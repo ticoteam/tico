@@ -44,6 +44,12 @@ from . import destinations, read_cache
 from .credentials import drop_service, keep_service, kept_record, open_kept
 from .store import H, Problem
 
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 KEY = "gateway-connection"
 CONTEXT = "gateway-connection:key"
 PROVIDER = "tico"
@@ -474,7 +480,7 @@ def check_soon(store, vault, settings=None, opener=None):
         )
     if not fingerprint:
         return None
-    now = time.monotonic()
+    now = _monotonic()
     with _tried_lock:
         if now - _tried.get(fingerprint, -CHECK_EVERY) < CHECK_EVERY:
             return None

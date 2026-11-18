@@ -27,6 +27,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import build_opener, HTTPRedirectHandler, Request
 
 
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 class Invalid(ValueError):
     pass
 
@@ -213,7 +218,7 @@ def download_icon(icon_url):
                 file=sys.stderr,
                 flush=True,
             )
-            time.sleep(wait_s)
+            _sleep(wait_s)
             continue
         if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
             raise Invalid("TICO_COMPANY_APPS.icon_url must serve a PNG up to 1 MB")

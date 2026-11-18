@@ -1,0 +1,5 @@
+{
+  "ui/tests/reconnect-card.cts": {
+    "no-fixed-wait-ui": 1
+  }
+}

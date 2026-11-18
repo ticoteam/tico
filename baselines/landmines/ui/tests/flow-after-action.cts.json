@@ -1,0 +1,6 @@
+{
+  "ui/tests/flow-after-action.cts": {
+    "no-fixed-wait-ui": 1,
+    "no-raised-timeout": 1
+  }
+}

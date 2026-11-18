@@ -370,6 +370,13 @@ class Settings:
     # TICO_MODELS_PRESET=subscriptions-gateway for the recommended setup). First boot only, like the three above.
     models_preset: str = ""
     credential_kms_key: str = ""
+    # A hosted company's own KMS settings (setup/cell.py writes them; backend/credentials.py `CredentialCipher`): its id as
+    # the KMS encryption context, so one company's access cannot unwrap another's key under the cell's one KMS key, and
+    # its own AWS access key (a container cannot use the host's role). Unset: today's context and boto's default chain.
+    credential_kms_context: str = ""
+    credential_kms_access_key_id: str = ""
+    credential_kms_secret_access_key: str = field(default="", repr=False)
+    credential_kms_region: str = ""
     # The Slack gateway (backend/slack_gateway.py): off unless the server configuration says so.
     # The thresholds are the routing rules in docs/slack-gateway.md; the tokens are read by
     # `slack_credentials()` in the gateway process only.
@@ -679,6 +686,10 @@ class Settings:
             default_model=os.environ.get("TICO_DEFAULT_MODEL", "").strip(),
             models_preset=os.environ.get("TICO_MODELS_PRESET", "").strip().lower(),
             credential_kms_key=os.environ.get("TICO_CREDENTIAL_KMS_KEY", ""),
+            credential_kms_context=os.environ.get("TICO_CREDENTIAL_KMS_CONTEXT", "").strip(),
+            credential_kms_access_key_id=os.environ.get("TICO_CREDENTIAL_KMS_ACCESS_KEY_ID", "").strip(),
+            credential_kms_secret_access_key=os.environ.get("TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY", "").strip(),
+            credential_kms_region=os.environ.get("TICO_CREDENTIAL_KMS_REGION", "").strip(),
             slack_gateway_enabled=not rehearsal and os.environ.get("TICO_SLACK_GATEWAY_ENABLED", "0") == "1",
             slack_team_id=os.environ.get("SLACK_TEAM_ID", "").strip(),
             slack_app_id=os.environ.get("SLACK_APP_ID", "").strip(),

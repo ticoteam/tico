@@ -9,9 +9,6 @@ Real task and links, webhooks the way the server takes them, the in-memory GitHu
 reproduction harness.
 """
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
 from backend import item_metadata as IM
@@ -225,25 +222,3 @@ def test_a_merged_pr_never_reopens(company):
 def test_tico_s_own_reads_never_share_a_version():
     seen = [G.version_now() for _ in range(1000)]
     assert seen == sorted(set(seen))
-
-
-def test_the_migration_lets_an_unmerged_closed_pr_be_read_again(company):
-    path = next(Path(G.__file__).parents[1].glob("migrations/*_unfinal_closed_github_prs.py"))
-    spec = importlib.util.spec_from_file_location("unfinal", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    w = World(company)
-    _opened(w)
-    w.gh.merge(REPO, 1)
-    with w.tx() as c:
-        new(c, 2)
-        w.gh.open_pr(REPO, 2)
-        w.gh.close(REPO, 2)
-        Seam.webhook(c, "pull_request", pr_payload(w.gh, "closed", 2, updated_at=_stamp()), delivery="c2")
-        Seam.webhook(c, "pull_request", pr_payload(w.gh, "closed", updated_at=_stamp()), delivery="m1")
-        # As the old code left them: every non-open PR final.
-        c.execute("UPDATE item_metadata SET final_at=updated_at WHERE source='github'")
-        module.up(c)
-        finals = dict(c.execute("SELECT item_key, final_at IS NOT NULL FROM item_metadata").fetchall())
-    assert finals == {KEY: 1, G.pr_key(REPO, 2): 0}

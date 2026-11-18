@@ -14,7 +14,7 @@ import tomllib
 
 # Direct invocation has scripts/gates, rather than the repository, on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts import check_migration_order, diff_facts, flake_quarantine, freeze_guard
+from scripts import check_migration_order, diff_facts, freeze_guard
 
 ROOT = Path(__file__).resolve().parents[2]
 SKIP = re.compile(
@@ -336,8 +336,6 @@ def check(base, head="HEAD", repo=ROOT, now=None):
                 ):
                     if pattern.search(text):
                         add(kind, path, number, reason)
-                if path.startswith(flake_quarantine.QUARANTINE + "/"):
-                    add("quarantine_entry", path, number, "added quarantine line")
             if path.startswith(("baselines/", "ui/baselines/")) or path in BASELINES:
                 if allowances(after, path) - allowances(before, path):
                     add("raised_baseline", path, line, "allowed verification counts or entries grew")

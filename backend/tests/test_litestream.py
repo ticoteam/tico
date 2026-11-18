@@ -17,7 +17,10 @@ from backend.config import ROOT
 def test_continuous_replication_restores_wal_commits(tmp_path):
     binary = Path(os.environ.get("LITESTREAM_BINARY", ROOT / "runtime/cloud-tools/litestream"))
     if not binary.is_file():
-        pytest.skip("Install the checksum-pinned Litestream binary to run the restore integration test")
+        pytest.skip(
+            "the pinned Litestream binary is missing (runtime/cloud-tools/litestream); CI never installs it, "
+            "so this restore test runs only where it was installed by hand"
+        )
     source = tmp_path / "live.sqlite"
     replica = tmp_path / "replica"
     config = tmp_path / "litestream.yml"
@@ -179,7 +182,10 @@ def reset_stale_state(tmp_path, config, source, **extra_env):
 def litestream_binary():
     binary = Path(os.environ.get("LITESTREAM_BINARY", ROOT / "runtime/cloud-tools/litestream"))
     if not binary.is_file():
-        pytest.skip("Install the checksum-pinned Litestream binary to run the stale-state integration tests")
+        pytest.skip(
+            "the pinned Litestream binary is missing (runtime/cloud-tools/litestream); CI never installs it, "
+            "so the stale-state tests run only where it was installed by hand"
+        )
     return binary
 
 

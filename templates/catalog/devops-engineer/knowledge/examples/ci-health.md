@@ -12,7 +12,7 @@ Nothing was rerun, canceled or changed. First draft, not yet reviewed.
 ## Flaky tests (register: knowledge/flaky-tests.md)
 | Test | Flips (14 days) | Suspected cause | Owner | Decision needed |
 |---|---|---|---|---|
-| `test_booking_reminder_sends_at_7am` | 6, e.g. runs 88121, 88164 | timezone: passes except 23:00-00:00 UTC | API owner | fix or quarantine by Fri |
+| `test_booking_reminder_sends_at_7am` | 6, e.g. runs 88121, 88164 | timezone: passes except 23:00-00:00 UTC | API owner | fix or delete today |
 | `e2e/checkout.spec: applies promo` | 3 | waits on a fixed 2 s sleep | web owner | fix |
 | `test_export_csv_large` | 2 (was 5) | shared temp dir; the 2026-09-23 fix halved it | web owner | watch |
 

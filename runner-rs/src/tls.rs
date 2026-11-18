@@ -91,7 +91,7 @@ fn trust() -> &'static Trust {
 
 /// A reqwest builder that verifies with the trust chosen above. Every runner HTTP client starts here.
 pub fn http_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().use_preconfigured_tls(trust().http.clone())
+    reqwest::Client::builder().tls_backend_preconfigured(trust().http.clone())
 }
 
 pub fn websocket_connector() -> tokio_tungstenite::Connector {
@@ -126,7 +126,7 @@ mod tests {
         // A usable verifier, not a refusal of everything: it builds a client config and a client.
         let built = config(&provider, verifier, &[b"http/1.1"]);
         assert!(reqwest::Client::builder()
-            .use_preconfigured_tls(built)
+            .tls_backend_preconfigured(built)
             .build()
             .is_ok());
     }

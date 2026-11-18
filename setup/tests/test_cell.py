@@ -165,6 +165,12 @@ def test_secrets_never_reach_argv_or_stdout_and_live_only_in_0600_files(tmp_path
         secret_file(
             tmp_path, "keys", json.dumps({"AccessKey": {"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET}})
         ),
+        "--kms-key",
+        KMS_ARN,
+        "--kms-credentials-file",
+        secret_file(
+            tmp_path, "kms", json.dumps({"AccessKey": {"AccessKeyId": KMS_KEY_ID, "SecretAccessKey": KMS_SECRET}})
+        ),
         "--version",
         "v1.2.3",
         "--json",
@@ -179,13 +185,15 @@ def test_secrets_never_reach_argv_or_stdout_and_live_only_in_0600_files(tmp_path
     printed, argv = out.getvalue(), system.argv_text()
     # Both releases stay unhealthy here, so the rollback says so too: two error paths with log lines.
     assert "rollback_failed" in printed and "did not come up" in printed and "********" in printed
-    for secret in (SECRET, INVITE, BACKUP_SECRET, TOKEN):
+    for secret in (SECRET, INVITE, BACKUP_SECRET, TOKEN, KMS_SECRET):
         assert secret not in printed and secret not in argv
     env = root / "companies" / "boatyard" / ".env"
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
     values = envfile.parse(env.read_text())
     assert values["TICO_OIDC_CLIENT_SECRET"] == SECRET and values["TICO_GATEWAY_INVITE"] == INVITE
     assert values["LITESTREAM_ACCESS_KEY_ID"] == BACKUP_KEY and values["LITESTREAM_SECRET_ACCESS_KEY"] == BACKUP_SECRET
+    assert values["TICO_CREDENTIAL_KMS_ACCESS_KEY_ID"] == KMS_KEY_ID
+    assert values["TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY"] == KMS_SECRET
     assert stat.S_IMODE((root / "tunnel.env").stat().st_mode) == 0o600
     assert (root / "tunnel.env").read_text() == f"TUNNEL_TOKEN={TOKEN}\n"
     link = root / "companies" / "boatyard" / "owner-link.txt"
@@ -235,6 +243,8 @@ def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
         "version": "v1.2.3",
         "changed": True,
         "owner_link_file": str(ready.root / "companies" / "boatyard" / "owner-link.txt"),
+        "kms": True,
+        "kms_key": KMS_ARN,
     }
     assert isinstance(answer["ready_ms"], int)
     d = ready.root / "companies" / "boatyard"
@@ -1614,6 +1624,7 @@ def test_a_whole_move_is_idempotent(tunneled):
 
 from setup import cell_updater as U  # noqa: E402
 from setup.tests.helpers.cell import FakeSystem, ROOT, SECRET, add_args, host, ready, record, secret_file, utc_in
+from setup.tests.helpers.cell import KMS_ARN, KMS_KEY_ID, KMS_SECRET, kms_args
 
 UPDATER_SOURCE = ROOT / "docker" / "updater.py"
 

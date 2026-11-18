@@ -1,10 +1,7 @@
 """The shared base of the Product and Engineering pipelines: their tables, the five kinds' places in the registry, and
 the stores every track reads (task_facts, page_verdicts, task_pages) with the fake GitHub the tests and the rig use."""
 
-import importlib
 import inspect
-import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -17,8 +14,6 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.fake_github import FakeGitHub, GitHubError
 
-MIGRATION = importlib.import_module("backend.migrations.20261110213830_product_engineering_facts")
-FLOOR = Path(__file__).parent / "fixtures" / "schema_floor.sql"
 REPO = "acme/app"
 
 
@@ -26,19 +21,6 @@ REPO = "acme/app"
 def c(company):
     with company.transaction() as conn:
         yield conn
-
-
-def test_the_migration_runs_twice_and_gives_effects_their_pr(tmp_path):
-    """On a database at the floor (v0.6.0-rc.1), which shipped without it."""
-    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
-    conn.executescript(FLOOR.read_text())
-    MIGRATION.up(conn)
-    MIGRATION.up(conn)
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"pr_facts", "releases", "release_reads", "release_commits", "github_deliveries"} <= tables
-    assert {"requirement_pages", "page_verdicts"} <= tables
-    effects = {r[1] for r in conn.execute("PRAGMA table_info(effects)")}
-    assert {"repo", "number", "head_sha", "next_try_at"} <= effects
 
 
 def test_a_pr_fact_keeps_the_newest_read(c):

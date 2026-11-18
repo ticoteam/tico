@@ -67,7 +67,11 @@ SENDS = {
 }
 NO_KEY = "Connect the Tico Gateway in Settings > Models first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
-now = time.time  # tests' controlled clock
+
+
+def now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
 
 
 class SleepSet(Contract):

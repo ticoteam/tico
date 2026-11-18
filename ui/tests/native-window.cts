@@ -13,6 +13,7 @@ const bridge: string = fs.readFileSync(require('node:path').join(__dirname, '../
 
 type Browser = import('playwright').Browser;
 type Route = import('playwright').Route;
+type Request = import('playwright').Request;
 type Pending = {resolve: (v: boolean) => void; reject: (e: Error) => void; origin: string};
 interface VisualWin {
   __calls: {origin: string}[]; __pending: Pending[]; __nativeOrigin: string;
@@ -79,6 +80,18 @@ async function visualHandshake(browser: Browser) {
     rank:1, version:1, created_at:'2026-01-01T00:00:00Z', updated_at:'2026-01-01T00:00:00Z', body:'Plan',
     parts:{total:0, done:0}, labels:[], links:[], attachments:[]};
   const threads = threadsFake({bot:'ops', messages:() => [message()]});
+  // WebKit on Linux reports a fetch a reload cuts off as a page error ("Fetch API cannot load … due to access control
+  // checks"), and the page asks for support access a second after it loads. So the test reloads only once every
+  // request the page has made has its answer (a live stream never finishes, so it doesn't count).
+  const inFlight = new Set<Request>();
+  let quiet = () => {};
+  const answered = (request: Request) => { inFlight.delete(request); if (!inFlight.size) quiet(); };
+  page.on('request', request => { if (request.resourceType() !== 'eventsource') inFlight.add(request); });
+  page.on('requestfinished', answered); page.on('requestfailed', answered);
+  const reload = async () => {
+    if (inFlight.size) await new Promise<void>(resolve => { quiet = resolve; });
+    await page.reload({waitUntil:'domcontentloaded'});
+  };
   await page.route('**/*', async (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = (body: unknown) => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
@@ -216,7 +229,7 @@ async function visualHandshake(browser: Browser) {
   assert.equal(await page.evaluate(() => (window as unknown as VisualWin).__calls.length), 10, 'the queued grant was skipped before native invocation');
 
   // A stale bridge rejection after sign-out also stays silent and cannot restore config.
-  await page.reload({waitUntil:'domcontentloaded'});
+  await reload();
   await waitCall(0, ''); await ack(0, false); await waitCall(1, VISUAL);
   await page.evaluate(() => signedOut());
   await page.evaluate(() => (window as unknown as VisualWin).__pending[1]!.reject(new Error('old command failed')));
@@ -226,7 +239,7 @@ async function visualHandshake(browser: Browser) {
   assert.equal(await page.getByRole('heading', {name:'Tico server not running'}).count(), 0);
 
   const rosterRequest = new Promise<Route>(resolve => { holdEmployees = resolve; });
-  await page.reload({waitUntil:'domcontentloaded'});
+  await reload();
   const staleRoster = await rosterRequest;
   await waitCall(0, ''); await ack(0, false);
   await page.evaluate(() => signedOut());
@@ -241,7 +254,7 @@ async function visualHandshake(browser: Browser) {
   // image/media recovery and Expand. Approval must be checked at the load itself.
   config = {company_name:'Deferred visual', visual_origin:VISUAL}; visual = VISUAL;
   const beforeDeferred = reads.length;
-  await page.reload({waitUntil:'domcontentloaded'});
+  await reload();
   await waitCall(0, ''); await ack(0, false); await waitCall(1, VISUAL);
   await page.evaluate(() => {
     (window as unknown as VisualWin).__raf = requestAnimationFrame; (window as unknown as VisualWin).__heldRAF = [];
@@ -286,7 +299,7 @@ async function visualHandshake(browser: Browser) {
   const now = new Date();
   await page.clock.install({time:new Date(now.getTime()-3600000)});
   await page.clock.pauseAt(now);
-  await page.reload({waitUntil:'domcontentloaded'});
+  await reload();
   await waitCall(0, ''); await ack(0, false); await waitCall(1, VISUAL);
   await page.clock.fastForward(await page.evaluate(() => NATIVE_VISUAL_WAIT_MS));
   await page.waitForFunction(() => S.me?.id === 'ana');
@@ -301,7 +314,7 @@ async function visualHandshake(browser: Browser) {
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
 
   authenticated = false; config = {visual_origin:VISUAL};
-  await page.reload({waitUntil:'domcontentloaded'});
+  await reload();
   await waitCall(0, ''); await ack(0, false);
   await waitCall(1, '');
   await page.evaluate(() => signedOut());

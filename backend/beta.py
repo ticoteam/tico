@@ -70,7 +70,7 @@ FEATURES = (
     ),
     Feature(
         "live_meetings",
-        "Live Meetings API and Recorder",
+        "Live Meetings API",
         (("live-meetings-api.md", None),),
         lambda c, s, shell: _rows(c, "SELECT 1 FROM live_meetings LIMIT 1"),
     ),

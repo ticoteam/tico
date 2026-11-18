@@ -370,8 +370,12 @@ pub fn parse(raw: &str, hide: &str) -> (String, String, Vec<String>, bool) {
             })
             .unwrap_or_default();
     }
+    let hide: String = hide.chars().take(12).collect();
     let mut code = String::new();
     for line in complete.iter().map(|s| squash(s)) {
+        if !hide.is_empty() && line.contains(&hide) {
+            continue; // the code the runner typed, echoed back, is never a device code to report
+        }
         if p.user_code_full.is_match(&line)
             || (line.to_lowercase().contains("code") && p.user_code.is_match(&line))
         {
@@ -379,7 +383,6 @@ pub fn parse(raw: &str, hide: &str) -> (String, String, Vec<String>, bool) {
             break;
         }
     }
-    let hide: String = hide.chars().take(12).collect();
     let mut shown: Vec<String> = vec![];
     for line in &lines {
         if !hide.is_empty() && line.contains(&hide) {
@@ -746,7 +749,7 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
 /// A Connect's screen after the code went in, as one line for the runner's log: links, the typed code and anything
 /// token-shaped taken out (`redact`), the last 240 characters. A code that the CLI accepted but then stops on (a
 /// question, a choice, an error with no retry) shows here; before, the log went quiet between code_written and cancel.
-fn screen_digest(raw: &str, typed: &str) -> String {
+pub(crate) fn screen_digest(raw: &str, typed: &str) -> String {
     let mut text = plain(raw);
     if !typed.is_empty() {
         text = text.replace(typed, "");
@@ -5731,6 +5734,20 @@ esac
         assert_eq!(url, "https://claude.ai/oauth/authorize?code=true");
         assert!(prompt);
         assert!(!lines.iter().any(|l| l.contains("secretcode")));
+    }
+
+    #[test]
+    fn an_echoed_typed_code_is_never_reported_as_the_device_code() {
+        // A CLI that draws the pasted code on its prompt line: the typed value holds a device-code-shaped piece.
+        let typed = "WXYZ-9876abcdefgh#state";
+        let raw = format!("Paste code here if prompted > {typed}\r\nSigning in...\r\n");
+        let (_, code, lines, _) = parse(&raw, typed);
+        assert_eq!(code, "", "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("WXYZ")), "{lines:?}");
+        // The device code the CLI itself shows is still read.
+        let raw =
+            format!("Enter this code: ABCD-1234\r\nPaste code here if prompted > {typed}\r\n");
+        assert_eq!(parse(&raw, typed).1, "ABCD-1234");
     }
 
     /// A finished login asks for a probe, whatever its verdict, once its action has run (finding 1): a sign-out's logout

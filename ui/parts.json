@@ -249,6 +249,7 @@
    "settingsHistoryAddress",
    "settingsMachinesRead",
    "settingsReleasesOpen",
+   "settingsRunPickerMount",
    "teamBuildOpen",
    "cloudAgentsOpen"
   ],
@@ -640,6 +641,15 @@
   ],
   "idle": []
  },
+ "who-picker": {
+  "files": [
+   "app/who-picker.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
  "library": {
   "files": [
    "docs-page.ts",
@@ -653,15 +663,15 @@
    "app/tools-api.ts",
    "app/tools-mcp.ts",
    "app/redesign-library.ts",
-   "app/tools-website.ts",
-   "app/who-picker.ts"
+   "app/tools-website.ts"
   ],
   "deps": [
    "finance",
    "webhooks",
    "docs-editor",
    "browser-view",
-   "thread-connect"
+   "thread-connect",
+   "who-picker"
   ],
   "pages": [
    "pageCompanyDocs",
@@ -720,7 +730,9 @@
    "app/meetings-sources.ts"
   ],
   "deps": [
-   "tool-icons"
+   "tool-icons",
+   "webhooks",
+   "who-picker"
   ],
   "pages": [
    "pageLiveMeetings",
@@ -874,8 +886,28 @@
   "pages": [],
   "calls": [
    "callJoin",
-   "callHangUp"
+   "callHangUp",
+   "callHandOff"
   ],
-  "idle": []
+  "idle": [
+   "callBarDraw",
+   "callDone"
+  ]
+ },
+ "call-window": {
+  "files": [
+   "app/call-window.ts"
+  ],
+  "deps": [
+   "thread-call-live"
+  ],
+  "pages": [
+   "pageCallWindow"
+  ],
+  "calls": [],
+  "idle": [
+   "callWindowDraw",
+   "callWindowStop"
+  ]
  }
 }

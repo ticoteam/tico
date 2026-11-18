@@ -60,6 +60,7 @@ class FakeGitHub:
         self.on_dispatch = None
         self.numbers = iter(range(100, 100000))
         self.failed = {}  # per run id: the tests its failed jobs name (None: a failure nobody can name)
+        self.cut = set()  # the red run ids that fail fast cut short (some parts cancelled beside a failed one)
 
     def _sha(self, ref):
         return self.tags_.get(ref) or (self.head_ if ref == "main" else ref)
@@ -84,8 +85,14 @@ class FakeGitHub:
     def validation_runs(self):
         return list(self.runs)
 
+    def workflow_run(self, run_id):
+        return next(item for item in self.runs if str(item["id"]) == str(run_id))
+
     def failed_tokens(self, run_id):
         return self.failed.get(run_id)
+
+    def cut_short(self, run_id):
+        return run_id in self.cut
 
     def ceiling_stopped(self, run):
         return run.get("id") in self.ceiling_ids
@@ -449,6 +456,16 @@ def test_only_a_run_the_ceiling_stopped_on_this_utc_day_is_a_stop():
     assert [item["id"] for item in rt.ceiling_stops(gh, [today, earlier], NOW)] == [9]
 
 
+def test_the_ceiling_never_reads_an_incremental_runs_jobs():
+    # ci.yml's ceiling counts and stops full validations only; reading each red incremental's jobs cost the train about
+    # 30 seconds a step.
+    incremental = dict(run(C, conclusion="failure", id=9), display_title=rt.title(C, "v0.5.201", "v0.5.200", B))
+    gh = FakeGitHub([incremental])
+    read = []
+    gh.ceiling_stopped = lambda item: read.append(item["id"]) or True
+    assert rt.ceiling_stops(gh, [incremental], NOW) == [] and read == []
+
+
 def test_the_ceiling_job_counts_as_a_stop_only_on_its_own_message(monkeypatch):
     gh = rt.GitHub("ticoteam/tico", "token")
     jobs = [{"id": 5, "name": "ceiling", "conclusion": "failure"}]
@@ -526,6 +543,49 @@ def test_a_red_naming_no_failure_reruns_from_the_green_anchor_without_a_second_f
     picked = rt.plan_step(gh, NOW, checkout=checkout)
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
     assert ("plan", B, D, set()) in checkout.calls
+
+
+def test_a_red_that_fail_fast_cut_short_is_no_anchor_but_its_failures_are_carried():
+    # C went red at its first failed part and fail fast cancelled the others: it ran only part of its suite, so it is no
+    # anchor (its cancelled parts never ran). The next candidate is incremental on B, which still covers C's diff, and
+    # carries the failure C did name.
+    gh = red_then_anchor()
+    gh.failed, gh.cut = {3: {"backend/tests/test_b.py"}}, {3}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert picked["carried"] == ["backend/tests/test_b.py"]
+    assert ("plan", B, D, {"backend/tests/test_b.py"}) in checkout.calls
+    # Until a commit selects what it named, it waits as any red does.
+    assert rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"ui/tests/x.cjs"}, plan=PLAN_TEXT))["action"] == "wait"
+
+
+def test_a_cut_short_run_names_the_parts_that_failed_not_the_ones_fail_fast_cancelled(monkeypatch):
+    gh = rt.GitHub("ticoteam/tico", "token")
+    jobs = [
+        {"id": 1, "name": "python-3", "conclusion": "failure"},
+        {"id": 2, "name": "python-4", "conclusion": "cancelled"},
+        {"id": 3, "name": "contracts-1", "conclusion": "cancelled"},
+        {"id": 4, "name": "release-check", "conclusion": "failure"},
+        {"id": 5, "name": "python-5", "conclusion": "success"},
+    ]
+    reads = []
+    monkeypatch.setattr(gh, "pages", lambda path, key=None, limit=10: reads.append(path) or jobs)
+    logs = {1: "FAILED backend/tests/test_a.py::test_x - AssertionError", 2: "", 3: ""}
+    monkeypatch.setattr(gh, "job_log", lambda job_id: logs[job_id])
+    assert gh.failed_tokens(9) == {"backend/tests/test_a.py"} and gh.cut_short(9)
+    assert len(reads) == 1, "a run's jobs are read once"
+    # A run cancelled from outside (every part cancelled) is not cut short: it names nothing, as before.
+    for entry in jobs:
+        entry["conclusion"] = "cancelled" if entry["id"] in (1, 2) else "success"
+    assert gh.failed_tokens(10) is None and not gh.cut_short(10)
+    # A red run that ran every part is complete.
+    jobs[0]["conclusion"], jobs[1]["conclusion"] = "failure", "success"
+    assert gh.failed_tokens(11) == {"backend/tests/test_a.py"} and not gh.cut_short(11)
+    # A part that ran into its 45-minute timeout is cancelled too, but it hung: a failure nobody can name, whatever
+    # failed beside it, and the run is not cut short by it.
+    jobs[1].update(conclusion="cancelled", started_at="2026-11-18T08:00:00Z", completed_at="2026-11-18T08:45:03Z")
+    assert gh.failed_tokens(12) is None and not gh.cut_short(12)
 
 
 def test_a_stale_anchor_runs_the_full_validation_once_a_day():
@@ -756,6 +816,27 @@ def test_guard_reports_a_red_head_from_any_event_once(installs, tmp_path, monkey
     assert len(gh.created) == 1 and gh.comments == []
 
 
+def test_a_validation_ci_hands_over_counts_as_a_finished_run_not_a_manual_one(tmp_path, monkeypatch):
+    # ci.yml's last job dispatches the train with its own run id: a run the train started with GITHUB_TOKEN never fires
+    # workflow_run, so without it a green candidate waited for the next push or a backstop GitHub often drops.
+    handed = {"GITHUB_EVENT_NAME": "workflow_dispatch", "VALIDATION_RUN": "1"}
+    assert not rt.manual_run(handed) and rt.manual_run({"GITHUB_EVENT_NAME": "workflow_dispatch"})
+    # The switch applies to it as to any finished run; with the train on, a green candidate runs the job.
+    assert guard(FakeGitHub([run(C)]), handed, tmp_path, monkeypatch)["go"] == "false"
+    on = dict(handed, RELEASE_TRAINS="on")
+    assert guard(FakeGitHub([run(C)]), on, tmp_path, monkeypatch)["go"] == "true"
+    # A red one is read from GitHub and reported like a workflow_run's.
+    gh = FakeGitHub([run(C, conclusion="failure")])
+    assert rt.event_run(on, gh) == {
+        "conclusion": "failure",
+        "title": rt.title(C, "v0.5.201", "v0.5.200"),
+        "url": "https://github.example/run/1",
+    }
+    assert rt.plan_step(gh, NOW, rt.event_run(on, gh))["red"]["sha"] == C
+    # Not finished yet (train.yml waits for it, so only if that wait was skipped): no finished run to report.
+    assert rt.event_run(on, FakeGitHub([run(C, status="in_progress", conclusion=None)])) is None
+
+
 def test_guard_respects_the_switch_and_a_running_hotfix(tmp_path, monkeypatch):
     for event in ("schedule", "push", "workflow_run"):
         assert guard(FakeGitHub(), {"GITHUB_EVENT_NAME": event}, tmp_path, monkeypatch)["go"] == "false"
@@ -789,6 +870,7 @@ def installs(monkeypatch):
         "paths": [],
         "outcome": "healthy",
         "down": set(),
+        "misses": {},  # install -> how many more of its reads go unanswered (502) before it answers again
     }
 
     def call(target, method, path, body=None, key=True):
@@ -796,6 +878,9 @@ def installs(monkeypatch):
         state["paths"].append((name, method, path, key))
         if name in state["down"]:
             return 0, {"error": "URLError"}
+        if method == "GET" and state["misses"].get(name):
+            state["misses"][name] -= 1
+            return 502, {}
         if (method, path) == ("POST", rt.UPDATE_PATH):
             version = body["version"]
             state["updated"].append((name, version))
@@ -828,6 +913,23 @@ def test_a_rolled_back_or_unreadable_update_fails(installs):
     installs["down"].add("stable")
     with pytest.raises(rt.Fail, match="cannot be read"):
         rt.update_install(rt.install("STABLE", ENV), "v0.5.201")
+
+
+def test_a_status_read_that_goes_unanswered_is_read_again_before_the_step_fails(installs, monkeypatch):
+    # Nov 18: single reads of stable went unanswered about one train step in two while it was up; each failed the step.
+    stable = rt.install("STABLE", ENV)
+    installs["misses"]["stable"] = rt.READ_TRIES - 1
+    assert rt.running(stable) == "0.5.199"
+    installs["misses"]["stable"] = rt.READ_TRIES
+    with pytest.raises(rt.Fail, match=r"stable: its update status cannot be read \(.*HTTP 502, 3 tries\)"):
+        rt.running(stable)
+    installs["down"].add("stable")
+    with pytest.raises(rt.Fail, match="no answer"):
+        rt.running(stable)
+    # Promotion holds, naming why, rather than reading stable once.
+    installs["canary"].update(running="0.5.200")
+    with pytest.raises(rt.Fail, match="promote: holding, stable: its update status cannot be read"):
+        rt.promote(FakeGitHub([]), ENV)
 
 
 def test_a_near_instant_failure_is_judged_at_once(monkeypatch):
@@ -1110,15 +1212,22 @@ def test_with_no_person_needed_releases_flow_canary_then_stable_with_no_one_in_t
     gh = publishes(FakeGitHub([run(C)]))
     older = approval_for(gh, "v0.5.200")
     assert rt.cmd_step(gh, dict(AUTO, GITHUB_EVENT_NAME="push"), NOW) == 0
-    assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201")]
+    # Continuous: the same step takes v0.5.201 to stable as soon as the canary runs it healthy, not at the next event.
+    assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201"), ("stable", "0.5.201")]
     assert older["state"] == "closed"
     newer = approval_of(gh, "v0.5.201")
-    assert newer["state"] == "open" and "approved automatically" in newer["body"]
-    # The next run (the backstop, at 03:00) takes v0.5.201 to stable too.
-    installs["canary"].update(running="0.5.201", state="healthy")
-    backstop = dict(AUTO, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
-    assert rt.cmd_step(gh, backstop, pt(2026, 11, 6, 3, 0)) == 0
-    assert installs["updated"][-1] == ("stable", "0.5.201") and newer["state"] == "closed"
+    assert newer["state"] == "closed" and "approved automatically" in newer["body"]
+    assert gh.comments[-1] == (
+        newer["number"],
+        "Promoted to stable (TIDY), approved automatically (no high-risk items; RELEASE_NEEDS_PERSON is off).",
+    )
+
+
+def test_a_canary_that_rolls_back_never_reaches_stable_in_the_same_step(installs):
+    gh = publishes(FakeGitHub([run(C)]))
+    installs["outcome"] = "rolled_back"
+    assert rt.cmd_step(gh, dict(AUTO, GITHUB_EVENT_NAME="push"), NOW) == 1
+    assert ("stable", "0.5.201") not in installs["updated"]
 
 
 # ---- the train job ----
@@ -1152,6 +1261,47 @@ def test_a_step_promotes_then_ships_the_green_candidate_and_closes_the_issues(in
     assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
     # Published, and main has nothing newer: the next event does nothing.
     assert rt.plan_step(gh, NOW + timedelta(minutes=5))["action"] == "none"
+
+
+def test_a_shipped_candidate_behind_main_has_main_validated_in_the_same_step(installs, tmp_path, monkeypatch):
+    # B is green as v0.5.201 and main moved on to C: the step ships B, then validates C as v0.5.202 at once. Waiting for
+    # another event could take hours: a quiet main has no pushes, and GitHub drops most backstop schedules.
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    monkeypatch.setattr(rt.increment, "Checkout", lambda root: checkout)
+    gh = publishes(FakeGitHub([run(B)]))
+    assert rt.cmd_step(gh, ENV, NOW) == 0
+    assert gh.tagged == [("v0.5.201", B)] and installs["updated"][-1] == ("canary", "0.5.201")
+    (validation,) = [inputs for workflow, _, inputs in gh.dispatched if workflow == "ci.yml"]
+    assert validation["candidate_sha"] == C and validation["version"] == "v0.5.202"
+    assert validation["previous_release"] == "v0.5.201"
+
+
+def test_the_next_validation_starts_once_the_release_is_published_before_the_canary_updates(
+    installs, tmp_path, monkeypatch
+):
+    # The canary update, its health check and the latest tags take a minute or more; the next validation only needs
+    # the published release it compares with.
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    monkeypatch.setattr(rt.increment, "Checkout", lambda root: FakeCheckout(since=set(), plan=PLAN_TEXT))
+    gh = publishes(FakeGitHub([run(B)]))
+    order, listed = [], gh.on_dispatch
+
+    def dispatched(workflow, ref, inputs):
+        order.append(workflow)
+        if listed:
+            listed(workflow, ref, inputs)
+
+    gh.on_dispatch = dispatched
+    original = rt.update_install
+
+    def updating(target, version, **kwargs):
+        order.append(target["name"])
+        return original(target, version, **kwargs)
+
+    monkeypatch.setattr(rt, "update_install", updating)
+    assert rt.cmd_step(gh, ENV, NOW) == 0
+    assert order.index("ci.yml") < order.index("canary")
 
 
 def test_without_an_approval_stable_waits_and_the_canary_still_ships(installs):
@@ -1714,6 +1864,6 @@ def test_a_github_reply_cut_short_is_retried(monkeypatch):
         return Reply()
 
     monkeypatch.setattr(rt.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(rt.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(rt, "sleep", lambda seconds: None)
     assert rt.GitHub("o/r", "t").get("actions/runs/1/jobs") == {"ok": True}
     assert len(calls) == 2

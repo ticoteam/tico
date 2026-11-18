@@ -8,6 +8,7 @@ import type {Route} from 'playwright';
 // every run again.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
+const util = require('node:util');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
@@ -171,6 +172,8 @@ declare function settingsHistoryShow(view?: string): void;
     // A new filter asks again and goes back in the address, so the view can be shared.
     await page.locator('#log-kind').selectOption('');
     await page.waitForFunction(() => location.hash === '#/settings/history?bot=ops');
+    // The address changes before the page asks again: wait for the ask, not just the address.
+    for (const end = Date.now() + 5000; !util.isDeepStrictEqual(logCalls.at(-1), {bot: 'ops'}) && Date.now() < end;) await page.waitForTimeout(25);
     assert.deepEqual(logCalls.at(-1), {bot: 'ops'});
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.locator('#log-csv').isVisible(), true);

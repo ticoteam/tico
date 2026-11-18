@@ -1,7 +1,7 @@
 """One end-to-end walk through a Hermes bot's life: pair, work, archive, restore, pair again.
 
 The hub is the real app served over HTTP on a local port; the connector is the real clients/hermes_agent.py,
-run against a fake profile directory under tmp with launchd/systemd mocked. Nothing touches the real home
+run against a fake profile directory under tmp with launchd/systemd faked. Nothing touches the real home
 directory, launchd or systemd. The detail of each step is in test_hermes_pairing.py, test_agents.py and
 clients/tests/test_hermes_agent.py; this test is the proof they fit together."""
 
@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -25,7 +26,7 @@ from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from clients import hermes_agent as H
 
-REAL_RUN, REAL_SLEEP, REAL_WHICH = subprocess.run, time.sleep, H.shutil.which
+REAL_RUN, REAL_SLEEP, REAL_WHICH = subprocess.run, time.sleep, shutil.which
 CODE = re.compile(r"\bcode ([A-Z0-9]{4}-[A-Z0-9]{4})\b")
 
 
@@ -95,9 +96,10 @@ class Connector:
         with (
             contextlib.redirect_stdout(out),
             contextlib.redirect_stderr(err),
-            mock.patch.object(H.subprocess, "run", self._run_command),
-            mock.patch.object(H.shutil, "which", which),
-            mock.patch.object(H.time, "sleep", (lambda seconds: sleep(out.getvalue())) if sleep else REAL_SLEEP),
+            mock.patch.object(H, "_run", self._run_command),  # double: launchctl, systemctl, hermes
+            mock.patch.object(H, "_which", which),  # double: the PATH lookup
+            # double: the pause between polls; a test hooks it to act between them, else the real pause runs
+            mock.patch.object(H, "_sleep", (lambda seconds: sleep(out.getvalue())) if sleep else REAL_SLEEP),
         ):
             code = H.main(list(argv))
         self.printed += out.getvalue() + err.getvalue()
@@ -151,6 +153,12 @@ def revision(api):
 
 def bot(api):
     return next(b for b in get(api, "bots?include_archived=1") if b["slug"] == "scout")
+
+
+def archived_seen(api, bot_id):
+    """When the hub last answered this bot's agent as archived: a call that reaches the hub moves it."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT archived_seen FROM agents WHERE bot=?", (bot_id,)).fetchone()[0]
 
 
 @pytest.mark.slow
@@ -236,8 +244,9 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     code, out, err = connector.run("heartbeat", "--profile", "scout")
     assert code == 1 and err == "Bot scout is archived in Tico: restore it (ask BotOps) or run uninstall\n"
     assert connector.status()["backoff"]["reason"] == "bot_archived"
-    with mock.patch.object(H, "request", side_effect=AssertionError("a backed-off heartbeat must not call the hub")):
-        assert connector.run("heartbeat", "--profile", "scout")[0] == 0
+    seen = archived_seen(api, scout)
+    assert connector.run("heartbeat", "--profile", "scout")[0] == 0
+    assert archived_seen(api, scout) == seen, "a backed-off heartbeat reached the hub"
     assert post(api, "bots/scout/restore", {})["status"] == "active"
     held = connector.credential()
     held["backoff"]["until"] = time.time() - 1  # an hour has gone by

@@ -89,18 +89,16 @@ async function pageNotes(): Promise<void> {
   // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, the shared filter
   // icon and Live now as tools, Add notes the one filled button, Sources and Settings in its ⋯. No chat button in a top
   // bar (the guide): Meetings' chat is Ask, opened from the Assistant's tab on the right edge or a phone's chat mark
-  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them. The Recorder links stay in
-  // the bar under it.
+  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them..
   $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
     tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
     tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
       + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
       + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
     more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
-    primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
-    <div class="meet-review-bar">
-      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
-      <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a></div>
+    // Call now only where this server runs Tico Meet (thread-call.ts callTicoMeet): the meeting window and bots are its.
+    primary: (callTicoMeet() ? `<button class="ghost" type="button" id="meet-call-now" aria-label="Call now" title="Call now">${CALL_SVG}<span>Call now</span></button>` : '')
+      + '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
@@ -121,8 +119,9 @@ async function pageNotes(): Promise<void> {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
-  meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
+  const callNow = document.getElementById('meet-call-now');
+  if (callNow) callNow.onclick = () => meetCallNow();
   const dialog: HTMLDialogElement = $('#notes-modal');
   const closeNote = () => meetShow(state, false);
   $('#notes-modal-close').onclick = closeNote;
@@ -161,6 +160,33 @@ async function pageNotes(): Promise<void> {
   // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
   state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
+}
+
+// Call now: the people and bots to call, picked in the who picker (its list in the dialog's flow, open for the next
+// pick; who is chosen leaves it; their chips between the field and the list, so they stay put), and an optional title; Start makes the call (thread-call.ts callTeammates), which
+// opens its meeting window, and a refusal shows here. A tap on a chosen one's chip takes them out again.
+function meetCallNow(): void {
+  const chosen: string[] = [];
+  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
+    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">`, `<button type="submit" class="primary meet-call-start" disabled>${CALL_SVG}Start</button>`);
+  dialog.classList.add('meet-call-dialog');
+  const who = dialog.querySelector<HTMLElement>('[data-call-who]'), start = dialog.querySelector<HTMLButtonElement>('[type=submit]');
+  const teammates = () => threadAddable({groups: false});
+  const name = (a: string) => teammates().find(t => t.actor === a)?.label || actorName(a);
+  const paint = () => {
+    if (who) who.innerHTML = chosen.map(a => `<span class="nm-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(name(a))}</span><button type="button" data-remove aria-label="Remove ${esc(name(a))}">×</button></span>`).join('');
+    if (start) start.disabled = !chosen.length;
+  };
+  const picker = whoPickerWire(dialog, {
+    candidates: () => teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
+      email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)})),
+    onPick: c => { chosen.push(c.subject); paint(); }});
+  if (who) who.onclick = ev => {
+    const actor = eventElement(ev)?.closest<HTMLElement>('[data-actor]')?.dataset['actor'];
+    if (!actor) return;
+    chosen.splice(chosen.indexOf(actor), 1); paint(); picker?.refresh(); picker?.input.focus();
+  };
+  whSubmit(dialog, async data => { if (await callTeammates([...chosen], String(data.get('title') || '').trim())) dialog.close(); });
 }
 
 function meetReviewTabs(state: MeetState): void {
@@ -258,26 +284,6 @@ async function meetSettingsOpen(state: MeetState): Promise<void> {
 // The meeting sources Tico takes from, in the order they are offered. `logo` is a key in ui/tool-icons.ts;
 // a source without one is drawn as its first two letters. Close is set up in its tool doc, the
 // rest in a dialog (ui/meeting-importers.ts).
-// Tico Recorder for Mac: the newest release's disk image.
-const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
-// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
-// Elsewhere the download shows until Tico has seen one of the person's copies lately (backend/recorder_installs.py),
-// and one quiet link says when the copy they used last is older than the newest release.
-async function meetRecorderLink() {
-  const hasRecorder = async () => {
-    if (!nativeHas('openRecorder')) return false;
-    try { return await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch { return false; }
-  };
-  const [installed, mine] = await Promise.all([hasRecorder(), get('/v2/meetings/recorder').catch(() => null)]);
-  const link = $('#meet-recorder'), update = $('#meet-recorder-update');
-  if (!link) return;
-  if (update) update.hidden = !mine?.update_available;
-  if (!installed) { link.hidden = !!mine?.recent; return; }
-  const button = document.createElement('button');
-  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
-  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
-  link.replaceWith(button);
-}
 const MEET_SOURCES: MeetSource[] = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -660,8 +666,8 @@ async function meetDetail(state: MeetState, id: string): Promise<void> {
 const IMPORT_SOURCES: Record<string, string> = {upload: 'Upload', zoom: 'Zoom', 'google-meet': 'Google Meet', granola: 'Granola', otter: 'Otter', fireflies: 'Fireflies', other: 'Other'};
 const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Typed', close: 'Close', submitted: 'Imported', api: 'API', tico: 'Tico'})[s || 'tico']
   || String(s).replace(/[-_]+/g, ' ').replace(/^./, c => c.toUpperCase());
-// The source in words; a meeting the Recorder filed says so.
-const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
+// The source in words.
+const meetSourceName = (r: MeetRec) => r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
 const MEET_STATUS_WORD: Record<string, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
 const meetStatusWord = (s: string | undefined) => (s && MEET_STATUS_WORD[s]) || s || '';
@@ -711,12 +717,13 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
   // Only an https link is drawn as one; the server refuses anything else, and this keeps a bad row inert.
   if (/^https:\/\//i.test(rec.media_url || '')) meta.push(`<a href="${esc(rec.media_url)}" target="_blank" rel="noopener noreferrer">Recording</a>`);
   const draft = state.noteDraft?.id === id ? state.noteDraft.value : null;
-  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea></section>`
-    : rec.note ? `<section class="mp-sec"><div class="mp-label">Notes</div><div class="mp-notes mp-notes-ro">${esc(rec.note)}</div></section>` : '';
+  // The source's summary sits under the person's own notes, so the record reads as one note.
+  const summary = rec.notes ? `<div class="mp-from"><div class="mp-label">${rec.source === 'granola' ? 'From Granola' : 'Summary'}</div><div class="md">${safeMd(rec.notes)}</div></div>` : '';
+  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea>${summary}</section>`
+    : rec.note || summary ? `<section class="mp-sec"><div class="mp-label">Notes</div>${rec.note ? `<div class="mp-notes mp-notes-ro">${esc(rec.note)}</div>` : ''}${summary}</section>` : '';
   const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me && f.id
     ? `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" download>${esc(f.name)}</a>`
     : `<span class="pill">${esc(typeof f === 'string' ? f : f.name || 'Attachment')}</span>`).join('')}</div>` : '';
-  const summary = rec.notes ? `<section class="mp-sec"><div class="mp-label">Summary</div><div class="md">${safeMd(rec.notes)}</div></section>` : '';
   const side = !typed || (rec.turns || []).length || rec.voice_text;
   el.innerHTML = `<div class="mp${side ? '' : ' mp-one'}">
     <header class="mp-head">
@@ -729,7 +736,7 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
     <div class="mp-cols">
       <div class="mp-main">
         ${typed || reviewing ? '' : '<section class="mp-sec" id="meet-sections"></section>'}
-        ${notes}${files}${summary}
+        ${notes}${files}
       </div>
       ${side ? '<aside class="mp-side" id="meet-side" aria-label="Transcript"></aside>' : ''}
     </div>
@@ -838,19 +845,21 @@ const meetMarked = (text: unknown, q?: string) => {
   return safe.replace(new RegExp(needle, 'gi'), m => `<mark>${m}</mark>`);
 };
 const meetTurnHTML = (who: string | undefined, at: string | undefined, text: unknown, q?: string) => `<div class="mp-turn"><div class="who">${who ? `<b>${esc(who)}</b>` : ''}${at ? `<span class="time">${esc(at)}</span>` : ''}</div><p class="said">${meetMarked(text, q)}</p></div>`;
+// Plain text has no times, so each line would read 0:00; a transcript with no times shows none.
+const meetTurnTime = (turns: MeetTurn[], t: MeetTurn): string => turns.some(x => x.start_ms) ? mmss(t.start_ms) : '';
 function meetTranscriptHTML(rec: MeetRec, q?: string): string {
   const turns = rec.turns || [];
-  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, mmss(t.start_ms), t.text, q)).join('')
+  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, meetTurnTime(turns, t), t.text, q)).join('')
     : rec.voice_text ? meetTurnHTML('', '', rec.voice_text, q)
     : rec.transcript_readable ? String(rec.transcript_readable).split(/\n+/).filter(l => l.trim()).map(l => `<p class="said">${meetMarked(plainMd(l), q)}</p>`).join('')
     : '<div class="mp-empty">No transcript</div>';
   const others = (rec.transcript_sources || []).filter(t => !t.primary).map(t =>
     `<details class="mp-alt"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)}${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
-      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, mmss(turn.start_ms), turn.text, q)).join('')}</details>`).join('');
+      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, meetTurnTime(t.turns || [], turn), turn.text, q)).join('')}</details>`).join('');
   return main + others;
 }
 const meetTranscriptText = (rec: MeetRec) => (rec.turns || []).length
-  ? rec.turns!.map(t => `${t.speaker ? t.speaker + ' ' : ''}[${mmss(t.start_ms)}] ${t.text}`).join('\n')
+  ? (rec.turns || []).map(t => { const at = meetTurnTime(rec.turns || [], t); return `${t.speaker ? t.speaker + ' ' : ''}${at ? `[${at}] ` : ''}${t.text}`; }).join('\n')
   : rec.voice_text || plainMd(rec.transcript_readable || '');
 const meetChatName = (m: MeetChatMessage) => m.actor ? actorLabel(m.actor) : m.role || '';
 const meetChatHTML = (chat: MeetChatMessage[]) => chat.map(m => meetTurnHTML(meetChatName(m), m.at_ms === null || m.at_ms === undefined ? '' : mmss(m.at_ms), m.text, '')).join('');

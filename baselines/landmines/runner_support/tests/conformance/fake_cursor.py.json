@@ -1,0 +1,5 @@
+{
+  "runner_support/tests/conformance/fake_cursor.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

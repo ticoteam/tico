@@ -233,8 +233,6 @@ EMPTY = (
     # Personal phone consent and paid dispatch queues belong to the source install.
     "alert_preferences",
     "personal_alerts",
-    # Which Recorder each person's computers run (backend/recorder_installs.py): per-machine, the copy starts without it.
-    "recorder_installs",
     # Browsers that take Web Push (backend/web_push.py): a copy pushes to none of the live install's.
     "push_subscriptions",
     "bills_inbound",  # emailed bills: senders, subjects and HQ delivery ids
@@ -652,6 +650,9 @@ KEEP = (
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
             "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
+            "growth_alert_state",  # which line each channel was last on (backend/growth_brief.py): history, no customer keys
+            "growth_crossings",  # each crossing and how its owner was told: history, no customer keys
+            "growth_view_reads",  # how many times agents read a scoped view each day: counts only
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",

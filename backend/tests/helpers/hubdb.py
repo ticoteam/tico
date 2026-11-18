@@ -2,7 +2,6 @@
 
 import tempfile
 import unittest
-import unittest.mock
 from pathlib import Path
 from backend import hubdb as H
 from backend.tests.helpers.migrations import forget_from

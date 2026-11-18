@@ -372,12 +372,23 @@ def growth_channel_list(api, args):
 
 @tool(
     "tico_growth_channel_show",
-    "One channel by slug, with its open marketing tasks (labelled channel:<slug>)." + SETUP_NOTE,
+    "One channel by slug: KPI vs target, 6 months, what changed and what lines up, tests, sources, open tasks."
+    + SETUP_NOTE,
     {"slug": _s("Channel slug")},
     required=("slug",),
 )
 def growth_channel_show(api, args):
     return api.get("growth/channels/" + args["slug"])
+
+
+@tool(
+    "tico_growth_segment_show",
+    "One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change.",
+    {"label": _s("Segment label, as customer facts name it: agency")},
+    required=("label",),
+)
+def growth_segment_show(api, args):
+    return api.get("growth/segments/" + args["label"])
 
 
 @tool(
@@ -955,7 +966,10 @@ CLI = (
         example="tico growth channel list",
     ),
     Command(
-        "growth channel show", "one channel", render=_growth_text, example="tico growth channel show google-search"
+        "growth channel show",
+        "one channel: its KPI against target, 6 months, what changed and what lines up with it, its tests, its sources",
+        render=_growth_text,
+        example="tico growth channel show google-search",
     ),
     Command(
         "growth channel add",
@@ -976,6 +990,13 @@ CLI = (
         "retire a channel (owner or admin)",
         render=_growth_text,
         example="tico growth channel retire google-search",
+    ),
+    Group("growth segment", "the numbers for one segment, from customer facts"),
+    Command(
+        "growth segment show",
+        "one segment: 6 months of new customers, kept at 30 and 90 days, LTV, and the change",
+        render=_growth_text,
+        example="tico growth segment show agency",
     ),
     Group("growth source", "which system holds the truth for each number"),
     Command(

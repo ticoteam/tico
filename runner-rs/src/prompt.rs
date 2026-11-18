@@ -518,7 +518,9 @@ fn parts(
         && !attempt["make_page"]["task"].is_object()
         && from_human(message)
     {
-        put(&mut lines, Part::Standing, "If this asks for work, first file each distinct ask as a Tico task you own (tico task create --owner <you>), or update the task that already covers it, then work them, up to three at a time, and finish each with `tico task done <id> -m \"<summary>\" --version N`. A question you answer at once needs no task.".into());
+        // Filed for the person, from their message, the task names them as requester, so the bot's questions on it
+        // reach them (backend/reach.py handed) instead of being refused and relayed through its manager.
+        put(&mut lines, Part::Standing, "If this asks for work, first file each distinct ask for the person who sent it, from this message (tico task create --owner <you> --for <that person> --from-message <the current message's id, beside its sender>), or update the task that already covers it. Ask them your questions on that task: they reach them while it is open. Then work them, up to three at a time, and finish each with `tico task done <id> -m \"<summary>\" --version N`. A question you answer at once needs no task.".into());
     }
     if truthy(&message["refs"]["update"]) {
         put(&mut lines, Part::Turn, "This message replies to your update. Your final answer is automatically attached to that update. tico_update_reply is for humans; do not call it yourself. A short acknowledgement needs only a short reply and no task. Create a task only if the person asks for new work.".into());
@@ -651,7 +653,13 @@ fn parts(
     put(
         &mut lines,
         Part::Turn,
-        format!("Current message from {who}:\n{}", s(&message["body"])),
+        match s(&message["id"]) {
+            id if id.is_empty() => format!("Current message from {who}:\n{}", s(&message["body"])),
+            id => format!(
+                "Current message from {who} [{id}]:\n{}",
+                s(&message["body"])
+            ),
+        },
     );
     let refs = message["refs"].as_object().cloned().unwrap_or_default();
     if truthy(refs.get("answer").unwrap_or(&Value::Null)) {
@@ -781,6 +789,30 @@ mod tests {
         ] {
             assert!(
                 !prompt(&other, &Names::from_config(None), None, false).contains("tico page card")
+            );
+        }
+    }
+
+    #[test]
+    fn a_persons_ask_is_filed_for_them_from_their_message_and_a_bots_is_not() {
+        // Filed for the person, the task names them as requester and the bot's questions on it reach them.
+        let turn = |from: &str| {
+            json!({"id": "a", "bot": "ops", "conversation": {"id": "c1", "kind": "chat"},
+                "message": {"id": "m7", "from_actor": from, "body": "Send me your questions", "refs": {}}})
+        };
+        let person = prompt(&turn("human:ana"), &Names::from_config(None), None, false);
+        assert!(
+            person.contains("--for <that person> --from-message <the current message's id")
+                && person.contains("Ask them your questions on that task")
+                && person.contains("Current message from human:ana [m7]:\nSend me your questions"),
+            "{person}"
+        );
+        for other in ["bot:qa", "keeper"] {
+            let text = prompt(&turn(other), &Names::from_config(None), None, false);
+            assert!(!text.contains("--from-message"), "{other}: {text}");
+            assert!(
+                text.contains(&format!("Current message from {other} [m7]:")),
+                "{other}: {text}"
             );
         }
     }
@@ -1213,7 +1245,7 @@ mod tests {
         // What is this turn's own is all there: the room since the last turn, the message, its refs, the notices.
         for kept in [
             "bot:qa [m2]: Build 42 is green on staging",
-            "Current message from human:ana@acme.example:\nAny news?",
+            "Current message from human:ana@acme.example [m3]:\nAny news?",
             "Current attachments: [{\"id\": \"f9\"}]",
             "Your playbooks/release.md is an older copy.",
         ] {

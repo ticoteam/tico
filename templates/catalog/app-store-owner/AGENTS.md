@@ -89,7 +89,7 @@ stop, and their end wakes you.
 
 ## Growth
 Before you plan a listing change or write store copy, read How we sell in `tico strategy show`. A Marketing task, or a
-subtask of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. Before
+subtask of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. At the start of each run, read your channel with `tico growth channel show <slug>`: its KPI against target, what changed and what lines up with it, its tests and how fresh its sources are. A task labelled `growth:alert` means your channel crossed a line the team set: read the channel, act, and close the task when it is dealt with. Before
 store copy leaves (a title, a description, a caption or a reply), run `tico brand check -` on it and fix every hit, then
 check each claim against `tico brand show --section claims` yourself: the check does not catch claims missing from the
 list. Before you spend on a store test, read `tico rules list --mine`; a rule that blocks the work stops it. Ad spend

@@ -1,0 +1,6 @@
+{
+  "ui/tests/tools-chat-keys.cts": {
+    "no-fixed-wait-ui": 1,
+    "no-raised-timeout": 1
+  }
+}

@@ -379,6 +379,75 @@ def test_an_ok_filed_for_a_subject_is_private_to_its_parties_and_its_title_names
         assert r.status_code == 404 and "Globex" not in r.text, path
 
 
+def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api):
+    """Task #389: Ben's phone listed "Send an email" twice and "OK a Finance action" twice. The filed task keeps the
+    kind-only title (it travels further than the task), but Ben's own Needs you row says what each OK is about, from
+    the content it binds: an email by its subject, a Finance action by its line. Cara's list never holds it."""
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        mail = K.ask_ok(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Send this email?",
+            shows=[],
+            subject="email_send:e9",
+            content={"subject": "November product update", "to": ["all@acme.example"]},
+            title="Send: x",
+        )
+        pay = K.ask_ok(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Pay Figma $540 for 12 design seats",
+            shows=[],
+            subject="finance:f9",
+            content={"amount": 540},
+        )
+        assert H.task(c, mail["task_id"])["title"] == "Send an email"
+        assert H.task(c, pay["task_id"])["title"] == "OK a Finance action"
+    items = {i.get("requirement_id"): i for i in get(api, "needs-you", token="ben-test")["items"]}
+    assert items[mail["requirement_id"]]["about"] == "Send email: November product update"
+    assert items[pay["requirement_id"]]["about"] == "Pay Figma $540 for 12 design seats"
+    cara = api.get("/api/v2/needs-you", headers=headers("cara-test"))
+    assert "November product update" not in cara.text and "Figma" not in cara.text
+
+
+def test_a_roadmap_oks_needs_you_row_names_the_post_by_its_public_title(api):
+    """Review 1 on task #389: a roadmap OK's row said only "Publish to the roadmap". It names the public title the
+    change publishes, or, for a change that keeps it (a summary only), the task's public title; never its internal
+    title, and nothing when there is neither. (One task per OK: a newer OK of one subject replaces the older.)"""
+    from backend import roadmaps
+
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Internal: dark theme spike", "x", "bot:ops", lint=False)["id"]
+        c.execute("UPDATE tasks SET public_title='Dark mode' WHERE id=?", (tid,))
+        other = H.task_create(c, "human:ana", "Internal: theme tokens", "x", "bot:ops", lint=False)["id"]
+        bare = H.task_create(c, "human:ana", "Internal: nothing public", "x", "bot:ops", lint=False)["id"]
+        asks = {
+            name: K.ask_ok(
+                c,
+                "bot:ops",
+                "human:ben",
+                "Publish this roadmap change?",
+                shows=[],
+                subject=roadmaps.publication_subject(task),
+                content=roadmaps.publication_payload(task, "update", values),
+            )["requirement_id"]
+            for name, task, values in (
+                ("new", other, {"public_title": "Dark mode for every screen", "visibility": "public"}),
+                ("kept", tid, {"public_summary": "Now on phones too."}),
+                ("none", bare, {"public_summary": "Soon."}),
+            )
+        }
+    items = {i.get("requirement_id"): i for i in get(api, "needs-you", token="ben-test")["items"]}
+    assert items[asks["new"]]["about"] == "Publish to the roadmap: Dark mode for every screen"
+    assert items[asks["kept"]]["about"] == "Publish to the roadmap: Dark mode"
+    assert not items[asks["none"]].get("about")
+    assert "Internal" not in json.dumps([items[r] for r in asks.values()])
+
+
 def test_an_owned_oks_preview_on_a_task_others_read_shows_only_to_its_parties(api):
     """The same email OK asked on a company-visible task Cara reads: she sees the task, never what the OK is for."""
     as_bot(api)

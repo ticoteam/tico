@@ -189,7 +189,13 @@ STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "ma
 WAIT = 15
 ANSWER_CAP = 256 * 1024
 TRANSPORT = None  # tests' fake HQ (httpx transport), never the live one
-now = time.time  # tests' clock
+
+
+def now():
+    """Epoch seconds: the tests' clock. A test replaces this, not time.time for the whole process."""
+    return time.time()
+
+
 now_ns = time.time_ns  # support writes' ordering clock
 
 

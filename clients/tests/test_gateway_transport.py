@@ -406,6 +406,41 @@ def test_relay_keeps_at_most_its_limit_and_sends_nothing_to_an_unsafe_address(ne
     assert len(network.requests) == 1
 
 
+# --- relay_speech(): raw PCM and its sample rate, an error kept, nothing to an unsafe address ------------------------
+
+
+class Speech(Reply):
+    """A text-to-speech answer: raw PCM, with the rate in its `X-Audio-Sample-Rate` header when the Gateway names one."""
+
+    def __init__(self, body, rate=None):
+        super().__init__(body)
+        self.headers = {"X-Audio-Sample-Rate": rate} if rate is not None else {}
+
+
+SPEECH = [
+    pytest.param(lambda: Speech(b"\x01\x00", "16000"), (200, b"\x01\x00", 16000), id="named-rate"),
+    pytest.param(lambda: Speech(b"\x01\x00"), (200, b"\x01\x00", G.SPEECH_RATE), id="no-rate-is-24k"),
+    pytest.param(lambda: Speech(b"\x01\x00", "4"), (200, b"\x01\x00", G.SPEECH_RATE), id="rate-out-of-range"),
+    pytest.param(lambda: error(404, b"unknown"), (404, b"unknown", G.SPEECH_RATE), id="error-keeps-its-status"),
+    pytest.param(lambda: error(503, unreadable=True), (503, b"", G.SPEECH_RATE), id="error-body-unreadable"),
+    pytest.param(lambda: urllib.error.URLError("connection refused"), (0, b"", G.SPEECH_RATE), id="no-answer"),
+]
+
+
+@pytest.mark.parametrize(("answer", "expected"), SPEECH)
+def test_relay_speech_gives_the_pcm_and_its_rate(network, answer, expected):
+    network.answers.append(answer())
+    assert G.relay_speech(BASE + "/audio/speech", b"{}", {"Authorization": "Bearer " + KEY}) == expected
+    [(request, _timeout)] = network.requests
+    assert request.get_method() == "POST" and header(request, "Accept") == "audio/pcm"
+    assert header(request, "Authorization") == "Bearer " + KEY
+
+
+def test_relay_speech_sends_nothing_to_an_unsafe_address(network):
+    assert G.relay_speech("http://gateway.example.test/audio/speech", b"{}") == (0, b"", G.SPEECH_RATE)
+    assert network.requests == []
+
+
 # --- a body cut short: a connection that closes part way makes read() raise IncompleteRead ---------------------------
 
 

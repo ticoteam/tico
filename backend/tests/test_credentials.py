@@ -198,6 +198,35 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
         assert 'PostHog' in event and 'synthetic-private' not in event and 'ciphertext' not in event
 
 
+def test_member_removes_a_credential_they_stored_without_a_grant_to_read_it(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='cpo'")
+    cid = member_stores(api, 'cpo', 'POSTHOG_API_KEY', 'phx-member-owned-value-123456')['id']
+    [item] = get(api, 'credentials', 'cara-test')['credentials']
+    assert item['id'] == cid and item['can_remove'] and not item['can_reveal']
+    assert api.delete(f'/api/v2/credentials/{cid}', headers=headers('cara-test')).json()['deleted']
+    with api.app.state.store.read() as c:
+        assert not c.execute('SELECT 1 FROM credentials WHERE id=?', (cid,)).fetchone()
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='credential.deleted' AND target=?", (cid,)).fetchone()[0]
+            == 'human:cara'
+        )
+
+
+def test_demoted_adder_can_list_and_remove_a_loose_password_without_seeing_its_value(api):
+    setup(api)
+    cid = post(
+        api, 'credentials', {'name': 'Acme account', 'kind': 'password', 'secret': 'stored-password'}, 'ben-test'
+    )['id']
+    api.app.state.store.settings.credential_admins = ('ana@acme.example',)
+    [item] = get(api, 'credentials', 'ben-test')['credentials']
+    assert item['id'] == cid and item['tool_id'] is None and item['remove_only'] and not item['can_reveal']
+    assert 'preview' not in item and 'username' not in item and item['grants'] == []
+    get(api, 'credentials', 'cara-test', expected=403)
+    assert api.delete(f'/api/v2/credentials/{cid}', headers=headers('ben-test')).json()['deleted']
+
+
 def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(api):
     setup(api)
     from backend.credentials import FILE_MIGRATION
@@ -236,6 +265,28 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == ['ops']
     post(api, 'runner-credential-migration', {'bot': 'ops', 'credentials': []}, machine['token'])
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == []
+
+
+def test_a_computer_file_import_records_the_computers_owner_as_the_keys_adder(api):
+    setup(api)
+    from backend.credentials import FILE_MIGRATION
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")  # Ben's bot, on Ben's computer
+    machine = runner(api, operator='ben')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
+    values = {'bot': 'ops', 'credentials': [{'env': 'QA_MOVED_KEY', 'value': 'fixture-moved-value-123456'}]}
+    post(api, 'runner-credential-migration', values, machine['token'])
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id,created_by,updated_by FROM credentials WHERE env='QA_MOVED_KEY'").fetchone()
+        [granted_by] = c.execute('SELECT granted_by FROM credential_grants WHERE credential_id=?', (row['id'],))
+        [event] = c.execute("SELECT actor FROM events WHERE action='credential.migrated' AND target=?", (row['id'],))
+    # Ben's computer brought it over: he is its adder. The Computer itself still made the grant and the event.
+    assert row['created_by'] == 'human:ben'
+    assert row['updated_by'] == granted_by[0] == event[0] == 'runner:' + machine['runner_id']
 
 
 def test_migration_shares_one_credential_per_value_by_grant(api):

@@ -2030,7 +2030,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
-        from . import task_calls
+        from . import task_asks, task_calls
         from .files import readable_earlier
 
         # Every ask's task read together: the list costs what one task's view does.
@@ -2050,6 +2050,13 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 item["line"] = item["ask"]["line"]
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
+                    # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
+                    # this one is about, to its party, in place of that title (task #389).
+                    title = str((item.get("task") or {}).get("title") or "")
+                    if title in task_asks.FILED_TITLES.values():
+                        said = task_asks.about(c, item["requirement_id"], item["line"])
+                        if said:
+                            item["about"] = said
     return sorted(items, key=needs_key)
 
 
@@ -2645,11 +2652,12 @@ def install_views(app, store, auth, mutate, task_view):
                 and access.get(row["id"], auth.FULL)["see"]
                 and access.get(row["id"], auth.FULL)["write"]
             ]
-            from .credentials import administrator, can_open
+            from .credentials import administrator, can_open, has_removable_loose_key
             from .onboarding import config_view
             from .mail import can_access
 
             admins = store.settings.credential_admins
+            credential_access = can_open(c, who, admins)
             role = auth.company_role(who)
             domains_ = Access.company_domains(c, store.settings, auth.owner_email)
             return {
@@ -2675,7 +2683,8 @@ def install_views(app, store, auth, mutate, task_view):
                 "has_tokens": personal_tokens.has_live(c, who),
                 "proxy_session": who.via_proxy,
                 "sign_in_name": auth.sign_in_name(request.headers) if who.via_proxy else "",
-                "credential_access": bool(can_open(c, who, admins)),
+                "credential_access": credential_access,
+                "credential_remove_access": not credential_access and has_removable_loose_key(c, who),
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),

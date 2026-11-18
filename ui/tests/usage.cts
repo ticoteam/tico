@@ -267,7 +267,13 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await page.keyboard.press('Escape');
     await panel.waitFor({state: 'hidden'});
     // On a phone the header's tools fold into ⋯: the icon is there, and its menu is a sheet that stays in the window.
+    // The focus leaves Filter first: a header keeps a tool that has the focus in its row, and would fold it only when the
+    // press on ⋯ takes the focus, moving ⋯ away before the release (the click then misses and ⋯ never opens). Escape
+    // gives Filter the focus back twice: as the menu hides, and again from the menu's toggle handler a moment later
+    // (pages-shell.ts phFilterWire). So the wait blurs Filter each time it has the focus in the row, until the tools fold.
     await page.setViewportSize({width: 400, height: 844});
+    await page.waitForFunction(() => { const f = document.querySelector<HTMLElement>('header.use-head > .ph-tools .use-filter');
+      if (f && document.activeElement === f) f.blur(); return !!document.querySelector('header.use-head.ph-fold > .ph-menu button.use-filter'); });
     await more.click();
     await filter.click();
     await panel.locator('.use-filter-menu').waitFor();

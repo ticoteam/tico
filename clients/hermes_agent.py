@@ -53,6 +53,33 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
+def _run(command, **kwargs):
+    """Every command the connector runs (launchctl, systemctl, the agent's own CLI) goes through here, so a test answers
+    for the tools of the machine it is not on, and not subprocess.run for the whole process."""
+    return subprocess.run(command, **kwargs)  # noqa: PLW1510 - each caller decides check; this only forwards it
+
+
+def _which(name):
+    """Where a command is on this computer's PATH, or None. A test answers for the tools it does not have."""
+    return shutil.which(name)
+
+
+def _platform():
+    """The operating system the connector installs for. A test answers for the one it is not running on."""
+    return sys.platform
+
+
 VERSION = "0.3.0"
 CONFIG_DIR = Path(os.environ.get("TICO_AGENT_CONFIG_DIR") or Path.home() / ".config" / "tico" / "agents")
 EVERY_SECONDS = 60
@@ -163,11 +190,11 @@ def agent_dir(harness, profile):
 
 
 def harness_version(harness="hermes"):
-    exe = shutil.which(harness)
+    exe = _which(harness)
     if not exe:
         return ""
     try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=20)
+        out = _run([exe, "--version"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return ""
     match = re.search(
@@ -387,7 +414,7 @@ def install_timer(profile, python, cli=None):
     log_dir = CONFIG_DIR / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / (profile + ".log")
-    if sys.platform == "darwin":
+    if _platform() == "darwin":
         agents = Path.home() / "Library" / "LaunchAgents"
         agents.mkdir(parents=True, exist_ok=True)
         plist = agents / (timer_label(profile) + ".plist")
@@ -404,14 +431,12 @@ def install_timer(profile, python, cli=None):
             plist.open("wb"),
         )
         os.chmod(plist, 0o600)
-        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)], capture_output=True)
-        done = subprocess.run(
-            ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], capture_output=True, text=True
-        )
+        _run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)], capture_output=True)
+        done = _run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], capture_output=True, text=True)
         if done.returncode != 0:
             raise Failure("launchctl bootstrap failed: " + (done.stderr or done.stdout).strip())
         return f"launchd job {timer_label(profile)} every {EVERY_SECONDS} s, log {log}"
-    if sys.platform.startswith("linux") and shutil.which("systemctl"):
+    if _platform().startswith("linux") and _which("systemctl"):
         units = Path.home() / ".config" / "systemd" / "user"
         units.mkdir(parents=True, exist_ok=True)
         name = "tico-agent-" + profile
@@ -428,7 +453,7 @@ def install_timer(profile, python, cli=None):
             ["systemctl", "--user", "daemon-reload"],
             ["systemctl", "--user", "enable", "--now", name + ".timer"],
         ):
-            done = subprocess.run(command, capture_output=True, text=True)
+            done = _run(command, capture_output=True, text=True)
             if done.returncode != 0:
                 raise Failure(" ".join(command) + " failed: " + (done.stderr or done.stdout).strip())
         return f"systemd user timer {name}.timer every {EVERY_SECONDS} s"
@@ -439,19 +464,19 @@ def install_timer(profile, python, cli=None):
 
 
 def remove_timer(profile):
-    if sys.platform == "darwin":
+    if _platform() == "darwin":
         plist = Path.home() / "Library" / "LaunchAgents" / (timer_label(profile) + ".plist")
         if plist.exists():
-            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)], capture_output=True)
+            _run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)], capture_output=True)
             plist.unlink()
         return
-    if sys.platform.startswith("linux") and shutil.which("systemctl"):
+    if _platform().startswith("linux") and _which("systemctl"):
         name = "tico-agent-" + profile
-        subprocess.run(["systemctl", "--user", "disable", "--now", name + ".timer"], capture_output=True)
+        _run(["systemctl", "--user", "disable", "--now", name + ".timer"], capture_output=True)
         units = Path.home() / ".config" / "systemd" / "user"
         for suffix in (".service", ".timer"):
             (units / (name + suffix)).unlink(missing_ok=True)
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        _run(["systemctl", "--user", "daemon-reload"], capture_output=True)
 
 
 def _suffixed(name, profile):
@@ -470,7 +495,7 @@ def remove_old_timers(profile):
     other job or unit for this profile that runs a hermes_agent.py. Returns what was removed."""
     removed = []
     current = timer_label(profile)
-    if sys.platform == "darwin":
+    if _platform() == "darwin":
         agents = Path.home() / "Library" / "LaunchAgents"
         for plist in sorted(agents.glob("*.plist")) if agents.is_dir() else []:
             try:
@@ -483,10 +508,10 @@ def remove_old_timers(profile):
                 continue
             if not any(a.endswith("hermes_agent.py") for a in arguments):
                 continue
-            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)], capture_output=True)
+            _run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)], capture_output=True)
             plist.unlink(missing_ok=True)
             removed.append("launchd job " + label)
-    elif sys.platform.startswith("linux") and shutil.which("systemctl"):
+    elif _platform().startswith("linux") and _which("systemctl"):
         units = Path.home() / ".config" / "systemd" / "user"
         current_name = "tico-agent-" + profile
         stems = (
@@ -504,26 +529,24 @@ def remove_old_timers(profile):
                 continue
             if "hermes_agent.py" not in text:
                 continue
-            subprocess.run(["systemctl", "--user", "disable", "--now", stem + ".timer"], capture_output=True)
+            _run(["systemctl", "--user", "disable", "--now", stem + ".timer"], capture_output=True)
             for suffix in (".service", ".timer"):
                 (units / (stem + suffix)).unlink(missing_ok=True)
             removed.append("systemd unit " + stem)
             changed = True
         if changed:
-            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+            _run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     return removed
 
 
 def timer_loaded(profile):
     """(loaded, note): is the heartbeat timer known to launchd or systemd right now."""
-    if sys.platform == "darwin":
-        done = subprocess.run(
-            ["launchctl", "print", f"gui/{os.getuid()}/{timer_label(profile)}"], capture_output=True, text=True
-        )
+    if _platform() == "darwin":
+        done = _run(["launchctl", "print", f"gui/{os.getuid()}/{timer_label(profile)}"], capture_output=True, text=True)
         return done.returncode == 0, "launchd job " + timer_label(profile)
-    if sys.platform.startswith("linux") and shutil.which("systemctl"):
+    if _platform().startswith("linux") and _which("systemctl"):
         name = "tico-agent-" + profile + ".timer"
-        done = subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True)
+        done = _run(["systemctl", "--user", "is-active", name], capture_output=True, text=True)
         return done.returncode == 0 and done.stdout.strip() == "active", "systemd user timer " + name
     return False, "no launchd or systemd here"
 
@@ -593,7 +616,7 @@ def skill_path(directory):
 
 def tool_command(harness, profile):
     """The harness's own command for this profile, with its name in any error."""
-    exe = shutil.which(harness)
+    exe = _which(harness)
     if not exe:
         raise Failure(f"`{harness}` is not on PATH, so its scheduled job cannot be changed")
     if profile in ("", "default"):
@@ -620,7 +643,7 @@ def run_tool(command, what, directory=None):
         env = None
         if directory is not None:
             env = dict(os.environ, OPENCLAW_STATE_DIR=str(directory))
-        done = subprocess.run(command, capture_output=True, text=True, timeout=90, **({"env": env} if env else {}))
+        done = _run(command, capture_output=True, text=True, timeout=90, **({"env": env} if env else {}))
     except (OSError, subprocess.SubprocessError) as exc:
         raise Failure(f"{what}: {exc}")
     if done.returncode != 0:
@@ -1026,7 +1049,7 @@ def blocked_message(failure, bot):
 def cmd_heartbeat(args):
     config = load_config(args.key)
     hold = config.get("backoff") or {}
-    if hold.get("until", 0) > time.time():
+    if hold.get("until", 0) > _now():
         return 0
     directory = Path(config.get("profile_dir") or agent_dir(args.harness, args.profile))
     try:
@@ -1042,8 +1065,8 @@ def cmd_heartbeat(args):
         if not message:
             raise
         config["backoff"] = {
-            "until": time.time() + BACKOFF_SECONDS,
-            "since": hold.get("since") or time.time(),
+            "until": _now() + BACKOFF_SECONDS,
+            "since": hold.get("since") or _now(),
             "reason": exc.code or str(exc.status),
             "message": message,
         }
@@ -1051,7 +1074,7 @@ def cmd_heartbeat(args):
         print(message, file=sys.stderr)
         return 1
     config["last_reply"] = reply
-    config["last_ok"] = time.time()
+    config["last_ok"] = _now()
     if config.pop("backoff", None):
         print(
             f"Bot {config.get('slug') or config.get('bot', '')} answers again: heartbeat back to every {EVERY_SECONDS} s"
@@ -1232,7 +1255,7 @@ def cmd_pair(args):
                 raise Failure(f"The pairing is {state}; run pair again")
             if time.monotonic() >= deadline:
                 raise Failure(f"The code {code} expired before anyone approved it; run pair again")
-            time.sleep(every)
+            _sleep(every)
     except KeyboardInterrupt:
         print("\nStopped. The code stays valid until it expires but nothing was changed here.", file=sys.stderr)
         return 130
@@ -1276,9 +1299,7 @@ def cmd_update(args):
         else f"Connector is current ({after}); reinstalled it in {target}"
     )
     # The new file does the install, so a newer connector's steps apply now, not on the next update.
-    done = subprocess.run(
-        [config.get("python") or sys.executable, str(target), "reinstall", *flags(args.harness, args.profile)]
-    )
+    done = _run([config.get("python") or sys.executable, str(target), "reinstall", *flags(args.harness, args.profile)])
     if done.returncode != 0:
         raise Failure("The new connector could not finish installing; see above")
     config = load_config(args.key)  # the new file saved it; the weekly clock restarts now
@@ -1583,7 +1604,7 @@ def openclaw_model_check(profile, directory):
     tokens. ('', why) when this OpenClaw gives no readable answer (a release without `--check`, say)."""
     command = "openclaw" + ("" if profile in ("", "default") else f" --profile {profile}")
     try:
-        done = subprocess.run(
+        done = _run(
             tool_command("openclaw", profile) + ["models", "status", "--json", "--check"],
             capture_output=True,
             text=True,

@@ -73,7 +73,6 @@ def main():
         )
         return
     session = flag("--session-id") or flag("--resume")
-    parent = os.getppid()
     for line in sys.stdin:
         try:
             message = json.loads(line)
@@ -154,8 +153,7 @@ def main():
                     "parent_tool_use_id": None,
                 }
             )
-            while os.getppid() == parent:
-                time.sleep(0.1)
+            sys.stdin.read()  # held until the runner closes its end, which it does when it goes away
             return
         if "SLOW" in text:
             send(

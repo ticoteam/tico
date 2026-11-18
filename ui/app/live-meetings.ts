@@ -7,7 +7,7 @@ interface Window { liveMeetingsStop?: () => void }
 interface LiveMember { actor: string; name?: string | undefined }
 interface LiveBot { bot: string; name: string; joined_by?: string | undefined }
 interface LiveCandidate { id?: string | undefined; slug?: string | undefined; name: string; team?: string | undefined }
-interface LiveListRow { id: string; title: string; state: string; client?: string | undefined; seq?: number | undefined; bots?: unknown[] | undefined }
+interface LiveListRow { id: string; title: string; state: string; seq?: number | undefined; bots?: unknown[] | undefined }
 interface LiveChunk { seq: number; revision: number; speaker?: string | undefined; text: string }
 interface LiveChat extends Omit<MeetChatMessage, 'actor'> { actor: string; created_at?: string | undefined; transcript_seq?: number | null | undefined }
 interface LiveNotice { kind: string; reason?: string | undefined; bot: string; detail?: string | null | undefined; created_at?: string | undefined }
@@ -19,7 +19,7 @@ interface LiveRouter {
   turns?: {name: string; status: string; skip_reason?: string | null | undefined}[] | undefined;
 }
 interface LiveDetail {
-  id: string; title: string; state: string; client?: string | undefined; event_id?: number | undefined; owner_actor?: string | undefined;
+  id: string; title: string; state: string; event_id?: number | undefined; owner_actor?: string | undefined;
   visibility?: string | undefined; window_ms: number; cooldown_ms: number; reply_cap?: number | null | undefined;
   imported_meeting_id?: string | null | undefined; humans?: LiveMember[] | undefined; access?: LiveMember[] | undefined;
   bots?: LiveBot[] | undefined; chunks?: LiveChunk[] | undefined; chat?: LiveChat[] | undefined; notices?: LiveNotice[] | undefined;
@@ -42,16 +42,11 @@ interface LiveFocusable extends HTMLElement {
   selectionStart?: number | null | undefined; selectionEnd?: number | null | undefined; selectionDirection?: string | null | undefined;
   setSelectionRange?: (start: number, end: number | null | undefined, direction?: string) => void;
 }
-interface LiveScreen {
-  id: string; after: string; url: string; generation: string; abort: AbortController; running: boolean;
-  request?: AbortController | undefined; statusRequest?: AbortController | undefined; timer?: number | undefined;
-  statusTimer?: number | undefined; visibility?: (() => void) | undefined;
-}
 interface LiveMeetState {
   list: LiveListRow[]; selected: string; pinned: string; detail: LiveDetail | null; sources: Map<string, EventSource>;
   cursor: Record<string, number>; poll: number; refreshTimer: number; candidates: LiveCandidate[]; busy: boolean;
   drafts: Record<string, LiveDraft>; paintedId: string; listVersion: number; detailVersions: Record<string, number>;
-  chatSending: Set<string>; screen?: LiveScreen | null | undefined;
+  chatSending: Set<string>;
 }
 
 let LIVE_MEETINGS: LiveMeetState | null = null;
@@ -59,7 +54,6 @@ const LIVE_API = '/v2/live-meetings';
 
 function liveMeetingsStop(): void {
   if (!LIVE_MEETINGS) return;
-  liveScreenStop(LIVE_MEETINGS);
   clearInterval(LIVE_MEETINGS.poll);
   clearTimeout(LIVE_MEETINGS.refreshTimer);
   for (const source of LIVE_MEETINGS.sources.values()) source.close();
@@ -150,7 +144,7 @@ function livePaintList(state: LiveMeetState): void {
   const host = $('.live-list');
   if (!state.list.length) { host.innerHTML = '<div class="empty">No connected meetings.</div>'; return; }
   host.innerHTML = state.list.map(meeting => `<button type="button" class="live-list-item${meeting.id === state.selected ? ' selected' : ''}" data-live-id="${esc(meeting.id)}">
-    <b>${esc(meeting.title)}</b>${meeting.client === 'tico-recorder' ? '<small>From Tico Recorder</small>' : ''}<span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
+    <b>${esc(meeting.title)}</b><span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
     <small>${meeting.seq || 0} transcript chunks · ${meeting.bots?.length || 0} bots</small></button>`).join('');
   host.querySelectorAll('[data-live-id]').forEach((button: HTMLElement) => button.onclick = () => {
     location.hash = '#/meetings/live/' + encodeURIComponent(button.dataset.liveId!);
@@ -234,8 +228,8 @@ function livePaintDetail(state: LiveMeetState, detail: LiveDetail): void {
   // A teammate is named by the server (`name`); a bot the viewer's roster lacks would otherwise show its id.
   const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${active && (controls || attached.joined_by === actor) ?
     ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.name)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
-  host.innerHTML = `<div class="live-screen" hidden><div class="muted">Screen · updates a few times a second</div><img alt="Shared screen" style="display:block;max-width:100%;max-height:65vh;margin:auto"></div><article class="live-card">
-    <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
+  host.innerHTML = `<article class="live-card">
+    <header class="live-card-head"><div><h2>${esc(detail.title)}</h2><span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
       ${controls && detail.state === 'paused' ? '<button class="ghost" data-live-control="resume">Resume</button>' : ''}
       ${controls && active ? '<button class="danger" data-live-control="end">End</button>' : ''}
@@ -251,7 +245,7 @@ function livePaintDetail(state: LiveMeetState, detail: LiveDetail): void {
       ` <button class="ghost" type="button" data-live-person-remove="${esc(person.actor.slice(6))}" aria-label="Remove ${esc(person.name || person.actor)} from this meeting">Remove</button>`
       : active && !controls && person.actor === actor ? ' <button class="ghost" type="button" data-live-leave>Leave</button>' : ''}</span>`).join(' ') || '—'}</span>
       <span>Teammates: ${teammates || '—'}</span></div>
-    <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
+    <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text.</p>'}</div></section>
     <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length || notices.length ? liveChatRows(chat, notices) : '<p class="muted">No chat messages yet.</p>'}</div>
       ${me && active ? '<form id="live-chat-form" class="live-chat-form"><input name="text" data-live-focus-key="chat-input" maxlength="20000" required aria-label="Meeting chat" placeholder="Write to the meeting"><button class="primary" type="submit">Send</button></form>' : ''}</section>
     <section class="live-section"><h3>Router</h3><p class="muted">${detail.window_ms / 1000}s window · ${detail.cooldown_ms / 1000}s cooldown · up to ${detail.reply_cap ?? 5} turns per window</p>
@@ -338,13 +332,10 @@ async function liveLoadDetail(state: LiveMeetState, id: string): Promise<void> {
     if (LIVE_MEETINGS !== state || state.busy || state.selected !== id || state.detailVersions[id] !== version) return;
     state.detail = detail;
     livePaintDetail(state, detail);
-    if (detail.state === 'live') liveScreenStart(state, id);
-    else liveScreenStop(state);
   } catch (error) {
     if (LIVE_MEETINGS !== state || state.selected !== id) return;
     const status = errorStatus(error);
     if (status !== undefined && [403, 404].includes(status)) {
-      liveScreenStop(state);
       state.detail = null;
       $('.live-detail').innerHTML = '<div class="empty">This meeting is not available to you, or it does not exist.</div>';
     }
@@ -360,10 +351,8 @@ function liveSubscribe(state: LiveMeetState, id: string, after: number): void {
     'meeting.bot_joined', 'meeting.bot_left', 'meeting.bot_turn', 'meeting.bot_turn_claimed', 'meeting.bot_turn_skipped',
     'meeting.bot_turn_failed', 'meeting.bot_turn_waiting', 'meeting.bot_turn_deferred', 'meeting.bot_turn_retried',
     'meeting.bot_reply', 'meeting.router', 'meeting.finalized'];
-  source.addEventListener('expired', () => { liveScreenStop(state); source.close(); void liveLoadDetail(state, id); });
+  source.addEventListener('expired', () => { source.close(); void liveLoadDetail(state, id); });
   for (const type of types) source.addEventListener(type, (event: Event) => {
-    if (type === 'meeting.state') liveScreenStop(state);
-    // Access changes revalidate on the next frame request; they must not blank a static slide.
     state.cursor[id] = Number((event as MessageEvent).lastEventId) || state.cursor[id] || 0;
     clearTimeout(state.refreshTimer);
     state.refreshTimer = setTimeout(() => { if (LIVE_MEETINGS === state) void liveLoad(state); }, 150);
@@ -379,7 +368,7 @@ async function liveAction(state: LiveMeetState, id: string, path: string, body: 
 }
 const liveJoin = (state: LiveMeetState, id: string) => liveAction(state, id, '/join', {}, 'You joined the meeting.');
 const liveControl = (state: LiveMeetState, id: string, action: LiveControl) => liveAction(state, id, '/control', {action},
-  action === 'end' ? 'Meeting ended.' : ({pause: 'Meeting paused.', disconnect: 'Recorder disconnected; meeting paused.', resume: 'Meeting resumed.'}[action] || 'Meeting updated.'));
+  action === 'end' ? 'Meeting ended.' : ({pause: 'Meeting paused.', disconnect: 'Meeting paused.', resume: 'Meeting resumed.'}[action] || 'Meeting updated.'));
 const liveAttach = (state: LiveMeetState, id: string, bots: string[]) => liveAction(state, id, '/bots', {bots}, 'Teammates attached to this meeting.');
 // Leaving answers {left: true}. A private meeting is then out of reach, so the list opens instead of a 403.
 async function liveLeave(state: LiveMeetState, detail: LiveDetail): Promise<void> {
@@ -390,7 +379,7 @@ async function liveLeave(state: LiveMeetState, detail: LiveDetail): Promise<void
     state.busy = false;
     delete state.drafts[detail.id];
     if (detail.visibility !== 'team' && state.selected === detail.id) {
-      liveScreenStop(state); state.sources.get(detail.id)?.close(); state.sources.delete(detail.id);
+      state.sources.get(detail.id)?.close(); state.sources.delete(detail.id);
       state.pinned = state.selected = state.paintedId = ''; state.detail = null;
     }
     liveStatus(state, 'You left the meeting.');
@@ -439,92 +428,4 @@ async function liveChat(state: LiveMeetState, id: string, text: string, input: H
       if (sendButton) sendButton.disabled = false;
     }
   }
-}
-
-
-// Frames have a separate bounded request loop; transcript refreshes never fetch media.
-function liveScreenClear(state: LiveMeetState): void {
-  if (state.screen?.url) URL.revokeObjectURL(state.screen.url);
-  if (state.screen) { state.screen.url = ''; state.screen.after = ''; }
-  const host = $('.live-screen');
-  if (host) { host.hidden = true; host.querySelector('img')?.removeAttribute('src'); }
-}
-function liveScreenStop(state: LiveMeetState): void {
-  state.screen?.abort.abort();
-  state.screen?.request?.abort();
-  state.screen?.statusRequest?.abort();
-  clearTimeout(state.screen?.statusTimer);
-  if (state.screen?.visibility) document.removeEventListener('visibilitychange', state.screen.visibility);
-  clearTimeout(state.screen?.timer);
-  liveScreenClear(state);
-  state.screen = null;
-}
-function liveScreenStart(state: LiveMeetState, id: string): void {
-  if (state.screen?.id === id) {
-    const host = $('.live-screen');
-    if (host && state.screen.url && !document.hidden) { host.hidden = false; host.querySelector('img').src = state.screen.url; }
-    return;
-  }
-  liveScreenStop(state);
-  const screen: LiveScreen = state.screen = {id, after: '', url: '', generation: '', abort: new AbortController(), running:false};
-  const current = (): boolean => LIVE_MEETINGS === state && state.screen === screen && !screen.abort.signal.aborted;
-  const next = async (): Promise<void> => {
-    if (!current() || screen.running || !screen.generation) return;
-    if (document.hidden) { liveScreenClear(state); screen.after = ''; return; }
-    screen.running = true;
-    const request = new AbortController();
-    screen.request = request;
-    let timeout = setTimeout(() => request.abort(), 4000);
-    let delay = 2000;
-    try {
-      const response = await fetch(API + LIVE_API + '/' + encodeURIComponent(id) + '/screen/frame?wait=2&after=' + encodeURIComponent(screen.after),
-        {credentials: 'same-origin', cache: 'no-store', signal: request.signal});
-      if (!current()) return;
-      if (response.status === 200) {
-        clearTimeout(timeout);
-        const size = Number(response.headers.get('Content-Length')) || 1_000_000;
-        timeout = setTimeout(() => request.abort(), Math.min(15000, 4000 + size / 65536 * 1000));
-        const version = response.headers.get('X-Screen-Version') || '';
-        const blob = await response.blob();
-        if (!current() || document.hidden || !screen.generation || !version.startsWith(screen.generation + ':')) { screen.after = ''; delay = 30; return; }
-        liveScreenClear(state);
-        screen.url = URL.createObjectURL(blob);
-        screen.after = version;
-        const host = $('.live-screen');
-        if (host) { host.hidden = false; host.querySelector('img').src = screen.url; }
-        delay = 30;
-      } else if (response.status === 204) delay = 30;
-      else { liveScreenClear(state); screen.after = ''; if ([401,403,404,410].includes(response.status)) screen.generation = ''; }
-    } catch { liveScreenClear(state); screen.after = ''; }
-    finally {
-      clearTimeout(timeout); screen.running = false;
-      if (current() && !document.hidden && screen.generation) screen.timer = setTimeout(next, delay);
-    }
-  };
-  // Stop/revocation remains visible even while a large image downloads on a slow connection.
-  const status = async (): Promise<void> => {
-    if (!current() || document.hidden) return;
-    const statusRequest = new AbortController();
-    screen.statusRequest = statusRequest;
-    const timeout = setTimeout(() => statusRequest.abort(), 2000);
-    try {
-      const response = await fetch(API + LIVE_API + '/' + encodeURIComponent(id) + '/screen/status',
-        {credentials:'same-origin', cache:'no-store', signal: statusRequest.signal});
-      if (!current()) return;
-      if (response.ok) {
-        const value = await response.json();
-        if (screen.generation && screen.generation !== value.generation) { screen.request?.abort(); liveScreenClear(state); }
-        screen.generation = value.generation || '';
-        if (!screen.running && screen.generation) void next();
-      } else { screen.generation = ''; screen.request?.abort(); liveScreenClear(state); }
-    } catch { screen.generation = ''; screen.request?.abort(); liveScreenClear(state); }
-    finally { clearTimeout(timeout); if (current() && !document.hidden) screen.statusTimer = setTimeout(status, screen.generation ? 1000 : 10000); }
-  };
-  screen.visibility = (): void => {
-    clearTimeout(screen.timer); clearTimeout(screen.statusTimer);
-    if (document.hidden) { screen.request?.abort(); screen.statusRequest?.abort(); liveScreenClear(state); screen.after = ''; }
-    else { void status(); if (!screen.running) void next(); }
-  };
-  document.addEventListener('visibilitychange', screen.visibility);
-  void status();
 }

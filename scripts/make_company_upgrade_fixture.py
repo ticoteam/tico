@@ -4,9 +4,9 @@
 Run it from a checkout of the release a company is updated FROM, so that release's own code makes every row, with the
 Python environment of a current checkout (one release back has the same pins):
 
-    git worktree add /tmp/tico-v0.6.0-rc.7 v0.6.0-rc.7
-    cd /tmp/tico-v0.6.0-rc.7 && PYTHONPATH=. /path/to/.venv/bin/python /path/to/scripts/make_company_upgrade_fixture.py \
-        /path/to/backend/tests/fixtures/company-v0.6.0-rc.7.sqlite.gz
+    git worktree add /tmp/tico-v0.6.0 v0.6.0
+    cd /tmp/tico-v0.6.0 && PYTHONPATH=. /path/to/.venv/bin/python /path/to/scripts/make_company_upgrade_fixture.py \
+        /path/to/backend/tests/fixtures/company-v0.6.0.sqlite.gz
 
 It writes the database and, beside it, `company-<release>.json`: what the person's Needs you held on that release.
 
@@ -42,7 +42,11 @@ def build(out):
     from backend.tests.helpers.botops_parity import act
     from backend.tests.helpers.cloud_access import signals
     from backend.tests.helpers.cloud_machines import FakeHQ
-    from backend.tests.helpers.fresh_install import OWNER_EMAIL, rows, settings_for, signed_in
+
+    try:
+        from backend.tests.helpers.fresh_install import OWNER_EMAIL, rows, settings_for, signed_in
+    except ImportError:  # 0.6.0 named it sample_company
+        from backend.tests.helpers.sample_company import OWNER_EMAIL, rows, settings_for, signed_in
     from backend.tests.helpers.template_renames import CHARTS, employees_file
     from clients.environments import seed_registry
 
@@ -96,7 +100,9 @@ def build(out):
     # ---- day one: the first start applies HQ's chart, the person finishes setup, the shared cloud computer enrolls
     with TestClient(create_app(settings)) as api:
         assert call(api, "GET", "setup")["company_import_failed"] is None
-        call(api, "POST", "setup/complete", {})
+        # 0.6.0 named it onboarding/complete
+        if api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 404:
+            call(api, "POST", "onboarding/complete", {})
         cloud(api)
         api.app.state.cloud_machines.tick()
         created = [c for c in hq.calls if c[0] == "create"]
@@ -167,9 +173,11 @@ def build(out):
         task("Dark mode for the dashboard", "creators-product-owner", "product")
         spec = task("Export invoices as CSV", "creators-product-owner", "product")
         move(spec, "next")
-        task("Fix the login redirect", "builder", "engineering")
-        review = task("Rate limit the public API", "builder", "engineering")
-        move(review, "next")
+        # 0.6.0 builds in Product (Pitch ... Build ... Done); 0.6.0-rc.7 had an Engineering pipeline (On deck, Build).
+        engineering = bool(rows(api, "SELECT 1 FROM pipelines WHERE id='engineering'"))
+        task("Fix the login redirect", "builder", "engineering" if engineering else "product")
+        review = task("Rate limit the public API", "builder", "engineering" if engineering else "product")
+        move(review, "next" if engineering else "product-build")
         snoozed = task("Look at the onboarding funnel", "growth-manager", "general")
         call(api, "POST", f"tasks/{snoozed['id']}/snooze", {"until": "2027-01-15", "why": "After the holidays."})
         signoff = task("Ship the pricing page", "builder", "general")

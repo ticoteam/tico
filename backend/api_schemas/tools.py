@@ -136,6 +136,7 @@ SCHEMAS['ApiTool'] = obj(
                     'access_level': {'enum': ['read', 'read_write']},
                     'expires_on': 'n',
                     'last_used_at': 'n',
+                    'can_remove': 'b',
                 },
                 required=['id', 'name', 'preview', 'access_level'],
             )
@@ -277,6 +278,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     ),
                     'can_use': 'b',
                     'can_manage': 'b',
+                    'can_remove': 'b',
                 },
                 # `username` is left out for a bot, a run or a computer.
                 required=[

@@ -41,6 +41,12 @@ from . import bot_settings as BS
 from . import brand_icons
 from .api_contract import KEYLESS, api_v2
 
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 log = logging.getLogger("tico.github_app")
 
 API = "https://api.github.com"
@@ -801,7 +807,7 @@ class GitHubApp:
 
     # -- GitHub calls -----------------------------------------------------------------------
     def app_jwt(self, c, row):
-        now = int(time.time())
+        now = int(_now())
         with self.lock:
             hit = self.live.get("jwt")
             if hit and hit[0] == row["app_id"] and hit[1] - 60 > now:
@@ -818,7 +824,7 @@ class GitHubApp:
         """The app's JWT, from memory when one is still good: reading the row needs no write lock."""
         with self.lock:
             hit = self.live.get("jwt")
-            if hit and hit[1] - 60 > time.time():
+            if hit and hit[1] - 60 > _now():
                 return hit[2]
         with self.store.transaction() as c:  # the at-rest key may be written the first time it is read
             return self.app_jwt(c, self.row(c))
@@ -901,7 +907,7 @@ class GitHubApp:
             return None
         with self.lock:
             hit = self.live.get("permissions")
-            if hit and hit[0] > time.time() and not refresh:
+            if hit and hit[0] > _now() and not refresh:
                 return hit[1]
         try:
             installation = self.installation()
@@ -1002,7 +1008,7 @@ class GitHubApp:
         about the reads."""
         with self.lock:
             narrowed = self.live.get("turn-reads")
-        reads = narrowed[1] if narrowed and narrowed[0] > time.time() else TURN_READS
+        reads = narrowed[1] if narrowed and narrowed[0] > _now() else TURN_READS
         if any(name in TURN_NEVER_WRITE and level != "read" for name, level in {**reads, **base}.items()):
             raise Problem("github_turn_permissions", "A bot's token never writes checks, statuses or settings", 403)
         while True:
@@ -1015,7 +1021,7 @@ class GitHubApp:
             accepted = {name: level for name, level in reads.items() if granted.get(name) in ("read", "write")}
             reads = accepted if accepted != reads else {}
             with self.lock:
-                self.live["turn-reads"] = (time.time() + READS_RETRY, reads)
+                self.live["turn-reads"] = (_now() + READS_RETRY, reads)
 
     def delete_repo(self, repository):
         row = self.row()
@@ -1057,7 +1063,7 @@ class GitHubApp:
         while True:
             with self.lock:
                 hit = self.cache.get(key)
-                if hit and hit["exp"] - refresh_margin > time.time():
+                if hit and hit["exp"] - refresh_margin > _now():
                     result = (hit["token"], hit["expires_at"])
                     return (*result, True) if include_cache_status else result
                 flight = self.minting.get((key, diagnose))
@@ -1149,7 +1155,7 @@ class GitHubApp:
         data = r.json()
         entry = {"token": data["token"], "expires_at": data["expires_at"], "exp": _iso(data["expires_at"])}
         with self.lock:
-            self.cache = {k: v for k, v in self.cache.items() if v["exp"] > time.time()}
+            self.cache = {k: v for k, v in self.cache.items() if v["exp"] > _now()}
             if len(self.cache) >= 256:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = entry

@@ -229,8 +229,9 @@ async function shot(page: import('playwright').Page, name: string) {
     await page.screenshot({animations: 'disabled', path: path.join(dir, `tools-${name}-${theme}.png`), fullPage: true});
   }
 }
-async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready}: {width?: number; ready?: string} = {}) {
+async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready, configure}: {width?: number; ready?: string; configure?: (api: ApiFake) => void} = {}) {
   const api = apiFake(), mail = mailboxesFake();
+  configure?.(api);
   const got = await open(browser, mail, googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, extra: (p, method, body, url) => api.answer(p, method, body as FakeBody, url)});
   return {...got, api, mail};
 }
@@ -482,6 +483,19 @@ async function start(browser: import('playwright').Browser, hash: string, {width
     }
     for (const width of [1440, 390]) {
       const tag = width < 500 ? 'phone' : 'desktop';
+      {
+        const {page, seen} = await start(browser, '#/tools/api/t-crm', {width, ready: '#tool-keys [data-ta-key]', configure: api => {
+          const tool = api.tools['t-crm']!;
+          tool.can_manage = false;
+          tool.keys[0]!.can_remove = true;
+          tool.keys[1]!.can_remove = false;
+        }});
+        assert.equal(await page.locator('[data-ta-key-delete="k-read"]').isVisible(), true, `${tag}: the key's adder can remove it`);
+        assert.equal(await page.locator('[data-ta-key-delete="k-write"]').count(), 0, `${tag}: another person's key has no Remove action`);
+        assert.equal(await page.locator('[data-ta-rotate]').count(), 0, `${tag}: removal does not allow rotation`);
+        assert.deepEqual(seen.errors, []);
+        await page.close();
+      }
       // An API tool: Who can use it with levels, Recent, Keys, Check, Limits not yet.
       {
         const {page, seen, api} = await start(browser, '#/tools/api/t-crm', {width, ready: '#tool-access tr'});

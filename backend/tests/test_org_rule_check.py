@@ -338,6 +338,53 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert len(tasks) == 1
 
 
+def _close(api, task_id):
+    """The review task's owner (its reviewer) closes it."""
+    with api.app.state.store.transaction() as c:
+        owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        H.task_close(c, owner, task_id, "Decided.")
+
+
+def _hold_notice(api, hold_id):
+    """The review task's Hold line for `hold_id` was posted, so the reviewer can open the hold."""
+    return bodies(api, "Hold: " + hold_id)
+
+
+def _status(api, task_id):
+    return sql(api, "SELECT status FROM tasks WHERE id=?", (task_id,))[0]["status"]
+
+
+def test_a_closed_repeat_review_task_is_not_reused_for_the_next_escalation(ruled):
+    api, _ = ruled
+    color_rule(api)
+    held = [say(api, f"Try {n}: our favorite color is gold")["held"] for n in range(3)]
+    first = hold_row(api, held[2]["id"])["task_id"]
+    _close(api, first)  # the reviewer closes the review task: none of its holds is decided by that
+    assert hold_row(api, held[2]["id"])["state"] == "held"
+    later = say(api, "Try 4: our favorite color is gold")["held"]
+    assert later["outcome"] == "escalated"
+    task = hold_row(api, later["id"])["task_id"]
+    assert task and task != first and _status(api, task) == "open"
+    assert _hold_notice(api, later["id"])
+
+
+def test_an_appeal_on_a_hold_whose_review_task_closed_opens_a_new_one(ruled):
+    api, _ = ruled
+    color_rule(api)
+    held = [say(api, f"Try {n}: our favorite color is gold")["held"] for n in range(4)]
+    first = hold_row(api, held[3]["id"])["task_id"]
+    assert hold_row(api, held[2]["id"])["task_id"] == first  # the day's repeat task, shared while open
+    _close(api, first)
+    appealed = post(api, f"rule-holds/{held[3]['id']}/appeal", {"why": "Gold is public."}, token="ops-test")
+    task = appealed["task_id"]
+    assert task != first and _status(api, task) == "open"
+    assert _hold_notice(api, held[3]["id"])
+    assert hold_row(api, held[3]["id"])["task_id"] == task and hold_row(api, held[3]["id"])["state"] == "held"
+    # An appeal while its review task is open keeps that task.
+    again = post(api, f"rule-holds/{held[3]['id']}/appeal", {"why": "Still public."}, token="ops-test")
+    assert again["task_id"] == task
+
+
 def test_cache_hits_count_toward_repeats(ruled):
     api, judge = ruled
     color_rule(api)

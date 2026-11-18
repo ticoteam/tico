@@ -223,7 +223,7 @@ def bot_gives_up(fake, row, event):
 def test_replay_scores_candidate_against_original(behave, verdict, monkeypatch, tmp_path):
     server = FakeTico(behave)
     monkeypatch.setattr(live, "Live", lambda url: server)
-    monkeypatch.setattr(live.time, "sleep", lambda s: None)
+    monkeypatch.setattr(live, "_sleep", lambda s: None)
     report = tmp_path / "replay.md"
     code = live.main(
         [

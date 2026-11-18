@@ -3,9 +3,11 @@
 import sqlite3
 import tempfile
 import unittest
-import unittest.mock
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+
+import time_machine
 
 from backend import hubdb as H
 
@@ -88,10 +90,9 @@ class Ids(_Case):
         self.assertEqual(H.resolve_actor(self.conn, f"bot:{bot_id}"), f"bot:{bot_id}")
 
     def test_a_uuidv7_carries_its_creation_time_in_milliseconds(self):
-        with unittest.mock.patch.object(H, "datetime") as clock:
-            clock.now.return_value.timestamp.return_value = 2_000_000_000.25  # seconds since the Unix epoch
+        with time_machine.travel(datetime.fromtimestamp(2_000_000_000.25, timezone.utc), tick=False):
             early = H.uuid7()
-            clock.now.return_value.timestamp.return_value = 2_000_000_001.5
+        with time_machine.travel(datetime.fromtimestamp(2_000_000_001.5, timezone.utc), tick=False):
             later = H.uuid7()
         self.assertEqual(uuid.UUID(early).version, 7)
         self.assertEqual(early.replace("-", "")[:12], format(2_000_000_000_250, "012x"))

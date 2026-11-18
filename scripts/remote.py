@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run one heavy command on a fresh RunsOn VM (.github/workflows/remote-run.yml) instead of on this computer.
 
-    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8|16] [--minutes N] [--ref SHA] -- CMD...
+    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8] [--minutes N] [--ref SHA] -- CMD...
 
 It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
 command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
@@ -28,6 +28,22 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
@@ -67,7 +83,7 @@ def rate_limit_wait():
     reset = subprocess.run(
         ['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True, text=True
     ).stdout.strip()
-    seconds = int(reset) - int(time.time()) if reset.isdigit() else 0
+    seconds = int(reset) - int(_now()) if reset.isdigit() else 0
     return min(seconds, 900) if seconds > 0 else 60
 
 
@@ -83,7 +99,7 @@ def gh(*args, capture=True, poll=False, failure=EX_NO_RESULT):
             fail(failure, f'gh {" ".join(args[:2])} failed: {error}')
         seconds = rate_limit_wait()
         print(f'remote: GitHub API rate limit hit; retrying in {seconds} s', file=sys.stderr, flush=True)
-        time.sleep(seconds)
+        _sleep(seconds)
 
 
 def git(*args):
@@ -132,8 +148,8 @@ def setup_for(command):
 
 def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
-    time.sleep(5)  # the dispatched run takes a few seconds to reach the list
-    while time.monotonic() < deadline:
+    _sleep(5)  # the dispatched run takes a few seconds to reach the list
+    while _monotonic() < deadline:
         runs = json.loads(
             gh(
                 'run',
@@ -152,13 +168,13 @@ def find_run(run_id, deadline):
         for run in runs:
             if run['displayTitle'] == title:
                 return run
-        time.sleep(10)
+        _sleep(10)
     fail(EX_NO_RESULT, f'dispatched, but "{title}" did not appear; see the Remote run workflow in Actions')
 
 
 def wait(run):
     last = None
-    deadline = time.monotonic() + RUN_LIMIT
+    deadline = _monotonic() + RUN_LIMIT
     while True:
         view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion', poll=True))
         if view['status'] != last:
@@ -166,12 +182,12 @@ def wait(run):
             last = view['status']
         if view['status'] == 'completed':
             return view['conclusion']
-        if time.monotonic() >= deadline:
+        if _monotonic() >= deadline:
             fail(
                 EX_NO_RESULT,
                 f'run {run["databaseId"]} was still {view["status"]} after {RUN_LIMIT // 3600} hours; giving up on it',
             )
-        time.sleep(30)
+        _sleep(30)
 
 
 def remote_cap():
@@ -208,13 +224,13 @@ def wait_for_capacity(cap):
     minutes exits without dispatching."""
     if not cap:
         return True
-    started = time.monotonic()
+    started = _monotonic()
     failing_since, retry = None, 5
     while True:
         try:
             busy = busy_remote_runs()
         except RuntimeError as error:
-            now = time.monotonic()
+            now = _monotonic()
             failing_since = now if failing_since is None else failing_since
             left = CHECK_LIMIT - (now - failing_since)
             if left <= 0:
@@ -229,13 +245,13 @@ def wait_for_capacity(cap):
                 file=sys.stderr,
                 flush=True,
             )
-            time.sleep(min(retry, left))
+            _sleep(min(retry, left))
             retry = min(retry * 2, 60)
             continue
         failing_since, retry = None, 5
         if busy < cap:
             return True
-        waited = time.monotonic() - started
+        waited = _monotonic() - started
         if waited >= WAIT_LIMIT:
             fail(
                 EX_NOT_DISPATCHED,
@@ -244,7 +260,7 @@ def wait_for_capacity(cap):
             )
         print(f'waiting: {busy} remote run{"" if busy == 1 else "s"} busy (cap {cap})', file=sys.stderr, flush=True)
         # Jittered, so agents that started together don't all poll and dispatch together.
-        time.sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
+        _sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
 
 
 def permit(run_id, cpus, minutes, environ=os.environ):
@@ -327,7 +343,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
         f'minutes={minutes}',
         failure=EX_NOT_DISPATCHED,
     )
-    found = find_run(run_id, time.monotonic() + 120)
+    found = find_run(run_id, _monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
     logs = ROOT / '.remote-runs' / run_id
@@ -384,9 +400,10 @@ def main(argv=None):
         choices=('python', 'browser', 'rust', 'all'),
         help='what the VM installs first (default: guessed from the command)',
     )
-    parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
-    # The whole default Python suite takes about 19 minutes on 16 vCPUs (a test worker per vCPU; 49 before Nov 11) and
-    # about four times that on 4, past the limit: a whole-suite run takes --cpus 16.
+    parser.add_argument('--cpus', choices=('4', '8'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
+    # Remote runs stay on Spot VMs of 8 vCPUs at most. The whole default Python suite took about 19 minutes on 16 vCPUs
+    # (a test worker per vCPU), so it runs as two time-balanced halves on 8, each its own remote run, at once:
+    #   remote.py --cpus 8 -- python scripts/release_checks.py --shard 1/2   (and --shard 2/2)
     parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')
     parser.add_argument('--ref', help='commit to run (default: HEAD, which must be pushed)')
     parser.add_argument('command', nargs=argparse.REMAINDER)
@@ -394,6 +411,10 @@ def main(argv=None):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         parser.error('a command is required, after --')
+    # argparse checks --cpus against its choices but not a default taken from TICO_REMOTE_CPUS; a 16 there would reach
+    # the workflow, fail its input check and exit 75 ("try again later") for a run that can never start.
+    if args.cpus not in ('4', '8'):
+        parser.error(f'TICO_REMOTE_CPUS must be 4 or 8, not {args.cpus!r}')
     if git('status', '--porcelain', '--untracked-files=no'):
         print('remote: uncommitted changes are not included; running the pushed commit', file=sys.stderr)
     code, _ = run(command, setup=args.setup, cpus=args.cpus, minutes=args.minutes, ref=args.ref)

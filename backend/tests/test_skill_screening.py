@@ -17,7 +17,9 @@ from backend.store import H
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.helpers.decide_strict import gateway  # noqa: F401  (fixture)
 from backend.tests.helpers.skills import NEWER, SKILL, approve, bundle, decide, proposal, publish
+from backend.tests.helpers.wait import wait_for
 from clients import judge as J
+
 
 EVIDENCE = {
     "summary": "Sorts the inbox; nothing leaves the company.",
@@ -372,9 +374,11 @@ def test_the_scheduler_tick_starts_a_pass_that_records_its_run(api, monkeypatch)
     pid = proposal(api)["id"]
     monkeypatch.setattr(S, "strict_engine", lambda store, c: None)
     Scheduler(store_of(api), api.app.state.execution).tick()
-    deadline = time.monotonic() + 15
-    while (S._RUNNING.locked() or row(api, pid)["screen_status"] == "pending") and time.monotonic() < deadline:
-        time.sleep(0.05)
+    wait_for(
+        lambda: not S._RUNNING.locked() and row(api, pid)["screen_status"] != "pending",
+        "the scheduled screening pass finished",
+        seconds=15,
+    )
     assert row(api, pid)["screen_status"] == "not_screened" and latest(api, pid)["reason"] == "unavailable"
     with store_of(api).read() as c:
         runs = c.execute("SELECT ok, result FROM system_runs WHERE job='skill_screening'").fetchall()

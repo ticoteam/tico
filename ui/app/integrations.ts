@@ -36,8 +36,11 @@ function vaultForIntegration(row: VaultToolRow | null | undefined): VaultCredent
   });
 }
 async function vaultFetch() {
-  if (!S.me?.credential_access) return null;
-  VAULT = await get('/v2/credentials');
+  if (!(S.me?.credential_access || S.me?.credential_remove_access)) return null;
+  VAULT = await get<VaultState>('/v2/credentials').catch((error: unknown) => {
+    if ((error as {status?: number})?.status === 403) return null;
+    throw error;
+  });
   return VAULT;
 }
 // A write level in words: what a bot may change there (backend/integrations.py `write_level`).

@@ -442,8 +442,14 @@ def call_show(api, args):
         "title": _s("What the call is called, up to 200 characters"),
         "speak_replies": {
             "type": "boolean",
-            "description": "Bots speak their replies on this call. Off unless asked; "
-            "spoken replies are refused until the Gateway has text-to-speech, so leave it out",
+            "description": "Bots answer aloud as well as in the thread: true makes the call Tico Meet. Left out, "
+            "a Tico Meet call has it on and a Google Meet off",
+        },
+        "bots": {
+            "type": "array",
+            "items": _s("A bot's slug"),
+            "maxItems": 10,
+            "description": "Bots in the call from its start; the call is Tico Meet",
         },
     },
     required=("thread_id",),
@@ -453,6 +459,8 @@ def call_start(api, args):
     body = {"title": str(args["title"])} if args.get("title") else {}
     if args.get("speak_replies"):
         body["speak_replies"] = True
+    if args.get("bots"):
+        body["bots"] = [str(bot) for bot in args["bots"]]
     return _as_person(api).post(f"threads/{args['thread_id']}/calls", body, key=_key(args))
 
 
@@ -556,8 +564,8 @@ CALL = (
     Command(
         "call start",
         "start a call in a thread you can write to; you become its connector",
-        args=(Arg("title", default=""), Arg("speak_replies", flag="--speak")),
-        example="tico call start t1 --title 'Weekly sync'",
+        args=(Arg("title", default=""), Arg("speak_replies", flag="--speak"), Arg("bots", flag="--bot")),
+        example="tico call start t1 --title 'Weekly sync' --bot ops",
     ),
     Command("call show", "a call: its state, people, bots and how it ended", example="tico call show c1"),
     Command(

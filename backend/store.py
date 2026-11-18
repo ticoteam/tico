@@ -383,7 +383,13 @@ TRIM_PAUSE = 0.5  # seconds slept after each write transaction
 TRIM_PAGE = 2000  # rows read per read transaction
 TRIM_READ_PAUSE = 0.05  # seconds slept between read pages
 TRIM_MAX = 50_000  # deletes one hourly pass makes at most
-_sleep = time.sleep  # the pauses go through this so tests can run without waiting
+
+
+def _sleep(seconds):
+    """The pauses go through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
 TRIM_MARK = "credential-use-trim"
 
@@ -1368,7 +1374,9 @@ class Store:
                         task_ids.update(task["id"] for task in rows)
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
-                privacy.require_payload(c, replay_principal, result)
+                # A replayed claim is checked as the first answer was (task_privacy.require_payload): a person's own
+                # Assistant room turn as that person.
+                privacy.require_payload(c, replay_principal, result, privacy.attempt_reader(c, replay_principal, aid))
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
 

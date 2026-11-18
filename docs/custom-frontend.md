@@ -292,6 +292,8 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
   `topics=messages,runs&conversation=<id>`.
 - **Small run steps.** `output=compact` sends each run step's `output` as `{"id", "attempt_id", "seq", "kind",
   "created_at", "bytes", "compact": true}` instead of its contents, however large the step (Tico's own pages ask for it).
+  The reply's own text still comes whole: a `delta` (not a `delta_kind: "thought"` one) and a `message`, so a page can
+  draw the reply as it is written.
   Read a step whole when you need it: `GET /api/v2/runs/{run_id}/steps/{seq}` gives `{"output": ...}`, the step as the
   stream would have sent it, or `404` if the stream would not have sent it to you; a bot's token gets `403`. Without
   `output` (or with `output=full`) the stream sends each step whole, as above.

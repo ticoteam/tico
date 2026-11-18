@@ -16,6 +16,7 @@ from backend import browser_commands as bc
 from backend import website_tools as real_tools
 from backend.store import Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
+from backend.tests.helpers.wait import wait_for
 
 PASSWORD = "canary-pw-7Q2x"
 CODE = "424242"
@@ -377,7 +378,7 @@ def test_the_frame_takes_at_most_one_screenshot_a_second(setup, tools):
     watchers = [threading.Thread(target=watch) for _ in range(3)]
     for w in watchers:
         w.start()
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.watchers.get("acct1") == 3, "all three watchers waiting on the picture")
     cmds = collect(s, s.host)
     assert [c["verb"] for c in cmds] == ["screenshot"]
     import base64
@@ -407,7 +408,7 @@ def test_a_computer_that_is_neither_the_host_nor_running_the_turn_gets_nothing(s
         token=other["token"],
     )
     thread, box = call(s, s.ops, "read")
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.queued(s.host["runner_id"]), "the read queued for the host")
     assert collect(s, other, wait=0) == []
     assert collect(s, s.own, wait=0) == []
     # The host stops being the host before it collects: it gets nothing and the bot is told.
@@ -561,11 +562,13 @@ def test_a_caller_that_goes_away_leaves_nothing_queued(setup, tools, monkeypatch
     monkeypatch.setattr(bc, "GONE_CHECK", 0.05)
 
     class Caller:
-        def __init__(self, gone):
+        def __init__(self, gone, asked=None):
             self.state = types.SimpleNamespace()
-            self.gone = gone
+            self.gone, self.asked = gone, asked
 
         async def is_disconnected(self):
+            if self.asked is not None:
+                self.asked.set()
             return self.gone
 
     async def go():
@@ -573,8 +576,12 @@ def test_a_caller_that_goes_away_leaves_nothing_queued(setup, tools, monkeypatch
         spot = bc.Place(s.host["runner_id"], "Host Mac", True)
         cancelled = bc._new(loop, spot, tools._picked(), "read", {})
         bc.MAILBOX.enqueue(cancelled)
-        waiting = asyncio.create_task(bc.wait_reply(Caller(False), cancelled, 30))
-        await asyncio.sleep(0.1)
+        asked = asyncio.Event()
+        waiting = asyncio.create_task(bc.wait_reply(Caller(False, asked), cancelled, 30))
+        try:
+            await asyncio.wait_for(asked.wait(), 10)  # the request is waiting, and has checked on its caller
+        except TimeoutError:
+            raise AssertionError("the waiting request never checked on its caller") from None
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiting
@@ -629,8 +636,9 @@ def test_a_poll_left_open_by_a_stopped_runner_never_takes_the_restarted_runners_
     s = setup
     old = {}
     first = threading.Thread(target=lambda: old.update(cmds=collect(s, s.host, wait=10)))
+    polls_before = bc.MAILBOX.polls.get(s.host["runner_id"], 0)
     first.start()
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.polls.get(s.host["runner_id"], 0) == polls_before + 1, "the first poll is open")
     new = {}
     second = threading.Thread(target=lambda: new.update(cmds=collect(s, s.host, wait=10)))
     second.start()

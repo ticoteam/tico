@@ -795,7 +795,7 @@ def register_core(
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
             # reviewer's default comes from its own setting.
-            check_models.record(c, owner, row["id"], check)
+            check_models.record(c, owner, row["id"], check, parent_id, f"{body.title}\n{body.body or ''}")
         elif body.check_model is None and body.check_role is None and unchecked:
             H._task_event(c, row["id"], who.actor, "check_model", None, None, unchecked)
         if handoff and owner == "bot:" + BOTOPS:

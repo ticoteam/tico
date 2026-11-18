@@ -265,7 +265,7 @@ the list looks too long: the numbers come from the same query as the list ([Need
 
 **Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
 whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-site
-and tico-recorder."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
+and tico-docs."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
 and path, and a setting's raw value ("all", "own") is never read out as a word: a field that holds a name (a model, a
 title) shows it, any other only names the field. A repository card made before this wording is titled from the request
 it sends, with its old line under Details. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded

@@ -8,7 +8,8 @@ the people who approve it. scripts/release_train.py posts them as the body of th
 only; release_train loads this file by path, because the Actions checkout is sparse.
 
 A pull request is in the notes when a commit in the range names it (a merge commit's subject, or a squash commit's
-"(#N)") and that commit is the pull request's merge commit. Order: high risk, then user-facing (ui/, clients/, app/),
+"(#N)") and that commit is the pull request's merge commit. A "(#N)" that names no pull request here (a commit on a
+branch citing a ticket) is skipped: `api.get` raises an error whose `status` is 404 for it. Order: high risk, then user-facing (ui/, clients/, app/),
 then backend, then internal, which prints one line each. A block gives the Spec, the demo steps and the risk when they
 are given (one line when none are), the checks only when one failed or none ran, the reviews and receipts, and the
 areas its files touch.
@@ -52,14 +53,13 @@ AREAS = (
     ("backend/", "backend"),
     ("runner-rs/", "runner"),
     ("runner_support/", "runner"),
-    ("recorder/", "recorder"),
     ("templates/", "templates"),
     ("docs/", "docs"),
     ("scripts/", "scripts"),
     (".github/", "ci"),
 )
 USER_AREAS = frozenset({"ui", "clients", "app"})
-BACKEND_AREAS = frozenset({"backend", "runner", "recorder", "templates"})
+BACKEND_AREAS = frozenset({"backend", "runner", "templates"})
 GROUPS = (("high", "High risk"), ("user", "User-facing"), ("backend", "Backend"), ("internal", "Internal"))
 HIGH_RISK_HEADING = "## " + dict(GROUPS)["high"]
 CUT_SHORT = "The range has more commits than these notes read; the list stops at the last one read."
@@ -212,7 +212,12 @@ def names_dev_ticket(data: dict[str, Any]) -> bool:
 
 def load(api: Api, number: int, shas: set[str]) -> Pull | None:
     """The pull request, when it is merged and its merge commit is in the range (`shas`)."""
-    data: dict[str, Any] = api.get("pulls/%d" % number)
+    try:
+        data: dict[str, Any] = api.get("pulls/%d" % number)
+    except Exception as exc:
+        if getattr(exc, "status", None) == 404:
+            return None  # "(#N)" cited a ticket or an issue, not a pull request in this repository
+        raise
     if not data.get("merged_at") or str(data.get("merge_commit_sha") or "") not in shas:
         return None
     raw_labels: list[dict[str, Any]] = data.get("labels") or []

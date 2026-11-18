@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import time
 from pathlib import Path
 import pytest
@@ -38,6 +39,12 @@ class FakeSystem:
         self.hosts = {}  # host -> slug, for a host that is not <slug>.<anything>
         self.unpublished = set()  # tags GitHub has no release for; None: GitHub does not answer
         self.probes = []  # (host, port) of each health probe
+        self.livekit_started = None  # the cell LiveKit's {{.State.StartedAt}}; None: no such container
+        self.rooms = 0  # what ListRooms answers (a count), or None when LiveKit does not answer
+        self.tokens = []  # each token ListRooms was asked with
+        self.input = ["-A INPUT -i lo -j ACCEPT"]  # INPUT as `iptables -S` prints it; the firewall script edits it
+        self.firewall_works = True  # False: running the firewall script leaves INPUT as it is
+        self.meet_cert = True  # `up` of an edge project with Tico Meet: the certificate Caddy gets its certificate
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -45,6 +52,12 @@ class FakeSystem:
         for key, res in self.fail.items():
             if key in joined:
                 return res
+        if argv[:3] == ["iptables", "-S", "INPUT"]:
+            return Result(0, "-P INPUT ACCEPT\n" + "".join(r + "\n" for r in self.input))
+        if argv and argv[0].endswith(cell.FIREWALL_SCRIPT) and self.firewall_works:
+            mine = [r for r in self.input if f" --comment {cell.MEET_TAG} " not in r]
+            self.input = (cell.MEET_INPUT if "want='" in Path(argv[0]).read_text() else []) + mine
+            return Result(0)
         if argv[:2] == ["iptables", "-S"]:
             rules = (
                 self.docker_user
@@ -75,12 +88,22 @@ class FakeSystem:
                     if not want or s == want
                 ),
             )
+        if argv[:2] == ["docker", "inspect"] and argv[-1] == cell.MEET_CONTAINER:
+            if self.livekit_started is None:
+                return Result(1, "", f"Error: No such object: {cell.MEET_CONTAINER}")
+            return Result(0, self.livekit_started + "\n")
         if argv[:3] == ["docker", "image", "inspect"]:
             return Result(0 if argv[-1] in self.images else 1)
         if "--project-name" in argv:
             proj = argv[argv.index("--project-name") + 1]
             slug = proj[len(cell.PROJECT_PREFIX) :]
             if proj == cell.EDGE_PROJECT:
+                edge = Path(argv[argv.index("-f") + 1])
+                domain = re.search(r"TICO_MEET_DOMAIN: (\S+)", edge.read_text()) if edge.exists() else None
+                if "up" in argv and domain and self.meet_cert:
+                    crt = edge.parent / cell.MEET_DIR / "certs" / (cell.MEET_CERT_PATH.format(d=domain[1]) + ".crt")
+                    crt.parent.mkdir(parents=True, exist_ok=True)
+                    crt.write_text("cert")
                 return Result(0)
             env = Path(argv[argv.index("--env-file") + 1]) if "--env-file" in argv else None
             profiles = envfile.parse(env.read_text()).get("COMPOSE_PROFILES", "") if env and env.exists() else ""
@@ -108,6 +131,10 @@ class FakeSystem:
         if self.ps.get(slug, ("",))[0] != "running":
             return 502
         return self.health.get(host, 200)
+
+    def meet_rooms(self, token):
+        self.tokens.append(token)
+        return self.rooms
 
     def port_free(self, port):
         return port not in self.busy_ports
@@ -164,7 +191,19 @@ def secret_file(tmp_path, name, text, mode=0o600):
     return str(p)
 
 
-def add_args(host, slug="boatyard", *extra):
+KMS_ARN = "arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+KMS_KEY_ID, KMS_SECRET = "AKIA" + "K" * 16, "km/" + "y" * 37  # synthetic, never a real key
+
+
+def kms_args(host, arn=KMS_ARN):
+    """--kms-key and --kms-credentials-file, which a new company needs (a synthetic access key in a 0600 file)."""
+    creds = secret_file(
+        host.tmp, "kms-credentials", f"AWS_ACCESS_KEY_ID={KMS_KEY_ID}\nAWS_SECRET_ACCESS_KEY={KMS_SECRET}"
+    )
+    return ["--kms-key", arn, "--kms-credentials-file", creds]
+
+
+def add_args(host, slug="boatyard", *extra, kms=True):
     return [
         "add",
         "--company",
@@ -183,6 +222,7 @@ def add_args(host, slug="boatyard", *extra):
         secret_file(host.tmp, "client-secret", SECRET),
         "--version",
         "v1.2.3",
+        *(kms_args(host) if kms else []),
         *extra,
         "--json",
     ]

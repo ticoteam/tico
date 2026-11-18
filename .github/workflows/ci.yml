@@ -74,8 +74,9 @@ jobs:
   # What to validate: the requested candidate against the requested published release.
   candidate:
     needs: ceiling
-    # An incremental validation runs on GitHub-hosted runners: its plan is made here, and it is small.
-    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    # Every validation's critical path (this job, the Linux binaries, the images) runs on RunsOn: no disk clean-up, and the
+    # x86_64 binaries build in about 2 minutes there against about 5 on a hosted runner.
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       previous: ${{ steps.pick.outputs.previous }}
@@ -98,19 +99,19 @@ jobs:
           [[ -z "$CARRIED" || "$CARRIED" == \[*\] ]] || { echo "::error::carried failures are a JSON list"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
       # Controls from the reviewed workflow commit: the gate's VMs are the full validation's, or the incremental plan's.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: validation-control
           sparse-checkout: |
             scripts/release_increment.py
             scripts/pr_checks.py
-            scripts/flake_quarantine.py
+            scripts/flake_detect.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       # An incremental validation makes its plan from the candidate's history (the anchor is an ancestor of main).
       - if: inputs.anchor != ''
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.candidate_sha }}
           path: candidate
@@ -142,13 +143,13 @@ jobs:
         include:
           - {arch: x64, name: linux-x86_64, target: x86_64-unknown-linux-musl}
           - {arch: arm64, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}', github.run_id, matrix.arch, matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '') }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}', github.run_id, matrix.arch, matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 20
     steps:
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
+        if: vars.TICO_CI_HOSTED == 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
@@ -157,7 +158,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q musl-tools
-          rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+          rustup toolchain install 1.99 --profile minimal --target "$TARGET" && rustup default 1.99
       # Every gate part waits for this build (about 3 min uncached). Cache compiled dependencies as on macOS: keyed on
       # Cargo.lock, toolchain and target; only Release validation runs on main write it.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -194,7 +195,7 @@ jobs:
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runner-${{ matrix.name }}
           path: dist/*.gz
@@ -213,7 +214,7 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && (matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.platform == 'arm64' && 'arm64' || 'x64', matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.platform == 'arm64' && 'arm64' || 'x64', matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 30
     permissions:
       actions: read   # watches this run's native-linux build
@@ -221,9 +222,9 @@ jobs:
       packages: write
     steps:
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
+        if: vars.TICO_CI_HOSTED == 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
@@ -241,7 +242,7 @@ jobs:
         run: |
           for _ in $(seq 150); do
             job="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              -q "[.jobs[] | select((.name | startswith(\"native-linux (\")) and (.name | contains(\"$NAME\"))) | {status, conclusion}]")"
+              -q "[.jobs[] | select((.name | startswith(\"native-linux (\")) and (.name | contains(\"$NAME\"))) | {status, conclusion}]")" || { sleep 10; continue; }  # a 502 or dropped connection is one more poll
             [ "$(jq 'length' <<<"$job")" = 1 ] || { echo "::error::The native-linux $NAME build was not found."; exit 1; }
             if [ "$(jq -r '.[0].status' <<<"$job")" = completed ]; then
               [ "$(jq -r '.[0].conclusion' <<<"$job")" = success ] && exit 0
@@ -251,7 +252,7 @@ jobs:
           done
           echo "::error::The release Linux binaries were not built within 12 minutes."; exit 1
       - if: matrix.image != 'tico-updater'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: runner-${{ matrix.platform == 'arm64' && 'linux-arm64' || 'linux-x86_64' }}
           path: ${{ runner.temp }}/native
@@ -285,7 +286,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/digest"
           echo "$DIGEST" > "$RUNNER_TEMP/digest/$NAME"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-${{ matrix.image }}-${{ matrix.platform }}
           path: ${{ runner.temp }}/digest/*
@@ -309,7 +310,10 @@ jobs:
     # Every part runs on 4 vCPUs; more shards, not bigger VMs, for speed.
     timeout-minutes: 45
     strategy:
-      fail-fast: false
+      # An incremental validation stops at its first failed part: the run is red either way, and the train moves on
+      # minutes sooner. Its cancelled parts ran nothing, so such a run is no anchor (release_train.py cut_short); the
+      # next validation selects from the anchor before it. A full validation runs every part, to name every failure.
+      fail-fast: ${{ inputs.anchor != '' }}
       # The VMs: the full validation's (release_increment.full_matrix), or an incremental plan's (--plan).
       matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
     # An incremental validation's python and browser VMs run on hosted runners; its product and desktop VMs need the
@@ -338,10 +342,10 @@ jobs:
       TICO_GIT_CHECK_PRIVATE_KEY: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_PRIVATE_KEY || '' }}
       TICO_GIT_CHECK_INSTALLATION_ID: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_INSTALLATION_ID || '' }}
       TICO_GIT_CHECK_REPOSITORY: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_REPOSITORY || '' }}
+    # No disk clean-up step: hosted ubuntu-24.04 runners start with about 85 GB free, and the capacity preflight below
+    # (hosted_release_check.py prepare) removes the unused SDKs only when / has less than the 35 GiB the gate needs.
+    # Removing them anyway cost each hosted part 47-143 s on the release's critical path.
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - name: Validate inputs before checkout
         env:
           TICO_HOSTED_ENVIRONMENT: ${{ runner.environment }}
@@ -361,12 +365,12 @@ jobs:
               stream.write(f'TICO_HOSTED_ENVIRONMENT={kind}\n')
           PY
       # Controls come from the reviewed workflow commit; builds/tests come only from the candidate.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: validation-control
           persist-credentials: false
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           path: candidate
@@ -376,7 +380,7 @@ jobs:
         run: python3 validation-control/scripts/hosted_release_check.py prepare
       # Caches hold downloads only (npm tarballs, browsers, compiled Cargo dependencies); every job still
       # installs from the candidate's pinned lock files and builds the candidate's own crates from source.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.15'
       - name: Install Python test prerequisites
@@ -410,7 +414,7 @@ jobs:
           then needed=true; fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - if: steps.browsers.outputs.needed == 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.3'
           cache: npm
@@ -457,7 +461,7 @@ jobs:
         run: |
           for _ in $(seq 150); do
             job="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              -q '[.jobs[] | select((.name | startswith("native-linux (")) and (.name | contains("linux-x86_64"))) | {status, conclusion}]')"
+              -q '[.jobs[] | select((.name | startswith("native-linux (")) and (.name | contains("linux-x86_64"))) | {status, conclusion}]')" || { sleep 10; continue; }  # a 502 or dropped connection is one more poll
             [ "$(jq 'length' <<<"$job")" = 1 ] || { echo "::error::The native-linux x86_64 build was not found."; exit 1; }
             if [ "$(jq -r '.[0].status' <<<"$job")" = completed ]; then
               [ "$(jq -r '.[0].conclusion' <<<"$job")" = success ] && exit 0
@@ -467,7 +471,7 @@ jobs:
           done
           echo "::error::The release Linux binaries were not built within 25 minutes."; exit 1
       - if: steps.binaries.outputs.needed == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: runner-linux-x86_64
           path: ${{ runner.temp }}/native
@@ -483,8 +487,8 @@ jobs:
       - name: Install Rust
         if: matrix.part != 'browser'
         run: |
-          rustup toolchain install 1.92 --profile minimal
-          rustup default 1.92
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
       # The Tauri app's Linux build dependencies, as .github/workflows/app.yml installs them.
       - name: Desktop build dependencies
         if: matrix.part == 'desktop'
@@ -505,7 +509,7 @@ jobs:
         run: |
           for _ in $(seq 120); do
             images="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              -q '[.jobs[] | select((.name | startswith("images (")) and (.name | contains("amd64"))) | {status, conclusion}]')"
+              -q '[.jobs[] | select((.name | startswith("images (")) and (.name | contains("amd64"))) | {status, conclusion}]')" || { sleep 10; continue; }  # a 502 or dropped connection is one more poll
             failed="$(jq '[.[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"$images")"
             [ "$failed" = 0 ] || { echo "::error::An image build did not succeed."; exit 1; }
             [ "$(jq '[.[] | select(.status == "completed")] | length' <<<"$images")" = 3 ] && exit 0
@@ -514,7 +518,7 @@ jobs:
           echo "::error::The images were not built within 20 minutes."
           exit 1
       - if: matrix.part == 'product'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-*-amd64
           path: ${{ runner.temp }}/digests
@@ -555,14 +559,14 @@ jobs:
           if [ -f validation-control/scripts/hosted_release_check.py ]; then
             python3 validation-control/scripts/hosted_release_check.py collect
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
           path: ${{ runner.temp }}/release-validation-report
           retention-days: 3
           if-no-files-found: warn
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && (matrix.part == 'python' || matrix.part == 'browser')
         with:
           name: release-junit-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
@@ -580,21 +584,21 @@ jobs:
     continue-on-error: true
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           sparse-checkout: |
             scripts/pr_checks.py
-            scripts/flake_quarantine.py
+            scripts/flake_detect.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-junit-${{ github.run_id }}-*
           path: ci-results
           merge-multiple: true
       - run: python3 scripts/pr_checks.py durations
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings
           path: durations.json
@@ -611,7 +615,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
@@ -620,13 +624,13 @@ jobs:
         run: |
           if [ -x scripts/cli_contract.sh ]; then echo "check=true" >> "$GITHUB_OUTPUT"
           else echo "::notice::this candidate predates scripts/cli_contract.sh; the real CLIs were not checked"; fi
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.has.outputs.check == 'true'
         with:
           node-version: '24.22.3'
       - name: Install Rust
         if: steps.has.outputs.check == 'true'
-        run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92
+        run: rustup toolchain install 1.99 --profile minimal && rustup default 1.99
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.has.outputs.check == 'true'
         with:
@@ -636,6 +640,27 @@ jobs:
       - name: The real claude and codex still behave as the runner expects
         if: steps.has.outputs.check == 'true'
         run: scripts/cli_contract.sh --latest
+
+  # Known advisories in the candidate's dependency inputs (scripts/osv_gate.py, the PR checks' advisories job): that job
+  # runs only when an input changes, so this catches an advisory published since against inputs nobody touched. Full
+  # validations only (one a day from the train, so this is also its schedule). Not part of the verdict, like the CLI
+  # contract: a red job to read before a release, answered by a fix or an allowlist entry with an expiry.
+  advisories:
+    needs: candidate
+    if: inputs.anchor == ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+      - name: Known advisories (pinned OSV-Scanner)
+        # A candidate frozen before the gate has nothing to run.
+        run: |
+          if [ -f scripts/osv_gate.py ]; then python3 scripts/osv_gate.py scan
+          else echo "::notice::this candidate predates scripts/osv_gate.py; advisories were not checked"; fi
 
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
@@ -656,16 +681,43 @@ jobs:
   # The train dispatches this workflow with GITHUB_TOKEN, and GitHub starts no workflow_run for a run that token started,
   # so main-red.yml never heard of the train's validations (none ran from Nov 16 to Nov 18). A dispatch from GITHUB_TOKEN
   # does start a run: this job hands main-red.yml this run's id, and main-red waits for the run to finish before reading it.
+# The same goes for the release train's own workflow_run trigger, so this job hands the run to train.yml as well.
   main-red:
     needs: release-check
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 3
     permissions:
       actions: write
+      contents: read
     steps:
       - name: Hand this run to main-red.yml
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run main-red.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"
+      # The train ships a green candidate, or reports a red one, as soon as this run ends rather than at the next push
+      # or backstop. It waits for this run to complete first.
+      - name: Hand this run to the release train
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run train.yml --repo "$GITHUB_REPOSITORY" --ref main -f validation_run="$GITHUB_RUN_ID"
+      # A red validation of main goes to its owner, the Release Owner bot on Tico Team, which fixes the cause or deletes
+      # the test the same day (scripts/ci/tell_release_owner.sh). main-red.yml still reviews the suspect pull requests.
+      - if: needs.release-check.result == 'failure'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        continue-on-error: true
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci/tell_release_owner.sh
+          sparse-checkout-cone-mode: false
+        timeout-minutes: 1
+      - name: Hand a red validation to the Release Owner
+        if: needs.release-check.result == 'failure'
+        continue-on-error: true
+        env:
+          TICO_RELEASE_OWNER_HOOK: ${{ secrets.TICO_RELEASE_OWNER_HOOK }}
+          TICO_RELEASE_OWNER_HOOK_SECRET: ${{ secrets.TICO_RELEASE_OWNER_HOOK_SECRET }}
+          TITLE: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}
+        run: scripts/ci/tell_release_owner.sh validation-red "$TITLE"

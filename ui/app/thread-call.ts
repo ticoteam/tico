@@ -1,23 +1,32 @@
 /* ui/app/thread-call.ts — Calls in a thread (docs/meet.md, docs/dev/meet-calls-contract.md): the phone button in the
    thread's header (a green pill with who is in it while a call is live), the call card a call posts in its thread, the
-   rail's green phone, and the two kinds of call. A Google Meet call opens Meet in a new tab (and the Tico Recorder on a
-   Mac that has it); a Tico Meet call is joined here, with one bar while in it (mute, share screen, add bot, leave).
+   rail's green phone, and the two kinds of call. A Google Meet call opens Meet in a new tab; a Tico Meet call opens its
+   meeting window (#/call/<id>, ui/app/call-window.ts): a small window in the desktop app, a tab on the web, the whole
+   screen on a phone. When the window cannot open, the call is joined here, with one bar while in it (mute, share
+   screen, add bot, open the window, leave).
    Tico Meet is audio and screen share only: the camera is never asked for. Its media client is LiveKit's
    (ui/vendor/livekit-client.umd.min.js, Apache-2.0), loaded on the first call. Ringing is ui/app/call-ring.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Someone in a call, as the call view lists them; `in_call` is what the status source (Google, a Recorder) says now.
+// Someone in a call, as the call view lists them; `in_call` is what the status source (Google) says now.
 interface CallPerson { actor: string; joined_at?: string | null; left_at?: string | null; removed_at?: string | null; in_call?: boolean | number; }
+// A bot's voice in a Tico Meet call (docs/meet.md, Voice): what it is doing, and the sentence it is saying.
+interface CallVoiceBot { slug: string; state: 'listening' | 'waiting' | 'thinking' | 'making_voice' | 'speaking' | string; caption?: string | null; }
+interface CallVoiceView { bots: CallVoiceBot[]; note?: string | null; }
 // The server's call view (GET /v2/calls/{id}, list items, the start and join answers; a Start answer may wrap it in {call}).
 interface CallRecord {
   id: string; title?: string; state?: string; connector?: string; call?: CallRecord;
   thread_id?: string; provider?: string; meet_uri?: string | null; join_url?: string | null;
   live_count?: number; status_source?: string | null; seen_at?: string | null; started_at?: string | null; ended_at?: string | null;
   duration_s?: number | null; ring?: boolean; card_message_id?: string | null; transcript_message_id?: string | null;
-  recorder?: {source?: string | null; installed?: boolean} | null;
-  participants?: CallPerson[];
+  participants?: CallPerson[]; meeting_id?: string | null; end_reason?: string | null;
+  // The bots in the call: slugs, or (an older voice view) each bot with what it is doing and its words now; what each is
+  // doing now comes in `voice` (null without voice).
+  bots?: (string | CallBotRaw)[]; voice?: CallVoiceView | null;
 }
+// A bot in a call as the server may send it: `state` is listening, waiting, thinking, making_voice or speaking.
+interface CallBotRaw { slug?: string; state?: string | null; caption?: string | null; }
 interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; }
 interface CallJoinReply { call?: CallRecord; token: string; url: string; }
 // Per thread: {call} (the live call, or null), {off} when the server has calls switched off, {removed} after a removal,
@@ -25,9 +34,10 @@ interface CallJoinReply { call?: CallRecord; token: string; url: string; }
 interface CallThreadInfo { call?: CallRecord | null; none?: boolean; off?: boolean; removed?: boolean; providers?: string[]; }
 // The parts of LiveKit's room, participants and tracks this file reads.
 interface CallPublication { source?: unknown; track?: { stop?: () => void; mediaStreamTrack?: { stop?: () => void } } | null; }
-interface CallParticipant { identity: string; }
+interface CallParticipant { identity: string; isSpeaking?: boolean; isMicrophoneEnabled?: boolean; }
 interface CallTrack { kind: string; source: unknown; attach(): HTMLMediaElement; detach(): HTMLMediaElement[]; }
 interface CallLocal {
+  identity?: string; isSpeaking?: boolean;
   setMicrophoneEnabled(on: boolean): Promise<unknown>;
   setScreenShareEnabled(on: boolean, options: {audio: boolean}): Promise<unknown>;
   trackPublications?: Map<string, CallPublication>;
@@ -35,6 +45,8 @@ interface CallLocal {
 interface CallRoom {
   localParticipant: CallLocal;
   remoteParticipants?: Map<string, CallParticipant>;
+  canPlaybackAudio?: boolean;
+  startAudio?: () => Promise<unknown>;
   on(event: string, listener: (...args: never[]) => void): unknown;
   connect(url: string, token: string, options: {autoSubscribe: boolean}): Promise<unknown>;
   disconnect(): void;
@@ -44,6 +56,9 @@ interface LivekitNamespace {
   RoomEvent: {
     TrackSubscribed: string; TrackUnsubscribed: string; ParticipantConnected: string;
     ParticipantDisconnected: string; LocalTrackUnpublished: string; Disconnected: string;
+    // Read by the meeting window (who speaks, who is muted, sound blocked); an older client may not have them.
+    ActiveSpeakersChanged?: string; TrackMuted?: string; TrackUnmuted?: string; AudioPlaybackStatusChanged?: string;
+    LocalTrackPublished?: string;
   };
   Track: {Source: {ScreenShare: unknown}};
   DisconnectReason?: {PARTICIPANT_REMOVED: unknown};
@@ -76,7 +91,10 @@ const CALL_OWED = new Set<string>();
 // A leave stays settled until the last Join finishes, including for a Start response still on its way.
 const CALL_SETTLED = new Set<string>();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
-const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
+const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end',
+  window: 'open_in_new', more: 'expand_more'};
+// The call's Tico voice in the LiveKit room (backend/call_media.py RECORDER_PREFIX): never shown as a person.
+const CALL_VOICE_PREFIX = 'tico-recorder-';
 
 // body.error of a failed call request: its code when it is an object, or the message string itself. '' when there is none.
 function callCode(e: unknown): string {
@@ -135,7 +153,7 @@ async function callLoad(view: ThvView): Promise<void> {
 function callHeadHTML(view: ThvView): string {
   const t = view.thread, info = CALL_THREADS.get(view.id);
   if (!t || !info || info.none) return '';
-  if (CALL?.threadId === view.id) return '<span class="thv-call-note thv-call-on" role="status">In call</span>';
+  if (CALL?.threadId === view.id) return '<button type="button" class="thv-call-note thv-call-on" data-call="window" title="Open the call">In call</button>';
   if (info.removed) return '<span class="thv-call-note muted">Removed from call</span>';
   if (info.off) return '';     // calls are not set up on this server: no control that cannot work
   // A live call is a green pill with who is in it; tapping it joins.
@@ -143,16 +161,63 @@ function callHeadHTML(view: ThvView): string {
     const n = callCount(CALL_VIEWS.get(info.call.id) || info.call);
     return `<button type="button" class="thv-call on" data-call="join" aria-label="Join call" title="Join">${CALL_SVG}${n ? `<span class="tnum">${n}</span>` : ''}</button>`;
   }
-  return t.me?.can_post ? `<button type="button" class="thv-call" data-call="start" aria-label="Start call" title="Call">${CALL_SVG}</button>` : '';
+  // A DM with one bot calls that bot, which only Tico Meet can do: no phone where the server has no Tico Meet.
+  if (!callTicoMeet(info.providers) && callDmBot(t)) return '';
+  if (!t.me?.can_post) return '';
+  // Tico Meet is every call's default; a Google Meet is asked for by name, from the phone's menu.
+  const meet = info.providers?.includes('google_meet') && info.providers[0] !== 'google_meet';
+  return `<button type="button" class="thv-call" data-call="start" aria-label="Start call" title="Call">${CALL_SVG}</button>${
+    meet ? `<button type="button" class="thv-call thv-call-more" data-call="more" aria-label="More ways to call" title="More" aria-haspopup="menu"><span class="nav-icon" aria-hidden="true">${CALL_ICONS.more}</span></button>` : ''}`;
 }
-async function callAction(view: ThvView, kind: string | undefined): Promise<void> {
+// Whether a bot can be called here: only Tico Meet calls take bots. `providers` is a thread's list answer (what the viewer
+// could start); without one, the server's config says whether it runs Tico Meet.
+const callTicoMeet = (providers?: string[]): boolean => providers ? providers.includes('tico') : S.config.features?.tico_meet === true;
+// A phone: the meeting takes this tab's whole screen instead of a window of its own.
+const callPhone = (): boolean => matchMedia('(max-width: 760px)').matches;
+// Opens a Tico Meet call's meeting window, in the click: on a phone (and on the call page itself) this tab goes there;
+// the desktop app makes a small window of its own (app/src/windows.rs open_call_window); a browser opens a tab, `tab`
+// when one was opened already in the click. One window per call: the browser's is named tico-call-<id>, so a second
+// Start, Join or card brings the same one forward (the desktop app's has its own label). `join=1` says the window was
+// opened to join: a plain visit to its address shows Join instead. This tab's own seat in that call, if it has one,
+// moves to the window: its media stops here without a leave, and the window joins. False when no window could open (a
+// blocked pop-up): the caller joins here instead.
+function callWindowOpen(call: CallRecord, tab: Window | null = null): boolean {
+  const hash = CALL_ROUTE + encodeURIComponent(call.id) + '?join=1', name = 'tico-call-' + call.id;
+  const close = (): void => { try { tab?.close(); } catch {} };
+  if (callPhone() || location.hash.startsWith(CALL_ROUTE)) { close(); location.hash = hash; return true; }
+  const native = (window.ticoNativeFeatures || []).includes('callWindow') && nativeHandler('callWindow');
+  let opened = false;
+  if (native) { close(); native.postMessage({call: call.id, join: true}); opened = true; }
+  else {
+    const url = location.pathname + location.search + hash;
+    if (tab && !tab.closed) { try { tab.name = name; tab.location.href = url; opened = true; } catch { close(); } }
+    if (!opened) { try { const w = window.open(url, name); w?.focus(); opened = !!w; } catch { opened = false; } }
+  }
+  if (opened && CALL?.id === call.id) callHandOff(CALL);
+  return opened;
+}
+async function callAction(view: ThvView, kind: string | undefined, from?: HTMLElement): Promise<void> {
   const id = view.id, info: CallThreadInfo = CALL_THREADS.get(id) || {};
+  // The phone's menu: a Google Meet instead of Tico Meet, for this call.
+  if (kind === 'more') {
+    if (from) thvMenuShow(from, [['meet', 'Use Google Meet instead']], () => { void callAction(view, 'meet'); });
+    return;
+  }
+  // In the call here: its window opens and takes the call over.
+  if (kind === 'window') { const v = CALL ? CALL_VIEWS.get(CALL.id) || {id: CALL.id, thread_id: CALL.threadId} : null; if (v) callWindowOpen(v); return; }
+  const live = info.call ? CALL_VIEWS.get(info.call.id) || info.call : null;
   // Google Meet goes to a tab of its own, opened now while the click still allows it.
-  if (kind === 'join' && info.call?.provider === 'google_meet') { await callMeetJoin(CALL_VIEWS.get(info.call.id) || info.call); return; }
-  // Start may make a Google Meet unless the server said it starts Tico Meet here: a blank tab opens now, in the click and
-  // before anything is awaited, so a pop-up blocker lets it through. It goes to the Meet once the start answers, and
-  // closes when the answer is a Tico Meet call (joined here) or the start fails.
-  let tab = kind === 'start' && (!info.providers?.length || info.providers[0] === 'google_meet') ? callTabOpen() : null;
+  if (kind === 'join' && live?.provider === 'google_meet') { await callMeetJoin(live); return; }
+  // A Tico Meet call opens its window, which joins it.
+  if (kind === 'join' && live && callWindowOpen(live)) return;
+  // Start: a blank tab opens now, in the click and before anything is awaited, so a pop-up blocker lets it through. It
+  // goes to the call's window (or the Meet) once the start answers, and closes when the start fails. A phone opens a tab
+  // only for a Google Meet (its own call page is this tab). A call in a DM with one bot is a voice call with that bot,
+  // always Tico Meet.
+  const starting = kind === 'start' || kind === 'meet';
+  const bot = kind === 'start' ? callDmBot(view.thread) : '';
+  const meet = kind === 'meet' || (!bot && info.providers?.[0] === 'google_meet');
+  let tab = starting && (meet || !callPhone()) ? callTabOpen() : null;
   const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
   // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
   // and never joins the call once it is made.
@@ -160,8 +225,9 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
   CALL_JOINS++;
   try {
     let call: CallRecord | null | undefined = info.call;
-    if (kind === 'start') {
-      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {provider: 'auto'});
+    if (starting) {
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`,
+        bot ? {provider: 'tico', bots: [bot]} : {provider: kind === 'meet' ? 'google_meet' : 'auto'});
       call = made?.call || made;
       if (call?.provider === 'google_meet') {
         CALL_THREADS.set(id, {...CALL_THREADS.get(id), call});
@@ -169,12 +235,17 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
         callMeetLanded(call, opened, call.join_url || '');
         return;
       }
+      if (call?.id && gen === CALL_GEN) {
+        const opened = tab; tab = null;
+        // The window joins it; the header here is the live call's pill until the window's join shows.
+        if (callWindowOpen(call, opened)) { CALL_THREADS.set(id, {...CALL_THREADS.get(id), call}); callViewKeep(call); return; }
+      }
       tabClose();
     }
     if (gen !== CALL_GEN) {
       // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
       // back, unless a Join of the same call (from the header the call's start redrew) is in it or on its way.
-      if (kind === 'start' && call?.id) {
+      if (starting && call?.id) {
         if (CALL_JOINING.get(call.id)) {
           if (!CALL_SETTLED.has(call.id)) CALL_OWED.add(call.id);
         } else if (CALL?.id !== call.id) callSeatLeave(call.id);
@@ -187,6 +258,83 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
     if (gen !== CALL_GEN) return;
     if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
     callNoted(id, e);
+  } finally {
+    tabClose();
+    CALL_JOINS--;
+  }
+}
+
+// The bot a DM is with, when it is a DM with exactly one bot ('' otherwise).
+function callDmBot(t: ThreadRow | null | undefined): string {
+  if (!threadIsDm(t) || t.parent_id || Number(t.dm_with_count || 1) !== 1) return '';
+  const others = threadOthers(t);
+  return others.length === 1 && others[0]?.startsWith('bot:') ? others[0].slice(4) : '';
+}
+// Call a bot from anywhere (the org chart): the viewer's DM with it (made when there is none), a Tico Meet call there
+// with the bot in it, joined here. A live call in that DM is joined instead.
+async function callBot(slug: string): Promise<void> {
+  const gen = ++CALL_GEN;
+  CALL_JOINS++;
+  try {
+    const r = await get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?with=' + encodeURIComponent('bot:' + slug), {fresh: true});
+    const t = (r?.thread !== undefined ? r.thread : r) || null;
+    if (!t?.id || gen !== CALL_GEN) return;
+    let call: CallRecord | null | undefined, started = false;
+    try {
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`, {provider: 'tico', bots: [slug]});
+      call = made?.call || made; started = true;
+    } catch (e) {
+      if (callCode(e) !== 'call_in_progress') throw e;
+      const list = await get<CallListReply>(`/v2/threads/${encodeURIComponent(t.id)}/calls?limit=1`, {fresh: true});
+      call = (list.calls || []).find(c => c.state === 'live');
+    }
+    if (!call?.id) return;
+    if (call.provider === 'google_meet') { await callMeetJoin(call); return; }
+    // Hidden or overtaken while the call was being made: the seat the start took goes back.
+    if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return; }
+    await callJoin(t.id, call, threadTitle(t), gen);
+  } catch (e) {
+    if (gen === CALL_GEN) toast(errorMessage(e, 'Could not call'), true);
+  } finally {
+    CALL_JOINS--;
+  }
+}
+// Call teammates from anywhere (the Meetings page's Call now): one teammate is the viewer's DM with them (made when there
+// is none), more are a new thread with them all, named for the call's title, else for who is in it (a group needs a
+// name). A Tico Meet call starts there with the bots among them, and its meeting window opens and joins it, as the
+// header's Start does: the blank tab opens now, in the click, before anything is awaited. A live call already in that
+// DM is joined instead. Resolves to whether a call opened; a refusal is thrown for the caller to show.
+async function callTeammates(actors: string[], title = ''): Promise<boolean> {
+  const bots = actors.filter(a => a.startsWith('bot:')).map(a => a.slice(4));
+  let tab = callPhone() ? null : callTabOpen();
+  const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
+  const gen = ++CALL_GEN;
+  CALL_JOINS++;
+  try {
+    const r: (ThreadRow & {thread?: ThreadRow}) | null = actors.length === 1
+      ? await get('/v2/threads/dm?with=' + encodeURIComponent(actors[0]!), {fresh: true})
+      : await post('/v2/threads', {title: title || actors.map(a => actorName(a)).join(', ').slice(0, 200), audience: 'members', members: actors});
+    const t = r?.thread || r;
+    if (!t?.id || gen !== CALL_GEN) return false;
+    threadsPut(t);
+    let call: CallRecord | null | undefined, started = false;
+    try {
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`,
+        {provider: 'tico', ...(bots.length ? {bots} : {}), ...(title ? {title} : {})});
+      call = made?.call || made; started = true;
+    } catch (e) {
+      if (callCode(e) !== 'call_in_progress') throw e;
+      const list = await get<CallListReply>(`/v2/threads/${encodeURIComponent(t.id)}/calls?limit=1`, {fresh: true});
+      call = (list.calls || []).find(c => c.state === 'live');
+    }
+    if (!call?.id) return false;
+    if (call.provider === 'google_meet') { tabClose(); await callMeetJoin(call); return true; }
+    // Hidden or overtaken while the call was being made: the seat the start took goes back.
+    if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return false; }
+    const opened = tab; tab = null;
+    if (callWindowOpen(call, opened)) { callViewKeep(call); return true; }
+    await callJoin(t.id, call, threadTitle(t), gen);
+    return true;
   } finally {
     tabClose();
     CALL_JOINS--;
@@ -220,14 +368,16 @@ const CALL_VIEWS = new Map<string, CallRecord>();
 // Calls whose view could not be read (gone, or not the viewer's to read): their cards stay plain rather than asking again.
 const CALL_VIEW_MISSING = new Set<string>();
 const CALL_VIEW_READS = new Map<string, Promise<CallRecord | null>>();
-// A Google Meet call that nothing reports on (no Google status, no Recorder): Tico does not know who is in it, so it
+// A Google Meet call that nothing reports on (no Google status): Tico does not know who is in it, so it
 // shows no count and no faces, only the call. Opening it from Tico is not being in it.
 const callBlind = (c: CallRecord): boolean => c.provider === 'google_meet' && !c.status_source;
-// Who is in it now: the status source's count while there is one; a Tico Meet call has none, so it is who joined.
+// Who is in it now: the status source's count while there is one; a Tico Meet call has none, so it is who joined and its
+// bots.
 function callCount(c: CallRecord | null | undefined): number {
   if (!c || callBlind(c)) return 0;
   if (c.status_source) return Number(c.live_count) || 0;
-  return (c.participants || []).filter(p => p.joined_at && !p.left_at && !p.removed_at).length;
+  // A Tico Meet call counts its bots too, as its meeting window does.
+  return (c.participants || []).filter(p => p.joined_at && !p.left_at && !p.removed_at).length + (c.state === 'live' ? (c.bots || []).length : 0);
 }
 // The faces on a live card: who the status source sees, else (Tico Meet) who joined.
 const callFaces = (c: CallRecord): string[] => callBlind(c) ? [] : (c.participants || [])
@@ -258,7 +408,13 @@ function callViewKeep(v: CallRecord): void {
     callRailMark(tid, v);
     if (JSON.stringify(was) !== JSON.stringify(v)) callViewsDraw(tid);
   }
+  // The bar shows the bots' voice (thread-call-live.ts; CALL is set only once that part has loaded).
+  if (CALL?.id === v.id) callBarDraw();
   if (typeof ringConsider === 'function') ringConsider(v);
+  // An ended call is over here too, even when its room was not closed on the server: the room, the token's timer and
+  // the microphone stop.
+  if (v.state !== 'live' && CALL?.id === v.id) callDone(CALL);
+  callWindowDraw();
 }
 // A call the viewer can no longer read: its mark and ring go.
 function callViewGone(id: string): void {
@@ -310,11 +466,10 @@ function callTabGo(tab: Window | null, url: string): void {
   if (tab && !tab.closed) { try { tab.location.href = url; return; } catch {} }
   window.open(url, '_blank', 'noopener');
 }
-// The Meet is made (or joined): its tab goes there, and the Recorder opens to record it.
+// The Meet is made (or joined): its tab goes there.
 function callMeetLanded(call: CallRecord, tab: Window | null, url: string): void {
   callViewKeep(call);
   callTabGo(tab, url || call.join_url || call.meet_uri || '');
-  callRecorderOpen(call);
 }
 // Join a Google Meet call: the server notes the open and answers its link (with the viewer's Google account).
 async function callMeetJoin(call: CallRecord): Promise<void> {
@@ -329,53 +484,25 @@ async function callMeetJoin(call: CallRecord): Promise<void> {
     if (call.thread_id) void callViewRead(call.id);
   }
 }
-// Join from anywhere (the card, the ring): Google Meet in a tab, Tico Meet here. Runs its first step in the click.
+// Join from anywhere (the card, the ring): Google Meet in a tab, Tico Meet in its window (here when that cannot open).
+// Runs its first step in the click.
 function callJoinAny(call: CallRecord): Promise<void> {
   if (call.provider === 'google_meet') return callMeetJoin(call);
+  if (callWindowOpen(call)) return Promise.resolve();
   const tid = call.thread_id || '';
   return callJoin(tid, call, threadTitle(threadsRow(tid)) || call.title || 'Call').catch(e => callNoted(tid, e));
-}
-
-// ----------------------------------------------------------------- the Recorder
-// A Mac, and not an iPad asking for the desktop site: where Tico Recorder runs. Also the calendar's Join (calendar-row.ts).
-function recorderMac(): boolean {
-  const ua = (navigator as Navigator & {userAgentData?: {platform?: string}}).userAgentData;
-  if (ua?.platform) return ua.platform === 'macOS';
-  return /Mac/.test(navigator.platform || '') && !(navigator.maxTouchPoints > 1);
-}
-// Starting or joining a Google Meet call on a Mac opens the Tico Recorder on it, to record it into the call. The desktop
-// app opens it itself (`recordCall`, no browser prompt; it answers false when no Recorder is installed); a browser follows
-// the Recorder's link without leaving the page. An app without `recordCall` opens nothing: its `openRecorder` only opens
-// the Recorder on the org.
-function callRecorderOpen(call: CallRecord): void {
-  if (call.provider !== 'google_meet' || !call.id) return;
-  if (window.ticoNative) {
-    if (nativeHas('recordCall')) try { void Promise.resolve(nativeHandler('recordCall')?.postMessage({call: call.id})).catch(() => {}); } catch {}
-    return;
-  }
-  if (!call.recorder?.installed || !recorderMac()) return;
-  recorderLinkOpen(`tico-recorder://record?server=${encodeURIComponent(location.origin)}&call=${encodeURIComponent(call.id)}`, 'call-recorder-link');
-}
-// Follows a `tico-recorder://record` link without leaving the page (a hidden frame, gone after 3 s); with no Recorder
-// installed nothing happens. The Recorder checks the link with the org before it records anything.
-function recorderLinkOpen(link: string, cls: string): void {
-  const frame = document.createElement('iframe');
-  frame.hidden = true; frame.className = cls; frame.src = link;
-  document.body.append(frame);
-  setTimeout(() => frame.remove(), 3000);
 }
 
 // ----------------------------------------------------------------- the card
 // A call's card in its thread (a message with refs.call.card): live, the phone, who is in it, how long, Join, and End for
 // whoever started a Google Meet; ended, how long it was and its transcript, or the missed mark for a Google Meet that
-// Google or a Recorder watched and saw nobody in. The red dot says a Recorder is recording it. A Google Meet nothing reports on shows only the call.
+// Google watched and saw nobody in. A Google Meet nothing reports on shows only the call.
 function callCardHTML(m: ThvMessage): string {
   const id = String(m.refs?.call?.id || '');
   const v = id ? CALL_VIEWS.get(id) : undefined;
   if (id && !v && !CALL_VIEW_MISSING.has(id)) void callViewRead(id);
   const head = (cls: string, svg = CALL_SVG, label = '') => `<span class="call-card-ic${cls}"${label ? ` title="${label}" aria-label="${label}" role="img"` : ''}>${svg}</span><b class="call-card-t">Call</b>`;
   if (!v) return `<div class="call-card" data-call-card="${esc(id)}">${head('')}</div>`;
-  const rec = v.recorder?.source ? '<span class="call-rec" title="Recording" aria-label="Recording"></span>' : '';
   if (v.state === 'live') {
     const blind = callBlind(v), faces = callFaces(v), since = blind ? '' : v.seen_at || v.started_at || '';
     const end = v.provider === 'google_meet' && v.connector && v.connector === myActor()
@@ -383,10 +510,10 @@ function callCardHTML(m: ThvMessage): string {
     if (since) callTick();
     return `<div class="call-card on" data-call-card="${esc(id)}">${head(' on')}${
       faces.length ? `<span class="call-card-ppl">${faces.slice(0, 4).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 20)}</span>`).join('')}</span>` : ''}${
-      since ? `<span class="call-card-n muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${rec}
+      since ? `<span class="call-card-n muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}
       <span class="spacer"></span>${end}<button type="button" class="primary small call-card-join" data-call-join="${esc(id)}">Join</button></div>`;
   }
-  // Missed only when something watched the call (Google or a Recorder) and saw nobody; a call nothing watched just ended.
+  // Missed only when something watched the call (Google) and saw nobody; a call nothing watched just ended.
   const missed = v.provider === 'google_meet' && v.duration_s == null && !!v.status_source;
   const len = callLength(v.duration_s);
   const tid = v.thread_id || m.thread_id || '';

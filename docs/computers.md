@@ -280,8 +280,8 @@ raw command output. A generic code rejection cannot say whether that code expire
 Signing a saved subscription in again is **Reconnect**, and asks first when running tasks would restart. It belongs to the company. A plan's
 **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
 person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
-and admins add, edit (name and owner), reconnect and remove them in **Settings > Models**; anyone who sees that page sees
-the list (name, kind, owner, status, computers, usage), never a value.
+and admins add, edit, reconnect and remove them in **Settings > Models**. The person who added a plan or API key can
+also remove it there. The list shows each name, kind, owner, status, computers and usage.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
 Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another

@@ -96,7 +96,7 @@ def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store
         finally:
             flight.request_finished(token)
     assert cost[2] == 5 and len(cost[3]) == 3
-    rec.request("GET /api/status", "human", 200, 1500, 10, "human:ana", cost)
+    rec.request("GET /api/status", "human", 200, 1500, 10, "human:ana", cost, "token:muse")
     rec.request("GET /api/status", "human", 200, 1600, 10, "human:ana", [900.0, 0.0, 40])  # an older-shaped cost
     rec.drain(MINUTE)
     taken = rec.take(MINUTE)
@@ -108,7 +108,21 @@ def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store
     assert {"sql": "SELECT * FROM tasks WHERE id='?'", "n": 2, "ms": named["top"][1]["ms"]} in named["top"]
     assert "secret" not in json.dumps(slow) and sum(1 for r in slow if "top" not in r) == 1
     # The flight file, which a stalled server still writes, carries the same names.
-    assert [r["top"] for r in rec.pop_slow() if "top" in r] == [named["top"]]
+    filed = rec.pop_slow()
+    assert [r["top"] for r in filed if "top" in r] == [named["top"]]
+    # And says how the person reached the server, so a burst can be traced to the assistant or script behind it.
+    assert [r.get("client") for r in filed] == ["token:muse", None]
+
+
+def test_a_slow_request_names_how_a_person_reached_the_server():
+    """A person's personal API token by its label, the Assistant, or the browser; nothing for bots and runners."""
+    from backend.auth import Identity
+
+    assert flight.client_of(Identity("human:ana", "human", via_token=True, token_label="muse")) == "token:muse"
+    assert flight.client_of(Identity("human:ana", "human", via_token=True)) == "token:unnamed"
+    assert flight.client_of(Identity("human:ana", "owner", via="assistant")) == "assistant"
+    assert flight.client_of(Identity("human:ana", "human")) == "browser"
+    assert flight.client_of(Identity("bot:ops", "bot")) == flight.client_of(None) == ""
 
 
 def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, capsys):
@@ -131,7 +145,9 @@ def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, c
         deadline = time.monotonic() + 5
         while not store.recorder.waiting and time.monotonic() < deadline:
             time.sleep(0.01)
+        assert store.recorder.waiting, "the writer never reached the write lock"
         sampler.step()
+        # The waiting writer needs some time on the lock before the window shows lock time to classify.
         time.sleep(0.1)
         store.recorder.beat = time.monotonic() - 1
         stall = sampler.step()
@@ -282,6 +298,8 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
                 if flight.last_start(c):
                     break
             time.sleep(0.05)
+        else:
+            raise AssertionError("the recorder's start event never reached the flight table")
         assert get("cara-test").status_code == 403 and get("runner-test").status_code in (401, 403)
         with app.state.store.transaction() as c:
             c.execute(
@@ -547,7 +565,7 @@ def test_a_start_or_stall_the_lock_kept_out_keeps_the_time_it_happened(store, mo
     """A start or stall event written minutes later, once the lock frees, is dated when it happened, not when it got
     in."""
     clock = [MINUTE + 5.0]
-    monkeypatch.setattr(flight.time, "time", lambda: clock[0])
+    monkeypatch.setattr(flight, "_now", lambda: clock[0])
     monkeypatch.setattr(flight, "start_event", lambda settings, check=True: {"version": "test"})
     rec = store.recorder
     sampler = flight.Flight(
@@ -615,7 +633,6 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     """A sync handler's write held across a recorder flush on another thread: the open hold names the route template
     (from the middleware's context, through the threadpool) and the handler's line before it ends, and the event the
     busy lock kept out lands once it does."""
-    monkeypatch.setattr(flight, "LONG_HOLD_MS", 30)
     registry = tmp_path / "registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
@@ -645,6 +662,8 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     sampler.file.start()
     client = TestClient(app)  # no lifespan: the server's own recorder thread never flushes here
     answers = []
+    # Every hold counts as long from here on, so the open one is named as soon as it is taken, with no wait for age.
+    monkeypatch.setattr(flight, "LONG_HOLD_MS", 0)
     request = threading.Thread(
         target=lambda: answers.append(client.post("/api/v2/test-hold/x", headers={"Authorization": "Bearer ana-test"})),
         daemon=True,
@@ -652,7 +671,6 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     request.start()
     try:
         assert entered.wait(10), [(a.status_code, a.text[:200]) for a in answers]
-        time.sleep(0.06)
         rec.drain(MINUTE)
         with caplog.at_level(logging.WARNING, logger="tico.flight"):
             sampler.flush(MINUTE)

@@ -45,6 +45,7 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
   registered?: boolean;
   bot_admin?: boolean;
   credential_access?: boolean;
+  credential_remove_access?: boolean;
   credential_admin?: boolean;
   mail_access?: boolean;
   mover?: boolean;
@@ -148,6 +149,8 @@ interface AppConfig {
   feedback_question?: FeedbackAsk | null;
   usage_count_notice?: unknown;
   changelog?: { unread_count?: number; [key: string]: unknown } | null;
+  /** What this server can do; `tico_meet`: it runs Tico Meet, the only calls a bot can join (backend/calls.py). */
+  features?: { task_files_multipart?: boolean; file_media_stream?: boolean; tico_meet?: boolean };
   [key: string]: unknown;
 }
 

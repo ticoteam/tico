@@ -1,0 +1,600 @@
+{
+ "results": [
+  {
+   "source": {
+    "path": ".github/workflows/ci.yml"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "uv",
+      "version": "0.13.1",
+      "ecosystem": "PyPI"
+     },
+     "groups": [
+      {
+       "ids": [
+        "PYSEC-2026-4321",
+        "GHSA-hq85-5cpj-mr62"
+       ],
+       "aliases": [
+        "GHSA-hq85-5cpj-mr62",
+        "PYSEC-2026-4321"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "PYSEC-2026-4321",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-hq85-5cpj-mr62",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": ".github/workflows/pr-checks.yml"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "uv",
+      "version": "0.13.0",
+      "ecosystem": "PyPI"
+     },
+     "groups": [
+      {
+       "ids": [
+        "PYSEC-2026-4321",
+        "GHSA-hq85-5cpj-mr62"
+       ],
+       "aliases": [
+        "GHSA-hq85-5cpj-mr62",
+        "PYSEC-2026-4321"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "PYSEC-2026-4321",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-hq85-5cpj-mr62",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": ".github/workflows/release-shots.yml"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "uv",
+      "version": "0.13.1",
+      "ecosystem": "PyPI"
+     },
+     "groups": [
+      {
+       "ids": [
+        "PYSEC-2026-4321",
+        "GHSA-hq85-5cpj-mr62"
+       ],
+       "aliases": [
+        "GHSA-hq85-5cpj-mr62",
+        "PYSEC-2026-4321"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "PYSEC-2026-4321",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-hq85-5cpj-mr62",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "Dockerfile"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "uv",
+      "version": "0.13.1",
+      "ecosystem": "PyPI"
+     },
+     "groups": [
+      {
+       "ids": [
+        "PYSEC-2026-4321",
+        "GHSA-hq85-5cpj-mr62"
+       ],
+       "aliases": [
+        "GHSA-hq85-5cpj-mr62",
+        "PYSEC-2026-4321"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "PYSEC-2026-4321",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-hq85-5cpj-mr62",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "app/Cargo.lock"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "glib",
+      "version": "0.18.5",
+      "ecosystem": "crates.io"
+     },
+     "groups": [
+      {
+       "ids": [
+        "RUSTSEC-2024-0429",
+        "GHSA-wrw7-89jp-8q8g"
+       ],
+       "aliases": [
+        "GHSA-wrw7-89jp-8q8g",
+        "RUSTSEC-2024-0429"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "RUSTSEC-2024-0429",
+       "summary": "Unsoundness in `Iterator` and `DoubleEndedIterator` impls for `glib::VariantStrIter`",
+       "affected": [
+        {
+         "database_specific": {
+          "informational": "unsound"
+         }
+        }
+       ]
+      },
+      {
+       "id": "GHSA-wrw7-89jp-8q8g",
+       "summary": "Unsoundness in `Iterator` and `DoubleEndedIterator` impls for `glib::VariantStrIter`",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    },
+    {
+     "package": {
+      "name": "proc-macro-error",
+      "version": "1.0.4",
+      "ecosystem": "crates.io"
+     },
+     "groups": [
+      {
+       "ids": [
+        "RUSTSEC-2024-0370"
+       ],
+       "aliases": [
+        "RUSTSEC-2024-0370"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "RUSTSEC-2024-0370",
+       "summary": "proc-macro-error is unmaintained",
+       "affected": [
+        {
+         "database_specific": {
+          "informational": "unmaintained"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "runner-rs/Cargo.lock"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "libsqlite3-sys",
+      "version": "0.30.1",
+      "ecosystem": "crates.io"
+     },
+     "groups": [
+      {
+       "ids": [
+        "RUSTSEC-2026-0459"
+       ],
+       "aliases": [
+        "BIT-sqlite-2026-119375",
+        "CVE-2026-119375",
+        "GHSA-72w2-rjgg-q729",
+        "RUSTSEC-2026-0459",
+        "RUSTSEC-2026-0502"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "RUSTSEC-2026-0459",
+       "summary": "`libsqlite3-sys` via C SQLite CVE-2026-119375",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    },
+    {
+     "package": {
+      "name": "rustls-webpki",
+      "version": "0.103.15",
+      "ecosystem": "crates.io"
+     },
+     "groups": [
+      {
+       "ids": [
+        "RUSTSEC-2026-0382"
+       ],
+       "aliases": [
+        "BIT-golang-2026-111943",
+        "CVE-2026-111943",
+        "GO-2026-6809",
+        "RUSTSEC-2026-0381",
+        "RUSTSEC-2026-0382",
+        "RUSTSEC-2026-0383"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "RUSTSEC-2026-0382",
+       "summary": "Certificate verification may accept distrusted intermediates",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "scripts/ci/merge_commit_checks.sh"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "uv",
+      "version": "0.13.0",
+      "ecosystem": "PyPI"
+     },
+     "groups": [
+      {
+       "ids": [
+        "PYSEC-2026-4321",
+        "GHSA-hq85-5cpj-mr62"
+       ],
+       "aliases": [
+        "GHSA-hq85-5cpj-mr62",
+        "PYSEC-2026-4321"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "PYSEC-2026-4321",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-hq85-5cpj-mr62",
+       "summary": "uv's bundled CA store trusts an emSign root whose intermediate CA keys are compromised",
+       "affected": [
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "templates/employee-repo/ui/vendor/js-yaml.min.js"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "js-yaml",
+      "version": "4.1.0",
+      "ecosystem": "npm"
+     },
+     "groups": [
+      {
+       "ids": [
+        "GHSA-2883-xcg3-v3hh"
+       ],
+       "aliases": [
+        "CVE-2026-84375",
+        "GHSA-2883-xcg3-v3hh"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-52cp-r559-cp3m"
+       ],
+       "aliases": [
+        "CVE-2026-59869",
+        "GHSA-52cp-r559-cp3m"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-5p4m-2wfm-xmqj"
+       ],
+       "aliases": [
+        "GHSA-5p4m-2wfm-xmqj"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-h67p-54hq-rp68"
+       ],
+       "aliases": [
+        "CVE-2026-53550",
+        "GHSA-h67p-54hq-rp68"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-mh29-5h37-fv8m"
+       ],
+       "aliases": [
+        "CVE-2025-64718",
+        "GHSA-mh29-5h37-fv8m"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "GHSA-2883-xcg3-v3hh",
+       "summary": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-52cp-r559-cp3m",
+       "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-5p4m-2wfm-xmqj",
+       "summary": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) \u2014 CVE-2026-59870 fix not backported",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-h67p-54hq-rp68",
+       "summary": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-mh29-5h37-fv8m",
+       "summary": "js-yaml has prototype pollution in merge (<<)",
+       "affected": [
+        {},
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "tools/trust-list-check/Cargo.lock"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "rustix",
+      "version": "1.1.5",
+      "ecosystem": "crates.io"
+     },
+     "groups": [
+      {
+       "ids": [
+        "RUSTSEC-2026-0486"
+       ],
+       "aliases": [
+        "GHSA-jh2m-fhpj-3vr7",
+        "RUSTSEC-2026-0486"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "RUSTSEC-2026-0486",
+       "summary": "xattr functions mark unwritten bytes as initialized when given a zero-length buffer",
+       "affected": [
+        {
+         "database_specific": {
+          "informational": "unsound"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": {
+    "path": "ui/vendor/js-yaml.min.js"
+   },
+   "packages": [
+    {
+     "package": {
+      "name": "js-yaml",
+      "version": "4.1.0",
+      "ecosystem": "npm"
+     },
+     "groups": [
+      {
+       "ids": [
+        "GHSA-2883-xcg3-v3hh"
+       ],
+       "aliases": [
+        "CVE-2026-84375",
+        "GHSA-2883-xcg3-v3hh"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-52cp-r559-cp3m"
+       ],
+       "aliases": [
+        "CVE-2026-59869",
+        "GHSA-52cp-r559-cp3m"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-5p4m-2wfm-xmqj"
+       ],
+       "aliases": [
+        "GHSA-5p4m-2wfm-xmqj"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-h67p-54hq-rp68"
+       ],
+       "aliases": [
+        "CVE-2026-53550",
+        "GHSA-h67p-54hq-rp68"
+       ]
+      },
+      {
+       "ids": [
+        "GHSA-mh29-5h37-fv8m"
+       ],
+       "aliases": [
+        "CVE-2025-64718",
+        "GHSA-mh29-5h37-fv8m"
+       ]
+      }
+     ],
+     "vulnerabilities": [
+      {
+       "id": "GHSA-2883-xcg3-v3hh",
+       "summary": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-52cp-r559-cp3m",
+       "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-5p4m-2wfm-xmqj",
+       "summary": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) \u2014 CVE-2026-59870 fix not backported",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-h67p-54hq-rp68",
+       "summary": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+       "affected": [
+        {},
+        {}
+       ]
+      },
+      {
+       "id": "GHSA-mh29-5h37-fv8m",
+       "summary": "js-yaml has prototype pollution in merge (<<)",
+       "affected": [
+        {},
+        {}
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

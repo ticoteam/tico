@@ -58,7 +58,7 @@ def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failu
             "published": "true" if published else "false",
             "dry_run": "" if "validated" in failures else str(dry_run).lower(),
         },
-        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes", "recorder-changes")},
+        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes")},
         "company-matrix": {"enabled": str(enabled).lower()},
     }
     results = {}
@@ -82,9 +82,7 @@ def test_release_build_and_carry_forward_schedules(published):
         "validated",
         "runner-changes",
         "desktop-changes",
-        "recorder-changes",
         "desktop-assets",
-        "recorder-assets",
         *([] if published else ["release"]),
     }
     assert _schedule(published=published, enabled=False)["companies"] == "skipped"
@@ -95,7 +93,7 @@ def test_a_prerelease_builds_the_generic_apps_and_no_company_app(ref):
     # A company's installed apps update from its own bucket's latest.json: a prerelease must never move it.
     results = _schedule(ref=ref)
     assert results["company-matrix"] == results["companies"] == "skipped"
-    assert {"desktop", "desktop-assets", "recorder", "recorder-assets", "macos", "macos-assets"} <= {
+    assert {"desktop", "desktop-assets", "macos", "macos-assets"} <= {
         name for name, result in results.items() if result == "success"
     }
 
@@ -117,8 +115,6 @@ def test_dry_run_and_failed_validation_never_start_optional_jobs():
         ("desktop-changes", {"desktop", "desktop-assets", "company-matrix", "companies"}),
         ("desktop", {"desktop-assets"}),
         ("company-matrix", {"companies"}),
-        ("recorder-changes", {"recorder", "recorder-assets"}),
-        ("recorder", {"recorder-assets"}),
     ],
 )
 def test_failed_prerequisites_block_dependents_even_with_outputs(failed, blocked):
@@ -180,7 +176,7 @@ def app_build_decision(tmp_path, monkeypatch):
     gh.chmod(0o755)
     monkeypatch.setenv("PATH", f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
 
-    def decide(kind, paths=(), *, force=False, assets="latest.json\nrecorder-latest.json"):
+    def decide(kind, paths=(), *, force=False, assets="latest.json"):
         git("checkout", "-qf", "--detach", "v1.0.0")
         for name in paths:
             path = repo / name
@@ -217,22 +213,6 @@ def app_build_decision(tmp_path, monkeypatch):
     ("kind", "paths"),
     [
         (
-            "recorder",
-            [
-                "recorder/tests/updates.cts",
-                "recorder/tests/nested/fixture.json",
-                "recorder/src/network_tests.rs",
-                "recorder/src/stream_tests.rs",
-                "recorder/src/app/tests.rs",
-                "recorder/bench/assist_cases.json",
-                "recorder/ui/preview/mock.ts",
-                "recorder/README.md",
-                "recorder/DEVELOPMENT.md",
-                "recorder/vendor/anarlog/README.md",
-                "recorder/ui/app/docs/guide.md",
-            ],
-        ),
-        (
             "desktop",
             [
                 "app/tests/update_hub.py",
@@ -255,25 +235,6 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
     ("kind", "paths"),
     [
         (
-            "recorder",
-            [
-                "recorder/CHANGES.md",
-                "recorder/src/app/recorder.rs",
-                "recorder/ui/app/app.ts",
-                "recorder/tauri.conf.json",
-                "recorder/icons/icon.icns",
-                "recorder/Cargo.lock",
-                "recorder/package-macos.sh",
-                "recorder/src/new_tests.rs",
-                "recorder/src/capture/tests.rs",
-                "recorder/build-ui.cjs",
-                "scripts/app_release.py",
-                ".github/workflows/recorder.yml",
-                "package.json",
-                "package-lock.json",
-            ],
-        ),
-        (
             "desktop",
             [
                 "app/src/main.rs",
@@ -292,16 +253,15 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
 )
 def test_shipping_changes_still_build_even_alongside_docs(app_build_decision, kind, paths):
     for path in paths:
-        assert app_build_decision(kind, ["recorder/README.md", "app/README.md", path]), path
+        assert app_build_decision(kind, ["app/README.md", path]), path
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("kind", ["desktop", "recorder"])
+@pytest.mark.parametrize("kind", ["desktop"])
 def test_unchanged_apps_build_when_forced_or_missing_previous_assets(app_build_decision, kind):
     assert not app_build_decision(kind)
     assert app_build_decision(kind, force=True)
-    other_manifest = "latest.json" if kind == "recorder" else "recorder-latest.json"
-    assert app_build_decision(kind, assets=other_manifest)
+    assert app_build_decision(kind, assets="other.json")
 
 
 # ---- The release train (train.yml), hotfixes (hotfix.yml) and the validations they dispatch (ci.yml) ----
@@ -341,34 +301,57 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     assert "--root candidate" in plan_step["run"] and "--carried" in plan_step["run"]
     # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
     assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
-    assert jobs["gate"]["strategy"]["fail-fast"] is False
+    # An incremental validation stops at its first failed part; a full one runs every part, to name every failure.
+    assert jobs["gate"]["strategy"]["fail-fast"] == "${{ inputs.anchor != '' }}"
     # The measured timings run only in a full validation.
     assert jobs["test-timings"]["if"] == "inputs.anchor == ''"
+    # The daily advisory scan: full validations only, outside the verdict (release-check needs neither it nor the CLIs).
+    assert jobs["advisories"]["if"] == "inputs.anchor == ''" and jobs["advisories"]["continue-on-error"] is True
+    assert "scripts/osv_gate.py scan" in jobs["advisories"]["steps"][-1]["run"]
+    assert "advisories" not in jobs["release-check"]["needs"]
     steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 
 
-def test_an_incremental_validation_runs_hosted_except_its_product_and_desktop_parts():
-    """An incremental validation's jobs run on GitHub-hosted runners; its product and desktop VMs need the 35 GiB disk
-    and the Docker images, so they stay on RunsOn. A full validation keeps the configured runners."""
+def test_an_incremental_validation_runs_its_critical_path_on_runson_and_its_test_parts_hosted():
+    """Every validation's critical path (candidate, the Linux binaries, the images) runs on RunsOn, hosted only under
+    TICO_CI_HOSTED: the x86_64 binaries build about 2 minutes faster there and need no disk clean-up. An incremental
+    validation's python and browser parts run hosted; its product and desktop VMs need the 35 GiB disk and the Docker
+    images, so they stay on RunsOn."""
     ci, _ = _workflow("ci.yml")
     jobs = ci["jobs"]
     for name in ("candidate", "native-linux", "images"):
-        assert "inputs.anchor != ''" in str(jobs[name]["runs-on"]), name
-        assert "runs-on=" in str(jobs[name]["runs-on"]), name  # a full validation still runs on RunsOn
+        runs_on = str(jobs[name]["runs-on"])
+        assert runs_on.startswith("${{ vars.TICO_CI_HOSTED == 'true' && ") and "inputs.anchor" not in runs_on, name
+        assert "runs-on=" in runs_on, name
     gate = str(jobs["gate"]["runs-on"])
     assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "matrix.part != 'desktop'" in gate
     assert "runs-on=" in gate
-    # The hosted disk clean-up step is reused, gated on the same mode: no new step text.
+    # The hosted disk clean-up step follows each job's own runner choice.
     for name in ("native-linux", "images"):
         step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
-        assert step["if"] == "vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''", name
-    # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.
-    gate_step = next(step for step in jobs["gate"]["steps"] if step.get("name", "").startswith("Free disk"))
-    assert gate_step["run"] == "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc"
-    assert gate_step["if"] == (
-        "vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')"
-    )
+        assert step["if"] == "vars.TICO_CI_HOSTED == 'true'", name
+    # The gate's hosted parts start with about 85 GB free: no clean-up step on the critical path (47-143 s each). The
+    # capacity preflight removes the unused SDKs only when a runner has less than the 35 GiB the gate needs.
+    assert not [step for step in jobs["gate"]["steps"] if "Free disk" in step.get("name", "")]
+    preflight = next(step for step in jobs["gate"]["steps"] if "capacity preflight" in step.get("name", ""))
+    assert "hosted_release_check.py prepare" in preflight["run"]
+
+
+def test_a_failed_poll_of_this_runs_jobs_is_one_more_poll_not_a_failed_validation():
+    """The waits for the Linux binaries and the images poll this run's jobs. One 502 or dropped connection failed whole
+    validations (Nov 18); a failed call now sleeps and polls again, inside the same time bound."""
+    ci, _ = _workflow("ci.yml")
+    waits = [
+        step
+        for job in ci["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name", "").startswith("Wait for the release")
+    ]
+    assert len(waits) == 3
+    for step in waits:
+        assert "jobs?per_page=100" in step["run"]
+        assert "|| { sleep 10; continue; }" in step["run"], step["name"]
 
 
 def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
@@ -560,12 +543,29 @@ def test_each_main_validation_hands_its_run_to_main_red_which_waits_for_it_to_fi
     ci, _ = _workflow("ci.yml")
     job = ci["jobs"]["main-red"]
     assert job["needs"] == "release-check" and job["if"] == "always() && github.ref == 'refs/heads/main'"
-    assert job["permissions"] == {"actions": "write"}
-    (step,) = job["steps"]
-    assert step["continue-on-error"] is True  # a failed hand-off never turns the validation red
+    assert job["permissions"] == {"actions": "write", "contents": "read"}
+    red_step, train_step = job["steps"][:2]  # then a red run goes to the Release Owner (test_tell_release_owner.py)
+    for step in job["steps"]:
+        assert step["continue-on-error"] is True  # a failed hand-off never turns the validation red
     assert (
-        'gh workflow run main-red.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"' == step["run"]
+        'gh workflow run main-red.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"'
+        == red_step["run"]
     )
+    # The train's own workflow_run trigger is just as dead for these runs: ci.yml hands the run to the train too, and
+    # the train's guard waits for it to finish before it reads it (scripts/release_train.py event_run).
+    assert (
+        'gh workflow run train.yml --repo "$GITHUB_REPOSITORY" --ref main -f validation_run="$GITHUB_RUN_ID"'
+        == train_step["run"]
+    )
+    train, train_on = _workflow("train.yml")
+    assert train_on["workflow_dispatch"]["inputs"]["validation_run"]["required"] is False
+    guard_steps = train["jobs"]["guard"]["steps"]
+    names = [step.get("name", "") for step in guard_steps]
+    wait = guard_steps[names.index("Wait for the validation run to finish")]
+    assert wait["if"] == "inputs.validation_run != ''" and "status --jq .status)\" = completed" in wait["run"]
+    assert names.index("Wait for the validation run to finish") < len(guard_steps) - 1
+    assert guard_steps[-1]["env"]["VALIDATION_RUN"] == "${{ inputs.validation_run }}"
+    assert train["jobs"]["train"]["env"]["VALIDATION_RUN"] == "${{ inputs.validation_run }}"
     red, on = _workflow("main-red.yml")
     assert set(on) == {"workflow_dispatch"} and on["workflow_dispatch"]["inputs"]["run_id"]["required"] is True
     assert "workflow_run" not in str(red)

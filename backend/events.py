@@ -13,8 +13,9 @@ signed-in person as they commit, filtered to what that person may read:
   to more than FAN_CAP tasks (a tag edit) is a single `bulk: true`: read task lists in full.
 - `messages`: a message as a conversation page shows it, a deleted one, or a chat goal change.
 - `runs`: a bot run's output step, or its state moving (queued, started, finished). `output=compact` (the web app)
-  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents; the
-  whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
+  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents, except
+  the reply's own text (a text delta, an assistant message), which goes whole so a chat draws the reply as it is
+  written; the whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
 - `bots`: a bot's status line, as `GET /api/v2/status` shows it.
 - `threads`: every thread the viewer reads, whatever is on screen: `conversation=` and `thread=` narrow `messages` and
   `runs` only, so the sidebar stays live while a thread is open (docs/dev/threads-contract.md §9).
@@ -63,6 +64,12 @@ from . import visuals as V
 from .store import H, Problem, encode
 from .api_contract import api_v2, ref as schema_ref
 
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 TOPICS = (
     "tasks",
     "messages",
@@ -104,7 +111,7 @@ LEAD_SECONDS = 0.02  # a ring after a quiet window waits only this long, for the
 def gathered(window, read_at):
     """How long a stream waits after a ring before it reads: at most one read per `window`, but a ring after
     a quiet window is read almost at once instead of a full window later (a chat reply, a job for a computer)."""
-    return max(LEAD_SECONDS, window - (time.monotonic() - read_at))
+    return max(LEAD_SECONDS, window - (_monotonic() - read_at))
 
 
 BATCH = 500
@@ -2743,10 +2750,20 @@ def _step_shown(view, bot, event, watched):
     return (decoded,)
 
 
+def _live_text(event, shown):
+    """Whether a run step is the reply's own words as they are written (a text delta, an assistant message): a compact
+    stream still sends it whole, so a chat on screen draws the reply as it comes (thread-view.ts). A model's thinking
+    stays compact."""
+    if event["kind"] == "message":
+        return True
+    payload = (shown[0] or {}).get("payload")
+    return event["kind"] == "delta" and isinstance(payload, dict) and payload.get("delta_kind") != "thought"
+
+
 def _step_output(event, compact, shown):
     """A run step as a `runs` event's `output`: the whole stored step, or its compact signal (still truthy). `shown` is
     what `_step_shown` gave for it."""
-    if compact:
+    if compact and not _live_text(event, shown):
         return {
             **{key: event[key] for key in COMPACT_STEP},
             "bytes": len((event["payload"] or "").encode()),
@@ -3022,8 +3039,8 @@ def _within_budget(c, rows):
     counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
     or task still relies on read_in's final byte cut. The first row always goes, however large; a row
     this viewer may not see still counts, as its size is known before its check. A compact stream (`output=compact`)
-    is sized the same way: it is sent none of a step's payload, but its read still loads and decodes each one for the
-    content check (_step_shown)."""
+    is sized the same way: it is sent none of a step's payload but the reply's text, and its read still loads and
+    decodes each one for the content check (_step_shown)."""
     outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
     if not outputs:
         return rows
@@ -3495,7 +3512,8 @@ def install(app, store, auth, task_views, task_view):
         if needs not in (None, "", "list", "changes"):
             raise Problem("validation", "needs is list or changes", 422)
         held = {} if needs == "changes" and "needs" in wanted else None
-        # `output=compact`: each run step as its compact signal (_step_output), what the web app asks for.
+        # `output=compact`: each run step as its compact signal, the reply's text whole (_step_output), what the web app
+        # asks for.
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 

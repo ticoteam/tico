@@ -125,7 +125,7 @@ class Service:
         self.upstream = upstream or (lambda c: (C.ROUTER_ADDRESS, int(c["port"])))
         self.hold, self.start, self.failed_for = hold, start, failed_for
         self.max_held, self.max_held_per_company = max_held, max_held_per_company
-        self.guard = threading.Lock()
+        self.guard = threading.Condition(threading.Lock())  # notified when a request takes a held place
         self.attempts: dict[str, Attempt] = {}
         self.held: dict[str, int] = {}
         self.workers: set[threading.Thread] = set()
@@ -196,6 +196,7 @@ class Service:
             ok = total < self.max_held and self.held.get(slug, 0) < self.max_held_per_company
             if ok:
                 self.held[slug] = self.held.get(slug, 0) + 1
+                self.guard.notify_all()
         try:
             yield ok
         finally:
@@ -273,6 +274,8 @@ class Listener(ThreadingHTTPServer):
     def __init__(self, service: Service, address: tuple[str, int], max_connections: int = MAX_CONNECTIONS):
         self.service = service
         self.slots = threading.BoundedSemaphore(max_connections)
+        self.connections = 0  # connections holding a place; wait_open waits on it
+        self.changed = threading.Condition()
         super().__init__(address, Handler)
 
     def process_request(self, request, client_address):
@@ -283,9 +286,11 @@ class Listener(ThreadingHTTPServer):
                 request.sendall(plain(503, "Too many requests are waiting; try again in a few seconds.", 5))
             self.shutdown_request(request)
             return
+        self._count(1)
         try:
             super().process_request(request, client_address)
         except BaseException:
+            self._count(-1)
             self.slots.release()
             raise
 
@@ -293,7 +298,18 @@ class Listener(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
+            self._count(-1)
             self.slots.release()
+
+    def _count(self, change: int) -> None:
+        with self.changed:
+            self.connections += change
+            self.changed.notify_all()
+
+    def wait_open(self, count: int, timeout: float) -> bool:
+        """Whether exactly `count` connections hold a place within `timeout` seconds (the tests wait on this)."""
+        with self.changed:
+            return self.changed.wait_for(lambda: self.connections == count, timeout)
 
 
 def plain(code: int, text: str, retry: int | None = None) -> bytes:

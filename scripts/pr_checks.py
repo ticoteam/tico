@@ -18,9 +18,9 @@ from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
 
 if __package__:
-    from . import flake_quarantine
+    from . import flake_detect
 else:
-    import flake_quarantine
+    import flake_detect
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
@@ -1292,6 +1292,9 @@ def callers(root, defined, scripts):
 # merge group. A draft skips the static job until it is marked ready. The table chooses only the tests. No ui/ folder
 # has an owner yet, so none is listed.
 OWNED_DATA = {
+    # The advisory gate's inventories and dispositions, and its pre-#4077 fixture (scripts/osv_gate.py).
+    "scripts/advisories/": ("scripts/tests/test_osv_gate.py",),
+    "scripts/tests/fixtures/advisories/": ("scripts/tests/test_osv_gate.py",),
     "baselines/": (
         "scripts/tests/test_lint_baseline.py",  # scripts/lint_baseline.py: baselines/ruff
         "scripts/tests/test_pyright_baseline.py",  # scripts/pyright_baseline.py and check_pyright_ratchet.py
@@ -1743,6 +1746,59 @@ def smoke_check(root=ROOT):
     return problems
 
 
+# Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names: the release
+# gate gives them python shards 1-2 (release_checks.NATIVE_SHARDS), and the incremental plan its waiting VMs
+# (release_increment.build_jobs); every other python VM starts without the binaries.
+NATIVE_TEST = re.compile(
+    r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
+    r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+    # scripts/tico-computer runs the checkout's runner (install, status: runner_support/engine.py finds
+    # the binary).
+    r'"scripts" / "tico(?:-computer)?"\)|scripts/tico(?:-computer)?"'
+)
+# A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
+TEST_IMPORT = re.compile(
+    r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+    r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)'
+)
+
+
+def native_test_files(names, root=ROOT):
+    """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
+    named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
+    reading every test, and run the whole suite for any test change). `root`: the checkout they are read from (the
+    incremental plan reads the candidate's). release_checks.py and release_increment.py both use this rule: keep it
+    here, since CI checks the planner out with this file alone beside it (ci.yml `validation-control`)."""
+    root = Path(root)
+    texts, verdicts = {}, {}
+
+    def text(name):
+        if name not in texts:
+            try:
+                texts[name] = (root / name).read_text(errors='replace')
+            except OSError:  # not a file here (a test's stand-in name, a package): nothing to run natively
+                texts[name] = ''
+        return texts[name]
+
+    def imports(source):
+        for package, members, module in TEST_IMPORT.findall(source):
+            if module:
+                yield module.replace('.', '/') + '.py'
+            else:
+                yield package.replace('.', '/') + '.py'
+                yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
+
+    def native(name, seen=()):
+        if name not in verdicts:
+            source = text(name)
+            verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
+                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name
+            )
+        return verdicts[name]
+
+    return {name for name in names if native(name)}
+
+
 def start_collect(root=ROOT):
     """The default collection as a background process. On a hosted runner it takes about a minute, about as long as the
     dependency map the plan builds meanwhile on another core, so a plan that builds the map starts this first."""
@@ -1869,15 +1925,21 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
-# The Rust lint, desktop app and recorder jobs check their own folders, so a merge queue group starts their VMs only when
+# The Rust lint and desktop app jobs check their own folders, so a merge queue group starts their VMs only when
 # its change touches one (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs them all.
+# The advisories job (scripts/osv_gate.py) scans the dependency inputs: the Python, npm and Cargo locks, both vendor
+# folders, the vendor and uv inventories and the dispositions in scripts/advisories/, and the gate, its pinned scanner and
+# its fixture. A uv pin a script changes reaches it through scripts/advisories/tools.json, which the drift gate
+# (scripts/gates/advisory_inputs.py, every pull request) keeps in step with the scripts.
 QUEUE_JOB_PATHS = {
     "rust_lint": re.compile(
         r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
     ),
     "desktop": re.compile(r"app/"),
-    # The root npm files pin esbuild, which builds the recorder's window (recorder/build-ui.cjs).
-    "recorder": re.compile(r"recorder/|package(-lock)?\.json$"),
+    "advisories": re.compile(
+        r"(.*/)?(requirements[^/]*\.txt|package-lock\.json|Cargo\.lock)$|(templates/employee-repo/)?ui/vendor/"
+        r"|scripts/advisories/|scripts/tests/fixtures/advisories/|scripts/osv_gate\.py$|scripts/pinned_tool\.sh$"
+    ),
 }
 
 
@@ -1904,9 +1966,10 @@ def queue_jobs(changed):
 # Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
 # test files first, then the smoke set, then tests linked to a specific changed file (non-hub links first), then the
 # nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
-# (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
+# (narrow.left_transitive, narrow.left_over_budget), and narrow.dropped gives each left file its reason (depth or
+# budget), level and seconds. A light pull request also runs the browser
 # scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
-# them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
+# them, the contracts, the static checks on its merge commit and the Rust and desktop jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
 # rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
 # hours (scripts/release_increment.py), and a red one holds the release until a fix selects its failure.
@@ -2064,6 +2127,9 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         "smoke_unless_capped": extra,
         "left_transitive": left,
         "tier": tier,
+        # How far each kept file is from the change (0 changed or guard, 1 direct, 2 one more), for dropped_reasons:
+        # the tier also ranks by link kind, so it does not give the distance.
+        "level": {p: level[p] for p in python if p in level},
     }
     if event == "pull_request":
         direct = {Path(p).stem for p in level if is_browser(p)}
@@ -2100,6 +2166,37 @@ def cap_tests(files, tier, seconds, budget):
     return sorted(kept), left
 
 
+def dropped_reasons(record, levels, seconds):
+    """One entry per Python test file a light plan left out, with why: `depth` (the change reaches it only past
+    record["depth"] levels) or `budget` (it was within reach, but did not fit record["budget_seconds"]). `level` is how
+    far from the change a budget drop was (`levels`, narrow's record["level"]; None when unknown); `seconds` is the
+    estimate the cap used, or the measured or committed time for a depth drop (None when the file has none)."""
+    out = [
+        {"file": name, "reason": "depth", "level": None, "seconds": seconds.get(name)}
+        for name in record["left_transitive"]
+    ]
+    out += [
+        {"file": name, "reason": "budget", "level": levels.get(name), "seconds": seconds.get(name)}
+        for name in record.get("left_over_budget", ())
+    ]
+    for entry in out:
+        took = entry["seconds"]
+        entry["seconds"] = round(float(took), 1) if isinstance(took, (int, float)) and math.isfinite(took) else None
+    # Nearest cut tests first: by reason, then level, then the longer file.
+    return sorted(
+        out, key=lambda e: (e["reason"], e["level"] if e["level"] is not None else 99, -(e["seconds"] or 0), e["file"])
+    )
+
+
+def dropped_line(entry, depth):
+    """A job summary line for one dropped file: its name and why it did not run here."""
+    took = "untimed" if entry["seconds"] is None else f"{entry['seconds']:.0f} s"
+    if entry["reason"] == "depth":
+        return f"- `{entry['file']}`: reached only past level {depth} ({took})"
+    where = "level ?" if entry["level"] is None else f"level {entry['level']}"
+    return f"- `{entry['file']}`: {where} ({took})"
+
+
 def committed_timings(root=ROOT):
     """The default suite's committed per-file seconds (TIMINGS_FILE), or {} when it cannot be read."""
     try:
@@ -2127,14 +2224,15 @@ def narrow_summary(record):
         "",
     ]
     over = record.get("left_over_budget", [])
+    dropped = record["dropped"]
     lines.append(f"- {len(record['left_transitive'])} test files reached only through more levels")
     lines.append(f"- {len(over)} test files over the time budget" + (":" if over else ""))
-    lines += [f"  - `{name}`" for name in over]
+    lines += ["  " + dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "budget"]
     if record.get("browser_left"):
         lines.append(f"- browser scripts not touched directly: {', '.join(record['browser_left'])}")
     if record["left_transitive"]:
         lines += ["", "<details><summary>Reached only through more levels</summary>", ""]
-        lines += [f"- `{name}`" for name in record["left_transitive"]]
+        lines += [dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "depth"]
         lines += ["", "</details>"]
     return "\n".join(lines) + "\n"
 
@@ -2188,6 +2286,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
         timings = {**committed_timings(), **timings}
         seconds = weights(counts, timings)
+        levels = record.pop("level", {})
         kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
         if record["left_over_budget"]:
             record["smoke"] = True
@@ -2199,6 +2298,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         timings |= {f: seconds[f] for f in kept}  # packing reuses the cap's estimates, untimed files included
         record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
         record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
+        # Why each file did not run (the plan's `dropped`, and the job summary): depth or budget, its level and time.
+        record["dropped"] = dropped_reasons(record, levels, {**timings, **seconds})
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
@@ -2357,7 +2458,7 @@ def check_base_failures(root, suite, retry_report, remaining):
             worktree = Path(temp) / "base"
             try:
                 subprocess.run(["git", "worktree", "add", "--detach", str(worktree), base], cwd=root, check=True)
-                command = [*pytest_command("0", base_report), "--quarantine", *messages]
+                command = [*pytest_command("0", base_report), *messages]
                 status = subprocess.run(command, cwd=worktree, check=False, timeout=300).returncode
             finally:
                 subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=True)
@@ -2381,11 +2482,13 @@ def check_base_failures(root, suite, retry_report, remaining):
     return commit
 
 
-def run(plan_path, suite, root=None, quarantine=False):
+def run(plan_path, suite, root=None, retry=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
     `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
-    `quarantine` (PR checks and the merge queue only, never release validation) runs the tests in ci/quarantine/ as
-    non-strict xfail. Python and browser legs retry up to five failures once and record them if all pass."""
+    `retry` (PR checks and the merge queue only, never release validation): Python and browser legs retry up to five
+    failures once and record each that then passed as flaky (flaky-<suite>.json, which the queue-flaky artifact carries
+    to scripts/flake_detect.py and the Release Owner). A flaky test is fixed at its root cause the same day or deleted;
+    nothing quarantines it."""
     root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
@@ -2436,8 +2539,6 @@ def run(plan_path, suite, root=None, quarantine=False):
             if extra:
                 env = {**os.environ, **extra}
                 print("Environment: " + " ".join(f"{k}={v}" for k, v in sorted(extra.items())), flush=True)
-        if quarantine:
-            command.append("--quarantine")
         if measured:
             # One data file per job, recording only the plan's statement files; extract() keeps the lines that ran.
             command += [
@@ -2449,10 +2550,10 @@ def run(plan_path, suite, root=None, quarantine=False):
             # On top of any environment the job already set (a content sweep's, above).
             env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
         command += files
-        print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
+        print("Test files: " + " ".join(files), flush=True)  # flake_detect.test_files: what a rerun ran again
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     failed = []
-    if quarantine:
+    if retry:
         for path in (
             report,
             retry_report,
@@ -2462,7 +2563,7 @@ def run(plan_path, suite, root=None, quarantine=False):
             results / f"base-broken-{suite}.json",
         ):
             path.unlink(missing_ok=True)
-    if browser and quarantine:
+    if browser and retry:
         status, failed = browser_attempt(command, root, env)
         if status and failed:
             browser_failures.write_text("\n".join(failed) + "\n")
@@ -2473,23 +2574,23 @@ def run(plan_path, suite, root=None, quarantine=False):
         data.unlink(missing_ok=True)
     if status == 0 and not browser:
         cases = list(ET.parse(report).iter("testcase"))
-        # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
+        # A test that ran: no skipped element, or an xfail (an expected failure ran), which JUnit writes as one.
         ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
         if not ran:
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
-    if not quarantine or slow or rust or status != 1:
+    if not retry or slow or rust or status != 1:
         return status or rust
     if not browser:
         failed = list(
             dict.fromkeys(
-                flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+                flake_detect.nodeid_of(case.get("classname", ""), case.get("name", ""))
                 for case in junit_failures(report)
             )
         )
         # Collection errors can have JUnit cases without a test node id.
         if any("::" not in test for test in failed):
             return status
-    if not 0 < len(failed) <= flake_quarantine.MAX_FAILURES_PER_JOB:
+    if not 0 < len(failed) <= flake_detect.MAX_FAILURES_PER_JOB:
         return status
     commit = None
     if browser:
@@ -2502,12 +2603,12 @@ def run(plan_path, suite, root=None, quarantine=False):
             return retry_status
         browser_failures.unlink(missing_ok=True)
     else:
-        retry = [*pytest_command("0", retry_report.relative_to(root)), "--quarantine", *failed]
-        retry_status = subprocess.run(retry, cwd=root, env=None, check=False).returncode
+        again = [*pytest_command("0", retry_report.relative_to(root)), *failed]
+        retry_status = subprocess.run(again, cwd=root, env=None, check=False).returncode
         if retry_status not in (0, 1):
             return retry_status
         try:
-            passed = flake_quarantine.passed_tests(retry_report.read_bytes())
+            passed = flake_detect.passed_tests(retry_report.read_bytes())
         except (ET.ParseError, OSError):
             return retry_status or status
         if retry_status:
@@ -2660,7 +2761,7 @@ def junit_failures(path):
 def junit_failure_messages(path):
     messages = defaultdict(set)
     for case in junit_failures(path):
-        test = flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+        test = flake_detect.nodeid_of(case.get("classname", ""), case.get("name", ""))
         for outcome in case:
             if outcome.tag in ("failure", "error"):
                 lines = outcome.get("message", "").splitlines()
@@ -2813,9 +2914,9 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest="action", required=True)
-    plan = sub.add_parser("plan")
+    plan = sub.add_parser("plan", allow_abbrev=False)
     plan.add_argument("--event", required=True)
     plan.add_argument("--base", default="")
     plan.add_argument("--head", default="HEAD")
@@ -2824,14 +2925,14 @@ def main():
     plan.add_argument(
         "--light", action="store_true", help="narrow the plan for an event in NARROW (a pull request); others ignore it"
     )
-    execute = sub.add_parser("run")
+    execute = sub.add_parser("run", allow_abbrev=False)
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
     execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
     execute.add_argument(
-        "--quarantine",
+        "--retry",
         action="store_true",
-        help="run ci/quarantine/ tests as non-strict xfail and retry small failures once",
+        help="retry up to five failed tests once and record each that then passed as flaky (PR checks and the queue)",
     )
     mine = sub.add_parser(
         "local", help="run the tests a pull request's checks would select, here, and print a receipt for its head"
@@ -2839,15 +2940,19 @@ def main():
     mine.add_argument("--base", default=LOCAL_BASE)
     mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers and browser scripts at once")
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
-    ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
+    ran = sub.add_parser(
+        "junit-ran", allow_abbrev=False, help="exit 1 unless a pytest JUnit report holds a test that was not skipped"
+    )
     ran.add_argument("report")
-    failed = sub.add_parser("failed", help="print the first failing tests or browser scripts reported in a folder")
+    failed = sub.add_parser(
+        "failed", allow_abbrev=False, help="print the first failing tests or browser scripts reported in a folder"
+    )
     failed.add_argument("folder")
-    sub.add_parser("durations")
-    sub.add_parser("flaky", help="combine the legs' successful retries into flaky.json")
-    sub.add_parser("receipt")
-    sub.add_parser("smoke-check")
-    cancel = sub.add_parser("cancel-superseded")
+    sub.add_parser("durations", allow_abbrev=False)
+    sub.add_parser("flaky", allow_abbrev=False, help="combine the legs' successful retries into flaky.json")
+    sub.add_parser("receipt", allow_abbrev=False)
+    sub.add_parser("smoke-check", allow_abbrev=False)
+    cancel = sub.add_parser("cancel-superseded", allow_abbrev=False)
     cancel.add_argument("--head-ref", required=True)
     cancel.add_argument("--run-number", type=int, required=True)
     cancel.add_argument("pages", nargs="+", help="gh api --paginate --slurp output files of the runs to consider")
@@ -2866,7 +2971,7 @@ def main():
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light, prefetch=True)
     elif args.action == "run":
-        return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
+        return run(args.plan, args.suite, Path(args.root), retry=args.retry)
     elif args.action == "junit-ran":
         if not junit_ran(args.report):
             print(f"{args.report}: every test skipped or none ran", file=sys.stderr)

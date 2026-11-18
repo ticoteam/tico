@@ -3,9 +3,11 @@ import type {Page, Route} from 'playwright';
 // A task's Spec pages and its Files tab in the task window (ui/app/task-docs.ts taskSpecsHTML, ui/app/task-pages.ts,
 // ui/app/task-modal.ts), on the v3 fixture (ui/tests/tasks-page.cts); every request is intercepted:
 // - each Spec page is a card under the title, not a tab; a page shared with another task says "also the Spec of D-…";
-//   a page changed since the OK that covered it has a dot; a card opens the page; no Spec, no cards;
-// - the Files tab, "Files N", lists every page and file linked to the task (GET /api/v2/tasks/{id}/files?all=1): a
-//   page with its roles as chips, a file by its name, a page already on the task not offered again by the picker;
+//   a page changed since the OK that covered it has a dot; a card opens the page in the window, in place of the chat,
+//   and pressed again brings the chat back; no Spec, no cards;
+// - the Files tab, "Files N", lists the pages and files linked to the task (GET /api/v2/tasks/{id}/files?all=1) that
+//   show nowhere else (a Spec has its card): a page with its roles as chips, a file by its name; a page row opens in the
+//   window too; a page already on the task (a Spec included) is not offered again by the picker;
 // - Link a page or file: the picker links a page as related (POST /api/v2/pages/{id}/links);
 // - New page: a title and a text, saved as the task's related page (POST /api/v2/pages).
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -60,6 +62,13 @@ const setup = async (page: Page) => {
     seen.links.push(JSON.parse(route.request().postData() || 'null'));
     return route.fulfill({contentType: 'application/json', body: JSON.stringify({id: OLD, links: []})});
   });
+  // A page's text, as the window's document view reads it (GET /api/v2/files/{id}?v=N).
+  await page.route(url => url.pathname.startsWith('/api/v2/files/') && !url.pathname.endsWith('/links'), route => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop()!);
+    const text = {[SPEC_A]: 'Carts survive a closed tab.', [BRIEF]: 'Why saved carts matter.'}[id];
+    return text ? route.fulfill({contentType: 'text/html', body: `<!doctype html><title>${id}</title><p>${text}</p>`})
+      : route.fulfill({status: 404, contentType: 'application/json', body: '{}'});
+  });
   await page.route(url => url.pathname === '/api/v2/pages', (route: Route) => {
     if (route.request().method() !== 'POST') return route.fallback();
     seen.pages.push(JSON.parse(route.request().postData() || 'null'));
@@ -88,12 +97,24 @@ const tabs = (win: ReturnType<Page['locator']>) => win.getByRole('tab').evaluate
       {id: SPEC_A, href: `#/page/${SPEC_A}`, title: 'Saved carts', meta: 'v2 · Writer · also the Spec of D-18463', dot: false},
       {id: SPEC_B, href: `#/page/${SPEC_B}`, title: 'Cart rules', meta: 'v1 · Writer', dot: true},
     ], 'two Spec cards: the shared one says so, the changed one has the dot');
-    // A Spec is a card, not a tab: the tabs are Chat and Files (its count, once read: four).
-    await win.getByRole('tab', {name: 'Files 4'}).waitFor();
-    assert.deepEqual(await tabs(win), ['Chat', 'Files 4'], 'no tab for a Spec');
+    // A Spec is a card, not a tab: the tabs are Chat and Files, which counts what it lists (the brief and the file).
+    await win.getByRole('tab', {name: 'Files 2'}).waitFor();
+    assert.deepEqual(await tabs(win), ['Chat', 'Files 2'], 'no tab for a Spec');
 
-    // The Files tab lists the pages (their roles as chips) and the file.
-    await win.getByRole('tab', {name: 'Files 4'}).click();
+    // A Spec card opens its page in the window, in place of the chat: the card is lit, no tab is; pressed again, the chat.
+    const specA = win.locator(`.task-spec[data-task-spec="${SPEC_A}"]`);
+    await specA.click();
+    await win.frameLocator('.task-doc iframe').getByText('Carts survive a closed tab.').waitFor();
+    assert.equal(await win.locator('.task-chat').isVisible(), false, 'the Spec shows instead of the chat');
+    assert.equal(await specA.getAttribute('aria-current'), 'true');
+    assert.deepEqual(await win.locator('.tw-tabs [aria-selected="true"]').count(), 0, 'no tab lit under a Spec');
+    assert.match(await win.locator('.task-doc .doc-ver-line').innerText(), /^v2 · /, 'its version line');
+    await specA.click();
+    await win.locator('.task-chat textarea').waitFor();
+    assert.equal(await specA.getAttribute('aria-current'), 'false');
+
+    // The Files tab lists the related page (its role as a chip) and the file; the Spec pages are on their cards.
+    await win.getByRole('tab', {name: 'Files 2'}).click();
     await win.locator('.task-files-tab .tft-list .tft-row').first().waitFor();
     assert.equal(await win.locator('.task-chat').isVisible(), false, 'the Files tab shows instead of the chat');
     const rows = await win.locator('.tft-list .tft-row').evaluateAll(els => els.map(e => ({
@@ -104,15 +125,21 @@ const tabs = (win: ReturnType<Page['locator']>) => win.getByRole('tab').evaluate
       chips: [...e.querySelectorAll('.tft-chip')].map(c => c.textContent?.trim()),
     })));
     assert.deepEqual(rows.map(r => [r.kind, r.title, r.chips]), [
-      ['page', 'Saved carts', ['Spec']],
-      ['page', 'Cart rules', ['Spec']],
       ['page', 'Saved carts brief', ['related']],
       ['file', 'carts.csv', []],
-    ], 'pages with their roles on this task, and the file');
-    assert.match(rows[0]!.meta ?? '', /^v2 · Writer · /, 'a page: v<version> · writers · time');
-    assert.equal(rows[2]!.href, `#/page/${BRIEF}`, 'a page row opens the page');
-    assert.match(rows[3]!.meta ?? '', /^v3 · /, 'a file: its version and time');
+    ], 'the page with its role on this task, and the file; no Spec twice');
+    assert.match(rows[0]!.meta ?? '', /^v1 · Ana · /, 'a page: v<version> · writers · time');
+    assert.equal(rows[0]!.href, `#/page/${BRIEF}`, 'a page row links its page (a new tab opens it there)');
+    assert.match(rows[1]!.meta ?? '', /^v3 · /, 'a file: its version and time');
     assert.equal(await win.locator('.task-side :is([data-task-files], [data-tft-list])').count(), 0);
+
+    // A page row opens the page in the window, under the Files tab; the Files tab brings the list back.
+    await win.locator(`.tft-row[data-tft-page="${BRIEF}"]`).click();
+    await win.frameLocator('.task-doc iframe').getByText('Why saved carts matter.').waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/task/t-2', 'the page opens in the task, not in its own view');
+    assert.equal(await win.getByRole('tab', {name: 'Files 2'}).getAttribute('aria-selected'), 'true', 'Files stays lit');
+    await win.getByRole('tab', {name: 'Files 2'}).click();
+    await win.locator('.task-files-tab .tft-list .tft-row').first().waitFor();
 
     // Link a page or file: the search leaves out the page already on the task, and the pick links it as related.
     await win.locator('[data-tp-add]').click();
@@ -144,6 +171,6 @@ const tabs = (win: ReturnType<Page['locator']>) => win.getByRole('tab').evaluate
 
     assert.deepEqual(errors, []);
     await page.close();
-    console.log('PASS: a task\'s Spec pages are cards under its title (shared and changed ones marked); the Files tab lists its pages with roles and its files; the picker links a page as related; New page posts the page.');
+    console.log('PASS: a task\'s Spec pages are cards under its title (shared and changed ones marked) that open in the window; the Files tab lists what shows nowhere else, its pages opening in the window; the picker links a page as related; New page posts the page.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

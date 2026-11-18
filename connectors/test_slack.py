@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Unit tests for connectors/slack.py, a thin client of Tico's Slack routes. No network, no token: Tico's answers are
-faked at `slack.hub` and `slack.client`.
+"""Unit tests for connectors/slack.py, a thin client of Tico's Slack routes. No network and no Slack token: Tico is
+answered at the HTTP seam (clients/tests/helpers/wire.py), so each request the connector makes is recorded and checked.
 
 python3 -m unittest discover -s connectors
 """
 
-import contextlib, email.message, io, json, os, stat, sys, tempfile, unittest, urllib.error
+import contextlib, io, json, os, stat, sys, tempfile, unittest, urllib.error, urllib.parse
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -13,7 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import slack  # noqa: E402
-from clients.tico import APIError  # noqa: E402
+from clients.tests.helpers.wire import Raw, Refusal, Wire  # noqa: E402
 
 TZ = "America/Los_Angeles"
 NOW = datetime(2026, 9, 2, 10, 30, tzinfo=slack.zone(TZ))  # a Wednesday morning in LA
@@ -27,20 +27,26 @@ def run(*argv):
     return code, out.getvalue(), err.getvalue()
 
 
-class Tico:
-    """Tico's answers by (method, path); every call is kept."""
+def connector_at(answers):
+    """The connector's Tico: `slack.client` returns the real client, whose transport answers `answers` (Tico's routes,
+    in Tico's shape) and keeps every request in `wire.sent`. Use the returned patch as a context manager."""
+    wire = Wire(answers)
 
-    def __init__(self, answers):
-        self.answers, self.calls = answers, []
+    def client(timeout=30):
+        return wire.client(timeout=timeout)
 
-    def __call__(self, method, path, body=None, query=None, timeout=30):
-        self.calls.append((method, path, body, query))
-        answer = self.answers[(method, path)]
-        if isinstance(answer, list):
-            answer = answer.pop(0)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
+    return wire, mock.patch.object(slack, "client", client)  # double: the HTTP transport only; the client is real
+
+
+def query_of(sent):
+    """The query a request carried, decoded, as the route received it."""
+    return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(sent.path).query))
+
+
+def no_pause():
+    return mock.patch.object(
+        slack, "_sleep", lambda seconds: None
+    )  # double: the pause between polls; a test does not wait
 
 
 class Times(unittest.TestCase):
@@ -144,40 +150,41 @@ class Saving(unittest.TestCase):
 
 class Calls(unittest.TestCase):
     def test_without_a_tico_credential_nothing_is_asked(self):
-        with mock.patch.dict(os.environ, {"HUB_API_URL": "", "HUB_TOKEN": ""}):
+        with mock.patch.dict(
+            os.environ, {"HUB_API_URL": "", "HUB_TOKEN": ""}
+        ):  # double: the OS environment; the connector reads its credential from it
             code, _, err = run("channels")
         self.assertEqual(code, 1)
         self.assertIn("no Tico credential", err)
 
     def test_ticos_refusal_exits_2_and_anything_else_exits_1(self):
-        api = mock.Mock()
-        with mock.patch.object(slack, "client", return_value=api):
-            api.call.side_effect = APIError("slack_scope", "may not read #x", 403)
+        wire, connected = connector_at({"GET slack/history": Refusal(403, "slack_scope", "may not read #x")})
+        with connected:
             with self.assertRaises(slack.Refused):
                 slack.hub("GET", "slack/history")
-            api.call.side_effect = APIError("slack_gateway_off", "Start it", 503)
+            wire.answers["GET slack/history"] = Refusal(503, "slack_gateway_off", "Start it")
             with self.assertRaises(slack.Failure) as caught:
                 slack.hub("GET", "slack/history")
-            self.assertNotIsInstance(caught.exception, slack.Refused)
-            self.assertEqual(slack.failed("slack_timeout", "", 504).hint, "Try again shortly.")
+        self.assertNotIsInstance(caught.exception, slack.Refused)
+        self.assertEqual(slack.failed("slack_timeout", "", 504).hint, "Try again shortly.")
 
     def test_doctor_says_when_the_gateway_is_off(self):
-        tico = Tico(
-            {("GET", "me"): {"actor": "bot:ops"}, ("GET", "slack/channels"): {"channels": [{}], "gateway": "off"}}
+        wire, connected = connector_at(
+            {"GET me": {"actor": "bot:ops"}, "GET slack/channels": {"channels": [{}], "gateway": "off"}}
         )
-        with mock.patch.object(slack, "hub", tico):
+        with connected:
             code, out, err = run("doctor")
         self.assertEqual(code, 1)
         self.assertIn("gateway   off", out)
         self.assertIn("TICO_SLACK_GATEWAY_ENABLED", err)
-        tico.answers[("GET", "slack/channels")] = {"channels": [], "gateway": "connected"}
-        with mock.patch.object(slack, "hub", tico):
+        wire.answers["GET slack/channels"] = {"channels": [], "gateway": "connected"}
+        with connected:
             self.assertEqual(run("doctor", "--json")[0], 0)
 
     def test_channels_lists_the_list(self):
         rows = [{"channel": "#general", "post": True, "readers": ["ops"], "note": "Team\nnews"}, {"channel": "#q"}]
-        tico = Tico({("GET", "slack/channels"): {"channels": rows}})
-        with mock.patch.object(slack, "hub", tico):
+        wire, connected = connector_at({"GET slack/channels": {"channels": rows}})
+        with connected:
             code, out, _ = run("channels")
             self.assertEqual(json.loads(run("channels", "--json")[1]), rows)
         self.assertEqual(code, 0)
@@ -192,66 +199,69 @@ class Calls(unittest.TestCase):
             "warning": "Tico screening: careful",
             "messages": [{"ts": "1788000000.0001", "author": "Ana", "text": "hi", "replies": [{"ts": "1788000001.0"}]}],
         }
-        tico = Tico({("GET", "slack/history"): answer})
-        with mock.patch.object(slack, "hub", tico):
+        wire, connected = connector_at({"GET slack/history": answer})
+        with connected:
             code, out, _ = run("history", "--channel", "#general,C2", "--since", "7d", "--threads")
         self.assertEqual(code, 0)
-        self.assertEqual([q["channel"] for _, _, _, q in tico.calls], ["#general", "C2"])
-        self.assertEqual(tico.calls[0][3]["threads"], "true")
+        asked = [query_of(s) for s in wire.sent]
+        self.assertEqual([q["channel"] for q in asked], ["#general", "C2"])
+        self.assertEqual(asked[0]["threads"], "true")
         self.assertIn("Tico screening: careful", out)
-        with mock.patch.object(slack, "hub", tico):
+        with connected:
             code, out, _ = run("history", "--channel", "C1", "--format", "json")
         self.assertEqual(json.loads(out)["channels"][0]["messages"][0]["time"][:4], "2026")
 
     def test_a_post_is_followed_until_slack_has_it(self):
-        tico = Tico(
+        wire, connected = connector_at(
             {
-                ("POST", "slack/posts"): {"message_id": "m1", "state": "ready", "channel": "C1", "name": "general"},
-                ("GET", "slack/posts/m1"): [{"state": "ready"}, {"state": "sent", "permalink": "https://x/p1"}],
+                "POST slack/posts": {"message_id": "m1", "state": "ready", "channel": "C1", "name": "general"},
+                "GET slack/posts/m1": [{"state": "ready"}, {"state": "sent", "permalink": "https://x/p1"}],
             }
         )
-        with mock.patch.object(slack, "hub", tico), mock.patch.object(slack.time, "sleep"):
+        with connected, no_pause():
             code, out, _ = run("post", "--channel", "#general", "--text", "Shipped", "--thread", "1.2")
         self.assertEqual((code, out.strip()), (0, "posted to #general: https://x/p1"))
-        self.assertEqual(tico.calls[0][2], {"channel": "#general", "text": "Shipped", "thread_ts": "1.2"})
+        self.assertEqual(wire.writes()[0].body, {"channel": "#general", "text": "Shipped", "thread_ts": "1.2"})
 
     def test_a_canceled_post_is_refused_and_a_failed_one_fails(self):
         for state, code in (("canceled", 2), ("failed", 1)):
-            tico = Tico(
+            _, connected = connector_at(
                 {
-                    ("POST", "slack/posts"): {"message_id": "m1", "channel": "C1"},
-                    ("GET", "slack/posts/m1"): {"state": state, "error": "Slack Connect channel"},
+                    "POST slack/posts": {"message_id": "m1", "channel": "C1"},
+                    "GET slack/posts/m1": {"state": state, "error": "Slack Connect channel"},
                 }
             )
-            with mock.patch.object(slack, "hub", tico):
+            with connected:
                 got, _, err = run("post", "--channel", "#partners", "--text", "hi")
             self.assertEqual(got, code)
             self.assertIn("Slack Connect channel", err)
 
     def test_a_held_post_says_why_and_sends_nothing(self):
-        tico = Tico({("POST", "slack/posts"): {"held": {"reason": "No prices in public channels"}}})
-        with mock.patch.object(slack, "hub", tico):
+        _, connected = connector_at({"POST slack/posts": {"held": {"reason": "No prices in public channels"}}})
+        with connected:
             code, out, _ = run("post", "--channel", "#general", "--text", "$5", "--json")
         self.assertEqual(code, 2)
         self.assertIn("No prices in public channels", json.loads(out)["error"])
 
     def test_a_dm_goes_to_one_person_and_text_can_come_from_stdin(self):
-        tico = Tico(
+        wire, connected = connector_at(
             {
-                ("POST", "slack/dms"): {"message_id": "m2", "to": "ana@acme.example"},
-                ("GET", "slack/posts/m2"): {"state": "queued"},
+                "POST slack/dms": {"message_id": "m2", "to": "ana@acme.example"},
+                "GET slack/posts/m2": {"state": "queued"},
             }
         )
         with (
-            mock.patch.object(slack, "hub", tico),
-            mock.patch.object(slack.time, "sleep"),
-            mock.patch.object(sys, "stdin", io.StringIO("from stdin")),
+            connected,
+            no_pause(),
+            mock.patch.object(
+                sys, "stdin", io.StringIO("from stdin")
+            ),  # double: the process's stdin; the command reads its text from it
         ):
             code, out, _ = run("dm", "--to", "ana@acme.example", "--text", "-")
         self.assertEqual((code, out.strip()), (0, "queued"))
-        self.assertEqual(tico.calls[0][2], {"to": "ana@acme.example", "text": "from stdin"})
-        tico.answers[("GET", "slack/posts/m2")] = {"state": "sent", "permalink": "https://x/d"}
-        with mock.patch.object(slack, "hub", tico):
+        self.assertEqual(wire.writes()[0].body, {"to": "ana@acme.example", "text": "from stdin"})
+        wire.answers["GET slack/posts/m2"] = {"state": "sent", "permalink": "https://x/d"}
+        with connected:
             self.assertIn("https://x/d", run("dm", "--to", "ana@acme.example", "--text", "hi")[1])
             self.assertEqual(run("dm", "--to", "a@x,b@x", "--text", "hi")[0], 2)
 
@@ -264,54 +274,41 @@ class Files(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def api(self, opened):
-        api = mock.Mock(url="https://tico.example")
-        api.bearer.return_value = "token"
-        api.opener.open.side_effect = opened
-        return api
-
     def test_a_file_from_tico_is_saved_beside_others_with_the_screening_line(self):
-        headers = email.message.Message()
-        for k, v in (
-            ("X-Slack-File-Name", "a%20b.txt"),
-            ("X-Slack-File-Type", "text/plain"),
-            ("X-Tico-Screening", "Careful"),
-        ):
-            headers[k] = v
-        response = mock.MagicMock()
-        response.__enter__.return_value = response
-        response.read.return_value, response.headers = b"data", headers
-        with mock.patch.object(slack, "client", return_value=self.api(lambda req, timeout: response)):
+        file = Raw(
+            b"data",
+            {"X-Slack-File-Name": "a%20b.txt", "X-Slack-File-Type": "text/plain", "X-Tico-Screening": "Careful"},
+        )
+        wire, connected = connector_at({"GET slack/files/F0FILE0001": file})
+        with connected:
             code, out, _ = run("file", "--id", "F0FILE0001", "--out", str(self.dir), "--json")
         row = json.loads(out)
         self.assertEqual((code, row["name"], row["warning"], row["bytes"]), (0, "a b.txt", "Careful", 4))
         self.assertEqual(Path(row["path"]).read_bytes(), b"data")
         self.assertEqual(Path(row["path"]).name, "F0FILE0001-a b.txt")
+        self.assertEqual(wire.sent[0].path, "/api/v2/slack/files/F0FILE0001")
         with (
-            mock.patch.object(slack, "client", return_value=self.api(lambda req, timeout: response)),
-            mock.patch.object(slack, "FILES_DIR", self.dir / "default"),
+            connected,
+            mock.patch.object(
+                slack, "FILES_DIR", self.dir / "default"
+            ),  # double: the default folder is computed under the system temp folder at import; a test's stands in
         ):
             code, out, _ = run("file", "--id", "F0FILE0001")
         self.assertEqual(code, 0)
         self.assertIn("Careful", out)
-        response.read.return_value = b"x" * (slack.MAX_FILE_BYTES + 1)
-        with mock.patch.object(slack, "client", return_value=self.api(lambda req, timeout: response)):
+        wire.answers["GET slack/files/F0FILE0001"] = Raw(b"x" * (slack.MAX_FILE_BYTES + 1))
+        with connected:
             self.assertEqual(run("file", "--id", "F0FILE0001", "--out", str(self.dir / "big"))[0], 2)
 
     def test_ticos_refusal_or_no_answer_saves_nothing(self):
-        def refused(req, timeout):
-            body = io.BytesIO(json.dumps({"error": {"code": "slack_scope", "detail": "not your channel"}}).encode())
-            raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message.Message(), body)
-
-        with mock.patch.object(slack, "client", return_value=self.api(refused)):
+        wire, connected = connector_at({"GET slack/files/F0FILE0001": Refusal(403, "slack_scope", "not your channel")})
+        with connected:
             code, _, err = run("file", "--id", "F0FILE0001", "--out", str(self.dir))
         self.assertEqual(code, 2)
         self.assertIn("not your channel", err)
 
-        def down(req, timeout):
-            raise urllib.error.URLError("refused")
-
-        with mock.patch.object(slack, "client", return_value=self.api(down)):
+        wire.answers["GET slack/files/F0FILE0001"] = urllib.error.URLError("refused")
+        with connected:
             self.assertEqual(run("file", "--id", "F0FILE0001", "--out", str(self.dir))[0], 1)
         self.assertEqual(list(self.dir.iterdir()), [])
 
@@ -350,7 +347,9 @@ class Workspace(unittest.TestCase):
             outside.mkdir()
             (workspace / "bot-real" / "bot.yaml").write_text("tools: []\n")
             (outside / "bot.yaml").write_text("tools: []\n")
-            with mock.patch.object(browser, "PROJECTS", workspace):
+            with mock.patch.object(
+                browser, "PROJECTS", workspace
+            ):  # double: PROJECTS is read from the environment at import; a temp folder stands in
                 self.assertEqual(browser.load_manifest("real"), {"tools": []})
                 for slug in ("real/../../outside", "../outside", "/tmp", "", "real/.."):
                     with self.assertRaises(browser.Refused, msg=slug):
@@ -366,8 +365,12 @@ class Workspace(unittest.TestCase):
             workspace = Path(root)
             (workspace / "bot-sales-helper").mkdir()
             (workspace / "bot-sales-helper" / "bot.yaml").write_text("tools: [own]\n")
-            with mock.patch.object(browser, "PROJECTS", workspace):
-                with mock.patch.dict(os.environ, {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}):
+            with mock.patch.object(
+                browser, "PROJECTS", workspace
+            ):  # double: PROJECTS is read from the environment at import; a temp folder stands in
+                with mock.patch.dict(
+                    os.environ, {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}
+                ):  # double: the OS environment; the runner names the bot's folder through it
                     self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
 
 

@@ -36,7 +36,6 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its Home thread.
 - [Company page](company-page.md): what outside people see of the company (investors, the board, the public), and who approves it.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md), [External agents](connect-an-agent.md) and [Work from a terminal](terminal.md).
-- [Pause, resume and discard a shared meeting](recorder-pause-discard.md) in Tico Recorder on a Mac.
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md), [Physical mail](physical-mail.md).
 - [General Manager](general-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
 - [Finance Owner](bookkeeper.md): the built-in helper that keeps the books, and the [Finance tools](finance-tools.md) it and every bot use.
@@ -52,7 +51,6 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#read-and-save),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
   [Company skills in your own Claude Code](skills.md#peoples-claude-code): the skills helper, its device token and its usage reports.
-  [Recorder speech and assist](recorder.md) relays the Tico Recorder's transcription, live text and chat through the Gateway.
 - External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).
 - Advanced operations: [Cloud provisioning](install-advanced.md), [Cloud machines](cloud-machines.md), [Many companies on one host](cell.md) and its [stats and debug tools](cell-stats.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).

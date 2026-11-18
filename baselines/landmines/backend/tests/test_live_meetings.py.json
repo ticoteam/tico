@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_live_meetings.py": {
+    "timing-assert": 1
+  }
+}

@@ -37,7 +37,8 @@ a pasted key.
 Who may do what, the vault's rules: a credential administrator (`credentials.administrator`) manages every tool and
 sees every row. Anyone else reads the page of a tool they hold a grant on or added a key to, sees only their own
 access row and the grants they made, and only the calls they or a bot they may see made. A bot reads the tools it is
-granted. Key values appear in no response here; the vault's reveal stays the only door to one.
+granted. The person or bot who added a key can remove it while they can see the tool. Values are revealed through the
+vault.
 
 Who can see it (`tools.audience`, `visible`): NULL is Everyone, the rules above. A list (the audience shape pages use,
 backend/teammate_access.py: people, groups with the groups nested in them, bots) is Only listed: the tool is then seen by
@@ -80,7 +81,7 @@ from . import tool_templates
 from . import default_read
 from . import reconnect_tasks
 from . import tool_access as TA
-from .credentials import CredentialWrite, administrator, effective_grant, owned
+from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
 from .api_contract import api_v2
@@ -93,6 +94,8 @@ LEVEL_NAMES = {"read": "Read", "read_write": "Read and write"}
 DELIVERIES = ("proxy", "computer")
 CHECK_EVERY = timedelta(minutes=30)
 CHECK_TIMEOUT = 10.0  # seconds for one check, connect to last byte
+# Tests set this to an httpx transport: every check then goes through it, its address still checked and pinned.
+TRANSPORT = None
 CHECKS_SHOWN = 24  # the 24 squares on a tool's Check card
 RECENT = 5  # calls on a tool's Overview
 EXPIRING_DAYS = 14  # a key this close to its end date is under Needs you
@@ -757,6 +760,7 @@ def _key_view(c, who, key, admin, admins):
         "stored": key["ciphertext"] is not None,
         "created_by": key["created_by"] or key["updated_by"],
         "created_at": key["created_at"],
+        "can_remove": may_remove(who, key["created_by"], manages=admin),
         **last_used(c, key["id"]),
     }
 
@@ -945,7 +949,7 @@ def send_check(url, headers, params):
     address = egress.address_for(parts, budget=CHECK_TIMEOUT)
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = parts.hostname + (f":{parts.port}" if parts.port else "")
-    with httpx.Client(timeout=CHECK_TIMEOUT, follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(timeout=CHECK_TIMEOUT, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
         with client.stream(
             "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
         ) as response:
@@ -1639,9 +1643,10 @@ def update_key(c, who, vault, tool_id, key_id, body):
 
 
 def delete_key(c, who, vault, tool_id, key_id):
-    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
-    _readable(c, who, tool_id, vault.admins)
+    _readable(c, who, tool_id, vault.admins, vault.auth)
     key = _tool_key(c, tool_id, key_id)
+    if not may_remove(who, key["created_by"], manages=TA.admin(c, who, vault.admins)):
+        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     _drop_key(c, who, key["id"])
     return {"deleted": True, "id": key_id}
 

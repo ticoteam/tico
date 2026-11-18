@@ -1,0 +1,93 @@
+# Tico Meet on a cloud cell (docs/cell.md "Tico Meet"): a stable public IP and the inbound ports LiveKit and its
+# certificate need, added to an existing cell host without touching the host's own stack. Deploy it as a stack of its
+# own (tico-cloud-<cell>-meet) with a change set. Deleting the stack removes the rules and releases the IP; the host
+# gets a new auto-assigned IP, which the outbound-only tunnel does not mind.
+#
+# Kept closed: 22, 7880 (LiveKit's API and signal, which browsers reach through the tunnel at /rtc) and 8443 (the
+# certificate Caddy's unused https port). A test keeps these ports equal to setup/cell.py's MEET_PUBLIC_PORTS.
+# Long-form intrinsics (Ref, Fn::GetAtt) keep the file plain YAML.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Tico Meet on a cloud cell - an Elastic IP and LiveKit's inbound ports on the cell's security group.
+
+Parameters:
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: The cell host (for cell-1, i-027126437a47a24f4).
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: The cell host's security group (for cell-1, sg-0ee5245bf7bc7a276).
+  CellName:
+    Type: String
+    Default: cell-1
+    AllowedPattern: "[a-z0-9-]{1,40}"
+    Description: Names the IP's tag.
+
+Resources:
+  MeetIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: {"Fn::Sub": "tico-cloud-${CellName}-meet"}
+
+  MeetIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: {"Fn::GetAtt": [MeetIp, AllocationId]}
+      InstanceId: {"Ref": InstanceId}
+
+  CertificateHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: {"Ref": SecurityGroupId}
+      Description: Tico Meet certificate (ACME HTTP-01)
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+
+  TurnTls:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: {"Ref": SecurityGroupId}
+      Description: Tico Meet TURN over TLS
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+
+  TurnUdp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: {"Ref": SecurityGroupId}
+      Description: Tico Meet TURN over UDP
+      IpProtocol: udp
+      FromPort: 3478
+      ToPort: 3478
+      CidrIp: 0.0.0.0/0
+
+  MediaTcp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: {"Ref": SecurityGroupId}
+      Description: Tico Meet media over TCP
+      IpProtocol: tcp
+      FromPort: 7881
+      ToPort: 7881
+      CidrIp: 0.0.0.0/0
+
+  MediaUdp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: {"Ref": SecurityGroupId}
+      Description: Tico Meet media over UDP
+      IpProtocol: udp
+      FromPort: 50000
+      ToPort: 50100
+      CidrIp: 0.0.0.0/0
+
+Outputs:
+  PublicIp:
+    Description: The cell's stable public IP. Point the DNS-only A record for the TURN host (--meet-domain) here.
+    Value: {"Ref": MeetIp}

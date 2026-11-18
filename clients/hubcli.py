@@ -789,7 +789,8 @@ def parser():
         "--doc",
         metavar="NAME",
         help="an .html file as the task's document NAME: a page linked to the task with that role, the same as "
-        "tico page publish FILE --task ID --as NAME. Spec, QA report, Release report and Invoice are the names a "
+        "tico page publish FILE --task ID --as NAME (a run on a private task, which may not publish pages, writes it "
+        "through the task's own files instead). Spec, QA report, Release report and Invoice are the names a "
         "stage approves; say what changed in a comment (no --note)",
     )
     s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')

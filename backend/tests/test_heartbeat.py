@@ -489,12 +489,17 @@ def test_a_slow_github_never_holds_up_a_due_run_and_one_pass_runs_at_a_time(api,
     import time
 
     ran, answers = fake
-    release, started = threading.Event(), threading.Event()
+    release, started, second = threading.Event(), threading.Event(), threading.Event()
     real = HB.BY_KEY["github_sync"].run
+    calls = []
 
     def slow_github(ctx):
-        started.set()
-        release.wait(10)  # GitHub answers after 10 s
+        calls.append(ctx)
+        if len(calls) == 1:
+            started.set()
+            release.wait(60)  # GitHub answers only when released (60 s at most), far past every beat below
+        else:
+            second.set()
         return real(ctx)
 
     steps = [dataclasses.replace(s, run=slow_github) if s.key == "github_sync" else s for s in HB.STEPS]
@@ -504,26 +509,20 @@ def test_a_slow_github_never_holds_up_a_due_run_and_one_pass_runs_at_a_time(api,
     scheduler = scheduler_of(api)
     worker = outside_of(api, scheduler).start()
     try:
-        beats, slowest = 0, 0.0
         for i in range(30):  # five minutes at a 10 s interval
             at = AT + timedelta(seconds=10 * i)
             worker.wake(at)
             if i == 0:
                 assert started.wait(5), "the worker took the first pass"
-            begun = time.monotonic()
             result, _ = beat(api, scheduler, at)
-            slowest = max(slowest, time.monotonic() - begun)
             assert "deferred" in result["did"], at
-            beats += 1
-        assert beats >= 28 and slowest < 2, f"slowest beat {slowest:.1f} s"
+        # Had a beat waited on GitHub, it could not have answered while the first pass is still held.
         assert ran.count("deferred") == 30 and ran.count("stall_marks") == 5, "AC-2"
         assert worker.passes == 0 and worker.running, "one pass, still waiting on GitHub; no second beside it"
         assert ran.count("github_sync") == 0 and "ci_sweep" not in ran
         release.set()
-        deadline = time.monotonic() + 10
-        while worker.passes < 2 and time.monotonic() < deadline:
-            time.sleep(0.05)
-        time.sleep(0.3)  # a third pass, if one were coming, would start here
+        assert second.wait(10), "the wake the stuck pass missed never started its pass"
+        worker.halt(5)  # joins: the second pass has finished, and no pass starts after this
         assert worker.passes == 2, "the stuck pass, then one more for every wake it missed"
         assert ran.count("github_sync") == 2
     finally:

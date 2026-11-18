@@ -220,7 +220,7 @@ def _build():
         "meeting.ready",
         "A team meeting with a transcript was imported.",
         "Meeting ready",
-        {"id": "m1", "title": "Acme weekly sync", "source": "recorder", "ended": "2026-03-02T17:30:00Z"},
+        {"id": "m1", "title": "Acme weekly sync", "source": "granola", "ended": "2026-03-02T17:30:00Z"},
         aliases=("recording.ready",),
     )
     add(
@@ -318,6 +318,16 @@ def _build():
             "body": "Version 1.4.1 fixes a mail sync bug.",
             "url": "https://tico.team/notices/1",
         },
+        sourceless=True,
+        outbound=False,
+    )
+    # A Growth channel crossed a line the team set (backend/growth_brief.py): its KPI went red or came back, its
+    # guardrail went over or back under, or its source started or stopped failing. Ids only, as Finance's.
+    add(
+        "growth.channel.crossed",
+        "A Growth channel crossed a line: its KPI went red or back, its guardrail over its max, or its source failed.",
+        "Growth channel crossed a line",
+        {"channel_id": "ch1", "kind": "kpi", "kpi_id": "k1", "source_id": None, "crossing_id": "x1"},
         sourceless=True,
         outbound=False,
     )

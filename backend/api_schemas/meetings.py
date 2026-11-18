@@ -81,19 +81,6 @@ SCHEMAS.update(
             {"id": "s", "title": "s", "review_state": {"type": "string", "enum": ["pending", "live", "dismissed"]}}
         ),
         "MeetingReviewList": obj({"meetings": items(ref("ReviewedMeeting")), "count": "i", "pending_count": "i"}),
-        "MyRecorder": obj(
-            {
-                "version": {
-                    "type": "string",
-                    "description": "Your most recently used copy's version; empty when none was seen",
-                },
-                "last_seen_at": "n",
-                "recent": {"type": "boolean", "description": "A copy was seen in the last 30 days"},
-                "latest": {"type": "string", "description": "The newest release's version; empty when unknown"},
-                "update_available": "b",
-                "download_url": "s",
-            }
-        ),
         "MeetingReviewPreferences": obj(
             {
                 "auto_share": {"type": ["boolean", "null"]},

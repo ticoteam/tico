@@ -39,7 +39,6 @@ Where a source was read only as a search excerpt, the line says so. The team set
 
 ## Open questions
 
-- How often should a quarantined test be re-checked before it is fixed or deleted? A team decision.
 - Whether the merge check should block on a single gate job or on each job. Test it on the team's setup first.
 
 ## Sources

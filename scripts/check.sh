@@ -10,8 +10,7 @@
 # Checks: lint.sh (ruff baseline and ruff format), test collection (pytest --collect-only), shell_lint.sh (shellcheck),
 # actionlint (workflows), migration order, gates.sh (shared gate scripts and ast-grep rules with fixtures),
 # check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
-# check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/, and the Recorder window's .ts, type-check
-# strictly), the
+# check_node_types.py (the .cts/.mts scripts under scripts/, type-check strictly), the
 # OpenAPI document (backend.openapi_v2 --check), the status value table (build_status_docs.py --check),
 # check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
 # check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
@@ -108,7 +107,7 @@ after() {  # JOB COMMAND...: waits for job number JOB to finish, then runs the c
 RUST_CRATES=$(sed -n 's/^CRATES="\(.*\)"$/\1/p' scripts/rust_checks.sh)
 # shellcheck disable=SC2016  # the sed pattern matches the literal ${RUST_TOOLCHAIN:-...} in rust_checks.sh
 RUST_TOOLCHAIN=$(sed -n 's/^TOOLCHAIN="${RUST_TOOLCHAIN:-\(.*\)}"$/\1/p' scripts/rust_checks.sh)
-RUST_TOOLCHAIN=${RUST_TOOLCHAIN:-1.92.0}
+RUST_TOOLCHAIN=${RUST_TOOLCHAIN:-1.99.1}
 # shellcheck disable=SC2329  # job calls it by name
 rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
   local crate=$1 pending=0 status=0 out
@@ -134,7 +133,7 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 # 1. Python lint, as lint.sh runs it in CI: the ruff baseline (counts only go down, against origin/main), the pytest
 # ignore count, and ruff format over the whole repository. The ruff settings and the pytest config are inputs too.
 # lint.sh also runs pr_checks.py smoke-check, which reads the smoke set and the browser runner's core scripts.
-if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cts$|^ui/tests/.*\.cts$'; then
+if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^baselines/landmines/|^skills/honest-code/|^scripts/(lint|lint_baseline|landmines|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cts$|^ui/tests/.*\.cts$'; then
   job "lint (ruff baseline, format)" env LINT_BASE_REF="$ratchet" bash scripts/lint.sh
 else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"
@@ -253,13 +252,13 @@ else
   skip "ui strict (TypeScript, strict ratchet)" "no UI file changed"
 fi
 
-# 6c'. The TypeScript outside ui/ (scripts/ and recorder/ .cts, .mts and .d.ts files Node runs, and the Recorder
-# window's .ts files under recorder/ui) type-checks strictly, with no baseline (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
+# 6c'. The TypeScript outside ui/ (scripts/ .cts, .mts and .d.ts files Node runs) type-checks strictly, with no baseline
+# (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
 # a project. The base config and the npm packages whose types the scripts read are inputs too.
 if touched '^([^u]|u[^i]|ui[^/])[^[:space:]]*\.([cm]?ts|tsx)$|(^|/)tsconfig(\.node)?\.json$|^package(-lock)?\.json$|^scripts/check_node_types\.py$'; then
-  job "node types (scripts/, recorder/ TypeScript)" python3 scripts/check_node_types.py
+  job "node types (scripts/ TypeScript)" python3 scripts/check_node_types.py
 else
-  skip "node types (scripts/, recorder/ TypeScript)" "no TypeScript outside ui/ changed"
+  skip "node types (scripts/ TypeScript)" "no TypeScript outside ui/ changed"
 fi
 
 # 6d. A check that picks UI source by a .js suffix alone stops covering each converted .ts file. Text only, a second.

@@ -2500,7 +2500,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Owns every automated test, from unit to end to end: keeps the flaky test register and decides fix or quarantine for each, reports the suite's health each week, and files each product bug a test exposes into the Engineering pipeline. It never merges, and it changes a test only when asked.",
+   "summary": "Owns every automated test, from unit to end to end: keeps the flaky test register and decides for each, the same day, whether it is fixed at its root cause or deleted, reports the suite's health each week, and files each product bug a test exposes into the Engineering pipeline. It never merges, and it changes a test only when asked.",
    "when": "Offer to a software team whose automated tests are flaky, slow or missing for the paths that matter, and where nobody owns the test suite as a whole.",
    "tags": [
     "saas",

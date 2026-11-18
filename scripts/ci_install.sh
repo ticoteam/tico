@@ -84,9 +84,9 @@ esac
 "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
 # Remote commands can run the same pinned Ruff and basedpyright checks as the PR job.
 if [ "${GITHUB_WORKFLOW:-}" = "Remote run" ]; then
-  "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 uv==0.13.0
+  "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 uv==0.13.9
   case ${SETUP:-} in
-    rust | all) rustup toolchain install 1.92 --profile minimal --component rustfmt ;;
+    rust | all) rustup toolchain install 1.99 --profile minimal --component rustfmt ;;
   esac
 fi
 # The types job runs basedpyright on the venv alone.

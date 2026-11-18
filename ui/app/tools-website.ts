@@ -22,7 +22,7 @@ interface TwGroup {id: string; name?: string; members?: number; actors?: string[
 interface TwSession {state?: string; where?: string | null; computer?: string | null; by?: TwWho | null}
 interface TwAccount {
   id: string; kind: string; username?: string | null; has_password?: boolean; has_totp?: boolean; all_bots?: boolean; holder?: TwWho | null; access?: TwWho[];
-  session?: TwSession | null; can_use?: boolean; can_manage?: boolean;
+  session?: TwSession | null; can_use?: boolean; can_manage?: boolean; can_remove?: boolean;
 }
 interface TwHost {runner_id: string; label: string; online: boolean}
 interface TwRow {id?: string; at?: string | null; who?: TwWho | null; verb: string; page?: string | null; account?: string; where?: string; result?: string}
@@ -251,7 +251,7 @@ function twAcctMenu(state: TwState, a: TwAccount, anchor: HTMLElement): void {
   }
   // The hub lets whoever uses the account, or manages it, read its password (people only, logged).
   if (a.has_password !== false && (a.can_use || a.can_manage)) items.push(['reveal', 'Reveal password · logged']);
-  if (a.can_manage) items.push(['remove', 'Remove', true]);
+  if (a.can_remove ?? a.can_manage) items.push(['remove', 'Remove', true]);
   if (!items.length) return;
   twMenu(anchor, twAcctName(a), items, key => {
     if (key === 'code') twCodeDialog(state, a);

@@ -516,13 +516,29 @@ def run(args, who=None):
         if sub == "attach":
             if getattr(args, "doc", None):  # a document is a page: the request `tico page publish --task --as` sends
                 from clients import hubtools
-                from clients.commands._shared import DOCUMENT_NOTE, document_attachment
+                from clients.commands._shared import DOCUMENT_NOTE, document_attachment, private_document
 
                 if getattr(args, "note", None) is not None:
                     raise APIError("validation", DOCUMENT_NOTE, 422)
                 fields = {"path": args.file, "task": args.id, "as": args.doc}
                 fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-                return document_attachment(hubtools.pages_publish_path(client, fields), args.doc)
+
+                def embedded():
+                    from clients import bot_files as BF, visual_embed
+
+                    if not visual_embed.is_page(args.file):
+                        raise APIError("validation", "A document is an .html file", 422)
+                    return visual_embed.embed(BF.checkout_root(), args.file)[0].decode("utf-8", errors="replace")
+
+                published = private_document(
+                    lambda: hubtools.pages_publish_path(client, fields),
+                    client,
+                    args.id,
+                    args.doc,
+                    embedded,
+                    fields["operation_id"],
+                )
+                return document_attachment(published, args.doc)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)
@@ -1097,6 +1113,10 @@ def _growth_body(fn, result):
         return _source_run(result)
     if fn in ("growth cohort list", "growth economics") and "by" in result and "cohorts" in result:
         return computed_text(result)
+    if fn == "growth channel show" and "changed" in result:
+        return channel_brief_text(result)
+    if fn == "growth segment show":
+        return segment_brief_text(result)
     if fn == "growth customers load":
         lines = [f"{result.get('customers')} customers loaded ({result.get('spells')} spells)."]
         if result.get("removed"):
@@ -1160,6 +1180,142 @@ def _growth_body(fn, result):
             ],
         )
     return "\n".join(_plain(result)) or "Nothing yet."
+
+
+def _num(value, pct=False, money=False):
+    if value is None:
+        return "not recorded"
+    text = f"{value:,.2f}".rstrip("0").rstrip(".") if isinstance(value, float) else f"{value:,}"
+    return ("$" + text) if money else (text + "%") if pct else text
+
+
+_MONEY, _PCT = ("spend", "cac", "ltv"), ("kept_d30", "kept_d90")
+
+
+def _change_lines(figures):
+    out = []
+    for f in figures:
+        money, pct = f["figure"] in _MONEY, f["figure"] in _PCT
+        if not f.get("recorded"):
+            out.append(f"  {f['name']}: not recorded")
+            continue
+        diff = f.get("diff") or 0
+        sign = "+" if diff > 0 else "-" if diff < 0 else ""
+        tail = f", {f['pct']:+g}%" if f.get("pct") is not None else ""
+        out.append(
+            f"  {f['name']} {_num(f['before'], pct, money)} -> {_num(f['value'], pct, money)}"
+            f" ({sign}{_num(abs(diff), pct, money)}{tail})"
+        )
+        for e in f.get("beside") or []:
+            out.append(f"    {str(e.get('at'))[:10]} {e.get('text')}")
+        for gap in f.get("data_gap") or []:
+            out.append(f"    {gap}")
+        if f.get("note") and f.get("recorded") and diff:
+            out.append(f"    {f['note']}")
+    return out
+
+
+def channel_brief_text(r):
+    """`tico growth channel show <slug>`: its KPI against target, 6 months, what changed and what lines up with it, its
+    tests, and how fresh its sources are (backend/growth_brief.py)."""
+    owner = r.get("owner_ref") or "no owner"
+    budget = f" · budget {_num(r['budget_month'], money=True)}/mo" if r.get("budget_month") is not None else ""
+    lines = [f"{r.get('name')} · {r.get('stage')} · owner {owner}{budget}", ""]
+    k = r.get("kpi") or {}
+    if not k.get("linked"):
+        lines.append(f"KPI  {k.get('text')} Link one: {k.get('fix')} ({k.get('who_may')} may).")
+    elif k.get("hidden"):
+        lines.append(f"KPI  {k.get('text')}")
+    else:
+        at = str(k.get("at") or "")[:10]
+        value = "no reading yet" if k.get("value") is None else f"{_num(k['value'])}{k.get('unit') or ''} on {at}"
+        judged = (
+            f"target {k['target'].lstrip('→ ')} · {str(k.get('colour') or '').upper()}"
+            if k.get("target")
+            else k.get("text")
+        )
+        lines += [f"KPI  {k.get('name')}", f"     {value} · {judged}"]
+    g = r.get("guardrail")
+    if g and not g.get("hidden"):
+        state = "OVER" if g.get("breached") else "ok"
+        lines.append(f"Guardrail  {g.get('name')}: {_num(g.get('value'))} (max {_num(g.get('max'))}) · {state}")
+    lines.append("")
+    months = r.get("months") or []
+    if months:
+        lines.append(
+            _table(
+                months,
+                [
+                    ("Month", "month"),
+                    ("Spend", lambda m: _num(m.get("spend"), money=True)),
+                    ("New", lambda m: _num(m.get("new_customers"))),
+                    ("CAC", lambda m: _num(m.get("cac"), money=True)),
+                    ("Kept30", lambda m: _num(m.get("kept_d30"), pct=True)),
+                    ("LTV:CAC", lambda m: _num(m.get("ltv_cac"))),
+                    ("Quality", "quality"),
+                ],
+            )
+        )
+    else:
+        lines.append("No months yet.")
+    ch = r.get("changed") or {}
+    if ch.get("month"):
+        lines += ["", f"Changed ({ch['month']} vs {ch['before']}), with what lines up"]
+        lines += _change_lines(ch.get("figures") or [])
+        for e in ch.get("events") or []:
+            if e.get("kind") == "crossing":
+                lines.append(f"  {str(e.get('at'))[:10]} {e.get('text')}")
+    t = r.get("tests") or {}
+    lines.append("")
+    running = [f'"{x["title"]}" ({x["stage"]}) since {str(x["started"])[:10]}' for x in t.get("open") or []]
+    done = [
+        f'"{x["title"]}" {x["outcome"]} {str(x["at"])[:10]}' + (f", result:{x['result']}" if x.get("result") else "")
+        for x in t.get("finished") or []
+    ]
+    lines.append("Tests  " + ("; ".join(running) if running else "none open"))
+    if done:
+        lines.append("       Finished: " + "; ".join(done))
+    src = r.get("sources") or {}
+    lines.append("")
+    rows = src.get("sources") or []
+    if not rows:
+        lines.append("Sources  none: its numbers are typed by hand")
+    for i, s in enumerate(rows):
+        good = str(s.get("last_good") or "never")[:10]
+        state = "STALE" if s.get("stale") else s.get("health")
+        lines.append(f"{'Sources' if i == 0 else '       '}  {s.get('name')}: last good {good} · {state}")
+    if src.get("newest_month_stale"):
+        lines.append(f"         Newest month {src.get('newest_month')} is more than 45 days old: STALE")
+    alerts = r.get("alerts") or []
+    if alerts:
+        lines += ["", "Open alerts"] + [f"  {a['title']} ({a['task_id']})" for a in alerts]
+    return "\n".join(lines)
+
+
+def segment_brief_text(r):
+    """`tico growth segment show <label>`: 6 months from customer facts and the change from the month before."""
+    lines = [f"Segment {r.get('segment')} · {r.get('spend')}", ""]
+    months = r.get("months") or []
+    if r.get("counts_only"):
+        lines.append(f"Under the minimum cohort ({r.get('min_cohort')}): counts only.")
+        lines.append(_table(months, [("Month", "month"), ("New", lambda m: _num(m.get("new_customers")))]))
+    else:
+        lines.append(
+            _table(
+                months,
+                [
+                    ("Month", "month"),
+                    ("New", lambda m: _num(m.get("new_customers"))),
+                    ("Kept30", lambda m: "too few" if m.get("too_few") else _num(m.get("kept_d30"), pct=True)),
+                    ("Kept90", lambda m: "too few" if m.get("too_few") else _num(m.get("kept_d90"), pct=True)),
+                    ("LTV", lambda m: "too few" if m.get("too_few") else _num(m.get("ltv"), money=True)),
+                ],
+            )
+        )
+    ch = r.get("changed") or {}
+    if ch.get("figures"):
+        lines += ["", f"Changed ({ch.get('month')} vs the month before)"] + _change_lines(ch["figures"])
+    return "\n".join(lines)
 
 
 def _retention_cell(figure):

@@ -19,6 +19,7 @@ owns a channel may change its why, stage, budget and input KPI; any bot or admin
 
 import asyncio
 import json
+import logging
 import math
 import secrets
 
@@ -1166,6 +1167,7 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
+    from . import growth_brief as BRIEF
     from . import growth_setup as SETUP
     from .goal_routes import _hidden_owners, kpi_editable
 
@@ -1186,6 +1188,15 @@ def install(app, store, auth, mutate):
 
     def reader(who):
         auth.domain(who)
+
+    def counted(who, view):
+        """A channel or segment read counted for the spec's first measure; never fails the read."""
+        if getattr(who, "support", None):
+            return
+        try:
+            store.write(who, lambda w: BRIEF.count_read(w, who.actor, view))
+        except Exception:  # noqa: BLE001 - a count must never fail the read
+            logging.getLogger(__name__).warning("growth view read was not counted", exc_info=True)
 
     def editor(who, what):
         auth.domain(who)
@@ -1212,8 +1223,32 @@ def install(app, store, auth, mutate):
             row = channel(c, slug)
             if not row:
                 raise Problem("not_found", f"No channel {slug}", 404)
-            out = {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+            out = {
+                **channel_view(row),
+                "tasks": channel_tasks(c, auth, who, slug),
+                **BRIEF.channel(c, auth, who, row, _hidden_owners(c, auth, who)),
+            }
+        counted(who, "channel")
         return answer(who, out, seen=True)
+
+    @app.get("/api/v2/growth/segments/{label}")
+    def growth_segment(request: Request, label: str):
+        """One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV, the change from
+        the month before, and that spend is not split by segment. A cohort under the minimum shows counts only."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            out = BRIEF.segment(c, auth, who, label)
+        counted(who, "segment")
+        return answer(who, out)
+
+    @app.get("/api/v2/growth/view-reads")
+    def growth_view_reads(request: Request, days: int = 30):
+        """How often each caller read a channel or segment view in the last `days` days, and in how many runs."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            return BRIEF.reads(c, max(1, min(int(days), 366)))
 
     @app.post("/api/v2/growth/channels")
     def growth_channel_add(request: Request, body: M.GrowthChannelCreate):

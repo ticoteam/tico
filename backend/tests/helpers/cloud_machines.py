@@ -20,6 +20,7 @@ class FakeHQ:
         self.calls, self.fail, self.machines, self.n = [], {}, {}, 0
         self.clock = None  # a test's fake clock (an ISO time): start and stop then stamp as HQ does
         self.sizes = None  # None offers the module's SIZES (a test may patch them); a test sets its own list
+        self.switch = False  # HQ's helper switch for Tico support
 
     def _check(self, action):
         failing = self.fail.get(action)
@@ -34,6 +35,7 @@ class FakeHQ:
 
     def list(self):
         self.calls.append(("list",))
+        self._check("list")
         sizes = SIZES if self.sizes is None else self.sizes
         return {"machines": [dict(m) for m in self.machines.values()], "sizes": sizes, "caps": {"machines": 10}}
 
@@ -89,6 +91,14 @@ class FakeHQ:
         if machine_id not in self.machines or self.machines[machine_id]["state"] == "deleted":
             raise CM.Refused("not_found", 404)
         self.machines[machine_id]["state"] = "deleted"
+
+    def support(self, on=None, revision=None, idempotency_key=None):
+        """HQ's helper switch: read when `on` is None, else set to `on`. HQ's revision check is not modelled."""
+        self.calls.append(("support", on))
+        self._check("support")
+        if on is not None:
+            self.switch = on
+        return {"on": self.switch, "machines": []}
 
     def actions(self):
         return [call[0] for call in self.calls if call[0] != "list"]

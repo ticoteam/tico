@@ -1,30 +1,10 @@
-"""No file names a Tico MCP tool `hub_*`: since 0.6.0 every tool is `tico_*`, served as `tico`, with no alias.
-
-A bot copies the tool names it reads (its instructions, skills, the docs, the runner's prompt, the tool descriptions), and
-the safety lists (backend/execution.py OUTSIDE_TOOLS, the gateway allowlist) match by name, so one `hub_task_show` left
-anywhere is a call that fails or an outside action that goes unflagged. scripts/cleanup/rename_hub_tools_to_tico.py
-made the change; it is rerunnable, and its check is the first test here, so a merge that brings back an old name fails
-until the script is run again.
-"""
-
-import importlib.util
-import subprocess
-import sys
-from pathlib import Path
+"""Every tool and command name in the clients/hubtools.py registry is `tico_*`, the server is named `tico`, and an old
+`hub_*` name is refused as an unknown tool without calling the API. This reads the registry only, not the files that
+name tools."""
 
 import pytest
 
 from clients import hubtools
-
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "cleanup" / "rename_hub_tools_to_tico.py"
-
-
-def load_script():
-    spec = importlib.util.spec_from_file_location("rename_hub_tools_to_tico", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_every_tool_and_command_name_is_tico_and_so_is_the_server():
