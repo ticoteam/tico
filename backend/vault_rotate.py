@@ -1,3 +1,4 @@
+# pyright: strict
 """Move every stored secret to a fresh AWS KMS data key and retire the key files: `python -m backend.manage vault-rotate`.
 
 Run with the server STOPPED (setup/cell.py `rewrap` runs it in a one-off container on the company's volume and env). A
@@ -41,7 +42,9 @@ import os
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from typing import Any, Protocol, cast
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -54,9 +57,29 @@ from .credentials import (
     ROTATED_AT,
     SEALED,
     CredentialCipher,
-    legacy_key,
 )
+from . import credentials as _credentials
 from .store import Problem
+
+Row = sqlite3.Row
+Conn = sqlite3.Connection
+Counts = dict[str, int]
+Items = Callable[[Row, Any], Iterable[tuple[Any, str, str]]]
+
+
+class _Cipher(Protocol):
+    """What the step uses of `CredentialCipher` (backend/credentials.py is not typed)."""
+
+    key_id: str
+    key_file: Path
+    context: dict[str, str]
+
+    def unwrap(self, wrapped: bytes, context: dict[str, str] | None = None) -> bytes: ...
+
+    def generate(self) -> tuple[bytes, bytes]: ...
+
+
+_legacy_key = cast("Callable[[Path], bytes | None]", _credentials.legacy_key)
 
 GITHUB_KEY = "github-app.key"
 SLACK_KEY = "slack.key"  # an older server's Slack row (backend/slack_app.py); read here, never deleted
@@ -68,16 +91,18 @@ CONFIG_ERROR = 2
 class Stop(Exception):
     """The step stops with nothing deleted. `code` 2 is a configuration error, 3 anything else."""
 
-    def __init__(self, reason, failed=None, code=3):
+    def __init__(self, reason: str, failed: Counts | None = None, code: int = 3) -> None:
         super().__init__(reason)
-        self.reason, self.failed, self.code = reason, failed or {}, code
+        self.reason: str = reason
+        self.failed: Counts = failed or {}
+        self.code: int = code
 
 
-def _now():
+def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def looks_sealed(value):
+def looks_sealed(value: object) -> bool:
     """Whether text is a `CredentialCipher.seal` value: the prefix, then base64 of a nonce and at least a GCM tag. Prose
     that merely starts with the prefix (a comment about this code) is not one."""
     if not isinstance(value, str) or not value.startswith(SEALED):
@@ -88,12 +113,12 @@ def looks_sealed(value):
         return False
 
 
-def _open_sealed(key, context, stored):
+def _open_sealed(key: bytes, context: str, stored: str) -> bytes:
     blob = base64.b64decode(stored[len(SEALED) :])
     return AESGCM(key).decrypt(blob[:12], blob[12:], b"tico-sealed:v1:" + context.encode())
 
 
-def _seal(key, context, plain):
+def _seal(key: bytes, context: str, plain: bytes) -> str:
     nonce = os.urandom(12)
     return (
         SEALED
@@ -101,11 +126,11 @@ def _seal(key, context, plain):
     )
 
 
-def _columns(c, table):
+def _columns(c: Conn, table: str) -> set[Any]:
     return {r[1] for r in c.execute(f'PRAGMA table_info("{table}")')}
 
 
-def _has(c, table, *columns):
+def _has(c: Conn, table: str, *columns: str) -> bool:
     found = _columns(c, table)
     return bool(found) and set(columns) <= found
 
@@ -120,10 +145,17 @@ class Raw:
     """Rows sealed whole with AESGCM: a `nonce` and a `ciphertext` column, and an AAD per row. `legacy` names the key
     files a row may still be sealed with (from before TICO_CREDENTIAL_KMS_KEY was set)."""
 
-    def __init__(self, kind, table, key, aad, legacy=()):
+    def __init__(
+        self,
+        kind: str | Callable[[Row], str],
+        table: str,
+        key: str,
+        aad: Callable[[Row], bytes],
+        legacy: tuple[str, ...] = (),
+    ) -> None:
         self.kind, self.table, self.key, self.aad, self.legacy = kind, table, key, aad, legacy
 
-    def run(self, c, step):
+    def run(self, c: Conn, step: "Pass") -> None:
         if not _has(c, self.table, self.key, "nonce", "ciphertext"):
             return
         for row in c.execute(f"SELECT * FROM {self.table} WHERE ciphertext IS NOT NULL").fetchall():
@@ -135,7 +167,7 @@ class Raw:
             nonce = os.urandom(12)
             c.execute(
                 f"UPDATE {self.table} SET ciphertext=?,nonce=? WHERE {self.key}=?",
-                (AESGCM(step.fresh).encrypt(nonce, plain, aad), nonce, row[self.key]),
+                (AESGCM(cast("bytes", step.fresh)).encrypt(nonce, plain, aad), nonce, row[self.key]),
             )
             step.resealed(kind)
 
@@ -143,11 +175,13 @@ class Raw:
 class Column:
     """A text column holding a `CredentialCipher.seal` value; `context(row)` is what it was sealed for."""
 
-    def __init__(self, kind, table, key, column, context, needs=()):
+    def __init__(
+        self, kind: str, table: str, key: str, column: str, context: Callable[[Row], str], needs: tuple[str, ...] = ()
+    ) -> None:
         self.kind, self.table, self.key, self.column, self.context = kind, table, key, column, context
         self.needs = needs
 
-    def run(self, c, step):
+    def run(self, c: Conn, step: "Pass") -> None:
         if not _has(c, self.table, self.key, self.column, *self.needs):
             return
         rows = c.execute(
@@ -162,7 +196,7 @@ class Column:
                 continue
             c.execute(
                 f"UPDATE {self.table} SET {self.column}=? WHERE {self.key}=?",
-                (_seal(step.fresh, context, plain), row[self.key]),
+                (_seal(cast("bytes", step.fresh), context, plain), row[self.key]),
             )
             step.resealed(self.kind)
 
@@ -171,11 +205,20 @@ class Json:
     """Sealed values inside a JSON column. `items(row, doc)` yields (holder, field, context) for each value that may be
     sealed; a sealed one is replaced in place and the document written back."""
 
-    def __init__(self, kind, table, key, column, items, where="1=1", params=()):
+    def __init__(
+        self,
+        kind: str,
+        table: str,
+        key: str,
+        column: str,
+        items: Items,
+        where: str = "1=1",
+        params: tuple[Any, ...] = (),
+    ) -> None:
         self.kind, self.table, self.key, self.column, self.items = kind, table, key, column, items
         self.where, self.params = where, params
 
-    def run(self, c, step):
+    def run(self, c: Conn, step: "Pass") -> None:
         if not _has(c, self.table, self.key, self.column):
             return
         for row in c.execute(f"SELECT * FROM {self.table} WHERE {self.where}", self.params).fetchall():
@@ -185,13 +228,13 @@ class Json:
                 continue
             changed = False
             for holder, field, context in self.items(row, doc):
-                stored = holder.get(field) if isinstance(holder, dict) else None
+                stored = cast("dict[str, Any]", holder).get(field) if isinstance(holder, dict) else None
                 if not isinstance(stored, str) or not stored.startswith(SEALED):
                     continue
                 step.covered(self.table, self.column)
                 plain = step.open_sealed(self.kind, context, stored)
                 if plain is not None and step.writing:
-                    holder[field] = _seal(step.fresh, context, plain)
+                    holder[field] = _seal(cast("bytes", step.fresh), context, plain)
                     step.resealed(self.kind)
                     changed = True
             if changed:
@@ -201,7 +244,7 @@ class Json:
                 )
 
 
-def registry():
+def registry() -> list[Raw | Column | Json]:
     """The entries, built from each owner module's own context function, so a context changed there is followed here.
     Imported on use: the step runs with the server stopped, never inside it."""
     from . import (
@@ -222,15 +265,29 @@ def registry():
         webhook_delivery,
     )
 
-    def headers(row, doc):
-        for h in doc if isinstance(doc, list) else []:
-            if isinstance(h, dict) and h.get("secret"):
-                yield h, "value", f"{webhook_delivery.sealed_as(row['id'])}:header:{h.get('name')}"
+    # The owner modules are not all typed: each context function is used with the type it has.
+    webhook_sealed_as = cast("Callable[..., str]", webhook_delivery.sealed_as)
+    trigger_sealed_as = cast("Callable[[str], str]", triggers.sealed_as)
+    support_context = cast("Callable[[str], str]", support._context)  # pyright: ignore[reportPrivateUsage]
+    tool_context = cast("Callable[[str], str]", mcp_connect._secret_context)  # pyright: ignore[reportPrivateUsage]
+    storage_context = cast("Callable[[str], str]", company_storage._context)  # pyright: ignore[reportPrivateUsage]
+    subscription_context = cast("Callable[[str], str]", model_subscriptions._context)  # pyright: ignore[reportPrivateUsage]
+    workspace_context = cast("Callable[[str], str]", google_workspace._context)  # pyright: ignore[reportPrivateUsage]
 
-    def record(fields):
+    def headers(row: Row, doc: Any) -> Iterator[tuple[Any, str, str]]:
+        for h in cast("list[Any]", doc) if isinstance(doc, list) else []:
+            if not isinstance(h, dict):
+                continue
+            header = cast("dict[str, Any]", h)
+            if header.get("secret"):
+                yield header, "value", f"{webhook_sealed_as(row['id'])}:header:{header.get('name')}"
+
+    def record(fields: list[tuple[str, str]]) -> Items:
         # registry_metadata records: a field sealed in the record itself (from before D11-11, migration
         # 20261117103033 moves it to a service row) or web push's key.
-        return lambda row, doc: ((doc, f, ctx) for f, ctx in fields) if isinstance(doc, dict) else ()
+        return lambda row, doc: (
+            ((cast("dict[str, Any]", doc), f, ctx) for f, ctx in fields) if isinstance(doc, dict) else ()
+        )
 
     gateway = [(field, ctx) for field, (_, _, ctx) in gateway_connection.SECRETS.items()]
     return [
@@ -250,7 +307,7 @@ def registry():
             (GITHUB_KEY,),
         ),
         Raw("slack_credentials", "slack_credentials", "id", lambda r: b"tico-slack-app:v1", (SLACK_KEY,)),
-        Column("support_tickets", "support_tickets", "id", "hq_secret", lambda r: support._context(r["id"])),
+        Column("support_tickets", "support_tickets", "id", "hq_secret", lambda r: support_context(r["id"])),
         Column(
             "google_connects",
             "google_connects",
@@ -259,10 +316,10 @@ def registry():
             lambda r: google_tokens.context(str(r["person_id"]), str(r["grant_operation_id"]), str(r["mailbox"])),
             ("grant_operation_id", "mailbox"),
         ),
-        Column("webhooks", "webhooks", "id", "secret", lambda r: webhook_delivery.sealed_as(r["id"])),
-        Column("webhooks", "webhooks", "id", "secret_prev", lambda r: webhook_delivery.sealed_as(r["id"], True)),
+        Column("webhooks", "webhooks", "id", "secret", lambda r: webhook_sealed_as(r["id"])),
+        Column("webhooks", "webhooks", "id", "secret_prev", lambda r: webhook_sealed_as(r["id"], True)),
         Json("webhooks", "webhooks", "id", "headers", headers),
-        Column("triggers", "triggers", "id", "signing_secret", lambda r: triggers.sealed_as(r["id"])),
+        Column("triggers", "triggers", "id", "signing_secret", lambda r: trigger_sealed_as(r["id"])),
         Column("tico_storage", "tico_storage", "id", "secret", lambda r: tico_storage.CONTEXT),
         Column(
             "growth_source_secrets",
@@ -271,19 +328,17 @@ def registry():
             "signing_secret",
             lambda r: growth_sync.sealed_as(r["source_id"]),
         ),
-        Column("tools", "tools", "id", "mcp_client_secret", lambda r: mcp_connect._secret_context(r["id"])),
+        Column("tools", "tools", "id", "mcp_client_secret", lambda r: tool_context(r["id"])),
         Column("tool_oauth_states", "tool_oauth_states", "id", "verifier", lambda r: "tool_oauth_states:" + r["id"]),
-        Column("company_storage", "company_storage", "id", "secret", lambda r: company_storage._context(r["id"])),
+        Column("company_storage", "company_storage", "id", "secret", lambda r: storage_context(r["id"])),
         Column(
             "model_subscriptions",
             "model_subscriptions",
             "id",
             "sealed",
-            lambda r: model_subscriptions._context(r["id"]),
+            lambda r: subscription_context(r["id"]),
         ),
-        Column(
-            "google_workspaces", "google_workspaces", "id", "key_sealed", lambda r: google_workspace._context(r["id"])
-        ),
+        Column("google_workspaces", "google_workspaces", "id", "key_sealed", lambda r: workspace_context(r["id"])),
         Column(
             "google_oauth_clients",
             "google_oauth_clients",
@@ -325,24 +380,27 @@ class Pass:
     """One walk of the registry. `old` opens what the vault sealed, `legacy` ({file name: key}) what a key file sealed;
     with `fresh` set every opened value is written back sealed with it."""
 
-    def __init__(self, old, legacy, fresh=None):
+    def __init__(self, old: bytes | None, legacy: dict[str, bytes], fresh: bytes | None = None) -> None:
         self.old, self.legacy, self.fresh = old, legacy, fresh
-        self.failed, self.done, self.cover, self.plain = {}, {}, {}, {}
+        self.failed: Counts = {}
+        self.done: Counts = {}
+        self.cover: dict[tuple[str, str], int] = {}
+        self.plain: dict[str, bytes] = {}
 
     @property
-    def writing(self):
+    def writing(self) -> bool:
         return self.fresh is not None
 
-    def fail(self, kind):
+    def fail(self, kind: str) -> None:
         self.failed[kind] = self.failed.get(kind, 0) + 1
 
-    def resealed(self, kind):
+    def resealed(self, kind: str) -> None:
         self.done[kind] = self.done.get(kind, 0) + 1
 
-    def covered(self, table, column):
+    def covered(self, table: str, column: str) -> None:
         self.cover[(table, column)] = self.cover.get((table, column), 0) + 1
 
-    def open_raw(self, kind, nonce, ciphertext, aad, legacy):
+    def open_raw(self, kind: str, nonce: Any, ciphertext: Any, aad: bytes, legacy: tuple[str, ...]) -> bytes | None:
         keys = [self.old] + [self.legacy.get(name) for name in legacy]
         for key in keys:
             if key is None:
@@ -357,24 +415,26 @@ class Pass:
         self.fail(kind)
         return None
 
-    def open_sealed(self, kind, context, stored):
+    def open_sealed(self, kind: str, context: str, stored: str) -> bytes | None:
         try:
-            return _open_sealed(self.old, context, stored)
+            return _open_sealed(
+                cast("bytes", self.old), context, stored
+            )  # no key (None) fails here, as one that does not open
         except Exception:  # noqa: BLE001 - no key, or one that does not open it: a failure, named by kind
             self.fail(kind)
             return None
 
-    def walk(self, c):
+    def walk(self, c: Conn) -> "Pass":
         for entry in registry():
             entry.run(c, self)
         return self
 
 
 # ------------------------------------------------------------------------------------------------------------- guard
-def uncovered(c, cover):
+def uncovered(c: Conn, cover: dict[tuple[str, str], int]) -> Counts:
     """{"table.column": count} of sealed values in columns the registry did not walk, or more of them than it walked.
     Every text value of every table is looked at: a value that is a sealed value, or JSON holding one."""
-    found = {}
+    found: Counts = {}
     tables = [
         r[0]
         for r in c.execute(
@@ -400,36 +460,37 @@ def uncovered(c, cover):
     return found
 
 
-def _sealed_in_json(text):
+def _sealed_in_json(text: str) -> int:
     try:
         doc = json.loads(text)
     except ValueError:
         return 0
-    stack, n = [doc], 0
+    stack: list[Any] = [doc]
+    n = 0
     while stack:
         item = stack.pop()
         if isinstance(item, dict):
-            stack.extend(item.values())
+            stack.extend(cast("dict[Any, Any]", item).values())
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.extend(cast("list[Any]", item))
         elif looks_sealed(item):
             n += 1
     return n
 
 
 # ----------------------------------------------------------------------------------------------- HMAC fingerprints
-def _finance_fingerprint(key, context, value):
+def _finance_fingerprint(key: bytes, context: str, value: str) -> str:
     """backend/finance/store/tico.py `fingerprint`, with a given key."""
     return hmac.new(key, f"tico-finance:{context}:".encode() + value.encode(), hashlib.sha256).hexdigest()
 
 
-def _rekey_recipients(c, step, old):
+def _rekey_recipients(c: Conn, step: Pass, old: bytes | None) -> Counts:
     """Finance keeps a keyed fingerprint of each payee's bank details (`fin_recipients.details_hash`, HMAC with the
     vault's data key) to refuse a duplicate recipient. For a bank recipient the details are sealed in its `details_ref`
     credential, so the fingerprint is computed again with the fresh key. A check recipient's fingerprint is of its
     mailing address, which the row does not keep: it cannot be recomputed and is returned in `stale` (it only stops a
     duplicate check recipient from being refused as one)."""
-    stale = {}
+    stale: Counts = {}
     if old is None or not _has(c, "fin_recipients", "id", "method", "details_hash", "details_ref"):
         return stale
     from .finance.core.feeds import details_hash
@@ -449,21 +510,21 @@ def _rekey_recipients(c, step, old):
             continue
         c.execute(
             "UPDATE fin_recipients SET details_hash=? WHERE id=?",
-            (_finance_fingerprint(step.fresh, "payee", digest), row["id"]),
+            (_finance_fingerprint(cast("bytes", step.fresh), "payee", digest), row["id"]),
         )
         step.resealed("fin_recipients.details_hash")
     return stale
 
 
 # -------------------------------------------------------------------------------------------------------------- step
-def _connect(db):
+def _connect(db: Path) -> Conn:
     c = sqlite3.connect(str(db), isolation_level=None, timeout=30)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA busy_timeout=30000")
     return c
 
 
-def _marker(c, key):
+def _marker(c: Conn, key: str) -> str | None:
     try:
         row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     except sqlite3.Error:
@@ -471,21 +532,21 @@ def _marker(c, key):
     return row[0] if row else None
 
 
-def _set_marker(c, key, value):
+def _set_marker(c: Conn, key: str, value: str) -> None:
     c.execute(
         "INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
 
 
-def _key_row(c):
+def _key_row(c: Conn) -> Row | None:
     try:
         return c.execute("SELECT * FROM credential_keys WHERE id='v1'").fetchone()
     except sqlite3.Error:
         return None
 
 
-def _current_key(c, cipher, row):
+def _current_key(c: Conn, cipher: _Cipher, row: Row | None) -> bytes | None:
     """The data key every vault secret is sealed with now, or None when none was ever made."""
     if row is None:
         return None
@@ -514,11 +575,11 @@ def _current_key(c, cipher, row):
     raise Stop("KMS did not unwrap the current data key (vault_unavailable): check the company's AWS access")
 
 
-def _rotate(db, cipher, folder):
+def _rotate(db: Path, cipher: _Cipher, folder: Path) -> tuple[Counts, Counts]:
     """Steps 2 to 4: every secret re-sealed with a fresh KMS data key in one transaction. Returns (resealed, stale)."""
     with closing(_connect(db)) as c:
         old = _current_key(c, cipher, _key_row(c))
-    legacy = {name: k for name in (GITHUB_KEY, SLACK_KEY) if (k := legacy_key(folder / name)) is not None}
+    legacy = {name: k for name in (GITHUB_KEY, SLACK_KEY) if (k := _legacy_key(folder / name)) is not None}
     try:
         fresh, wrapped = cipher.generate()
     except Exception:  # noqa: BLE001 - KMS unreachable or denied: the step stops
@@ -556,7 +617,7 @@ def _rotate(db, cipher, folder):
         c.close()
 
 
-def _verify(db, cipher):
+def _verify(db: Path, cipher: _Cipher) -> dict[tuple[str, str], int]:
     """Step 5's check: every registered secret opens with the key KMS unwraps from the database, and nothing else."""
     c = _connect(db)
     try:
@@ -578,9 +639,9 @@ def _verify(db, cipher):
         c.close()
 
 
-def run(settings, kms=None):
+def run(settings: Any, kms: Any = None) -> tuple[dict[str, Any], int]:
     """The step. Returns (report, exit code); the report never holds a secret."""
-    report = {"status": STOPPED, "reason": "", "failed": {}, "resealed": {}, "deleted": []}
+    report: dict[str, Any] = {"status": STOPPED, "reason": "", "failed": {}, "resealed": {}, "deleted": []}
     if not str(settings.credential_kms_key or "").strip():
         report["reason"] = "TICO_CREDENTIAL_KMS_KEY is not set: the step needs the company's KMS key"
         return report, CONFIG_ERROR
@@ -589,7 +650,7 @@ def run(settings, kms=None):
         report["reason"] = f"No database at {db}"
         return report, CONFIG_ERROR
     folder = db.parent
-    cipher = CredentialCipher.for_settings(settings, kms)
+    cipher = cast("Callable[[Any, Any], _Cipher]", CredentialCipher.for_settings)(settings, kms)
     files = [folder / KEY_FILE, folder / GITHUB_KEY]
     try:
         with closing(_connect(db)) as c:
@@ -615,7 +676,8 @@ def run(settings, kms=None):
         report.update(reason=stop.reason, failed=stop.failed)
         return report, stop.code
     except Problem as problem:
-        report.update(reason=f"{problem.code}: {problem.detail}")
+        refused = cast("Any", problem)
+        report.update(reason=f"{refused.code}: {refused.detail}")
         return report, EXIT[STOPPED]
     report.update(
         status=DONE,
