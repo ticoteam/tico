@@ -74,13 +74,16 @@ def _seed(api):
             [("human:ana", "company"), ("human:ben", "company"), ("human:ana", "members"), ("human:cara", "members")]
             + [("human:ana", "company"), ("human:cara", "members"), ("human:ben", "members")]
         ):
-            title = "" if i % 3 == 2 else f"Topic {chr(90 - i)}"
-            out = threads.post(c, who, None, f"Hello {i}", start={"title": title, "audience": audience})
+            out = threads.post(
+                c, who, None, f"Hello {i}", start={"title": f"Topic {chr(90 - i)}", "audience": audience}
+            )
             made.append(out.get("thread_id") or out.get("conversation_id"))
+            if i % 3 == 2:  # an untitled thread (written before titles were required): the lists put it last
+                c.execute("UPDATE conversations SET subject='' WHERE id=?", (made[-1],))
         threads.add_member(c, "human:ana", made[2], "human:ben")
         threads.add_member(c, "human:cara", made[3], "human:ana")
         threads.post(c, "human:cara", made[2], "Seen")
-        threads.post(c, "human:ana", None, "Group", start={"dm": ["human:ben", "human:cara"], "title": ""})
+        threads.post(c, "human:ana", None, "Group", start={"dm": ["human:ben", "human:cara"], "title": "Trio"})
         threads.post(c, "human:ben", None, "Just us", start={"dm": ["human:cara"], "title": ""})
         thread_rail.pin(c, "human:ben", made[0])
         thread_rail.pin(c, "human:cara", made[3])
@@ -185,6 +188,7 @@ def test_the_rail_and_catch_up_answer_as_the_old_sql(api, monkeypatch):
     )
     monkeypatch.setattr(thread_rail, "_rail_lists", old_rail_lists)
     monkeypatch.setattr(thread_rail, "_walk_where", old_walk_where)
+    monkeypatch.setattr(thread_rail, "OPEN_ROOTS_FROM", "conversations r")
     for (path, token), pages in new.items():
         assert _pages(api, token, path) == pages, f"{path} changed for {token}"
     rail = {t: new[("threads/rail", t)] for t in READERS.values()}

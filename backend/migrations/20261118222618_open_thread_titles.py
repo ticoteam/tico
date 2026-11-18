@@ -4,7 +4,10 @@ roots and not every task thread.
 The rail lists threads (company, team, members) and group DMs (personal, participants), never a task's thread, and a
 company's task threads are most of its roots (thread_rail.rail). The index holds only open roots of those audiences
 (the stored one, else the one derived from scope and kind, as threads._derived_audience reads it), keyed by the rail's
-title order: unnamed last, then the lowercased title, then the id. Nothing else changes.
+title order: unnamed last, then the lowercased title, then the id.
+
+A second index holds every open root's task and id, so Catch up (thread_rail._walk) passes over a finished task's root
+by its task alone, without reading the root's row. Nothing else changes.
 
 Running it again changes nothing more.
 """
@@ -17,6 +20,8 @@ INDEXES = (
     "WHEN scope='personal' THEN 'personal' WHEN scope='shared' THEN 'home' "
     "WHEN kind='task' AND task_id IS NOT NULL THEN 'task' ELSE 'participants' END) "
     "IN ('company','team','members','personal','participants')",
+    "CREATE INDEX IF NOT EXISTS conversations_open_roots ON conversations(task_id, id) "
+    "WHERE parent_id IS NULL AND archived_at IS NULL AND closed_at IS NULL",
 )
 
 
