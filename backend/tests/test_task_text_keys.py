@@ -11,7 +11,7 @@ from pathlib import Path
 from backend import task_text_keys as K
 from backend import threads
 from backend.store import H
-from backend.tests.helpers.tasks_board import api, bot_token, get, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
 
 CASES = json.loads((Path(__file__).parent / "fixtures" / "secret_drop_cases.json").read_text())
 # Stored split, joined here, so this file holds no key either.
@@ -34,7 +34,15 @@ ORDINARY = [
     "the new value is masked before the commit.",
     "token= and the value on the next line, in UTF-8 and UTF-16",
     "Save GITHUB_TOKEN in Tools and refer to it by name; the api key is in Tools as STRIPE_SECRET_KEY.",
+    # A name, a colon and a word, a number or a dotted name: what engineering notes say every day (Review 1, run 5).
+    "Motion (tokens.css: --dur-fast, --dur, --ease)",
+    "auth: OAuth2 device flow",
+    "hotkey: Ctrl-K opens search",
+    "max_tokens: 4096",
+    "cache key: tasks:list:v2",
 ]
+# The spec page's own text (people's names changed to the fictional team's).
+SPEC_PAGE = (Path(__file__).parent / "fixtures" / "task_text_spec_page.txt").read_text()
 
 
 def _negatives():
@@ -42,7 +50,7 @@ def _negatives():
     certain_free = [
         t for t, c in zip(joined, CASES["cases"]) if not any(e.get("tier") == "certain" for e in c["expect"])
     ]
-    return certain_free + list(CASES["ordinary"]) + ORDINARY
+    return certain_free + list(CASES["ordinary"]) + ORDINARY + [SPEC_PAGE]
 
 
 def _task(api, token="ana-test"):
@@ -136,6 +144,49 @@ def test_ordinary_text_and_every_detector_negative_is_stored_unchanged(api):
     text = "\n".join(ORDINARY)
     said = post(api, f"tasks/{task['id']}/comments", {"text": text})["comment"]
     assert said["body"] == text and _rows(api, task["id"]) == []
+
+
+def test_every_detector_key_is_still_refused_in_task_text():
+    # A name in front of a value is not enough on its own in task text; the detector's own keys all still count.
+    for case in CASES["cases"]:
+        text = "".join(case["text"]) if isinstance(case["text"], list) else case["text"]
+        certain = [e for e in case["expect"] if e.get("tier") == "certain"]
+        assert len(K.found(text)) >= len(certain), case.get("id")
+
+
+def _upload_refused(api, path, data):
+    files = {"files": ("a.txt", b"hello", "text/plain")}
+    r = api.post("/api/v2/" + path, data=data, files=files, headers=headers())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "looks_like_key", r.text
+    assert KEY not in r.text
+
+
+def test_a_comment_or_a_new_task_sent_with_a_file_is_refused_too(api):
+    task = _task(api)
+    _upload_refused(api, f"uploads/threads/{task['conversation_id']}/messages", {"text": "deploy key: " + KEY})
+    _upload_refused(api, "uploads/tasks", {"owner": "ops", "title": "New", "body": "key " + KEY})
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
+    assert len(_rows(api, task["id"])) == 1
+    # The same upload with ordinary words goes through, its file included.
+    r = api.post(
+        f"/api/v2/uploads/threads/{task['conversation_id']}/messages",
+        data={"text": "max_tokens: 4096"},
+        files={"files": ("a.txt", b"hello", "text/plain")},
+        headers=headers(),
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_a_message_or_an_edit_in_a_task_s_conversation_is_refused(api):
+    task = _task(api)
+    said = post(api, f"threads/{task['conversation_id']}/messages", {"text": "Ordinary words"})
+    _refused(api, f"threads/{task['conversation_id']}/messages", {"text": "the key " + KEY})
+    mid = (said.get("message") or said)["id"]
+    r = api.patch(f"/api/v2/messages/{mid}", json={"text": "now " + KEY}, headers=headers())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "looks_like_key", r.text
+    assert len(_rows(api, task["id"])) == 2
 
 
 def test_files_pages_and_reads_are_not_checked():

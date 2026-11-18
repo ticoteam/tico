@@ -1331,6 +1331,7 @@ def _install_request_guard(
                             request.method,
                             request.url.path,
                             request._body,
+                            request.headers.get("content-type", ""),
                         )
                 # assistant_owns reads the database: off the event loop.
                 if (
