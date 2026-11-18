@@ -36,8 +36,9 @@ import threading
 import time
 from array import array
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import aclosing
 from typing import Any
 
 from . import call_media as _call_media
@@ -58,7 +59,9 @@ log = logging.getLogger("tico.call_voice")
 BYTES_PER_MS = call_media.SAMPLE_RATE * 2 // 1000
 FRAME_MS = 20
 LOUD_RMS = 500  # a 20 ms frame this loud (of 32767) is speech; quieter is a pause
-SILENCE_MS = 700  # a pause this long after speech ends the utterance
+SILENCE_MS = call_media.END_PAUSE_MS
+FRAGMENT_SILENCE_MS = 700  # a short phrase gets more time for the speaker to continue it
+FRAGMENT_SPEECH_MS = 600
 QUESTION_MAX_MS = 60_000  # an utterance is cut here even without a pause
 PREROLL_MS = 200  # kept from before the first loud frame, so a soft first syllable is not clipped
 MIN_SPEECH_MS = 200  # less speech than this (a cough, a click) is not sent
@@ -109,6 +112,12 @@ class Segmenter:
     def speaking(self) -> bool:
         return self.pcm is not None
 
+    def _pause_ms(self) -> int:
+        return FRAGMENT_SILENCE_MS if self.speaking and self.voiced < FRAGMENT_SPEECH_MS else SILENCE_MS
+
+    def idle_seconds(self) -> float:
+        return (self._pause_ms() - self.quiet) / 1000
+
     def feed(self, pcm: bytes, start_ms: int) -> list[tuple[int, bytes]]:
         """Take one piece of speech; returns the utterances it ended, as (start_ms, pcm)."""
         data = self.rest + pcm
@@ -140,7 +149,7 @@ class Segmenter:
                 self.voiced, self.quiet = self.voiced + FRAME_MS, 0
             else:
                 self.quiet += FRAME_MS
-        if self.quiet >= SILENCE_MS or len(self.pcm) >= QUESTION_MAX_MS * BYTES_PER_MS:
+        if self.quiet >= self._pause_ms() or len(self.pcm) >= QUESTION_MAX_MS * BYTES_PER_MS:
             return self._take()
         return None
 
@@ -595,13 +604,13 @@ class Voice:
         media = self.calls.media
         played = 0
         why = "not_spoken"  # why the reply stayed text, when it did
-        made: list[Future[tuple[bytes, int]]] = []
         try:
             with self.store.read() as c:
                 key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
                 used = c.execute("SELECT voice_ms FROM calls WHERE id=?", (call_id,)).fetchone()
             budget = VOICE_CAP_MS - (int(used[0] or 0) if used else 0)
             parts = sentences(spoken(text))
+            mark = media.mark(call_id)  # a hush after standing was checked also stops this reply
             if not key or not parts or not self._standing(call_id, bot, voice, epoch):
                 why = "no_voice" if not key or not parts else "canceled"
                 return
@@ -609,73 +618,72 @@ class Voice:
             if names is None:
                 self.warm()  # this reply has the Gateway's own voice; the next has the bot's
             name = call_media.voice_for(bot, names or [])
-            planned = 0  # what the sentences made so far will take, by their length
-
-            def make(index: int) -> bool:
-                nonlocal planned
-                guess = estimate_ms(parts[index])
-                if planned + guess > budget:
-                    return False  # never made: it would not fit in what is left of the call's voice
-                planned += guess
-                made.append(self.makers.submit(call_media.speech, base, key, parts[index], name))
-                return True
-
-            if not make(0):
+            planned = 0
+            sentences_to_say: list[str] = []
+            for sentence in parts:
+                planned += estimate_ms(sentence)
+                if planned > budget:
+                    break
+                sentences_to_say.append(sentence)
+            if not sentences_to_say:
                 self._note(voice, "Voice limit reached")
                 why = "voice_limit"
                 return
-            for index, sentence in enumerate(parts):
-                if index + 1 < len(parts) and len(made) == index + 1:
-                    make(index + 1)  # the next sentence is made while this one plays
+
+            def first_chunk() -> None:
+                if timing is not None:
+                    timing["tts_chunk"] = self.clock()
+
+            def request_started() -> None:
+                if timing is not None:
+                    timing["tts_requested"] = self.clock()
+
+            async def frames() -> AsyncGenerator[tuple[int, bytes]]:
+                nonlocal why
                 try:
-                    pcm, rate = made[index].result(call_media.SPEECH_TIMEOUT + 5)
+                    audio: AsyncGenerator[tuple[int, bytes]] = media.speech_frames(
+                        base, key, sentences_to_say, name, first_chunk, request_started=request_started
+                    )
+                    async with aclosing(audio):
+                        async for frame in audio:
+                            yield frame
                 except call_media.MediaUnavailable as exc:
                     log.warning(
                         "call_voice_speech_failed call=%s bot=%s reply=%s status=%s", call_id, bot, reply_id, exc.status
                     )
                     why = "voice_failed"
-                    break
-                mark = (
-                    media.mark(call_id) if hasattr(media, "mark") else None
-                )  # before standing: a hush after it counts
+
+            def before(index: int) -> bool:
+                nonlocal why
                 if not self._standing(call_id, bot, voice, epoch):
                     why = "canceled"
-                    break
+                    return False
                 if index == 0 and self.clock() >= deadline:
                     self.makers.submit(self._late, call_id, bot)  # too late to start: the answer stays text
                     why = "late"
-                    break
-                length = len(pcm) * 1000 // (rate * 2)
-                if played + length > budget:
+                    return False
+                return True
+
+            def started(index: int) -> None:
+                # The media loop sets the caption as the first frame plays, then writes the change off the loop.
+                if index == 0 and timing is not None:
+                    timing["audio"] = self.clock()
+                with voice.lock:
+                    changed = _epoch(voice, bot) == epoch and self._set(voice, bot, "speaking", parts[index])
+                if changed:
+                    self.makers.submit(self.touch, call_id)
+
+            played, capped = media.say_stream(call_id, frames(), mark, budget, before, started)
+            with voice.lock:
+                if _epoch(voice, bot) != epoch:
+                    why = "canceled"
+                elif capped or (played and why == "not_spoken" and len(sentences_to_say) < len(parts)):
                     self._note(voice, "Voice limit reached")
                     why = "voice_limit"
-                    break
-
-                def started(caption: str = sentence, first: bool = index == 0) -> None:
-                    # On the media loop: the state is set here, and its change is written off the loop. A bot canceled
-                    # since is not shown speaking.
-                    if first and timing is not None:
-                        timing["audio"] = self.clock()
-                    with voice.lock:
-                        changed = _epoch(voice, bot) == epoch and self._set(voice, bot, "speaking", caption)
-                    if changed:
-                        self.makers.submit(self.touch, call_id)
-
-                said = media.say(call_id, pcm, rate, started, mark)
-                played += said
-                with voice.lock:
-                    canceled = _epoch(voice, bot) != epoch
-                if not said or canceled:
-                    break
-                if index + 1 < len(parts) and len(made) == index + 1:
-                    self._note(voice, "Voice limit reached")  # the next sentence would not fit
-                    break
         except Exception as exc:  # noqa: BLE001 - a voice failure leaves the posted text as it is
             why = "voice_failed"
             report("calls_voice", call_id, exc, logger="tico.call_voice")
         finally:
-            for future in made:
-                future.cancel()
             if timing is not None:
                 spoke = timing.get("audio") is not None
                 self._log_turn(None, call_id, timing, "spoken" if spoke else "text_only", None if spoke else why)
@@ -777,7 +785,7 @@ class Voice:
             heard, audio = timing.get("asked"), timing.get("audio")
             log.info(
                 "call_voice_turn call_id=%s bot=%s turn=%s outcome=%s skip_reason=%s transcribe_ms=%s queue_ms=%s "
-                "answer_ms=%s speech_ms=%s total_ms=%s",
+                "answer_ms=%s speech_ms=%s total_ms=%s heard_to_transcript_ms=%s tts_first_chunk_ms=%s",
                 call_id,
                 timing["bot"],
                 timing["turn"],
@@ -791,6 +799,8 @@ class Voice:
                         ms(claimed, None if outcome == "skipped" else replied),
                         ms(timing.get("handed"), audio),
                         ms(heard, audio) if timing.get("stored") is not None else None,
+                        ms(heard, timing.get("stored")),
+                        ms(timing.get("tts_requested"), timing.get("tts_chunk")),
                     )
                 ),
             )

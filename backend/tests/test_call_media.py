@@ -4,9 +4,13 @@ import asyncio
 import io
 import json
 import sys
+import threading
 import urllib.error
 import wave
+from array import array
+from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pytest
 
 from backend import call_media as media
@@ -15,6 +19,7 @@ from backend.tests.helpers.call_media import (
     KIND_VIDEO,
     SOURCE_CAMERA,
     SOURCE_SCREENSHARE_AUDIO,
+    FakeAudioSource,
     decode,
     fake_rtc,
     wait_until,
@@ -194,30 +199,316 @@ def test_a_gateway_that_does_not_know_the_live_model_yet_is_asked_once_with_the_
 
 
 def test_speech_asks_the_gateway_for_pcm_and_keeps_its_sample_rate(monkeypatch):
-    from clients import gateway
-
     sent = []
 
-    def relay_speech(url, body, headers=None, timeout=None):
-        sent.append((url, json.loads(body), headers))
-        return 200, b"\x10\x00" * 240, 22050
+    def reply(request):
+        sent.append(request)
+        return httpx.Response(200, headers={"X-Audio-Sample-Rate": "16000"}, content=b"\x10\x00" * 640)
 
-    monkeypatch.setattr(gateway, "relay_speech", relay_speech)
-    pcm, rate = media.speech("https://gateway.acme.example/v1", "gw-key", "Hello from Acme.", "acme-alto")
-    assert (len(pcm), rate) == (480, 22050)
-    url, body, headers = sent[0]
-    assert url == "https://gateway.acme.example/v1/audio/speech" and headers == {"Authorization": "Bearer gw-key"}
-    assert body == {
+    async def read():
+        frames = media.speech_frames(
+            "https://gateway.acme.example/v1", "gw-key", ["Hello from Acme."], "acme-alto", None
+        )
+        return [chunk async for chunk in frames]
+
+    monkeypatch.setattr(media, "SPEECH_TRANSPORT", httpx.MockTransport(reply))
+    assert asyncio.run(read()) == [(0, b"\x10\x00" * 960)] * 2
+    [request] = sent
+    assert str(request.url) == "https://gateway.acme.example/v1/audio/speech"
+    assert request.headers["Authorization"] == "Bearer gw-key"
+    assert request.headers["Accept"] == "audio/pcm"
+    assert request.headers["User-Agent"].startswith("Tico-Client/")
+    assert json.loads(request.content) == {
         "model": "tico-voice-1.0",
         "input": "Hello from Acme.",
         "response_format": "pcm",
         "voice": "acme-alto",
     }
 
-    for answer in ((404, b"", 24000), (200, b"", 24000), (0, b"", 24000)):
-        monkeypatch.setattr(gateway, "relay_speech", lambda *a, answer=answer, **k: answer)
-        with pytest.raises(media.MediaUnavailable):
-            media.speech("https://gateway.acme.example/v1", "gw-key", "Hello.")
+
+def test_speech_refuses_a_redirect_and_missing_audio(monkeypatch):
+    asked = []
+
+    async def read():
+        frames = media.speech_frames("https://gateway.acme.example/v1", "gw-key", ["Hello."], "", None)
+        return [chunk async for chunk in frames]
+
+    for status, headers in ((307, {"Location": "https://other.acme.example/speech"}), (200, {})):
+
+        def reply(request):
+            asked.append(request.url.host)
+            return httpx.Response(status, headers=headers)
+
+        monkeypatch.setattr(media, "SPEECH_TRANSPORT", httpx.MockTransport(reply))
+        with pytest.raises(media.MediaUnavailable) as refused:
+            asyncio.run(read())
+        assert refused.value.status == status
+    assert asked == ["gateway.acme.example", "gateway.acme.example"]
+
+
+class HeldSpeech(httpx.AsyncByteStream):
+    """The Gateway holds the rest of the response after a configurable prefix."""
+
+    def __init__(self, value, prefix=962):
+        self.pcm = bytes([value, 0]) * 960
+        self.prefix = prefix  # one 24 kHz frame and the sample needed to interpolate its last output sample
+        self.held, self.closed = threading.Event(), threading.Event()
+        self.release = asyncio.Event()
+        self.reader = None
+
+    async def __aiter__(self):
+        yield self.pcm[:1]
+        yield self.pcm[1 : self.prefix]
+        self.reader = asyncio.current_task()
+        self.held.set()
+        await self.release.wait()
+        yield self.pcm[self.prefix :]
+
+    async def aclose(self):
+        self.closed.set()
+
+
+@pytest.mark.parametrize("hushed", [False, True], ids=["ordered", "canceled"])
+def test_streaming_speaks_before_eof_and_prefetches_the_next_sentence(fake_rtc, monkeypatch, hushed):
+    first, second = HeldSpeech(16), HeldSpeech(32, prefix=3)
+    first_text, second_text = "Here is the first sentence.", "Here is the second sentence."
+    answers = {first_text: first, second_text: second}
+
+    def speech(request):
+        return httpx.Response(200, stream=answers[json.loads(request.content)["input"]])
+
+    monkeypatch.setattr(media, "SPEECH_TRANSPORT", httpx.MockTransport(speech))
+    live = media.LiveKitMedia(CONFIG)
+    live.start_recorder("stream", "tico-call-stream", lambda *args: None)
+    recorder = live.recorders["stream"]
+    announced, started = [], threading.Event()
+
+    def announce(index):
+        announced.append(index)
+        started.set()
+
+    frames = media.speech_frames("https://gateway.acme.example/v1", "gw-key", list(answers), "", None)
+    with ThreadPoolExecutor(max_workers=1) as playback:
+        pending = playback.submit(
+            live.say_stream, "stream", frames, live.mark("stream"), 100, lambda index: True, announce
+        )
+        try:
+            assert started.wait(5), "LiveKit did not play the first frame while the first sentence's tail was held"
+            assert second.held.wait(5), "the next Gateway request did not wait for the rest of its first frame"
+            assert second.reader is not None and not second.reader.done()
+            assert announced == [0]
+            assert [frame.data for frame in recorder.source.frames] == [b"\x10\x00" * 960]
+            if hushed:
+                live.hush("stream")
+                assert pending.result(5) == (20, False)
+                assert announced == [0] and len(recorder.source.frames) == 1
+                assert recorder.source.cleared == 1
+                assert second.reader.done() and second.reader.cancelled() and not second.release.is_set()
+            else:
+                live.loop.call_soon_threadsafe(second.release.set)
+                live.loop.call_soon_threadsafe(first.release.set)
+                assert pending.result(5) == (80, False)
+                assert announced == [0, 1]
+                assert [frame.data for frame in recorder.source.frames] == [b"\x10\x00" * 960] * 2 + [
+                    b"\x20\x00" * 960
+                ] * 2
+            assert first.closed.is_set() and second.closed.is_set()
+        finally:
+            live.stop_recorder("stream")
+
+
+@pytest.fixture
+def voice_room(fake_rtc):
+    live = media.LiveKitMedia(CONFIG)
+    live.start_recorder("stream", "tico-call-stream", lambda *args: None)
+    try:
+        yield live, live.recorders["stream"]
+    finally:
+        live.stop_recorder("stream")
+
+
+class NativeCapture(FakeAudioSource):
+    """LiveKit can enqueue the frame later even if its Python waiter was canceled."""
+
+    def __init__(self):
+        super().__init__(48000, 1)
+        self.pending = None
+        self.entered, self.was_cleared = threading.Event(), threading.Event()
+        self.played = []
+
+    async def capture_frame(self, frame):
+        if frame.data[0] == 16:
+            callback = asyncio.get_running_loop().create_future()
+            self.pending = (frame, callback)
+            self.entered.set()
+            await asyncio.shield(callback)
+        else:
+            self.frames.append(frame)
+
+    def complete(self):
+        frame, callback = self.pending
+        self.frames.append(frame)
+        callback.set_result(None)
+
+    def clear_queue(self):
+        super().clear_queue()
+        self.frames.clear()
+        self.was_cleared.set()
+
+    async def wait_for_playout(self):
+        self.played.extend(frame.data[0] for frame in self.frames)
+        self.frames.clear()
+
+
+async def pcm_frames(*values):
+    for value in values:
+        yield 0, bytes([value, 0]) * 960
+
+
+def test_hush_clears_a_late_native_frame_before_the_next_reply(voice_room):
+    live, recorder = voice_room
+    source = recorder.source = NativeCapture()
+    mark = live.mark("stream")
+    with ThreadPoolExecutor(max_workers=2) as playback:
+        pending = playback.submit(live.say_stream, "stream", pcm_frames(16), mark, 100, lambda _: True, bool)
+        try:
+            assert source.entered.wait(5), "LiveKit did not begin native capture"
+            live.hush("stream")
+            assert source.was_cleared.wait(5), "hush did not clear the native queue promptly"
+            replacement = playback.submit(
+                live.say_stream, "stream", pcm_frames(32), live.mark("stream"), 100, lambda _: True, bool
+            )
+            wait_until(lambda: len(recorder.streams) == 2 or replacement.done())
+        finally:
+            if source.entered.is_set():
+                live.loop.call_soon_threadsafe(source.complete)
+        assert pending.result(5) == (20, False)
+        assert replacement.result(5) == (20, False)
+    assert source.cleared == 2 and source.played == [32] and source.frames == []
+
+
+def test_playback_charges_successful_frames_when_capture_fails(voice_room):
+    live, recorder = voice_room
+
+    class CaptureFailure(FakeAudioSource):
+        async def capture_frame(self, frame):
+            if len(self.frames) == 2:
+                raise RuntimeError("LiveKit refused the third frame")
+            await super().capture_frame(frame)
+
+    recorder.source = CaptureFailure(48000, 1)
+    result = live.say_stream("stream", pcm_frames(1, 2, 3, 4), live.mark("stream"), 100, lambda _: True, bool)
+    assert result == (40, False)
+    assert [frame.data[0] for frame in recorder.source.frames] == [1, 2]
+
+
+def test_playback_charges_successful_frames_when_the_reply_times_out(voice_room, caplog):
+    live, recorder = voice_room
+    waiting, closed = threading.Event(), threading.Event()
+
+    async def stalled():
+        try:
+            async for frame in pcm_frames(1, 2):
+                yield frame
+            waiting.set()
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    assert recorder.play_stream(stalled(), recorder.hushed, 100, lambda _: True, bool, timeout=2) == (40, False)
+    assert waiting.is_set() and closed.wait(5)
+    assert any(record.exc_info and isinstance(record.exc_info[1], TimeoutError) for record in caplog.records)
+
+
+def test_reaching_the_voice_cap_closes_the_held_gateway_body(voice_room, monkeypatch):
+    live, recorder = voice_room
+    body, asked = HeldSpeech(16), []
+
+    def speech(request):
+        asked.append(json.loads(request.content)["input"])
+        return httpx.Response(200, stream=body)
+
+    monkeypatch.setattr(media, "SPEECH_TRANSPORT", httpx.MockTransport(speech))
+    frames = media.speech_frames("https://gateway.acme.example/v1", "gw-key", ["First.", "Second."], "", None)
+    with ThreadPoolExecutor(max_workers=1) as playback:
+        pending = playback.submit(live.say_stream, "stream", frames, live.mark("stream"), 39, lambda _: True, bool)
+        try:
+            assert pending.result(5) == (20, True)
+            assert body.closed.is_set() and asked == ["First."]
+        finally:
+            live.loop.call_soon_threadsafe(body.release.set)
+    assert len(recorder.source.frames) == 1
+
+
+@pytest.mark.parametrize(
+    ("rate", "samples", "count"),
+    [(11025, 11025, 48000), (11025, 11026, 48004), (48000, 1921, 1921), (96000, 1921, 960), (96000, 1, 1)],
+)
+def test_stream_resampling_keeps_phase_across_blocks_and_only_pads_at_eof(monkeypatch, rate, samples, count):
+    pcm = array("h", range(1000, 1000 + samples)).tobytes()
+
+    class SplitPCM(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for at in range(0, len(pcm), 443):
+                yield pcm[at : at + 443]
+
+    monkeypatch.setattr(
+        media,
+        "SPEECH_TRANSPORT",
+        httpx.MockTransport(
+            lambda _: httpx.Response(200, headers={"X-Audio-Sample-Rate": str(rate)}, stream=SplitPCM())
+        ),
+    )
+
+    async def read():
+        return [
+            frame
+            async for _, frame in media.speech_frames("https://gateway.acme.example/v1", "gw-key", ["Acme."], "", None)
+        ]
+
+    frames = asyncio.run(read())
+    assert all(len(frame) == 1920 for frame in frames)
+    output = array("h", b"".join(frames))
+    assert list(output[:count]) == [1000 + min(n * rate // 48000, samples - 1) for n in range(count)]
+    assert list(output[count:]) == [0] * (-count % 960)
+
+
+def test_speech_reuses_the_off_loop_client_and_times_from_the_request(monkeypatch):
+    live = media.LiveKitMedia(CONFIG)
+    constructor_threads, timing, requests = [], [], []
+    now = 1000
+
+    def respond(request):
+        nonlocal now
+        requests.append(request.headers["Authorization"])
+        now += 30
+        return httpx.Response(200, content=b"\x10\x00" * 480)
+
+    class GatewayClient(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            nonlocal now
+            constructor_threads.append(threading.get_ident())
+            now += 900
+            super().__init__(**{**kwargs, "transport": httpx.MockTransport(respond)})
+
+    monkeypatch.setattr(httpx, "AsyncClient", GatewayClient)
+
+    async def read():
+        for key in ("first", "second"):
+            frames = live.speech_frames(
+                "https://gateway.acme.example/v1",
+                key,
+                ["Acme."],
+                "",
+                lambda: timing.append(now),
+                request_started=lambda: timing.append(now),
+            )
+            assert len([frame async for frame in frames]) == 1
+
+    asyncio.run(read())
+    assert len(constructor_threads) == 1 and constructor_threads[0] != threading.get_ident()
+    assert requests == ["Bearer first", "Bearer second"]
+    assert timing == [1900, 1930, 1930, 1960]
 
 
 def test_the_gateway_names_the_voices_and_each_bot_keeps_one(monkeypatch):
@@ -243,8 +534,6 @@ def test_the_gateway_names_the_voices_and_each_bot_keeps_one(monkeypatch):
 
 
 def test_speech_is_resampled_to_the_voice_track_rate():
-    from array import array
-
     pcm = array("h", [0, 1000, 2000, 3000]).tobytes()
     doubled = array("h")
     doubled.frombytes(media.resample(pcm, 24000, 48000))
@@ -287,14 +576,13 @@ def test_speech_cleared_before_a_hush_never_plays(fake_rtc):
         live.stop_recorder("call6")
 
 
-def test_a_speaker_who_goes_quiet_is_told_on_the_media_loop_and_shared_screen_sound_is_not_heard(fake_rtc, monkeypatch):
-    monkeypatch.setattr(media, "QUIET_SECONDS", 0.05, raising=False)
+def test_a_speaker_who_goes_quiet_is_told_on_the_media_loop_and_shared_screen_sound_is_not_heard(fake_rtc):
     live = media.LiveKitMedia(CONFIG)
     heard, quiet = [], []
     live.start_recorder(
         "call7",
         "tico-call-call7",
-        lambda identity, pcm, start_ms: heard.append(identity),
+        lambda identity, pcm, start_ms: heard.append(identity) or 0.05,
         lambda identity: quiet.append(identity),
     )
     try:
