@@ -55,7 +55,8 @@
   "deps": [],
   "pages": [],
   "calls": [
-   "thvLibOpen"
+   "thvLibOpen",
+   "libPickerMount"
   ],
   "idle": []
  },
@@ -837,7 +838,8 @@
   "calls": [
    "frvShow",
    "frvAboveTask",
-   "frvTeardown"
+   "frvTeardown",
+   "fileShowInto"
   ],
   "idle": []
  },

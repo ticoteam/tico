@@ -3,7 +3,10 @@
 // it, a breathing ring on a thinking bot, no face for anyone the room has that the view does not, the recorder included)
 // and the caption with the voice's note; the transcript applied from the meeting's event stream; the chat without the
 // call's own posts and its + menu; ringing a person; a bot's face tapped out with Undo and back in; wide while someone
-// shares; the window joining only when opened to (`?join=1`); a big roster keeping the controls on screen; the phone
+// shares; a Tico file shown on the stage (the call view's `stage`: a late joiner's, "No access", the share menu and its
+// picker, the newest wins and stops a replaced screen, Stop unpublishing before it clears the stage, a reconnect),
+// Link a file posting its card and a linked task as a card; the window joining only
+// when opened to (`?join=1`); a big roster keeping the controls on screen; the phone
 // layout at 390px; the call ending while the window is open; and the call's notes (summary, items with owners, the
 // transcript). `bots` comes both ways: a slug, or the bot with its state; the states come in `voice.bots`.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots: call-window-<name>-<desktop|phone>-<dark|light>.png.
@@ -15,7 +18,8 @@ const {html, uiFile, isUiPath, serveUi} = require('./support/page.cts') as impor
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 type Handler = (...a: unknown[]) => void;
 type FakeRoom = {handlers: Map<string, Handler[]>; remoteParticipants: Map<string, Record<string, unknown>>; emit(ev: string, ...a: unknown[]): void};
-declare const window: Window & typeof globalThis & {LivekitClient: unknown; __rooms: FakeRoom[]; __disconnects: number; __streams: EventSource[]};
+declare const window: Window & typeof globalThis & {LivekitClient: unknown; __rooms: FakeRoom[]; __disconnects: number; __streams: EventSource[];
+  __screens: boolean[]};
 declare function callViewRead(id: string): Promise<unknown>;
 declare function callVoiceDraw(box: HTMLElement, voice: unknown): void;
 
@@ -35,7 +39,8 @@ const liveCall = (big = false) => ({id: 'c1', thread_id: 't-plan', title: 'Call'
   participants: [joined('human:ana', 1122), joined('human:thomaz', 1000), joined('human:bea', 900),
     ...(big ? Array.from({length: 20}, (_, i) => joined(`human:p${i}`, 800)) : [])],
   bots: ['growth-manager', {slug: 'analytics', state: 'listening'}] as Bot[],
-  voice: {bots: [{slug: 'growth-manager', state: 'thinking', caption: null}], note: null as string | null}});
+  voice: {bots: [{slug: 'growth-manager', state: 'thinking', caption: null}], note: null as string | null},
+  stage: null as Record<string, unknown> | null, stage_n: 0});
 const endedCall = () => ({...liveCall(), id: 'c2', state: 'ended', ended_at: at(0), duration_s: 1440, meeting_id: 'lm2', bots: [] as Bot[], voice: null,
   transcript_message_id: 'n2'});
 const notes = (owner: string) => ({pending: false, message_id: 'n1', summary: ['Signups are up 14%, most from the Reddit post.', 'Four demos no-showed on Tuesday.',
@@ -46,13 +51,20 @@ const STREAM = 'retry: 600000\n\n'
   + 'event: meeting.chunk_corrected\ndata: {"seq":2,"revision":2,"speaker":"thomaz","start_ms":1100000,"end_ms":1104000,"text":"Analytics, which post drove the signup spike?"}\n\n'
   + 'event: meeting.chunk\ndata: {"seq":3,"revision":1,"speaker":"growth-manager","start_ms":1110000,"end_ms":1112000,"text":"Reddit, the Thursday post."}\n\n';
 
-async function open(browser: import('playwright').Browser, {phone = false, big = false, lm2 = true}: {phone?: boolean; big?: boolean; lm2?: boolean} = {}) {
-  const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 420, height: 680}, serviceWorkers: 'block', reducedMotion: 'reduce',
+// The company's files: a document, a page (a dashboard) and one this viewer may not read (its info is a 404).
+const FILES = [{id: 'f-plan-0001', title: 'Q4 growth plan', name: 'q4-plan.md', library_kind: 'document'},
+  {id: 'f-dash-0001', title: 'Signups dashboard', name: 'signups.md', library_kind: 'page'},
+  {id: 'f-secret-01', title: 'Board notes', name: 'board.md', library_kind: 'document'}];
+const FILE_TEXT: Record<string, string> = {'f-plan-0001': '# Q4 growth plan\n\nDouble the Reddit posts; one demo day a week.',
+  'f-dash-0001': '# Signups\n\n| Week | Signups |\n|---|---|\n| 45 | 212 |\n| 46 | 241 |'};
+async function open(browser: import('playwright').Browser, {phone = false, big = false, lm2 = true, wide = false}: {phone?: boolean; big?: boolean; lm2?: boolean; wide?: boolean} = {}) {
+  const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : wide ? {width: 1280, height: 800} : {width: 420, height: 680}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const page = await context.newPage();
   const call = liveCall(big);
   const seen = {errors: [] as string[], joins: 0, botWrites: [] as string[], tasks: [] as unknown[], rings: [] as string[], memberWrites: 0, meetingReads: 0,
-    streams: [] as string[], notes: notes('bot:content-social')};
+    streams: [] as string[], notes: notes('bot:content-social'), posts: [] as string[], fileReads: [] as string[], stageWrites: [] as string[],
+    screensAtDelete: [] as boolean[][]};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A stand-in media client: its rooms keep their handlers so the test can say who speaks and who shares. The room has
   // people the call's view does not list (the recorder, someone already gone): they are no one's face.
@@ -60,11 +72,12 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
     window.__rooms = [];
     window.__disconnects = 0;
     window.__streams = [];
+    window.__screens = [];
     const Stream = window.EventSource;
     window.EventSource = class extends Stream { constructor(url: string | URL, init?: EventSourceInit) { super(url, init); window.__streams.push(this); } };
     window.LivekitClient = {
       RoomEvent: {TrackSubscribed: 'ts', TrackUnsubscribed: 'tu', ParticipantConnected: 'pc', ParticipantDisconnected: 'pd', LocalTrackUnpublished: 'lu',
-        Disconnected: 'd', ActiveSpeakersChanged: 'as', TrackMuted: 'tm', TrackUnmuted: 'tum'},
+        Disconnected: 'd', ActiveSpeakersChanged: 'as', TrackMuted: 'tm', TrackUnmuted: 'tum', Reconnecting: 'rc', Reconnected: 'rd'},
       Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
       Room: class {
         handlers = new Map<string, Handler[]>();
@@ -73,7 +86,8 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
           ['human:thomaz', {identity: 'human:thomaz', isSpeaking: true, isMicrophoneEnabled: true}],
           // Muted wins: the room hears Bea, but her mic is off.
           ['human:bea', {identity: 'human:bea', isSpeaking: true, isMicrophoneEnabled: false}]]);
-        localParticipant = {identity: 'human:ana', isSpeaking: false, trackPublications: new Map(), setMicrophoneEnabled: async () => {}, setScreenShareEnabled: async () => {}};
+        localParticipant = {identity: 'human:ana', isSpeaking: false, trackPublications: new Map(), setMicrophoneEnabled: async () => {},
+          setScreenShareEnabled: async (on: boolean) => { window.__screens.push(on); }};
         canPlaybackAudio = true;
         constructor() { window.__rooms.push(this as unknown as FakeRoom); }
         on(ev: string, fn: Handler) { this.handlers.set(ev, [...(this.handlers.get(ev) || []), fn]); return this; }
@@ -125,6 +139,21 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
     if (p === '/api/v2/calls/c1/notes' || p === '/api/v2/calls/c2/notes') return json(seen.notes);
     if (p === '/api/v2/calls/c1/join') { seen.joins++; return json({call, token: 'tok', url: 'wss://lk.test'}); }
     if (p === '/api/v2/calls/c1/leave') return json(call);
+    // The stage: Ana's write replaces whatever showed; her stop clears only her own.
+    if (p === '/api/v2/calls/c1/stage' && method === 'PUT') {
+      const {kind, file_id} = JSON.parse(req.postData() || '{}') as {kind: string; file_id?: string};
+      seen.stageWrites.push(`put:${kind}${file_id ? ':' + file_id : ''}`);
+      const f = FILES.find(x => x.id === file_id);
+      call.stage = {kind, by: 'human:ana', at: at(0), ...(f ? {file_id: f.id, version: 2, title: f.title} : {})};
+      call.stage_n++;
+      return json(call);
+    }
+    if (p === '/api/v2/calls/c1/stage' && method === 'DELETE') {
+      seen.stageWrites.push('delete');
+      seen.screensAtDelete.push(await page.evaluate(() => window.__screens.slice()));
+      if (call.stage?.by === 'human:ana') { call.stage = null; call.stage_n++; }
+      return json(call);
+    }
     if (p === '/api/v2/calls/c1/ring' && method === 'POST') {
       const {actor} = JSON.parse(req.postData() || '{}') as {actor: string};
       seen.rings.push(actor);
@@ -160,6 +189,23 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
       seen.tasks.push(body);
       return json({task: {id: 'k' + seen.tasks.length, title: body.title}});
     }
+    if (p === '/api/v2/files') return json({files: FILES});
+    const file = p.match(/^\/api\/v2\/files\/([^/]+)(\/info|\/meta)?$/);
+    if (file) {
+      const f = FILES.find(x => x.id === file[1]);
+      // The viewer may not read the board's notes: no info, and its bytes are never asked for.
+      if (!f || !FILE_TEXT[f.id]) { if (!file[2]) seen.fileReads.push(file[1]! + url.search); return json({error: {code: 'not_found'}}, 404); }
+      if (file[2] === '/info') return json({file: {id: f.id, title: f.title, name: f.name, mime: 'text/markdown', locator: 'stored', version: 1}});
+      if (file[2] === '/meta') return json({name: f.name, size: FILE_TEXT[f.id]!.length});
+      seen.fileReads.push(f.id + url.search);
+      return route.fulfill({contentType: 'text/markdown', headers: {'content-disposition': `inline; filename="${f.name}"`}, body: FILE_TEXT[f.id]!});
+    }
+    if (p === '/api/v2/threads/t-plan/messages' && method === 'POST') {
+      const {text: body} = JSON.parse(req.postData() || '{}') as {text: string};
+      seen.posts.push(body);
+      return json({message: msg('p' + seen.posts.length, 10 + seen.posts.length, 'human:ana', body)});
+    }
+    if (p === '/api/v2/tasks/k9') return json({task: {id: 'k9', title: 'Draft Thursday\'s Reddit post', status: 'open', owner_id: 'bot:content-social'}});
     if (/\/read$/.test(p)) return json({ok: true});
     if (p === '/api/v2/rule-holds') return json({holds: [], next_cursor: null});
     return json(unrouted(p));
@@ -243,7 +289,7 @@ let browser: import('playwright').Browser | null = null;
     // The + in front of the field: upload, link a file, link a task, new task.
     await page.locator('.cw .p-attach').click();
     assert.deepEqual(await page.locator('.cw .thv-attach-menu button').evaluateAll(els => els.map(e => [e.querySelector('.nav-icon')?.textContent, e.lastChild?.textContent])),
-      [['description', 'Upload file'], ['article', 'Link a file'], ['link', 'Link a task'], ['task_alt', 'New task']]);
+      [['upload', 'Upload file'], ['link', 'Link a file'], ['check_circle', 'Link a task'], ['add_circle', 'New task']]);
     await themed(page, 'plusmenu');
     await page.locator('.cw .p-attach').click();
     // People: who is in the call (you first, as yourself); typing shows only what it finds.
@@ -329,6 +375,209 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.locator('.cw-summary li').count(), 3);
     assert.equal(await page.locator('.cw-thread .th-msg').count(), 0, 'the chat is gone');
     assert.equal(await page.locator('.cw-bar button').count(), 0);
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+
+  // ---- a Tico file on the stage (the call view's `stage`): Thomaz shows one; "No access" for one Ana may not read; Ana
+  // shows one from the share menu, the newest wins, Stop clears it; her screen, replaced and stopped; a reconnect; the
+  // chat's Link a file posts its card; a task as a card
+  {
+    const {context, page, seen, call} = await open(browser, {wide: true});
+    const stage = async (s: Record<string, unknown> | null) => { call.stage = s; call.stage_n++; await page.evaluate(() => callViewRead('c1')); };
+    // Thomaz is already showing the plan (its version 3) when Ana joins: the call view says so.
+    call.stage = {kind: 'file', by: 'human:thomaz', at: at(60), file_id: 'f-plan-0001', version: 3, title: 'Q4 growth plan'}; call.stage_n = 1;
+    await page.goto('https://tico-ui.test/#/call/c1?join=1');
+    await page.locator('.cw-bar .cw-leave').waitFor();
+    await page.locator('#cw-file .md h1', {hasText: 'Q4 growth plan'}).waitFor();
+    assert.ok(await page.locator('#call-window.cw-wide').count(), 'a file grows the window as a screen does');
+    assert.equal(await page.locator('#cw-file .cw-file-t').innerText(), 'Q4 growth plan');
+    assert.match(await page.locator('#cw-file .cw-file-by').innerText(), /Thomaz/);
+    assert.match(await page.locator('.cw-meta').innerText(), /Thomaz sharing$/);
+    assert.equal(await page.locator('#cw-screen').isVisible(), false);
+    assert.deepEqual(seen.fileReads, ['f-plan-0001?v=3'], 'that exact version, read with Ana\'s own rights');
+    // The same stage read again draws nothing again.
+    await page.evaluate(() => { document.querySelector('#cw-file .cw-file-body')!.setAttribute('data-kept', '1'); return callViewRead('c1'); });
+    assert.equal(await page.locator('#cw-file .cw-file-body[data-kept]').count(), 1, 'redrawn only when the stage changes');
+    await page.locator('.cw-thread .th-msg').first().waitFor();
+    await themed(page, 'file-stage');
+    // He shows one Ana may not read: the view names nothing of it, so nothing is fetched; "No access".
+    await stage({kind: 'file', by: 'human:thomaz', at: at(50), no_access: true});
+    await page.locator('#cw-file .cw-noaccess', {hasText: 'No access'}).waitFor();
+    assert.equal(await page.locator('#cw-file .md').count(), 0, 'none of the plan left');
+    assert.deepEqual(seen.fileReads, ['f-plan-0001?v=3'], 'nothing more is read');
+    await themed(page, 'file-noaccess');
+    // Ana's share menu: Screen and Show a Tico file; the picker (no ✕ of its own: Escape, a click outside or share again
+    // put it away), then her pick shows to everyone.
+    const share = page.locator('.cw-bar [data-cw-ctl="share"]');
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="file"]').waitFor();
+    assert.deepEqual(await page.locator('.cw-pop .cw-pop-row').evaluateAll(els => els.map(e => [e.querySelector('.nav-icon')?.textContent, e.lastChild?.textContent])),
+      [['screen_share', 'Screen'], ['description', 'Show a Tico file']]);
+    await themed(page, 'share-menu');
+    await share.click();
+    assert.equal(await page.locator('.cw-pop').isVisible(), false, 'share again puts it away');
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="file"]').click();
+    await page.locator('.cw-pop .thv-lib-row').nth(2).waitFor();
+    assert.equal(await page.locator('.cw-pop .thv-lib-x').count(), 0, 'the field\'s own clear is the only ✕');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.cw-pop').isVisible(), false, 'Escape puts it away');
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="file"]').click();
+    await page.locator('.cw-pop .thv-lib-row').nth(2).waitFor();
+    await page.locator('.cw-title').click();
+    assert.equal(await page.locator('.cw-pop').isVisible(), false, 'a click outside puts it away');
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="file"]').click();
+    await page.locator('.cw-pop .thv-lib-row').nth(2).waitFor();
+    assert.deepEqual(await page.locator('.cw-pop .thv-lib-row .nav-icon').allInnerTexts(), ['description', 'article', 'description'], 'each file\'s kind');
+    await page.locator('.cw-pop .thv-lib-q').fill('sign');
+    await page.waitForFunction(() => document.querySelectorAll('.cw-pop .thv-lib-row').length === 1);
+    await themed(page, 'share-pick');
+    await page.locator('.cw-pop .thv-lib-row').click();
+    await page.locator('#cw-file .md h1', {hasText: 'Signups'}).waitFor();
+    assert.equal(await page.locator('.cw-pop').isVisible(), false);
+    assert.deepEqual(seen.stageWrites, ['put:file:f-dash-0001']);
+    assert.equal(seen.fileReads.at(-1), 'f-dash-0001?v=2');
+    assert.match(await page.locator('#cw-file .cw-file-by').innerText(), /Chris/);
+    assert.match(await page.locator('.cw-meta').innerText(), /You are sharing$/);
+    assert.equal(await page.locator('.cw-bar [data-cw-ctl="stop"]').getAttribute('aria-label'), 'Stop sharing');
+    await themed(page, 'file-mine');
+    // Thomaz shows something newer: it replaces Ana's, and her share is Share again.
+    await stage({kind: 'file', by: 'human:thomaz', at: at(0), file_id: 'f-plan-0001', version: 3, title: 'Q4 growth plan'});
+    await page.locator('#cw-file .md h1', {hasText: 'Q4 growth plan'}).waitFor();
+    await share.waitFor();
+    // He stops: the stage goes and the window is small again.
+    await stage(null);
+    await page.waitForFunction(() => !document.querySelector('#call-window.cw-wide'));
+    assert.equal(await page.locator('#cw-file').isVisible(), false);
+    // Ana shows a file and stops it herself.
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="file"]').click();
+    await page.locator('.cw-pop .thv-lib-row').first().click();
+    await page.locator('.cw-bar [data-cw-ctl="stop"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-window.cw-wide'));
+    assert.deepEqual(seen.stageWrites.slice(-2), ['put:file:f-plan-0001', 'delete']);
+
+    // ---- Ana's screen: it reaches the room, then the stage says so. Thomaz's newer file replaces it: her screen stops
+    // (no stop of the stage: it is his now). Her own Stop unpublishes first, then clears the stage.
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="screen"]').click();
+    await page.locator('.cw-bar [data-cw-ctl="stop"]').waitFor();
+    assert.deepEqual(await page.evaluate(() => window.__screens), [true]);
+    assert.equal(seen.stageWrites.at(-1), 'put:screen');
+    await stage({kind: 'file', by: 'human:thomaz', at: at(0), file_id: 'f-plan-0001', version: 3, title: 'Q4 growth plan'});
+    await page.waitForFunction(() => window.__screens.length === 2);
+    assert.deepEqual(await page.evaluate(() => window.__screens), [true, false], 'replaced: her screen stops');
+    assert.equal(seen.stageWrites.at(-1), 'put:screen', 'and the stage, his now, is left alone');
+    await share.waitFor();
+    await stage(null);
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="screen"]').click();
+    await page.locator('.cw-bar [data-cw-ctl="stop"]').click();
+    await share.waitFor();
+    assert.deepEqual(seen.stageWrites.slice(-2), ['put:screen', 'delete']);
+    assert.deepEqual(seen.screensAtDelete.at(-1), [true, false, true, false], 'the screen was unpublished before the stage was cleared');
+
+    // ---- a reconnect: its unpublishing is not a stop; a share it lost leaves the stage once it is back
+    await share.click();
+    await page.locator('.cw-pop [data-cw-pop="screen"]').click();
+    await page.locator('.cw-bar [data-cw-ctl="stop"]').waitFor();
+    const writes = seen.stageWrites.length;
+    await page.evaluate(() => {
+      const room = window.__rooms[0]! as FakeRoom & {localParticipant: {trackPublications: Map<string, unknown>}};
+      const pub = {source: 'screen', track: {}};
+      room.localParticipant.trackPublications.set('s', pub);
+      room.emit('rc');
+      room.emit('lu', pub);
+      room.emit('rd');
+    });
+    await page.evaluate(() => callViewRead('c1'));
+    assert.equal(seen.stageWrites.length, writes, 'the screen still shows: nothing is cleared');
+    assert.equal(await page.locator('.cw-bar [data-cw-ctl="stop"]').count(), 1);
+    await page.evaluate(() => {
+      const room = window.__rooms[0]! as FakeRoom & {localParticipant: {trackPublications: Map<string, unknown>}};
+      room.emit('rc');
+      room.emit('lu', room.localParticipant.trackPublications.get('s'));
+      room.localParticipant.trackPublications.clear();
+      room.emit('rd');
+    });
+    await share.waitFor();
+    assert.deepEqual(seen.stageWrites.slice(writes), ['delete'], 'the reconnect lost the share: it leaves the stage');
+
+    // ---- Link a file: the chat's + posts the file's link at once, drawn as its card
+    await page.locator('.cw .p-attach').click();
+    await page.locator('.cw .thv-attach-menu [data-attach="library"]').click();
+    await page.locator('.cw .thv-lib .thv-lib-row').first().waitFor();
+    assert.equal(await page.locator('.cw .thv-lib .thv-lib-row', {hasText: 'Board notes'}).count(), 1);
+    await page.locator('.cw .thv-lib .thv-lib-row', {hasText: 'Q4 growth plan'}).click();
+    await page.locator('.cw-thread .th-msg a.md-card[data-name="Q4 growth plan"]').waitFor();
+    assert.deepEqual(seen.posts, ['[Q4 growth plan](/api/v2/files/f-plan-0001)']);
+    assert.equal(await page.locator('.cw .p-chips > *').count(), 0, 'posted, not left as a chip');
+
+    // ---- a linked task: a card with its state, its title and its owner
+    await page.locator('.cw .p-attach').click();
+    await page.locator('.cw .thv-attach-menu [data-attach="more:link"]').click();
+    await page.locator('.cw-task-form input[name="ref"]').fill('#k9');
+    await page.locator('.cw-task-form button[type="submit"]').click();
+    const card = page.locator('.cw-thread .th-msg a.cw-tcard');
+    await card.locator('.cw-tcard-who').waitFor();
+    assert.equal(seen.posts.at(-1), '[Draft Thursday\'s Reddit post](#/task/k9)');
+    assert.equal(await card.locator('.cw-tcard-t').innerText(), 'Draft Thursday\'s Reddit post');
+    assert.equal(await card.locator('.cw-tcard-mark').getAttribute('aria-label'), 'To do');
+    assert.equal(await card.getAttribute('href'), '#/task/k9');
+    assert.equal(Math.round((await card.boundingBox())!.height), 40);
+    await page.setViewportSize({width: 420, height: 680});
+    await page.waitForFunction(() => !document.querySelector('#call-window.cw-wide'));
+    await themed(page, 'chat-cards');
+    // Opening it leaves the call where it is.
+    await page.evaluate(() => { (window as unknown as {__opened: string[]}).__opened = []; window.open = (u?: string | URL) => { (window as unknown as {__opened: string[]}).__opened.push(String(u)); return window; }; });
+    await card.click();
+    assert.deepEqual(await page.evaluate(() => (window as unknown as {__opened: string[]}).__opened), ['/#/task/k9']);
+    assert.equal(await page.evaluate(() => location.hash), '#/call/c1');
+    const icons = fs.readFileSync(path.join(__dirname, '..', 'vendor', 'fonts', 'icons.txt'), 'utf8').split('\n');
+    for (const name of await page.locator('.cw .nav-icon').allTextContents()) assert.ok(icons.includes(name.trim()), 'in the icon font: ' + name);
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+
+  // ---- a phone (no screen to share): share is the file picker at once; a file on the stage
+  {
+    const {context, page, seen} = await open(browser, {phone: true});
+    await page.addInitScript(() => { try { Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', {value: undefined}); } catch {} });
+    await page.goto('https://tico-ui.test/#/call/c1?join=1');
+    await page.locator('.cw-bar .cw-leave').waitFor();
+    await page.locator('.cw-thread .th-msg').first().waitFor();
+    await page.locator('.cw-bar [data-cw-ctl="share"]').click();
+    await page.locator('.cw-pop .thv-lib-row').first().waitFor();
+    assert.equal(await page.locator('.cw-pop .cw-pop-row').count(), 0, 'no Screen where the browser cannot share one');
+    assert.ok(await sideways(page) <= 390);
+    await themed(page, 'share-pick', true);
+    await page.locator('.cw-pop .thv-lib-row').first().click();
+    await page.locator('#cw-file .md h1', {hasText: 'Q4 growth plan'}).waitFor();
+    await page.locator('.cw.cw-wide').waitFor();
+    assert.ok(await sideways(page) <= 390);
+    // The chat's peek under the file: its newest message in view, above the field.
+    await page.waitForFunction(() => { const b = document.querySelector('.cw-thread .thv-scroll') as HTMLElement; return b.scrollHeight - b.scrollTop - b.clientHeight < 2; })
+      .catch(async () => { throw new Error('the chat is not at its end: ' + JSON.stringify(await page.evaluate(() => { const b = document.querySelector('.cw-thread .thv-scroll') as HTMLElement; return {scrollHeight: b.scrollHeight, scrollTop: b.scrollTop, clientHeight: b.clientHeight}; }))); });
+    await themed(page, 'file-stage', true);
+    for (const b of await page.locator('.cw-bar button').all()) assert.ok((await b.boundingBox())!.height >= 44, 'a finger-sized control');
+    await page.locator('.cw-bar [data-cw-ctl="stop"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-window.cw-wide'));
+    // The chat's +, then a linked file and task as their cards.
+    await page.locator('.cw .p-attach').click();
+    await themed(page, 'plusmenu', true);
+    await page.locator('.cw .thv-attach-menu [data-attach="library"]').click();
+    await page.locator('.cw .thv-lib .thv-lib-row', {hasText: 'Q4 growth plan'}).click();
+    await page.locator('.cw-thread a.md-card').waitFor();
+    await page.locator('.cw .p-attach').click();
+    await page.locator('.cw .thv-attach-menu [data-attach="more:link"]').click();
+    await page.locator('.cw-task-form input[name="ref"]').fill('#k9');
+    await page.locator('.cw-task-form button[type="submit"]').click();
+    await page.locator('.cw-thread a.cw-tcard .cw-tcard-who').waitFor();
+    assert.ok(await sideways(page) <= 390);
+    await themed(page, 'chat-cards', true);
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

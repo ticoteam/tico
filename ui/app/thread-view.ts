@@ -124,6 +124,7 @@ interface ThvFileRow {
   locator?: string;
   url?: string;
   archived?: boolean;
+  library_kind?: string;  // page, document, image, data, media or other: its mark (LF_ICON)
 }
 interface ThvLibFile {
   id: string;
@@ -201,6 +202,10 @@ interface ThvOpts {
   attachMore?: {items: [string, string, string?][]; pick: (key: string) => void; plus?: boolean};
   // Messages this view leaves out (still read): the meeting window's chat leaves out the call's own posts.
   hide?: (m: ThvMessage) => boolean;
+  // Link a file's pick, in place of a chip on the next message: the meeting window posts it at once as its card.
+  libPick?: (f: ThvLibFile) => void;
+  // A message's body drawn by the host, or null for the usual one: the meeting window's task card.
+  body?: (m: ThvMessage) => string | null;
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -803,7 +808,9 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   const qmark = m.deleted ? '' : qmarkHTML(m.refs);
   const head = cont ? qmark : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}${qmark}</div>`;
   let body;
+  const own = m.deleted ? null : view.opts.body?.(m) ?? null;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
+  else if (own != null) body = own;
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
   else if (m.refs?.call?.card) body = callCardHTML(m);
   // The Tools owner's proposal: rows the server built, and Grant (tools-key-drop.ts).
@@ -1315,7 +1322,7 @@ function thvContextDraw(view: ThvView) {
   (host.querySelector('.thv-ctx-x') as HTMLElement).onclick = () => { view.contextOff = true; thvContextDraw(view); view.composer?.el.querySelector<HTMLTextAreaElement>('.p-text')?.focus(); };
 }
 // The + menu's icons (names the icon font's subset holds: scripts/build-icon-font.py reads *_ICONS maps).
-const ATTACH_ICONS = {upload: 'description', library: 'article'};
+const ATTACH_ICONS = {upload: 'upload', library: 'link'};
 function thvComposerDraw(view: ThvView) {
   const host = view.el.querySelector('.thv-composer') as HTMLElement;
   const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);

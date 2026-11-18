@@ -37,6 +37,7 @@ TOKEN_TTL_SECONDS = 300
 AUDIO_SOURCES = ("microphone", "screen_share", "screen_share_audio")
 SAMPLE_RATE = 16000
 TWIRP_TIMEOUT = 8
+TWIRP_ANSWER_MAX = 1_000_000  # bytes of a LiveKit API answer read; a longer one is refused, not cut short
 TRANSCRIBE_TIMEOUT = 30  # a live clip that takes longer is lost: the person is asked to repeat it
 TRANSCRIBE_MODEL = "tico-transcribe-1.1"  # live-call clips: the Gateway's fast speech-to-text
 # The Gateway's older speech-to-text, tried once when it does not know TRANSCRIBE_MODEL yet (it answers 400).
@@ -164,7 +165,7 @@ def _post_json(url, token, payload):
     )
     try:
         with urllib.request.urlopen(request, timeout=TWIRP_TIMEOUT) as response:
-            return json.loads(response.read(1_000_000) or b"{}")
+            raw = response.read(TWIRP_ANSWER_MAX + 1)
     except urllib.error.HTTPError as exc:
         with exc:
             code = ""
@@ -175,6 +176,16 @@ def _post_json(url, token, payload):
             raise MediaRefused(exc.code, code) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise MediaUnavailable("LiveKit did not answer") from exc
+    # An answer cut short or not JSON says nothing: the caller tries again on its next pass.
+    if len(raw) > TWIRP_ANSWER_MAX:
+        raise MediaUnavailable("LiveKit's answer was too large")
+    try:
+        answer = json.loads(raw or b"{}")
+    except ValueError:
+        raise MediaUnavailable("LiveKit's answer was not JSON") from None
+    if not isinstance(answer, dict):
+        raise MediaUnavailable("LiveKit's answer was not an object")
+    return answer
 
 
 def _sdk():
@@ -419,7 +430,10 @@ class LiveKitMedia:
             if exc.status == 404:
                 return []
             raise MediaUnavailable("LiveKit refused the participant list") from None
-        found = [str(item.get("identity") or "") for item in answer.get("participants") or []]
+        listed = answer.get("participants") or []
+        if not isinstance(listed, list) or not all(isinstance(item, dict) for item in listed):
+            raise MediaUnavailable("LiveKit's participant list was not a list")
+        found = [str(item.get("identity") or "") for item in listed]
         return [identity for identity in found if identity and not is_voice(identity)]
 
     def mark(self, call_id):

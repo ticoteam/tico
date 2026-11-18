@@ -104,6 +104,28 @@ SCHEMAS.update(
                 ],
                 "description": "A live voice call's bots: what each is doing and saying. null for any other call",
             },
+            stage={
+                "anyOf": [
+                    obj(
+                        {
+                            "kind": {"enum": ["screen", "file"]},
+                            "by": {"type": "string", "description": "Who shows it"},
+                            "at": "n",
+                        },
+                        required=["kind", "by", "at"],
+                        file_id={"type": "string", "description": "A file you may read; absent with no_access"},
+                        version={"type": "integer", "description": "The file's version that shows"},
+                        title={"type": "string"},
+                        no_access={"type": "boolean", "description": "A file you may not read: nothing names it"},
+                    ),
+                    {"type": "null"},
+                ],
+                "description": "What shows on a live Tico Meet call's stage, as you may see it; null for nothing",
+            },
+            stage_n={
+                "type": "integer",
+                "description": "How many times the stage changed: a read with a lower count is older than one with a higher",
+            },
         ),
         "Call": {"allOf": [ref("CallBase"), ref("CallProvider")]},
         "CallList": obj(

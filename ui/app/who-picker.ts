@@ -1,6 +1,7 @@
 /* ui/app/who-picker.ts — One search picker for "who": a person, a bot or a group, typed into one field.
    whoPickerHTML() draws the field and its list; whoPickerWire(root, {candidates, onPick}) binds them. The caller gives
-   the candidates (each with its face, name and an optional muted sub-label) and what a pick does; the picker knows
+   the candidates (each with its face, name, an optional muted sub-label and optional `trail` HTML at the row's end: a
+   team's faces and count in Call now) and what a pick does; the picker knows
    nothing of what is being shared, so any screen can use it (the Website tool's Who can use it is the first).
    The field is a combobox (role, aria-expanded, aria-controls, aria-activedescendant) over a listbox that floats in the
    top layer (popover="manual"), placed under the field by script and flipped above it when there is no room below,
@@ -17,7 +18,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-interface WhoCandidate {subject: string; kind: string; name: string; email?: string | undefined; face: string; sub?: string | undefined}
+interface WhoCandidate {subject: string; kind: string; name: string; email?: string | undefined; face: string; sub?: string | undefined; trail?: string | undefined}
 interface WhoPickerOptions {
   candidates: () => WhoCandidate[];
   onPick: (c: WhoCandidate) => unknown;
@@ -68,7 +69,7 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
     shown = q ? all.filter(c => c.name.toLowerCase().includes(q) || (c.kind === 'person' && !!c.email && c.email.toLowerCase().includes(q))) : all;
     active = shown.length ? Math.min(active, shown.length - 1) : -1;
     list.innerHTML = shown.length ? shown.map((c, i) => `<div class="settings-combo-opt" role="option" id="${list.id}-o${i}" data-who="${esc(c.subject)}" aria-selected="false">${c.face}
-      <span class="settings-combo-n">${esc(c.name)}</span>${c.sub ? `<span class="settings-combo-sub">${esc(c.sub)}</span>` : ''}</div>`).join('')
+      <span class="settings-combo-n">${esc(c.name)}</span>${c.sub ? `<span class="settings-combo-sub">${esc(c.sub)}</span>` : ''}${c.trail || ''}</div>`).join('')
       : `<p class="settings-combo-empty" data-who-empty>${all.length ? esc(`No one called "${input.value.trim()}"`) : 'Everyone already has it'}</p>`;
     mark();
     place();

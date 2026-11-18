@@ -24,7 +24,12 @@ interface CallRecord {
   // The bots in the call: slugs, or (an older voice view) each bot with what it is doing and its words now; what each is
   // doing now comes in `voice` (null without voice).
   bots?: (string | CallBotRaw)[]; voice?: CallVoiceView | null;
+  // What shows on the stage, as this viewer may see it (null for nothing; absent from an older server), and how many
+  // times it changed: a read with a lower `stage_n` is older (docs/meet.md, Sharing).
+  stage?: CallStageView | null; stage_n?: number;
 }
+// A screen, or a Tico file: its id, version and title, or only `no_access` when the viewer may not read it.
+interface CallStageView { kind: 'screen' | 'file'; by: string; at?: string | null; file_id?: string; version?: number; title?: string; no_access?: boolean; }
 // A bot in a call as the server may send it: `state` is listening, waiting, thinking, making_voice or speaking.
 interface CallBotRaw { slug?: string; state?: string | null; caption?: string | null; }
 interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; }
@@ -58,7 +63,7 @@ interface LivekitNamespace {
     ParticipantDisconnected: string; LocalTrackUnpublished: string; Disconnected: string;
     // Read by the meeting window (who speaks, who is muted, sound blocked); an older client may not have them.
     ActiveSpeakersChanged?: string; TrackMuted?: string; TrackUnmuted?: string; AudioPlaybackStatusChanged?: string;
-    LocalTrackPublished?: string;
+    LocalTrackPublished?: string; Reconnecting?: string; Reconnected?: string;
   };
   Track: {Source: {ScreenShare: unknown}};
   DisconnectReason?: {PARTICIPANT_REMOVED: unknown};
@@ -67,6 +72,9 @@ interface LivekitNamespace {
 interface CallState {
   id: string; threadId: string; title: string; connector: string | undefined; room: CallRoom;
   token: string; url: string; muted: boolean; sharing: boolean; leaving: boolean; timer: number; gen: number;
+  // The stage (thread-call-live.ts): `stageN` is the call view's `stage_n` this tab's own last write left, `staging` the
+  // writes still on their way, and `reconnecting` while LiveKit reconnects (its unpublishing then is not a stop).
+  stageN: number; staging: number; reconnecting: boolean;
 }
 
 const CALL_LIB = '/vendor/livekit-client.umd.min.js';
