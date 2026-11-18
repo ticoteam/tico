@@ -119,7 +119,6 @@ def seed(api):
                         threads.post(c, who, tid, f"Note {k}" + (" @ana" if rnd.random() < 0.15 else ""))
 
 
-@contextlib.contextmanager
 class Timed:
     """A trace sink that keeps each statement and when it started."""
 
@@ -131,6 +130,7 @@ class Timed:
         self.seen.append(statement)
 
 
+@contextlib.contextmanager
 def counting(store, seen):
     originals = {name: getattr(store, name) for name in ("read", "read_transaction")}
 
