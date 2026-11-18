@@ -193,6 +193,51 @@ def test_in_a_one_to_one_call_the_bot_answers_every_question_aloud_one_at_a_time
     assert _states(meet, call_id) == [("ops", "listening", None)]
 
 
+def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering_a_task(meet):
+    from backend import events
+    from backend.tests.helpers.credentials import setup as credential_setup
+    from backend.tests.helpers.model_subscriptions import add, company, give, on
+    from backend.tests.helpers.task_lanes import new_task, task_bot
+
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    machine = task_bot(meet, lanes=True, capacity=5)
+    give(meet, machine, default["runtime"], add(meet)["id"])
+    rid, token = machine["runner_id"], machine["token"]
+    task = new_task(meet, "Review the launch")
+    claim = {"next_run": True, "start_places": True, "busy_bots": [], "busy_lanes": []}
+    task_run = post(meet, "jobs/claim", claim, token)["attempt"]
+    assert task_run["lane"] == "task:" + task["id"]
+    post(meet, f"attempts/{task_run['id']}/started", {"thread_id": "task-session"}, token)
+    followup = post(meet, f"tasks/{task['id']}/comments", {"text": "Check the numbers too."})["comment"]
+    inputs = post(meet, f"attempts/{task_run['id']}/inputs", {}, token)["messages"]
+    assert followup["id"] in [m["id"] for m in inputs]
+
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    store = meet.app.state.store
+    bell = events.runner_bell(store)
+    with store.read() as c:
+        cursor = events.latest(c)
+    _speak(meet, call["id"], 0, "Can we ship today?")
+    [turn] = _turns(meet, call["meeting_id"])
+    assert (turn["bot"], turn["status"]) == ("ops", "pending")
+    with store.read() as c:
+        sent, _, reset, _ = events.runner_read(c, rid, "runner:" + rid, cursor)
+    assert not reset
+    (work_seq,) = [seq for seq, frame in sent if frame["kind"] == "work" and frame["bots"] == ["ops"]]
+    assert bell.latest >= work_seq
+
+    claim["busy_lanes"] = ["ops|" + task_run["lane"]]
+    call_run = post(meet, "jobs/claim", claim, token)["attempt"]
+    assert call_run is not None
+    assert call_run["lane"] != task_run["lane"]
+    assert call_run["message"]["refs"]["live_meeting"]["meeting_id"] == call["meeting_id"]
+    with store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (task_run["id"],)).fetchone()[0] == "running"
+
+
 def test_a_bot_that_does_not_answer_in_time_is_cut_off_and_its_late_answer_is_never_heard(meet):
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])

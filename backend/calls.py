@@ -1646,7 +1646,7 @@ class Calls:
                             self.voice.touch(call_id, c)
             return
         duration_ms = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
-        with self.store.transaction() as c:
+        with self.store.transaction(notify=True) as c:
             row = _call(c, call_id)
             meeting = live_meetings._meeting(c, row["live_meeting_id"])
             if row["state"] != "live" or meeting["state"] != "live":

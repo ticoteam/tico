@@ -1159,13 +1159,17 @@ class Store:
         c.close()
 
     @contextmanager
-    def transaction(self, durable=False):
+    def transaction(self, durable=False, *, notify=False):
         """One write transaction. `durable` makes its commit reach the disk before the call returns, for a write
         that authorises an outside effect (finance's claim of a money transfer before the provider is called): the
         connection runs synchronous=FULL for this transaction and goes back to the pool at its default. SQLite refuses
-        to change the setting inside a transaction, so it is set before BEGIN, from `checkout`."""
+        to change the setting inside a transaction, so it is set before BEGIN, from `checkout`.
+        `notify` wakes open streams after background writes that produce changes. Request writes handle this in
+        `write` or `mutate`, which also record the caller."""
+        from . import events
         from .flight import begin
 
+        logged = None
         # The gate is released only after commit/rollback, including message-link maintenance.
         with ExitStack() as stack:
             c = None
@@ -1185,9 +1189,12 @@ class Store:
                 from . import provenance_clock
 
                 c.provenance_start = provenance_clock.current(c)
+                since = events.mark(c) if notify else None
                 yield c
                 message_links.refresh_dirty(c)
                 H.owed_sync(c)
+                if notify:
+                    logged = events.claim(c, since, None)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
                 # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
@@ -1208,6 +1215,8 @@ class Store:
                 raise
             finally:
                 done()
+        if logged:
+            self.ring(logged)
 
     def seed_goals(self, c):
         """`registry/goals.yaml`, once per goal (backend/goals.py `seed`): the first draft of the

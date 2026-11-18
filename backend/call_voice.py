@@ -576,7 +576,7 @@ class Voice:
     def _move(self, call_id: str, voice: CallVoice, current: dict[str, Any] | None, now: float) -> None:
         """The tick's writes: end a turn past its deadline, free the call from one that is over, ask the next."""
         moved = False
-        with self.store.transaction() as c:
+        with self.store.transaction(notify=True) as c:
             row = c.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
             if not row or row["state"] != "live" or row["ending_at"]:
                 c.after_commit.append(lambda: self.forget(call_id))
