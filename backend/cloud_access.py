@@ -229,7 +229,7 @@ def apply(store, cloud, at=None):
         if kept is not None and low is not None and days_left(before) is None:
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "cloud.low_credit",
                 "company",
                 {
