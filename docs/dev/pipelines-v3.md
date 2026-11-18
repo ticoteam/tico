@@ -711,6 +711,9 @@ snoozed by itself: snoozing it snoozes the task. Talk about it is the task's con
 
 A bot's question is none of these. It is a ❓ on the bot's chat message: the person's reply in that chat answers it, and nothing is added to the task.
 
+Approvals win over questions: one card per person per task. While a stage's page waits on your approval, a bot's ❓ to
+you on that task is refused (the approval is its ask), and your OK or send back clears any ❓ to you there.
+
 ### What lands in your list
 
 Five kinds on one screen. Only a requirement added to one task stores anything. The rest are read from what already

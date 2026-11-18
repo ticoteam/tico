@@ -6,8 +6,9 @@ chased while it waits on its own open ❓ (waiting_on.of).
 - Only a bot marks, and only its own message. Tico itself never authors one.
 - The person must be on the roster, in the bot's reach (as an ask is), and able to read the message.
 - The message's first line passes ask_shape.line_refusal, as any ask to a person does.
-- On a task, a bot's ❓ does not repeat what the stage's people-only page asks already (its message naming that page:
-  the person OKs the page there), and in Product's Validate it is refused (validate_gate.check_question).
+- On a task, approvals win over questions: one card per person per task. A bot's ❓ to a person whose approval of the
+  stage's page waits on them is refused, whatever it says (`approval_of`); one naming that page is refused whoever it
+  asks (the person OKs the page there); and in Product's Validate it is refused (validate_gate.check_question).
 - `ask` runs every check before it posts the message, so a refused ❓ leaves nothing in the chat.
 - One open ❓ per bot per chat (the chat's root conversation, `room_id`): a new one clears the old ("replaced"), and
   the bot is told so (`replaced_warning`), so it puts every question to a person in one ❓.
@@ -16,7 +17,8 @@ chased while it waits on its own open ❓ (waiting_on.of).
   closing a task it filed itself is withdrawing it, and its question goes with it.
 
 It clears when the person replies in that chat, in their own hand or by their Assistant on their word (`replied`, from
-hubdb._write_message: `cleared_via` keeps which); when its task ends (done or closed: the migration's trigger; merged:
+hubdb._write_message: `cleared_via` keeps which); when the person answers the stage's page approval on its task
+(`approval_answered`, from answers.answer); when its task ends (done or closed: the migration's trigger; merged:
 task_merge; deleted: task_engine.on_delete); or when the bot marks a newer message in the chat. Give to moves an open
 one to another person (`give`).
 
@@ -441,6 +443,34 @@ def _addressee(
     return target
 
 
+APPROVAL_FIRST = (
+    "{name} already has \"{page}\" to approve on this task; that approval is your ask. Put what you need them to know in "
+    "the page or the task note, and wait for their OK."
+)
+
+
+def approval_of(conn: sqlite3.Connection, row: Row, person: str) -> str | None:
+    """The name of the stage's page a person signs off that waits on `person` on this task now (their approval card in
+    Needs you), or None. Approvals win over questions: one card per person per task, so a bot's ❓ to them is refused
+    while it waits, whatever its words say."""
+    from . import task_requirements as _task_requirements
+    from . import waiting_on as _waiting_on
+
+    R, W = cast(Any, _task_requirements), cast(Any, _waiting_on)
+    pages = {
+        str(r["id"]): r
+        for r in R.for_visit(conn, row["visit"])
+        if r["kind"] == "page" and r.get("stage_id") and (R.people_only(r) or r.get("person_id"))
+    }
+    if not pages:
+        return None
+    for wait in W.of(conn, row):
+        requirement = pages.get(str(wait.requirement_id or ""))
+        if requirement and wait.state == W.PERSON and wait.ask and wait.who == person:
+            return str(R.document_of(requirement) or R.name_of(requirement))
+    return None
+
+
 def _check(
     conn: sqlite3.Connection, bot: str, task_id: str, person: str, body: str, message: Row | None, *, checked: bool
 ) -> str:
@@ -469,6 +499,10 @@ def _check(
 
         R = cast(Any, _task_requirements)
 
+        held = approval_of(conn, row, target) if row.get("visit") else None
+        if held:
+            detail = APPROVAL_FIRST.format(name=H.actor_name(conn, target), page=held)
+            engine._refuse(conn, bot, "task_requirement", detail, task_id)
         page = engine.people_page(conn, row, [body], question=True) if row.get("visit") else None
         if page:
             engine._refuse(conn, bot, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
@@ -610,6 +644,32 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
     for bot in sorted({str(r[1]) for r in found}):
         H._recount(conn, bot)
     return sorted({str(r[2] or "") for r in found})
+
+
+def approval_answered(conn: sqlite3.Connection, task_id: object, person: str, answer_id: str) -> list[str]:
+    """A person OK'd or sent back a stage's page on a task: that approval was the ask, so each open ❓ to them on the
+    task clears with it (`cleared_reason` 'approval'), as a reply clears one. Not a reply: no `cleared_message_id`, so it
+    is not counted as one (task_engine.progress_mark); the answer itself is the task's progress. Returns the marks'
+    ids."""
+    if not task_id or not H.is_human(person):
+        return []
+    found = conn.execute(
+        "SELECT id, bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL",
+        (str(task_id), person),
+    ).fetchall()
+    if not found:
+        return []
+    ids = [str(r[0]) for r in found]
+    conn.execute(
+        "UPDATE question_marks SET cleared_at=?, cleared_reason='approval', cleared_by_id=? "
+        "WHERE id IN (SELECT value FROM json_each(?)) AND cleared_at IS NULL",
+        (H.now(), person, H._dump(ids)),
+    )
+    for bot in sorted({str(r[1]) for r in found}):
+        H._recount(conn, bot)
+    for mid in ids:
+        H.event(conn, person, "question.cleared", mid, {"reason": "approval", "answer": answer_id})
+    return ids
 
 
 def after_reply(conn: sqlite3.Connection, task_id: object, by: str, why: str = "Replied") -> None:
