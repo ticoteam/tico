@@ -29,8 +29,8 @@ ADMINS = REQUESTER
 OWNER_ONLY = PEOPLE  # the server admits only the Owner; a member or admin is told so by the route
 
 
-def _bots(api):
-    rows = api.get("bots")
+def _bots(api, fields=None):
+    rows = api.get("bots", fields=fields)
     return rows.get("bots", []) if isinstance(rows, dict) else rows or []
 
 
@@ -367,7 +367,7 @@ def repo_show(api, args):
         raise _not_listed(args["repository"])
     name = row["full_name"]
     bots = []
-    for bot in _bots(person):
+    for bot in _bots(person, "id,slug,state,repo"):
         slug = bot.get("slug") or bot.get("id")
         if not slug or bot.get("state") == "archived":
             continue

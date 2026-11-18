@@ -199,6 +199,9 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
         c.execute("UPDATE bot_config SET owner_ids=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
         BS.write(c, 'ops', {'name': 'ops', 'runtime': 'fake', 'private_tasks_default': True, 'model': 'm2'})
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")
+        # Cpo is private to people, but it writes to Ops below, so Ops may answer it (teammate_access.replies);
+        # product-design stays private to Ops.
+        T.restrict(c, "product-design", see={"people": ["ana"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
         c.execute(
             "INSERT INTO agents(bot,harness,token_hash,created_at,created_by,last_seen_at) VALUES(?,?,?,?,?,?)",
             ("scout", "hermes", "h", H.now(), "human:ana", H.now()),
@@ -211,6 +214,9 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     T.post(api, "tasks", {"owner": "finance", "title": "Open", "body": "y"})
     bens = T.post(api, "tasks", {"owner": "finance", "title": "Ben's", "body": "z", "private": True}, token="ben-test")
     T.post(api, "chat/ops", {"text": "hello"})
+    from backend.auth import Identity
+
+    store.settings.test_identities["ops-bot-test"] = Identity("bot:ops", "bot", agent="hermes")
     T.post(api, "chat/finance", {"text": "hi"}, token="ben-test")
     with store.transaction() as c:
         for bot, to in (("ops", "ops"), ("finance", "finance"), ("ops", "finance")):
@@ -237,7 +243,12 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
             "VALUES('g1',?,'ops','Ship it','active','human:ana',?,?)",
             (cid, H.now(), H.now()),
         )
-    for token in ("ana-test", "ben-test", "cara-test"):
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+            "VALUES(?,?,'bot:cpo','bot:ops','chat','hi','{}',?)",
+            (H.new_id(), cid, H.now()),
+        )
+    for token in ("ana-test", "ben-test", "cara-test", "ops-bot-test"):
         listed = T.get(api, "bots", token=token)
         assert listed == per_bot_list(api, token), token
         for row in listed:
@@ -253,6 +264,8 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     ana = {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}
     assert ana["ops"]["status"]["focus"] == "the secret" and ana["ops"]["goal_active"] and ana["scout"]["agent"]
     assert sum(ana["ops"]["task_flow"].values()) == 1
+    ops = {row["slug"]: row for row in T.get(api, "bots", token="ops-bot-test")}
+    assert ops["cpo"]["access"]["write"]  # private to people, but it wrote to Ops
 
 
 def statements(api, method, path, token, body=None):
@@ -330,7 +343,7 @@ def open_work(api, slugs):
             )
 
 
-def list_statements(api, monkeypatch, token="ana-test"):
+def list_statements(api, monkeypatch, token="ana-test", path="bots"):
     """The bot list as `token` gets it, and the statements it took. Each request starts from cold roster and row caches."""
     import contextlib
 
@@ -356,7 +369,7 @@ def list_statements(api, monkeypatch, token="ana-test"):
 
             patched.setattr(store, name, traced)
         with measuring(seen):
-            response = api.get("/api/v2/bots", headers=T.headers(token))
+            response = api.get("/api/v2/" + path, headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 
@@ -453,3 +466,20 @@ def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
         ]
     assert any("COVERING INDEX tasks_private_status" in line for line in plan), plan
     assert not any("tasks_private_parties" in line for line in plan), plan
+
+
+def test_fields_keeps_the_named_fields_and_reads_no_activity_it_leaves_out(api, monkeypatch):
+    """GET /api/v2/bots?fields= (the CLI's lookups by slug): each row is the full row's named fields, in its order,
+    and an answer naming none of a bot's activity (its status, queue, tasks, computer) does not read it."""
+    add_bots(api, {"scout": {"harness": "hermes"}})
+    open_work(api, ["ops", "finance"])
+    for token in ("ana-test", "cara-test"):
+        full, everything = list_statements(api, monkeypatch, token)
+        for fields in ("id,slug,name,revision", "slug,state,onboarding_state", "id,slug,state,repo", "slug,status"):
+            slim, read = list_statements(api, monkeypatch, token, "bots?fields=" + fields)
+            wanted = fields.split(",")
+            assert slim == [{k: row[k] for k in wanted if k in row} for row in full], (token, fields)
+            assert all(list(row) == [k for k in row if k in wanted] for row in slim)
+            if "status" not in wanted:
+                assert read < everything, (token, fields, read, everything)
+    assert T.get(api, "bots?fields=", token="ana-test") == T.get(api, "bots", token="ana-test")

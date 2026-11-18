@@ -48,12 +48,16 @@ STAGES = (
 )
 CALLERS = ("ana-test", "cara-test", "bot-test")
 PATHS = (
-    "/api/v2/bots",
-    "/api/v2/bots?include_archived=1",
-    f"/api/v2/bots/{BOTS[5]}",
-    f"/api/v2/bots/{FILE_BOT}/tools",
-    f"/api/v2/bots/{FILE_BOT}/files?limit=3",
-    "/api/employees",
+    tuple(os.environ["PATHS"].split())
+    if os.environ.get("PATHS")
+    else (
+        "/api/v2/bots",
+        "/api/v2/bots?include_archived=1",
+        f"/api/v2/bots/{BOTS[5]}",
+        f"/api/v2/bots/{FILE_BOT}/tools",
+        f"/api/v2/bots/{FILE_BOT}/files?limit=3",
+        "/api/employees",
+    )
 )
 
 
@@ -253,6 +257,8 @@ def report(api):
                 for q, k in collections.Counter(shape(q) for q in seen).most_common(8):
                     if k > 2:
                         print(f"      {k:5d}  {q}")
+    if os.environ.get("EXPLAIN"):
+        explain(api)
     if os.environ.get("JSON"):
         Path(os.environ["JSON"]).write_text(json.dumps(answers, indent=1, sort_keys=True, default=str))
     if os.environ.get("PROFILE"):
@@ -267,7 +273,40 @@ def report(api):
         pstats.Stats(prof).sort_stats(os.environ.get("SORT", "cumulative")).print_stats(int(os.environ.get("TOP", 50)))
 
 
+def explain(api):
+    """The plans of the reply-rule reads (teammate_access.replies) on the seeded tables."""
+    from backend import teammate_access as TA
+
+    targets = json.dumps(["bot:" + b for b in BOTS])
+    with api.app.state.store.read() as c:
+        for name in ("_WROTE_SQL", "_ASKED_SQL"):
+            sql = getattr(TA, name, None)
+            if sql:
+                plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, (targets, "bot:" + BOTS[7]))]
+                print(name, "|", " / ".join(plan))
+
+
+def compare(a, b):
+    """Two runs' answers (JSON=) the same, but for ids (uuids) and times, which each seeding draws anew."""
+    norm = lambda text: re.sub(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        "ID",
+        re.sub(r"\d{4}-\d\d-\d\dT[\d:.]+Z?|\b\d+\.\d+\b", "T", text),
+    )
+    left, right = (json.loads(Path(f).read_text()) for f in (a, b))
+    items = lambda value: sorted(norm(json.dumps(item, sort_keys=True)) for item in (value or [None, []])[1] or [])
+    for key in sorted(set(left) | set(right)):
+        one, two = (norm(json.dumps(side.get(key), sort_keys=True)) for side in (left, right))
+        # A list's rows in another order: rows tied on a time sort by their (random) ids.
+        same = one == two or (
+            isinstance((left.get(key) or [0, 0])[1], list) and items(left.get(key)) == items(right.get(key))
+        )
+        print(("same     " if one == two else "reordered" if same else "DIFFERENT"), key)
+
+
 def main():
+    if os.environ.get("COMPARE"):
+        return compare(*os.environ["COMPARE"].split(","))
     import tempfile
 
     from backend.tests.helpers.api_app import api_client

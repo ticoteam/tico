@@ -726,7 +726,7 @@ def local_slug(client, args, workspace):
 
     card = catalog.card(args.template) or {}
     try:
-        known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
+        known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1", fields="slug,name")}
     except (APIError, AttributeError, TypeError):
         known = set()
     reserved = ("assistant", "botops", "librarian", "strategy-owner", "general-manager", "finance-owner")

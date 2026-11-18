@@ -169,8 +169,9 @@ def task_flow(c, tasks_by_bot, who=None):
 
 
 class BotRows:
-    def __init__(self, c, who, slugs, readable):
-        """`slugs`: the bots shown; `readable`: those the caller may read, whose activity is read too."""
+    def __init__(self, c, who, slugs, readable, activity=True):
+        """`slugs`: the bots shown; `readable`: those the caller may read, whose activity is read too unless
+        `activity` is False."""
         privacy.snapshot(c)
         slugs = list(dict.fromkeys(slugs))
         read = [slug for slug in slugs if slug in readable]
@@ -179,39 +180,45 @@ class BotRows:
         sources = {source_of(_json(row["config"])) for row in self.configs.values()} - {""} - set(self.configs)
         self.configs.update({r["bot"]: r for r in read_cache.configs(c, sources)})
         self.humans = {row["id"]: row for row in H.humans(c)}
-        self.assignments = _by(
-            c,
-            "SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
-            "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-            "WHERE a.bot IN ({})",
-            read,
-        )
-        self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
-        self.scopes = {
-            bot: row["claim_task"]
-            for bot, row in _by(
-                c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read
-            ).items()
-        }
-        self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
-        self.status_inputs = privacy.status_inputs(c, list(self.statuses))
-        # Work that will run, not work fenced behind a run nobody reviewed.
-        self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
-        self.notes = H.notes_waiting_counts(c, read, limit=500)
-        tasks = {}
-        for part in H.chunks(read):
-            for task in H._rows(
-                c.execute(
-                    "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
-                    ["bot:" + slug for slug in part],
-                )
-            ):
-                tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
-        # Every task the rows below look at is read once, with its tags, so each privacy check and lookup of it reads none.
-        H.prime_tasks(c, [t["id"] for ts in tasks.values() for t in ts] + list(self.scopes.values()))
-        self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
+        # A bot's activity (its computer, status, queue and tasks) is read only for the bots the caller may read, and
+        # not at all for an answer that leaves it out (`activity=False`: GET /api/v2/bots?fields= naming none of it).
+        self.assignments, self.draining, self.scopes, self.statuses, self.status_inputs = {}, set(), {}, {}, {}
+        self.queued, self.notes, self.task_flow = {}, {}, {}
+        if read and activity:
+            self.assignments = _by(
+                c,
+                "SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
+                "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+                "WHERE a.bot IN ({})",
+                read,
+            )
+            self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
+            self.scopes = {
+                bot: row["claim_task"]
+                for bot, row in _by(
+                    c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read
+                ).items()
+            }
+            self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
+            self.status_inputs = privacy.status_inputs(c, list(self.statuses))
+            # Work that will run, not work fenced behind a run nobody reviewed.
+            self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
+            self.notes = H.notes_waiting_counts(c, read, limit=500)
+            tasks = {}
+            for part in H.chunks(read):
+                for task in H._rows(
+                    c.execute(
+                        "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
+                        ["bot:" + slug for slug in part],
+                    )
+                ):
+                    tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
+            # Every task the rows below look at is read once, with its tags, so each privacy check and lookup of it
+            # reads none.
+            H.prime_tasks(c, [t["id"] for ts in tasks.values() for t in ts] + list(self.scopes.values()))
+            self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
         self.goals = {}
-        for part in H.chunks(slugs):
+        for part in H.chunks(slugs if activity else []):
             for row in c.execute(
                 "SELECT bot,conversation_id FROM chat_goals WHERE status='active' AND bot IN "
                 f"({','.join('?' * len(part))})",
@@ -228,11 +235,15 @@ class BotRows:
         row = self.configs.get(slug)
         return _json(row["config"]) if row else {}
 
-    def model(self, c, settings, declared):
-        """The model a bot with config `declared` runs on (providers.bot_choice), the company's choice read once."""
+    def providers(self, c, settings):
+        """The company's choice of providers (providers.load), read once for every bot in the answer."""
         if not hasattr(self, "_providers"):
             self._providers = providers.load(c, settings)
-        return providers.bot_choice(c, settings, declared, self._providers)[1]
+        return self._providers
+
+    def model(self, c, settings, declared):
+        """The model a bot with config `declared` runs on (providers.bot_choice), the company's choice read once."""
+        return providers.bot_choice(c, settings, declared, self.providers(c, settings))[1]
 
     def human(self, pid):
         """H.human, from the rows read."""
