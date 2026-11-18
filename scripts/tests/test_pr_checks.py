@@ -2761,17 +2761,26 @@ def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_alway
     )
 
 
-def test_the_budget_keeps_a_specific_dependency_ahead_of_a_broad_read(tmp_path):
+@pytest.mark.parametrize(
+    ("changed", "reader"),
+    [
+        ("backend/leaf.py", "from backend import leaf\ndef test_x(): pass\n"),
+        (
+            "backend/data/input.json",
+            'from pathlib import Path\ndef test_x(name): (Path("backend/data") / name).read_text()\n',
+        ),
+    ],
+)
+def test_the_budget_keeps_a_specific_dependency_ahead_of_a_broad_read(tmp_path, changed, reader):
     smoke_tree(tmp_path)
-    changed = ["backend/leaf.py"]
     linked = "backend/tests/test_linked.py"
     broad = "backend/tests/test_broad.py"
-    source(tmp_path, changed[0], "VALUE = 1\n")
-    source(tmp_path, linked, "from backend import leaf\ndef test_x(): pass\n")
+    source(tmp_path, changed, "")
+    source(tmp_path, linked, reader)
     source(tmp_path, broad, "import subprocess\ndef test_x(): subprocess.run(['git', 'ls-files'])\n")
     graph = checks.DependencyMap(tmp_path)
-    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
-    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    picked = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, [changed], "pull_request", root=tmp_path, graph=graph)
     assert {broad, linked} <= set(light["python"])
     kept, left = checks.cap_tests([broad, linked], light["narrow"]["tier"], {broad: 1, linked: 10}, budget=10)
     assert kept == [linked] and left == [broad]

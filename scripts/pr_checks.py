@@ -979,12 +979,17 @@ class DependencyMap:
         found.discard(name)
         return found
 
-    def readers(self, name, added):
-        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
-        folder, or a listing (one that uses only names sees it only when it is new)."""
+    def path_readers(self, name):
+        """The files that read a changed path or a folder that contains it."""
         users = set(self.read_by.get(name, set()))
         for parent in list(Path(name).parents)[:-1]:
             users |= self.read_by.get(str(parent) + "/", set())
+        return users
+
+    def readers(self, name, added):
+        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
+        folder, or a listing (one that uses only names sees it only when it is new)."""
+        users = self.path_readers(name)
         users |= {
             p for p, patterns in self.globs.items() if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)
         }
@@ -2014,7 +2019,7 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         for name in names:
             users = graph.run_by.get(name, ())
             (hub_linked if is_hub(users) else linked).update(users)
-            linked.update(graph.read_by.get(name, ()))
+            linked.update(graph.path_readers(name))
             stem = Path(name).stem
             linked.update(graph.by_base.get(f"test_{stem}.py", ()))
             linked.update(graph.by_base.get(f"{stem}_test.py", ()))
