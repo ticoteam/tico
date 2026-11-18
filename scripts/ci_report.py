@@ -338,7 +338,7 @@ def aws_cost(profile, since, until, tag=None, usage_only=True, session=None):
 ROWS = [
     ("Merged PRs (main)", "merged_prs", ""),
     ("Hosted job-min per merged PR, all workflows", "hosted_min_per_pr", ""),
-    ("Hosted job-min per merged PR, PR checks and queue only", "pr_checks_hosted_min_per_pr", ""),
+    ("Hosted job-min per merged PR, PR checks and queue (target 150)", "pr_checks_hosted_min_per_pr", ""),
     ("RunsOn job-min per merged PR", "runs_on_min_per_pr", ""),
     ("Hosted job-min, total", "hosted_min", ""),
     ("of which macOS", "hosted_macos_min", ""),
@@ -442,7 +442,9 @@ def main(argv=None):
     parser.add_argument("--until", help="day after the last, YYYY-MM-DD (UTC, exclusive; default today)")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "ticoteam/tico"))
     parser.add_argument("--aws-profile", default="tico-ci", help="AWS profile for Cost Explorer (default tico-ci)")
-    parser.add_argument("--aws-tag", help="KEY=VALUE cost allocation tag filter (default: the whole account)")
+    parser.add_argument(
+        "--aws-tag", help="KEY=VALUE cost allocation tag filter (default: the whole account, which only CI uses)"
+    )
     parser.add_argument("--aws-all-records", action="store_true", help="keep credits, refunds and taxes in AWS $")
     parser.add_argument("--no-aws", action="store_true", help="skip Cost Explorer (reported as not read)")
     parser.add_argument("--budget", type=int, default=6000, help="most GitHub API calls (default 6000)")
