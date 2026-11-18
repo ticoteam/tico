@@ -311,10 +311,10 @@ def test_a_queue_retry_artifact_proposes_a_pytest_entry_and_reports_browser_flak
             old = {**artifact, "created_at": "2026-11-06T08:00:00Z", "archive_download_url": "old"}
             expired = {**artifact, "expired": True, "archive_download_url": "expired"}
             pages = [{"artifacts": [old, expired]}, {"artifacts": [artifact]}]
-            return SimpleNamespace(stdout=json.dumps(pages))
+            return SimpleNamespace(returncode=0, stdout=json.dumps(pages))
         if "/workflows/" in path:
             runs = [retry_run] if "created=2026-11-07" in path else []
-            return SimpleNamespace(stdout=json.dumps({"workflow_runs": runs}))
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"workflow_runs": runs}))
         assert path == artifact["archive_download_url"]
         return SimpleNamespace(returncode=0, stdout=archive)
 
@@ -366,6 +366,65 @@ def test_a_rerun_attempt_that_passes_flips_the_test_its_first_attempt_failed():
     found = flips_of(gh)
     assert list(found) == [flaky] and found[flaky]["commit"] == "c" * 40
     assert found[flaky]["passed"] == [f"https://github.com/{REPO}/actions/runs/1/attempts/2"]
+
+
+class UnreadableGitHub(FakeGitHub):
+    """A FakeGitHub whose jobs listing fails, with gh's message, for the (run, attempt) pairs in `broken`."""
+
+    def __init__(self, *args, broken, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.broken = broken
+
+    def api(self, path):
+        parts = path.split("?")[0].split("/")
+        key = (int(parts[parts.index("runs") + 1]), int(parts[parts.index("attempts") + 1]))
+        if key in self.broken:
+            self.calls.append(path)
+            raise quarantine.GhError(path, self.broken[key])
+        return super().api(path)
+
+
+def test_one_unreadable_attempt_is_skipped_with_a_warning_and_a_systemic_failure_still_fails(monkeypatch, capsys):
+    """Nov 17: one run's jobs listing failed and the uncaught error killed the daily detector, so no flake was reported
+    after it. One unreadable attempt is now skipped and named; auth or rate limit, or every attempt failing, still fails."""
+    flaky = "scripts/tests/test_flake_quarantine.py::test_a_node_id_comes_from_its_junit_classname_and_name"
+    runs = [run(1, attempts=2), run(2, attempts=2, sha="d" * 40)]
+    jobs = {
+        (1, 1): [job(10, "plan", "success"), job(11, "python-1", "failure")],
+        (1, 2): [job(10, "plan", "success"), job(21, "python-1", "success")],
+    }
+    kwargs = {"logs": {11: log(f"FAILED {flaky} - AssertionError")}, "xml": {21: junit_for((flaky, None))}}
+    monkeypatch.setattr(quarantine, "runs_since", lambda gh, *a: gh.runs)
+    monkeypatch.setattr(quarantine, "_add_retry_flips", lambda *a: None)
+
+    gh = UnreadableGitHub(runs, jobs, broken={(2, 1): "gh: Not Found (HTTP 404)"}, **kwargs)
+    text, proposed = quarantine.detect(gh, REPO, 1, "2026-11-07", {})
+    assert [p["test"] for p in proposed] == [flaky]  # run 1's flip is still found
+    assert f"Skipped 1 run attempt(s)" in text and "runs/2/attempts/1" in text and "HTTP 404" in text
+    assert "warning: skipped" in capsys.readouterr().err
+
+    gh = UnreadableGitHub(runs, jobs, broken={(2, 1): "gh: Bad credentials (HTTP 401)"}, **kwargs)
+    with pytest.raises(quarantine.GhError, match="HTTP 401"):
+        quarantine.detect(gh, REPO, 1, "2026-11-07", {})
+
+    every = {(run_id, attempt): "HTTP 502" for run_id in (1, 2) for attempt in (1, 2)}
+    gh = UnreadableGitHub(runs, jobs, broken=every, **kwargs)
+    with pytest.raises(quarantine.GhError, match="all 4 failed"):
+        quarantine.detect(gh, REPO, 1, "2026-11-07", {})
+
+    # The command line turns a systemic failure into exit 1 with gh's message, not a traceback.
+    monkeypatch.setattr(quarantine, "GitHub", lambda repo, cache: UnreadableGitHub(runs, jobs, broken=every, **kwargs))
+    assert quarantine.main(["detect", "--today", "2026-11-07"]) == 1
+    assert "error: gh api" in capsys.readouterr().err
+
+
+def test_gh_api_raises_gh_error_with_ghs_message(monkeypatch):
+    failed = subprocess.CompletedProcess([], 1, stdout="", stderr="gh: Not Found (HTTP 404)\n")
+    monkeypatch.setattr(quarantine.subprocess, "run", lambda *a, **k: failed)
+    with pytest.raises(quarantine.GhError, match="HTTP 404") as error:
+        quarantine.GitHub(REPO).api("repos/x/actions/runs/1/attempts/1/jobs")
+    assert not error.value.systemic
+    assert quarantine.GhError("p", "API rate limit exceeded (HTTP 403)").systemic
 
 
 def test_a_passing_testcase_in_a_leg_that_failed_on_another_test_still_proves_it():

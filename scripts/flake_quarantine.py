@@ -211,33 +211,46 @@ def candidates(runs):
     return [r for r in done if r["run_attempt"] > 1 or r["id"] in shared]
 
 
-def observations(gh, repo, runs):
+def observations(gh, repo, runs, skipped=None):
     """One observation per attempt of each run: the commit it tested (`key`), its plan job, its pytest legs, and the
     tests that failed with the leg that failed them. A merge queue group's head sha is the commit it tested; a pull
-    request run tested the branch merged into main, which only a job log names."""
+    request run tested the branch merged into main, which only a job log names.
+
+    An attempt GitHub cannot read (a 404, an expired artifact, a 5xx) is left out, with a warning on stderr and its url
+    and reason appended to `skipped`. An auth or rate-limit failure (GhError.systemic) is raised: every later call would
+    fail too."""
     out = []
     for r in runs:
         commit = None if r["event"] == "pull_request" else r["head_sha"]
         attempts = []
         for attempt in range(1, r["run_attempt"] + 1):
-            jobs = gh.api(f"repos/{repo}/actions/runs/{r['id']}/attempts/{attempt}/jobs?per_page=100")["jobs"]
-            plan = next((j["id"] for j in jobs if j["name"] == "plan"), None)
-            legs = [
-                {
-                    "id": j["id"],
-                    "name": j["name"],
-                    "conclusion": j["conclusion"],
-                    "url": j["html_url"],
-                    "started_at": j.get("started_at"),
-                    "completed_at": j.get("completed_at"),
-                }
-                for j in jobs
-                if TEST_JOB.fullmatch(j["name"])
-            ]
-            for leg in legs:
-                # Every leg's report counts, failed legs included: a test that passed in a leg that failed on another
-                # test is still proof that it passed.
-                leg["passed"] = gh.results(r["id"], leg)
+            try:
+                jobs = gh.api(f"repos/{repo}/actions/runs/{r['id']}/attempts/{attempt}/jobs?per_page=100")["jobs"]
+                plan = next((j["id"] for j in jobs if j["name"] == "plan"), None)
+                legs = [
+                    {
+                        "id": j["id"],
+                        "name": j["name"],
+                        "conclusion": j["conclusion"],
+                        "url": j["html_url"],
+                        "started_at": j.get("started_at"),
+                        "completed_at": j.get("completed_at"),
+                    }
+                    for j in jobs
+                    if TEST_JOB.fullmatch(j["name"])
+                ]
+                for leg in legs:
+                    # Every leg's report counts, failed legs included: a test that passed in a leg that failed on
+                    # another test is still proof that it passed.
+                    leg["passed"] = gh.results(r["id"], leg)
+            except GhError as error:
+                if error.systemic:
+                    raise
+                url = f"{r['html_url']}/attempts/{attempt}"
+                print(f"warning: skipped {url}: {error}", file=sys.stderr)
+                if skipped is not None:
+                    skipped.append((url, str(error)))
+                continue
             failed, crowded = {}, []
             for leg in legs:
                 if leg["conclusion"] != "failure":
@@ -386,6 +399,17 @@ def passed_tests(report):
     return passed
 
 
+class GhError(RuntimeError):
+    """A `gh api` call that failed, with gh's own message. `systemic` when no later call can succeed either: bad or
+    missing credentials, no permission, or the rate limit (HTTP 401 or 403)."""
+
+    SYSTEMIC = re.compile(r"HTTP 40[13]|Bad credentials|rate limit|gh auth login|authentication", re.IGNORECASE)
+
+    def __init__(self, path, message):
+        super().__init__(f"gh api {path}: {message.strip() or 'failed with no message'}")
+        self.systemic = bool(self.SYSTEMIC.search(message))
+
+
 class GitHub:
     """Read-only `gh api` calls. Job logs, which never change, are cached in `cache` when it is given."""
 
@@ -395,9 +419,10 @@ class GitHub:
 
     def api(self, path, *, paginate=False):
         flags = ["--paginate", "--slurp"] if paginate else []
-        return json.loads(
-            subprocess.run(["gh", "api", *flags, path], capture_output=True, text=True, check=True).stdout
-        )
+        done = subprocess.run(["gh", "api", *flags, path], capture_output=True, text=True, check=False)
+        if done.returncode:
+            raise GhError(path, done.stderr or done.stdout)
+        return json.loads(done.stdout)
 
     def artifact(self, artifact, name):
         """Read one file from an artifact, if its archive is still available."""
@@ -502,7 +527,11 @@ def _add_retry_flips(gh, repo, days, today, found):
 def detect(gh, repo, days, today, quarantined):
     """Report flips from PR-check runs and queue retries, with proposed pytest entries."""
     runs = candidates(runs_since(gh, repo, days, today))
-    observed = observations(gh, repo, runs)
+    skipped = []
+    observed = observations(gh, repo, runs, skipped)
+    if skipped and len(skipped) == sum(r["run_attempt"] for r in runs):
+        # Not one attempt could be read: GitHub is failing, not a run. Fail rather than report "no flips".
+        raise GhError("(every run attempt)", f"all {len(skipped)} failed; the first: {skipped[0][1]}")
     found = flips(observed)
     _add_retry_flips(gh, repo, days, today, found)
     proposed = propose(found, quarantined)
@@ -520,6 +549,9 @@ def detect(gh, repo, days, today, quarantined):
             lines.append(f"| `{test}` | {flip['commit'][:10]} | {failed} | {passed} | {status} |")
     else:
         lines.append("No test failed and passed on the same commit.")
+    if skipped:
+        lines += ["", f"Skipped {len(skipped)} run attempt(s) GitHub could not read:"]
+        lines += [f"- {url}: {reason}" for url, reason in skipped]
     crowded = sorted({u for o in observed for u in o["crowded"]})
     if crowded:
         lines += ["", f"Jobs with more than {MAX_FAILURES_PER_JOB} failed tests (a breakage, not flakes):"]
@@ -551,7 +583,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.action == "detect":
         gh = GitHub(args.repo, args.cache)
-        text, proposed = detect(gh, args.repo, args.days, args.today, load())
+        try:
+            text, proposed = detect(gh, args.repo, args.days, args.today, load())
+        except GhError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         print(text)
         if args.write:
             for path in write_entries(proposed, args.write):
