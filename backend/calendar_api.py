@@ -1642,6 +1642,113 @@ def record_link(c: Any, facts: Row, link_type: str, link_id: str) -> None:
     )
 
 
+# ----------------------------------------------------------------------------- scheduled calls
+# A scheduled call (docs/meet.md, Scheduled calls) owns one event, and the calendar is where its time lives: Tico keeps
+# only the link (`calendar_event_links`, link_type 'call') and reads the event again before it acts.
+#
+# Decision 13 is "people view; bots and the Assistant write". Scheduling a call is its one exception, and it is made
+# here only: the person scheduling writes that one event on their own calendar, for a call they are making, as Google's
+# own UI would let them. Nothing else a person does in Tico writes their Google calendar.
+CALL_EVENT_FAILED = "The call was not scheduled: the calendar did not take its event"
+
+
+def call_event_id(call_id: str) -> str:
+    """The Google event id a scheduled call's event is written with: the call id without dashes (hex is base32hex), so
+    a retried write cannot make a second event and the sweep reads it back by the call alone."""
+    return call_id.replace("-", "")
+
+
+def plan_call_event(c: Any, who: Any, *, title: str, start: str, end: str, invited: list[str], link: str) -> Row:
+    """Where a scheduled call's event goes: the scheduler's Google calendar when they are connected, else their Tico
+    calendar. `invited` are the actors of the people asked; bots are never Google attendees."""
+    caller = _caller(c, who)
+    if caller["kind"] != "person":
+        raise Problem("identity", "Only a person schedules a call", 403)
+    people = [
+        found
+        for found in (_person(c, str(H.actor_id(actor))) for actor in invited if str(actor).startswith("human:"))
+        if found and found["email"] and found["id"] != caller["id"]
+    ]
+    fields: Row = {"title": title, "start": start, "end": end, "location": link, "notes": "Join: " + link}
+    address = _viewer_google(c, caller)
+    if address:
+        refused = _company_writes(c)
+        if refused is not None:
+            raise _call_event_refused(refused)
+        google = _google_fields(fields, people, caller, None)
+        google["attendees"] = [{"email": address, "response": "accepted"}, *google["attendees"]]
+        return {"home": "google", "as": address, "calendar_id": address, "fields": google, "caller": caller}
+    return {"home": "tico", "fields": _tico_fields(fields, people), "caller": caller}
+
+
+def _call_event_refused(refused: Problem) -> Problem:
+    detail = cast(str, refused.detail)
+    return Problem("calendar_write_failed", CALL_EVENT_FAILED + ": " + detail, refused.status, refused.retryable)
+
+
+def insert_call_event(c: Any, plan: Row, call_id: str) -> Row:
+    """Write a scheduled call's Google event (outside any transaction: it asks Google). The event carries the call's id
+    in its private properties, beside who wrote it."""
+    try:
+        return cast(
+            Row,
+            gcal.insert(
+                c, plan["as"], plan["calendar_id"], {**plan["fields"], "call": call_id}, event_id=call_event_id(call_id)
+            ),
+        )
+    except Problem as refused:
+        raise _call_event_refused(refused) from None
+
+
+def drop_call_event(c: Any, plan: Row, call_id: str) -> None:
+    """Take back a Google event whose call was not stored, best effort: a call that failed leaves no invitation."""
+    try:
+        gcal.delete(c, plan["as"], plan["calendar_id"], call_event_id(call_id))
+    except Problem as refused:
+        log.warning("calendar: a scheduled call's event stayed after its call failed: %s", cast(str, refused.code))
+
+
+def record_call_event(c: Any, who: Any, plan: Row, call_id: str, occ: Row | None) -> None:
+    """Store a scheduled call's event facts in the call's write: a Google event's receipt (`occ`, already written) or
+    the Tico event itself, and the link from the event to the call."""
+    if plan["home"] == "google":
+        if occ is None or not occ.get("ical_uid"):
+            raise Problem("calendar_write_failed", CALL_EVENT_FAILED, 502, True)
+        _record_google(c, who, plan["caller"], "created", occ, plan["calendar_id"], None)
+        record_link(c, {"google_calendar_id": plan["calendar_id"], "ical_uid": occ["ical_uid"]}, "call", call_id)
+        return
+    try:
+        calendar_id = cal_store.calendar_for(c, "human", plan["caller"]["id"])["id"]
+        created = cast(Row, cal_store.create_event(c, calendar_id, plan["fields"], plan["caller"]["actor"]))
+    except Problem as refused:
+        raise _call_event_refused(refused) from None
+    record_link(c, {"tico_event_id": created["event_id"]}, "call", call_id)
+
+
+def read_call_event(c: Any, call_id: str) -> Row | None:
+    """A scheduled call's event as its calendar has it now: {start, end}, or None when it was cancelled or deleted (or
+    the call has no event). Raises Problem when the calendar cannot be read now (Google not answering, a lost grant)."""
+    link = c.execute(
+        "SELECT * FROM calendar_event_links WHERE link_type='call' AND link_id=? ORDER BY created_at LIMIT 1",
+        (call_id,),
+    ).fetchone()
+    if link is None:
+        return None
+    if link["tico_event_id"]:
+        row = cast(Row | None, cal_store.event(c, link["tico_event_id"]))
+        if row is None or row["status"] == "cancelled":
+            return None
+        return {"start": row["starts_at"], "end": row["ends_at"]}
+    address = str(link["google_calendar_id"] or "")
+    try:
+        occ = cast(Row, gcal.event(c, address, address, call_event_id(call_id)))
+    except Problem as refused:
+        if refused.code in ("not_found", "gone"):
+            return None
+        raise
+    return {"start": occ["start"], "end": occ["end"]}
+
+
 # ----------------------------------------------------------------------------- settings
 def _settings_view(c: Any, pid: str, zone: str | None = None) -> Row:
     cal = _person(c, pid)

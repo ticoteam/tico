@@ -102,6 +102,7 @@ async function pageNotes(): Promise<void> {
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
+    <section class="meet-upcoming" id="meet-upcoming" aria-label="Upcoming calls" hidden></section>
     <div class="notes" id="notes">
       <div class="meet-syncing" id="meet-syncing" role="status" hidden>${meetLogo('granola', 30)}<div class="meet-main"><b>Checking Granola</b><div class="meet-meta"><span>New notes arrive once Granola has a summary</span></div></div><div class="meet-side"><span class="meet-state"><i class="mg-spin" aria-hidden="true"></i>Syncing</span></div></div>
       <section class="notes-list"><div class="meet-list-head" id="meet-list-head" hidden><label class="meet-select-all" id="meet-select-all"><input type="checkbox" aria-label="Select all shown meetings"></label></div><div class="notes-rows" id="notes-rows"><div class="notes-empty">Loading…</div></div></section>
@@ -147,6 +148,7 @@ async function pageNotes(): Promise<void> {
   };
   meetSources(state);
   meetReviewTabs(state);
+  void meetUpcoming(state);
   granolaInit(state);   // the viewer's own Granola account: status, then one sync (ui/app/meetings-granola.ts)
   await meetLoad(state, true);
   if (MEET !== state) return;
@@ -159,7 +161,26 @@ async function pageNotes(): Promise<void> {
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
   // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
   state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
-  state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
+  state.sourcesPoll = setInterval(() => { if (!document.hidden) { meetSources(state); void meetUpcoming(state); } }, 60000);
+}
+
+// Upcoming: the scheduled calls the viewer is in, soonest first (GET /v2/calls/upcoming), each with when, who and Join.
+// Join (thread-call.ts, data-call-join) opens the meeting window, and the first join starts the call.
+async function meetUpcoming(state: MeetState): Promise<void> {
+  const box = document.getElementById('meet-upcoming');
+  if (!box || !callTicoMeet()) return;
+  let calls: CallRecord[] = [];
+  try { calls = (await get<CallListReply>('/v2/calls/upcoming', {fresh: true})).calls || []; } catch { return; }
+  if (MEET !== state) return;
+  for (const v of calls) CALL_VIEWS.set(v.id, v);
+  box.hidden = !calls.length;
+  patchHTML(box, calls.length ? `<h3 class="meet-upcoming-h">Upcoming</h3>${calls.map(v => {
+    const people = (v.people || []).concat((v.bots || []).map(b => 'bot:' + (typeof b === 'string' ? b : b.slug || '')));
+    return `<div class="meet-upcoming-row" data-upcoming="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
+      <span class="meet-upcoming-when muted tnum">${esc(callWhen(v.scheduled_start))}</span>
+      <span class="meet-upcoming-ppl">${people.slice(0, 5).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 20)}</span>`).join('')}</span>
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button></div>`;
+  }).join('')}` : '');
 }
 
 // Call now: the people and bots to call, picked in the who picker (its list in the dialog's flow, open for the next
@@ -168,14 +189,19 @@ async function pageNotes(): Promise<void> {
 function meetCallNow(): void {
   const chosen: string[] = [];
   const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
-    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">`, `<button type="submit" class="primary meet-call-start" disabled>${CALL_SVG}Start</button>`);
+    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">
+    <div class="meet-call-when"><input type="datetime-local" name="starts" aria-label="Starts" value="${meetNextHalfHour()}" required>
+      <select name="minutes" aria-label="Length">${[15, 30, 45, 60, 90].map(n => `<option value="${n}"${n === 30 ? ' selected' : ''}>${n} min</option>`).join('')}</select></div>`,
+    `<button type="button" class="ghost meet-call-schedule" disabled>Schedule</button><button type="submit" class="primary meet-call-start" disabled>${CALL_SVG}Start</button>`);
   dialog.classList.add('meet-call-dialog');
   const who = dialog.querySelector<HTMLElement>('[data-call-who]'), start = dialog.querySelector<HTMLButtonElement>('[type=submit]');
+  const schedule = dialog.querySelector<HTMLButtonElement>('.meet-call-schedule');
   const teammates = () => threadAddable({groups: false});
   const name = (a: string) => teammates().find(t => t.actor === a)?.label || actorName(a);
   const paint = () => {
     if (who) who.innerHTML = chosen.map(a => `<span class="nm-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(name(a))}</span><button type="button" data-remove aria-label="Remove ${esc(name(a))}">×</button></span>`).join('');
     if (start) start.disabled = !chosen.length;
+    if (schedule) schedule.disabled = !chosen.length;
   };
   // A team (the org chart's, as the meeting window's Add has them): its bots the viewer may call, in one pick.
   const team = (g: OrgGroup): string[] => {
@@ -198,6 +224,25 @@ function meetCallNow(): void {
     chosen.splice(chosen.indexOf(actor), 1); paint(); picker?.refresh(); picker?.input.focus();
   };
   whSubmit(dialog, async data => { if (await callTeammates([...chosen], String(data.get('title') || '').trim())) dialog.close(); });
+  // Schedule books it for the time picked: the call and its calendar invite, and the dialog closes; nothing opens.
+  if (schedule) schedule.onclick = async () => {
+    const form = dialog.querySelector('form')!, error = dialog.querySelector('[data-wh-error]')!, data = new FormData(form);
+    const at = new Date(String(data.get('starts') || ''));
+    if (Number.isNaN(at.getTime())) { error.textContent = 'Pick a time'; return; }
+    schedule.disabled = true; error.textContent = '';
+    try {
+      if (await callSchedule([...chosen], String(data.get('title') || '').trim(), at, Number(data.get('minutes')) || 30)) {
+        dialog.close(); toast('Scheduled');
+        if (MEET) void meetUpcoming(MEET);
+      }
+    } catch (e) { error.textContent = errorMessage(e, 'Try again'); } finally { schedule.disabled = !chosen.length; }
+  };
+}
+// The next half hour, as a datetime-local field's value in the viewer's own time.
+function meetNextHalfHour(): string {
+  const d = new Date(Math.ceil(Date.now() / 1800000) * 1800000);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
 function meetReviewTabs(state: MeetState): void {

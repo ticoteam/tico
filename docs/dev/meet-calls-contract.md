@@ -104,6 +104,27 @@ when the thread has at most 8 human members; otherwise empty. Bots are never run
 hook it does nothing. `payload` = `{"title": "<caller name>", "body": "# <thread title>", "url": "<thread path>?call=<id>",
 "tag": "call-<id>"}`.
 
+### Scheduled calls (migration `backend/migrations/20261118133337_scheduled_calls.py`)
+
+- `calls` gains `scheduled_start`, `scheduled_end` and `prepped_at` (all nullable); `calls.state` gains `scheduled`, and
+  `calendar_event_links.link_type` gains `call`.
+- `POST /api/v2/threads/{thread_id}/calls` with `starts_at` and `ends_at` stores a Tico Meet call `scheduled`, its live
+  meeting `paused`, its card and its bots, with no participant and an empty `ring`. Before the write it writes one event
+  as the caller (backend/calendar_api.py `plan_call_event`, the one exception to calendar decision 13): their Google
+  calendar when connected (event id = the call id without dashes, `extendedProperties.private.tico_call`), else their
+  Tico calendar, in the write. The link row is in the same write. A calendar refusal is `calendar_write_failed` and no
+  call; a write that fails after the Google event was made deletes the event.
+- A scheduled call is in no live list: not `live_call`, not ringing, not `GET /api/v2/live-meetings`, not the calls
+  sweep. `GET /api/v2/calls/upcoming` lists the viewer's.
+- The first `join` turns it `live` (started_at = now, the meeting `live`, `ring` the thread's other people), then starts
+  the recorder and rings, once. A second live call in the thread is `409 call_in_progress`.
+- The heartbeat's `call_prep` step (backend/call_prep.py, every minute): for calls due within 30 minutes and not
+  prepped, or an hour past their end, re-read the event (`calendar_api.read_call_event`); moved moves the times,
+  cancelled or gone ends the call `calendar_cancelled`; unreadable waits, three passes at most. Then one task per bot,
+  "Prepare for <title>" (skills/meeting-prep/SKILL.md), and `prepped_at`, in one write guarded by `prepped_at IS NULL`.
+  Past its end by an hour: `missed`.
+- Change kinds: `call.scheduled`, `call.moved`, `call.prepped`.
+
 ## Google availability
 
 `google_meet` is available to a person when the Workspace connection is active, covers their mailbox

@@ -243,6 +243,17 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
     return "Done", True
 
 
+def call_prep(ctx: Context) -> tuple[str, bool]:
+    # Scheduled calls (backend/call_prep.py): their bots' prep tasks 30 minutes before, the calendar's moves and
+    # cancellations, and the ones nobody joined.
+    app: Any = ctx.app
+    done = cast("dict[str, int]", app.state.call_prep.sweep())
+    acted = {k: n for k, n in done.items() if k != "waiting"}
+    if not acted:
+        return "Done", True
+    return ", ".join(f"{n} {k}" for k, n in sorted(acted.items())), False
+
+
 def _engine_github(ctx: Context) -> Any:
     """The engine's GitHub (backend/github.py `AppGitHub`) through the company's GitHub App, or None without one."""
     app: Any = ctx.github_app
@@ -404,6 +415,7 @@ STEPS = [
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
+    Step("call_prep", "Scheduled calls", "due", MINUTE, call_prep, loop=True),
     Step(
         "item_metadata",
         "PR and release metadata",

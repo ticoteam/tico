@@ -325,6 +325,8 @@ button.ths-link:hover .ths-val{color:var(--ink)}
 /* calls: the bar while in a Tico Meet call (the header's phone and the call card are styles/calls.css) */
 .thv-call-note{flex:none;font-size:var(--t-sm)}
 .thv-call-on{color:var(--ok)}
+.thv-call-next{border:0;background:transparent;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer;white-space:nowrap}
+.thv-call-next:hover{color:var(--ink)}
 .call-bar{position:fixed;z-index:30;left:calc(var(--rail-left) + 16px);right:16px;bottom:16px;max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .call-row{display:flex;align-items:center;gap:4px;min-width:0}
 .call-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink)}

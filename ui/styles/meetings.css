@@ -96,6 +96,20 @@ dialog.meet-call-dialog{background:var(--g1)}
 .meet-stack{display:flex}
 .meet-stack .av{box-shadow:0 0 0 2px var(--surface);border-radius:50%}
 .meet-stack .av+.av{margin-left:-6px}
+.meet-call-when{display:flex;gap:8px}
+.meet-call-when input{flex:1 1 auto;width:auto;min-width:0;box-sizing:border-box;background-color:var(--g2)}
+.meet-call-when select{flex:0 0 auto;width:auto;background-color:var(--g2)}
+/* Upcoming: the scheduled calls the viewer is in, above the meetings list; one dense row each. */
+.meet-upcoming{margin:12px 0}
+.meet-upcoming-h{margin:0 0 4px;padding:0 8px;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.meet-upcoming-row{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 8px;border-radius:var(--r-ctl);color:var(--g7)}
+.meet-upcoming-row:hover{background:var(--hover)}
+.meet-upcoming-row>svg{flex:none;color:var(--accent)}
+.meet-upcoming-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);text-decoration:none;font-weight:500}
+.meet-upcoming-when{flex:none;font-size:var(--t-sm)}
+.meet-upcoming-ppl{display:flex;flex:none}
+.meet-upcoming-ppl>span+span{margin-left:-4px}
+@media (max-width:760px){.meet-upcoming-ppl{display:none}.meet-upcoming-row{min-height:44px}}
 /* A phone: the dialog stands at the top, so the field, the list and Start stay above the keyboard. */
 @media (max-width:760px){
   dialog.tmodal.meet-call-dialog{top:max(12px,env(safe-area-inset-top));right:16px;bottom:auto;left:16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}

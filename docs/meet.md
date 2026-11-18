@@ -246,12 +246,42 @@ only waiting leaves the bot speaking alone.
 `making_voice` or `speaking`) and `caption` (the sentence being spoken), and `note`, the latest short note for 10
 seconds. The call bar shows the bot answering, dots while it thinks, and its sentence while it speaks.
 
+## Scheduled calls
+
+A call can be booked for later: **Schedule** in Call now, or `starts_at` and `ends_at` on the start. The calendar is
+where its time lives; Tico keeps only the call and a link to its one event.
+
+1. **Booking.** It is a Tico Meet call in state `scheduled`, with the bots picked. Nobody is in it, nobody is rung, and
+   it is in no live list. Its card goes in the thread, the thread header shows its time, and the
+   Meetings page lists it under Upcoming (`GET /api/v2/calls/upcoming`) with Join. One event is written as
+   the person booking it: on their Google calendar when they are connected, else on their Tico calendar. It invites
+   the thread's people (bots are never Google attendees), its location and notes hold the call's link (`/#/call/<id>`),
+   and a Google event carries `extendedProperties.private.tico_call`. A `calendar_event_links` row (`link_type`
+   `call`) ties the event to the call. A calendar that will not take the event leaves no call
+   (`calendar_write_failed`, with the calendar's own status). This is the one place a person's action writes their
+   calendar (calendar decision 13 is otherwise "people view").
+2. **Before the start.** Once a minute the scheduler's Scheduled calls step looks at each scheduled call due within 30
+   minutes. It reads the call's event again first: a moved event moves the call (and it acts only if the call is still
+   due), a cancelled or deleted one cancels it (`end_reason: calendar_cancelled`). An event that cannot be read is read
+   again on the next pass, and after three passes the call goes on with the times it has. Then each bot on the call
+   gets one task, **Prepare for <title>**, that runs the built-in `meeting-prep` skill: the bot reads the thread, the
+   notes of the thread's earlier calls, the tasks and files it links and its own work, and posts one short prep note
+   in the thread. `prepped_at` is set in the same write, so the tasks are given once. A call booked less than 30
+   minutes ahead preps on the next pass.
+3. **The start.** The meeting window shows the start time and Join. The first join starts the call: it is live from
+   then, with the bots it was booked with, and rings the thread's other people as a start does. While another call is
+   live in the thread, joining it is `call_in_progress`.
+4. **The end.** The connector's End before the start cancels it (`end_reason: cancelled`). A scheduled call nobody
+   joined ends `missed` an hour after its end. Times are changed in the calendar, not in Tico.
+
+Not done: repeating scheduled calls, replies to the invitation in Tico, and times edited in Tico.
+
 ## Who may do what
 
 | Action | Who |
 | --- | --- |
 | See a call, list calls, join, refresh a token | People who can read the thread |
-| Start a call, attach or detach bots | People who can write to the thread (attach also needs the person to have joined) |
+| Start or schedule a call, attach or detach bots | People who can write to the thread (attach also needs the person to have joined) |
 | Leave | The person who joined, even after losing access to the thread |
 | End | The connector |
 | Anything | Bots are refused. BotOps acts as the person it works for |
@@ -268,10 +298,11 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | Method and path | What it does |
 | --- | --- |
 | `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything |
-| `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional; on for Tico Meet, off for Google Meet), `provider` (`auto`, `google_meet` or `tico`; default `auto`; bots or voice make it Tico Meet), `bots` (optional, up to 10 slugs attached at the start) |
+| `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional; on for Tico Meet, off for Google Meet), `provider` (`auto`, `google_meet` or `tico`; default `auto`; bots or voice make it Tico Meet), `bots` (optional, up to 10 slugs attached at the start), `starts_at` and `ends_at` (optional, ISO 8601 with an offset: both schedule a Tico Meet call for then, up to 8 hours long; see Scheduled calls) |
 | `GET /api/v2/calls/ringing` | The live calls ringing the caller now |
-| `GET /api/v2/calls/{call_id}` | One call: state (`live`, `ending` or `ended`), connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, `voice` (see Voice; `null` without voice) `stage` (see Sharing; `null` for nothing) and `stage_n` (how many times it changed, so a window can tell an older read from a newer one) |
-| `POST /api/v2/calls/{call_id}/join` | Join. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
+| `GET /api/v2/calls/upcoming` | The scheduled calls the caller is in (booked by them, or with them among the thread's people), soonest first, each with `people` |
+| `GET /api/v2/calls/{call_id}` | One call: state (`scheduled`, `live`, `ending` or `ended`), `scheduled_start` and `scheduled_end`, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, `voice` (see Voice; `null` without voice) `stage` (see Sharing; `null` for nothing) and `stage_n` (how many times it changed, so a window can tell an older read from a newer one) |
+| `POST /api/v2/calls/{call_id}/join` | Join; the first join of a scheduled call starts it. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined (Tico Meet only) |
 | `POST /api/v2/calls/{call_id}/leave` | Leave |
 | `PUT /api/v2/calls/{call_id}/stage` | Show your screen or a Tico file on the stage (in the call, Tico Meet). Body: `kind` (`screen` or `file`), `file_id` for a file you may read (`404` otherwise). Replaces whatever showed |
@@ -286,11 +317,12 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 The same operations are `tico call list|start|show|join|token|leave|end|retry` and `tico call bot add|remove` in the
 `tico` CLI, and `tico_call_list`, `tico_call_show`, `tico_call_start`, `tico_call_join`, `tico_call_token`, `tico_call_leave`,
 `tico_call_end`, `tico_call_retry`, `tico_call_bot_add` and `tico_call_bot_remove` over MCP. The OpenAPI operations are
-`listCalls`, `startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `setCallStage`, `clearCallStage`,
+`listCalls`, `startCall`, `listUpcomingCalls`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `setCallStage`, `clearCallStage`,
 `endCall`, `retryCallActionItems`, `attachCallBots` and `detachCallBot`. The stage is set from the meeting window only:
 it shows what a person in the call shares.
 
-Changes are written to the change log on the `threads` topic: `call.started`, `call.joined`, `call.left`,
+Changes are written to the change log on the `threads` topic: `call.scheduled`, `call.moved`, `call.prepped`,
+`call.started`, `call.joined`, `call.left`,
 `call.ended`, `call.stage`, `call.bot_attached`, `call.bot_detached`, `call.participant_removed`, `call.post_refused`,
 `call.action_items_given_up`, `call.action_items_retry` and `call.updated`. Each but `call.updated` has an audit row. A refusal's event tells the thread's
 readers that a post was refused, not what it said. The live

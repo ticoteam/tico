@@ -39,11 +39,13 @@ SCHEMAS.update(
                         "id": "s",
                         "thread_id": "s",
                         "title": "s",
-                        "state": {"enum": ["live", "ending", "ended"]},
+                        "state": {"enum": ["scheduled", "live", "ending", "ended"]},
                         "connector": "s",
                         "started_at": "s",
                         "ended_at": "n",
                         "end_reason": "n",
+                        "scheduled_start": "n",
+                        "scheduled_end": "n",
                     }
                 ),
                 ref("CallProvider"),
@@ -55,8 +57,9 @@ SCHEMAS.update(
                 "thread_id": "s",
                 "title": "s",
                 "state": {
-                    "enum": ["live", "ending", "ended"],
-                    "description": "ending: End was pressed and the speech already heard is being transcribed",
+                    "enum": ["scheduled", "live", "ending", "ended"],
+                    "description": "scheduled: booked for later, started by its first join. ending: End was pressed "
+                    "and the speech already heard is being transcribed",
                 },
                 "connector": "s",
                 "meeting_id": "s",
@@ -65,6 +68,8 @@ SCHEMAS.update(
                 "end_reason": "n",
                 "participants": items(ref("CallParticipant")),
                 "bots": items({"type": "string"}),
+                "scheduled_start": {"type": ["string", "null"], "description": "When a scheduled call is booked for"},
+                "scheduled_end": "n",
             },
             holds={
                 "type": "array",
@@ -137,6 +142,18 @@ SCHEMAS.update(
             }
         ),
         "CallRinging": obj({"calls": items(ref("Call"))}),
+        "CallUpcoming": obj(
+            {
+                "calls": items(
+                    {
+                        "allOf": [
+                            ref("Call"),
+                            obj({"people": items({"type": "string", "description": "The people the call is for"})}),
+                        ]
+                    }
+                )
+            }
+        ),
         "CallJoin": obj(
             {"call": ref("Call"), "url": "n", "expires_in": "i", "token": "s"},
             required=["call", "url"],

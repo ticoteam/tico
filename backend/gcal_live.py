@@ -596,7 +596,8 @@ def _recurrence(fields: Json) -> list[str]:
 def google_body(fields: Json, *, partial: bool = False) -> Json:
     """A Google event body from the contract's POST /events fields (title, start, end, all_day, time_zone, repeat or
     recurrence, attendees as addresses or {email}, notes, location, add_meet, visibility, response) plus `actor`
-    (who in Tico wrote it) and `bot` (the bot it is for). `partial` builds a patch: only the fields given."""
+    (who in Tico wrote it), `bot` (the bot it is for) and `call` (the scheduled call it is for). `partial` builds a
+    patch: only the fields given."""
     body: Json = {}
 
     def has(key: str) -> bool:
@@ -640,6 +641,8 @@ def google_body(fields: Json, *, partial: bool = False) -> Json:
         private["tico_actor"] = str(fields["actor"])[:200]
     if fields.get("bot"):
         private["tico_bot"] = str(fields["bot"])[:200]
+    if fields.get("call"):
+        private["tico_call"] = str(fields["call"])[:200]
     if private:
         body["extendedProperties"] = {"private": private}
     return body
