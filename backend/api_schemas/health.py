@@ -86,7 +86,10 @@ SCHEMAS.update(
                         obj(
                             {
                                 "version": "s",
-                                "since": {"type": "string", "description": "When this server first started on it (UTC)"},
+                                "since": {
+                                    "type": "string",
+                                    "description": "When this server first started on it (UTC)",
+                                },
                             },
                             required=["version", "since"],
                         )

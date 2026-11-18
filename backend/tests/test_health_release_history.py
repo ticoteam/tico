@@ -58,7 +58,10 @@ def test_500_are_kept_and_the_oldest_is_dropped_within_30_kb(api, monkeypatch):
     """AC-4 and the guard: at 500 entries Health grows by no more than 30 KB."""
     stored(api, [])
     without = len(api.get("/api/v2/health", headers=headers()).content)
-    full = [{"version": f"0.{n // 100}.{n % 100}", "since": f"2026-10-{1 + n // 20:02d}T00:00:00.000000Z"} for n in range(500)]
+    full = [
+        {"version": f"0.{n // 100}.{n % 100}", "since": f"2026-10-{1 + n // 20:02d}T00:00:00.000000Z"}
+        for n in range(500)
+    ]
     stored(api, full)
     started(api, monkeypatch, "1.0.0", "2026-11-18T00:00:00.000000Z")
     listed = history(api)

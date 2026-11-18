@@ -4108,7 +4108,9 @@ def release_history(c, since=None):
     """The releases this server ran and when it first started on each (backend/releases.py `record_start`), oldest
     first, as Health shows them to bots and people: only version and since, whatever else an entry may carry. `since`
     (an ISO time) keeps the entries that started at or after it; a malformed one is refused with a 400."""
-    entries = [{"version": str(r.get("version") or ""), "since": str(r.get("since") or "")} for r in releases.history(c)]
+    entries = [
+        {"version": str(r.get("version") or ""), "since": str(r.get("since") or "")} for r in releases.history(c)
+    ]
     if since is None:
         return entries
     start = _instant(since)
