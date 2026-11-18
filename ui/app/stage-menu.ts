@@ -24,10 +24,12 @@ function pvMayWork(state: PvState, tasks: TaskAny[]): boolean {
   return !!me && tasks.some(t => t.owner_id === me || t.requester_id === me);
 }
 
-/** The ⋯ of a stage: the shell's stand-in calls it (task-pipelines.ts pvClick). */
-function pvColMenu(state: PvState, stageId: string, anchor: HTMLElement): void {
+/** The ⋯ of a stage: the shell's stand-in calls it (task-pipelines.ts pvClick). The first press loads this part, and a
+    live draw meanwhile may have replaced the ⋯ that was pressed: the menu opens from the one drawn now. */
+function pvColMenu(state: PvState, stageId: string, pressed: HTMLElement): void {
   const stage = state.rec.stages.find(s => s.id === stageId);
   if (!stage || PV !== state) return;
+  const anchor = pvColAnchor(stageId, pressed);
   const tasks = pvInStage(state, stageId), ids = tasks.map(t => t.id), work = pvMayWork(state, tasks);
   const later = (run: () => void) => () => setTimeout(run);
   const items: PropMenuAction[] = [];
