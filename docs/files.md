@@ -208,9 +208,9 @@ rule is the web app's, so such a caller sends the joined path itself.
 ## Library › Files
 
 **Library › Files** lists every file the viewer may see, across all bots and whoever added it: bots' files and
-[pages](pages.md) (bot-wide, on a task or in a chat), task attachments whoever added them, links and imports. A file a
-person attaches to a thread message stays on that message and is not listed here. Each row passes the same check as
-the bot's page, so a file you may not read adds no row, name or count.
+[pages](pages.md) (bot-wide, on a task or in a chat), task attachments whoever added them, files a person sends a bot in
+its chat, links and imports. A file a person attaches to a message in a shared thread stays on that message and is not
+listed here. Each row passes the same check as the bot's page, so a file you may not read adds no row, name or count.
 
 - **Filters:** kind (Pages, Documents, Images, Data, Video and audio, Other), bot, team (its bots' files and the
   files on tasks its bots and people own, nested teams included), task, date, pinned and archived. They ride in the
