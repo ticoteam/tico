@@ -74,9 +74,21 @@
 /* Call now beside Add notes: the phone mark and the verb; on a phone the mark alone, a square the row's height. */
 #meet-call-now{display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:var(--ctl);white-space:nowrap}
 @media (max-width:760px){#meet-call-now{justify-content:center;width:var(--ctl);padding:0}#meet-call-now>span{display:none}}
+/* The Call now dialog: the meeting window's look (the dialog on --g1, its fields on --g2, a 1px muted border on focus),
+   the picker's list in the dialog's flow under its field (who-picker.ts inline), and the chosen as chips a tap removes. */
+dialog.meet-call-dialog{background:var(--g1)}
+.meet-call-dialog :is(input.who-pick-q,input[name=title]){background-color:var(--g2)}
+.meet-call-dialog :is(input.who-pick-q,input[name=title]):is(:focus,:focus-visible){outline:0;box-shadow:none;border:1px solid var(--muted)}
+.meet-call-dialog input[name=title]{box-sizing:border-box;width:100%}
 .meet-call-who{display:flex;flex-wrap:wrap;gap:6px}
 .meet-call-who:empty{display:none}
-.meet-call-dialog input[name=title]{box-sizing:border-box;width:100%}
+.meet-call-who .nm-chip{cursor:pointer}
+.meet-call-start{display:inline-flex;align-items:center;gap:8px}
+/* A phone: the dialog stands at the top, so the field, the list and Start stay above the keyboard. */
+@media (max-width:760px){
+  dialog.tmodal.meet-call-dialog{inset:max(12px,env(safe-area-inset-top)) 16px auto 16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}
+  .meet-call-who .nm-chip{height:32px;border-radius:16px}
+}
 .ph #notes-search{width:240px;flex:0 1 240px}
 /* Sources in the ⋯ menu carries a dot when a source needs a look; the closed ⋯ carries it too. */
 .ph-more.meet-src-trouble{position:relative}

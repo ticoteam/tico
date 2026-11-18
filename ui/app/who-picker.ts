@@ -9,6 +9,10 @@
    and when focus leaves the field. Groups come first, then people, then bots, each by name; typing filters by name
    (a person also by email), any case, anywhere in it. ↑/↓ move, Enter or a click picks: the field clears and keeps
    focus, and the list closes (it stays open only while the field has text).
+   `inline` puts the list in the dialog's own flow instead, under the field, where it pushes what follows down: it opens
+   the same ways, stays open after a pick (the field clears and the list shows who is left) and when the field is
+   emptied, and closes only on Esc or once nobody is left; a click outside or a blur leaves it, so a press on a button
+   under it never lands after the list closed and the button moved.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -22,12 +26,12 @@ interface WhoPicker {refresh: () => void; close: () => void; input: HTMLInputEle
 const WHO_KIND_RANK: Record<string, number> = {group: 0, person: 1, bot: 2};
 let whoPickerSeq = 0;
 
-function whoPickerHTML(opts: {placeholder?: string; label?: string} = {}): string {
+function whoPickerHTML(opts: {placeholder?: string; label?: string; inline?: boolean} = {}): string {
   const id = `who-pick-${++whoPickerSeq}`, placeholder = opts.placeholder || 'Add a person, bot or group';
-  return `<div class="settings-combo who-pick" data-who-pick><input type="text" class="who-pick-q" role="combobox" aria-expanded="false"
+  return `<div class="settings-combo who-pick${opts.inline ? ' who-pick-inline' : ''}" data-who-pick><input type="text" class="who-pick-q" role="combobox" aria-expanded="false"
     aria-controls="${id}" aria-autocomplete="list" aria-label="${esc(opts.label || placeholder)}" placeholder="${esc(placeholder)}"
     autocomplete="off" spellcheck="false" autocapitalize="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
-    <div class="settings-combo-list who-pick-list" id="${id}" role="listbox" popover="manual" aria-label="${esc(opts.label || placeholder)}"></div></div>`;
+    <div class="settings-combo-list who-pick-list" id="${id}" role="listbox" ${opts.inline ? 'hidden' : 'popover="manual"'} aria-label="${esc(opts.label || placeholder)}"></div></div>`;
 }
 
 function whoPickerSort(list: WhoCandidate[]): WhoCandidate[] {
@@ -39,11 +43,11 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
   const input = box?.querySelector<HTMLInputElement>('.who-pick-q');
   const list = box?.querySelector<HTMLElement>('.who-pick-list');
   if (!box || !input || !list) return null;
-  const dialog = box.closest('dialog');
+  const dialog = box.closest('dialog'), inline = box.classList.contains('who-pick-inline');
   let shown: WhoCandidate[] = [], active = -1, swallow = false;
-  const isOpen = () => list.matches(':popover-open');
+  const isOpen = () => inline ? !list.hidden : list.matches(':popover-open');
   const place = () => {
-    if (!isOpen()) return;
+    if (inline || !isOpen()) return;
     const r = input.getBoundingClientRect(), h = list.offsetHeight;
     const below = innerHeight - r.bottom - 8, above = r.top - 8;
     const top = below >= h + 4 || below >= above ? r.bottom + 4 : r.top - h - 4;
@@ -59,6 +63,7 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
   };
   const paint = () => {
     const all = whoPickerSort(opts.candidates()), q = input.value.trim().toLowerCase();
+    if (inline && !all.length) { close(); return; }
     shown = q ? all.filter(c => c.name.toLowerCase().includes(q) || (c.kind === 'person' && !!c.email && c.email.toLowerCase().includes(q))) : all;
     active = shown.length ? Math.min(active, shown.length - 1) : -1;
     list.innerHTML = shown.length ? shown.map((c, i) => `<div class="settings-combo-opt" role="option" id="${list.id}-o${i}" data-who="${esc(c.subject)}" aria-selected="false">${c.face}
@@ -68,11 +73,11 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
     place();
   };
   const open = () => {
-    if (!isOpen()) { list.showPopover(); input.setAttribute('aria-expanded', 'true'); active = -1; }
+    if (!isOpen()) { if (inline) list.hidden = false; else list.showPopover(); input.setAttribute('aria-expanded', 'true'); active = -1; }
     paint();
   };
   const close = () => {
-    if (isOpen()) list.hidePopover();
+    if (isOpen()) { if (inline) list.hidden = true; else list.hidePopover(); }
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
     active = -1;
@@ -82,11 +87,12 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
     // The field clears and keeps focus; the list stays open only while the field has text, so it closes here.
     input.value = '';
     input.focus();
-    close();
+    if (!inline) close();
     await opts.onPick(c);
+    if (inline && isOpen()) { active = -1; paint(); }
   };
   input.addEventListener('click', () => { if (!isOpen()) open(); });
-  input.addEventListener('input', () => { active = -1; if (input.value) open(); else close(); });
+  input.addEventListener('input', () => { active = -1; if (input.value || inline) open(); else close(); });
   input.addEventListener('keydown', ev => {
     if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
       ev.preventDefault();
@@ -107,7 +113,7 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
   // The dialog's cancel for that same Esc (it comes before the key's keyup) is held back; the next Esc closes the dialog.
   input.addEventListener('keyup', ev => { if (ev.key === 'Escape') swallow = false; });
   dialog?.addEventListener('cancel', ev => { if (swallow) ev.preventDefault(); swallow = false; });
-  input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement !== input) close(); }); });
+  if (!inline) input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement !== input) close(); }); });
   // A press on an option keeps focus in the field, so the blur above does not close the list first.
   list.addEventListener('pointerdown', ev => ev.preventDefault());
   list.addEventListener('click', ev => {
@@ -119,7 +125,7 @@ function whoPickerWire(root: ParentNode, opts: WhoPickerOptions): WhoPicker | nu
     const t = ev.target;
     if (t instanceof Node && !box.contains(t)) close();
   };
-  document.addEventListener('pointerdown', outside, true);
+  if (!inline) document.addEventListener('pointerdown', outside, true);
   const replace = () => place();
   addEventListener('resize', replace);
   dialog?.addEventListener('scroll', replace, true);

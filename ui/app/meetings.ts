@@ -163,12 +163,13 @@ async function pageNotes(): Promise<void> {
 
 // Call now is there only where this server runs Tico Meet: the meeting window and calls with bots are Tico Meet's.
 const meetCallable = (): boolean => (S.config.features as {tico_meet?: boolean} | undefined)?.tico_meet === true;
-// Call now: the people and bots to call, picked in the who picker, and an optional title; Start makes the call
-// (thread-call.ts callTeammates), which opens its meeting window, and a refusal shows here.
+// Call now: the people and bots to call, picked in the who picker (its list in the dialog's flow, open for the next
+// pick; who is chosen leaves it), and an optional title; Start makes the call (thread-call.ts callTeammates), which
+// opens its meeting window, and a refusal shows here. A tap on a chosen one's chip takes them out again.
 function meetCallNow(): void {
   const chosen: string[] = [];
-  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot'})}<div class="meet-call-who" data-call-who></div>
-    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">`, '<button type="submit" class="primary" disabled>Start</button>');
+  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot', inline: true})}<div class="meet-call-who" data-call-who></div>
+    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">`, `<button type="submit" class="primary meet-call-start" disabled>${CALL_SVG}Start</button>`);
   dialog.classList.add('meet-call-dialog');
   const who = dialog.querySelector<HTMLElement>('[data-call-who]'), start = dialog.querySelector<HTMLButtonElement>('[type=submit]');
   const teammates = () => threadAddable({groups: false});
@@ -182,7 +183,7 @@ function meetCallNow(): void {
       email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)})),
     onPick: c => { chosen.push(c.subject); paint(); }});
   if (who) who.onclick = ev => {
-    const actor = eventElement(ev)?.closest('[data-remove]')?.closest<HTMLElement>('[data-actor]')?.dataset['actor'];
+    const actor = eventElement(ev)?.closest<HTMLElement>('[data-actor]')?.dataset['actor'];
     if (!actor) return;
     chosen.splice(chosen.indexOf(actor), 1); paint(); picker?.refresh(); picker?.input.focus();
   };

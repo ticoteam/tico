@@ -479,21 +479,28 @@ let browser: import('playwright').Browser | null = null;
     await context.close();
   }
 
-  // ---- the Meetings page's Call now: there with Tico Meet, Start with the Ops bot opens a new Tico Meet call's window,
-  // and gone where the server has no Tico Meet
+  // ---- the Meetings page's Call now: there with Tico Meet; its picker's list in the dialog, open for the next pick and
+  // without who is chosen; Start with the Ops bot opens a new Tico Meet call's window from their DM, and with Bea and Cy
+  // from a new thread named for them; gone where the server has no Tico Meet
   for (const phone of [false, true]) {
     const {context, page, seen, mode} = await open(browser, {phone});
     const config = {features: {tico_meet: true}};
     const dm = {id: 't-dm', title: 'Ops', audience: 'personal', audience_group_id: null, dm_with: [{actor: 'bot:ops'}], dm_with_count: 1, last_seq: 0,
       last_message_at: at(60), me: me(), members: [], live_call: null};
     const dms: string[] = [];
-    const mine = new Set(['/api/me', '/api/employees', '/api/v2/meetings', '/api/meetings/sources', '/api/v2/threads/dm']);
+    const made: unknown[] = [];
+    const mine = new Set(['/api/me', '/api/employees', '/api/v2/meetings', '/api/meetings/sources', '/api/v2/threads/dm', '/api/v2/threads']);
     await page.route(u => u.hostname === 'tico-ui.test' && mine.has(u.pathname), route => {
-      const url = new URL(route.request().url()), json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const req = route.request(), url = new URL(req.url()), json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.pathname === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true, config});
       if (url.pathname === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_chat: true, schedules: []}]);
       if (url.pathname === '/api/v2/meetings') return json({meetings: [], pending_count: 0});
       if (url.pathname === '/api/meetings/sources') return json({sources: []});
+      if (url.pathname === '/api/v2/threads') {
+        if (req.method() !== 'POST') return route.fallback();
+        made.push(JSON.parse(req.postData() || '{}'));
+        return json({...dm, id: 't-grp', title: 'Bea, Cy', audience: 'members', dm_with: [], dm_with_count: 0});
+      }
       dms.push(url.searchParams.get('with') || '');
       return json(dm);
     });
@@ -512,8 +519,19 @@ let browser: import('playwright').Browser | null = null;
     const ops = page.locator('.who-pick-list [role="option"][data-who="bot:ops"]');
     await ops.waitFor();
     await themed(page, 'call-now-pick', phone);
+    if (phone) {
+      // The dialog stands at the top of a phone's screen, above where the keyboard comes up.
+      const box = await dialog.boundingBox();
+      assert.ok(box && box.y <= 16 && Math.round(box.x) === 16 && Math.round(box.width) === 358, 'pinned to the top, 16px in');
+    }
     await ops.click();
     await dialog.locator('.nm-chip[data-actor="bot:ops"]').waitFor();
+    // The list stays open for the next pick, without Ops now; it is in the dialog, so Start is under it, not covered.
+    const list = dialog.locator('.who-pick-list');
+    assert.ok(await list.isVisible(), 'the list stays open after a pick');
+    assert.equal(await ops.count(), 0, 'who is chosen leaves the list');
+    const [under, below] = [await list.boundingBox(), await start.boundingBox()];
+    assert.ok(under && below && below.y >= under.y + under.height, 'Start below the list');
     await themed(page, 'call-now-dialog', phone);
     mode.start = 'tico';
     await page.evaluate(() => { window.__order = []; });
@@ -534,6 +552,26 @@ let browser: import('playwright').Browser | null = null;
     await dialog.waitFor({state: 'detached'});
     assert.deepEqual(dms, ['bot:ops'], 'one bot is its DM');
     assert.deepEqual(seen.starts, [{provider: 'tico', bots: ['ops']}]);
+    if (!phone) {
+      // Two people, picked one after the other: a new thread with them both, named for them (no title), and its call.
+      await call.click();
+      await dialog.locator('.who-pick-q').click();
+      await dialog.locator('.who-pick-list [data-who="human:bea"]').click();
+      await dialog.locator('.who-pick-list [data-who="human:cy"]').click();
+      assert.equal(await dialog.locator('.nm-chip').count(), 2);
+      await page.evaluate(() => { window.__order = []; });
+      const opened = context.waitForEvent('page');
+      await start.click();
+      const tab = await opened;
+      await tab.waitForURL(u => u.hash === '#/call/ct?join=1', {waitUntil: 'commit'});
+      assert.equal(await tab.evaluate(() => window.name), 'tico-call-ct');
+      assert.deepEqual(made, [{title: 'Bea, Cy', audience: 'members', members: ['human:bea', 'human:cy']}]);
+      assert.deepEqual(seen.starts.at(-1), {provider: 'tico'});
+      assert.deepEqual(await page.evaluate(() => window.__order), ['open ', 'POST /api/v2/threads', 'POST /api/v2/threads/t-grp/calls']);
+      await tab.close();
+      await dialog.waitFor({state: 'detached'});
+      assert.deepEqual(dms, ['bot:ops'], 'no DM for two');
+    }
     // No Tico Meet on this server: no Call now.
     config.features.tico_meet = false; mode.ticoMeet = false;
     await page.goto('https://tico-ui.test/#/meetings');

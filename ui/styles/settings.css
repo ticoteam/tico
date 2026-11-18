@@ -322,6 +322,9 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo input.who-pick-q{width:100%;min-width:0;padding:7px 10px 7px 32px;font-size:var(--t-base);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237f8a96' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 10px center;color:var(--ink)}
 .settings-combo-list[popover]{position:fixed;inset:auto;right:auto;bottom:auto;margin:0;box-sizing:border-box;max-height:234px;color:var(--ink)}
 .settings-combo-list[popover]:popover-open{display:block}
+/* An inline who picker's list (who-picker.ts inline): part of the form under its field, about five rows, no card of its own. */
+.who-pick-inline .who-pick-list{display:block;position:static;max-height:200px;overflow:auto;margin:4px 0 0;padding:0;border:0;border-radius:0;background:none;box-shadow:none}
+.who-pick-inline .who-pick-list[hidden]{display:none}
 .settings-combo-opt{display:flex;align-items:center;gap:8px;min-height:32px;box-sizing:border-box;padding:4px 8px;border-radius:4px;font-size:var(--t-base);cursor:pointer}
 .settings-combo-opt[aria-selected=true],.settings-combo-opt:hover{background:var(--surface2)}
 .settings-combo-n{flex:none;max-width:70%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
