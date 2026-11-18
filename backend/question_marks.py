@@ -48,6 +48,7 @@ LINE_MAX = 160
 REPLY_VIA = (None, "", "slack", "token", "assistant")
 
 _OPEN = "SELECT * FROM question_marks WHERE cleared_at IS NULL ORDER BY created_at, id"
+_OPEN_ON_TASK = "SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id=? ORDER BY created_at, id"
 
 
 class Asking:
@@ -334,7 +335,29 @@ def unasked_reply(
 
 
 def on_task(conn: sqlite3.Connection, task_id: object) -> list[Row]:
-    return [m for m in open_rows(conn) if m["task_id"] and m["task_id"] == str(task_id)]
+    """The task's open ❓ its person can still answer, oldest first. A snapshot that already read every open ❓ (a pass
+    over many tasks) takes them from that list; reading one task reads only its own (question_marks_open_task), never
+    the company's: every open ❓ with its message, task and chat made each task page cost what the company's
+    questions did."""
+    from . import read_cache as _read_cache
+
+    read_cache = cast(Any, _read_cache)
+    tid = str(task_id or "")
+    if not tid:
+        return []
+    values = read_cache.cache(conn)
+    if values is not None and ("question_marks_open",) in values:
+        return [m for m in open_rows(conn) if m["task_id"] == tid]
+
+    def build() -> list[Row]:
+        rows = [dict(r) for r in conn.execute(_OPEN_ON_TASK, (tid,))]
+        if not rows:
+            return []
+        stored = H.prime_messages(conn, {m["message_id"] for m in rows})
+        chats = chat_rows(conn, {m["conversation_id"] for m in stored.values()})
+        return [m for m in rows if answerable(conn, m, chats)]
+
+    return read_cache.value(conn, ("question_marks_on_task", tid), build, shared=True)
 
 
 REPLIED_SQL = "SELECT task_id, COUNT(*) FROM question_marks WHERE cleared_message_id IS NOT NULL AND task_id <> '' GROUP BY task_id"

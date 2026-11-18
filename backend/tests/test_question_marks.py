@@ -129,6 +129,48 @@ def test_one_open_question_mark_per_bot_per_chat_and_the_message_carries_it(c, g
     assert H.message(c, second["message_id"])["refs"]["question"] == {"id": second["id"], "to": ANA}
 
 
+def test_one_tasks_question_marks_are_read_without_reading_the_companys(c, general):
+    """A task's read (GET /api/v2/tasks/{tid} through waiting_on) reads its own open ❓, not every open ❓ in the
+    company with their messages, chats and tasks: 400 marks elsewhere cost each read of one task about 30 statements
+    and 40 ms. The answer is the one the company-wide list gives for that task."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    others = [X.new_task(c, ANA, f"Other {k}", assignee=BUILDER)["id"] for k in range(3)]
+    mine = _ask(c, task_id)
+    for k, other in enumerate(others):
+        _ask(c, other, text=f"Which tone should note {k} take?")
+    seen = []
+    c.set_trace_callback(seen.append)
+    try:
+        found = Q.on_task(c, task_id)
+    finally:
+        c.set_trace_callback(None)
+    assert [m["id"] for m in found] == [mine["id"]]
+    assert not [s for s in seen if "question_marks WHERE cleared_at IS NULL ORDER BY" in s], seen
+    assert not [s for s in seen if "FROM tasks" in s and any(o in s for o in others)], seen
+    everyone = [m["id"] for m in Q.open_rows(c) if m["task_id"] == task_id]
+    assert everyone == [mine["id"]]
+    # Once a pass has read every open ❓ in this snapshot, a task's come from that list.
+    assert [m["id"] for m in Q.on_task(c, task_id)] == everyone
+    assert Q.on_task(c, others[0]) and Q.on_task(c, "") == []
+
+
+def test_a_list_over_many_tasks_reads_the_open_question_marks_once(c, general):
+    """Needs you works out every open task's waits in one snapshot (waiting_on.prime): the company's open ❓ are read
+    once for all of them, never once per task."""
+    tasks = [X.new_task(c, ANA, f"Write note {k}", assignee=BUILDER)["id"] for k in range(4)]
+    for k, task_id in enumerate(tasks):
+        _ask(c, task_id, text=f"Which tone should note {k} take?")
+    seen = []
+    c.set_trace_callback(seen.append)
+    try:
+        listed = [i for i in W.needs(c, ANA) if i["kind"] == "question"]
+    finally:
+        c.set_trace_callback(None)
+    assert sorted(i["task_id"] for i in listed) == sorted(tasks)
+    assert len([s for s in seen if "question_marks WHERE cleared_at IS NULL ORDER BY" in s]) == 1, seen
+    assert not [s for s in seen if "cleared_at IS NULL AND task_id=?" in s], seen
+
+
 @pytest.mark.parametrize("end", ["done", "closed", "merged", "deleted"])
 def test_the_task_ending_clears_it(c, general, end):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
