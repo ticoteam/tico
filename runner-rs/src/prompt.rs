@@ -655,7 +655,10 @@ fn parts(
         Part::Turn,
         match s(&message["id"]) {
             id if id.is_empty() => format!("Current message from {who}:\n{}", s(&message["body"])),
-            id => format!("Current message from {who} [{id}]:\n{}", s(&message["body"])),
+            id => format!(
+                "Current message from {who} [{id}]:\n{}",
+                s(&message["body"])
+            ),
         },
     );
     let refs = message["refs"].as_object().cloned().unwrap_or_default();

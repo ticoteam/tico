@@ -958,7 +958,10 @@ def wrote_lately(c, sender, receiver, before=None):
     """The latest message (id, created_at) the person `receiver` wrote to `sender`, to it or @mentioning it, in the
     last SOLICITED_DAYS, anywhere; None when there is none."""
     until = before or H.now()
-    since = (H.parse_ts(until) - timedelta(days=SOLICITED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    at = H.parse_ts(until)
+    if at is None:  # pragma: no cover - H.now() and the dry-run's timestamps always parse
+        return None
+    since = (at - timedelta(days=SOLICITED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     args = [receiver, since, until, sender]
     where = "m.sender_id=? AND m.created_at>=? AND m.created_at<? AND (m.recipient_id=?"
     if H._has_table(c, "message_mentions"):
