@@ -2,9 +2,6 @@
 
 import os
 import subprocess
-import sys
-
-import pytest
 from runner_support import safe_git
 
 
@@ -72,13 +69,11 @@ def _mirror(tmp_path, name='mirror "one".git'):
     return mirror
 
 
-@pytest.mark.skipif(
-    sys.platform != 'linux',
-    reason="macOS git serves a local upload-pack without the ownership check, so there is no refusal to get past",
-)
 def test_a_mirror_another_user_owns_is_cloned_and_fetched_with_the_trust_file(tmp_path):
-    """The bot user clones the supervisor's mirror (file://). Git's test switch makes every repository look owned by
-    someone else, and on Linux `-c safe.directory` alone is refused for the upload-pack git starts."""
+    """The bot user clones the supervisor's mirror (file://) and fetches from it, with the trust file, under git's
+    switch that makes every repository look owned by someone else. The git versions we run (CI's Linux git and macOS
+    git 2.50) do not refuse a local upload-pack without the trust file, so this checks only that the trust file keeps
+    the clone and the fetch working, not that it is what gets them past a refusal."""
     mirror = _mirror(tmp_path)
     env = {**safe_git.clean_environment(), 'GIT_TEST_ASSUME_DIFFERENT_OWNER': '1'}
     local = [
@@ -90,10 +85,6 @@ def test_a_mirror_another_user_owns_is_cloned_and_fetched_with_the_trust_file(tm
         '-c',
         'protocol.file.allow=always',
     ]
-    refused = subprocess.run(
-        [*local, 'clone', '-q', mirror.as_uri(), str(tmp_path / 'flag-only')], env=env, capture_output=True, text=True
-    )
-    assert 'dubious ownership' in refused.stderr, refused.stderr  # the premise: without the trust file git refuses
     trusted = safe_git.trusting(env, mirror)
     clone = tmp_path / 'clone'
     done = subprocess.run(
