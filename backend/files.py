@@ -2436,7 +2436,8 @@ class Files:
                 cache[task_id] = None
         return cache[task_id]
 
-    def view(self, c, who, row, caches):
+    def view(self, c, who, row, caches, page=None):
+        """One file as the Files rail lists it; `page` when the caller already knows whether it is a page."""
         version = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
@@ -2462,7 +2463,7 @@ class Files:
             "bot": row["bot_id"],
             "title": row["title"],
             "kind": row["kind"],
-            "library_kind": file_library.library_kind(row["kind"], self.is_page(c, row)),
+            "library_kind": file_library.library_kind(row["kind"], self.is_page(c, row) if page is None else page),
             "mime": row["mime"],
             "locator": row["locator"],
             "scope": row["scope"].partition(":")[0],

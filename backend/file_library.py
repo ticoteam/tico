@@ -400,8 +400,8 @@ class Library:
         return out
 
     def row_view(self, c, who, r, caches, known):
-        value = self.files.view(c, who, r, caches)
         page = r["page_cadence"] is not None
+        value = self.files.view(c, who, r, caches, page=page)
         value.update(
             kind_label=KINDS[library_kind(r["kind"], page)],
             library_kind=library_kind(r["kind"], page),
