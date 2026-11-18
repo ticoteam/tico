@@ -938,22 +938,47 @@ def opens(key):
 def enrolled(c, execution, runner_id, key):
     """Machine `key`'s runner is in: it becomes that machine's computer (a machine made again after its disk was
     deleted replaces the old one), and each bot set to run there is assigned to it now, or by the manager's next look
-    if it is busy."""
+    if it is busy. A computer that replaces one that is gone takes the plans the old one was given (`replaced`)."""
+    from . import model_subscriptions as MS
+
     current = row(c, key)
     old = current.get("runner_id")
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
+    gone = replaced(c, key, old, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
+    for source in gone:
+        MS.carry_over(c, source, runner_id)
     for bot in hosted(c, key):
         bind(c, execution, bot)
-    from . import model_subscriptions as MS
-
     for bot in hosted(c, key):  # a new computer, even while its bot's last turn is still out elsewhere
         chooser = (row(c, bot) or {}).get("changed_by") or ""
         if MS.may_grant(c, execution.auth, chooser):
             lend_plans(c, execution, bot, runner_id, chooser, new=True)
+
+
+def replaced(c, key, old, runner_id):
+    """The computers machine `key`'s new computer `runner_id` takes the place of, newest first: the one the machine
+    still names (`old`), and the ones the bots set to run there are still assigned to, when that computer is gone
+    (revoked: a replaced or deleted machine's, or one a person removed). Their plans follow the bots
+    (model_subscriptions.carry_over), so a Replace keeps every runtime the old machine signed in, a person's plans
+    included, and not only the ones the company would lend it now. A computer still in use keeps its plans to itself.
+    """
+    placed_on = []
+    for bot in hosted(c, key):
+        found = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        if found:
+            placed_on.append(found["runner_id"])
+    out = []
+    for source in dict.fromkeys([old, *placed_on]):
+        if not source or source == runner_id:
+            continue
+        gone = c.execute("SELECT revoked_at FROM runners WHERE id=?", (source,)).fetchone()
+        if gone and gone["revoked_at"]:
+            out.append(source)
+    return out
 
 
 def unplaced(c, bot):

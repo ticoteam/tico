@@ -351,15 +351,54 @@ def out_of_credit(text):
     return re.search(r'[("]' + OUT_OF_CREDIT + r'[")]', str(text or "")) is not None
 
 
+# A Cloudflare error page in place of the service's own answer (the Gateway at updates.tico.team, or a provider's API):
+# `{"title": "Error 502: Bad gateway", "cloudflare_error": true, "ray_id": ..}`, or its HTML page. Its boilerplate says
+# "the origin is overloaded or misconfigured" for every 502, and that word is not a busy model: on Tico Team (Nov 18)
+# it read as model capacity, so a check on a Tico model retried every two minutes as "usage_limited".
+_EDGE_RE = re.compile(
+    r'"cloudflare_error"\s*:\s*true|/cloudflare-5xx-errors/|\berror code 5\d\d\b[\s\S]*\bcloudflare\b', re.I
+)
+_EDGE_STATUS_RE = re.compile(r'"status"\s*:\s*(5\d\d)\b|\b(5\d\d)\b')
+_EDGE_TITLE_RE = re.compile(r'"title"\s*:\s*"(?:Error )?(?:5\d\d:\s*)?([^"]{1,60})"')
+_EDGE_RAY_RE = re.compile(r'"ray_id"\s*:\s*"([0-9a-f]{8,32})"|\bray id:?\s*(?:<[^>]*>\s*)*([0-9a-f]{8,32})\b', re.I)
+_EDGE_ZONE_RE = re.compile(r'"zone"\s*:\s*"([a-z0-9.-]{1,100})"', re.I)
+
+
+def edge_outage(text):
+    """Whether a model error is a Cloudflare 5xx page: the service behind it is down, not a login's limit."""
+    return _EDGE_RE.search(str(text or "")) is not None
+
+
+def edge_summary(text):
+    """A Cloudflare 5xx page in one line for Runs and logs, keeping its status, host and ray id (what Cloudflare and
+    Tico support look a failure up by), or '' when `text` is not one."""
+    text = str(text or "")
+    if not edge_outage(text):
+        return ""
+    found = _EDGE_STATUS_RE.search(text)
+    status = (found[1] or found[2]) if found else ""
+    title = _EDGE_TITLE_RE.search(text)
+    ray = _EDGE_RAY_RE.search(text)
+    zone = _EDGE_ZONE_RE.search(text)
+    words = (title[1].strip() if title else "") or "server error"
+    out = " ".join(p for p in (status, words) if p) + " from " + (zone[1] if zone else "Cloudflare")
+    ray_id = (ray[1] or ray[2]) if ray else ""
+    return out + (f" (Cloudflare ray {ray_id})" if ray_id else " (Cloudflare)")
+
+
 def run_code(text):
     """The Gateway's code a bot's model error ends with, `not_found` for a 404 from it, or ''. Only read for runs on a
-    Tico model."""
+    Tico model. A Cloudflare 5xx page (`edge_outage`) is the Gateway unavailable: an older runner sent it as it came."""
     text = str(text or "")
     named = [code for code in CODES if f"({code})" in text or f": {code})" in text]
     if named:
         return named[0]
     bare = [code for code in CODES if code in text]
-    return bare[0] if bare else NOT_FOUND if not_served(text) else ""
+    if bare:
+        return bare[0]
+    if edge_outage(text):
+        return UNAVAILABLE
+    return NOT_FOUND if not_served(text) else ""
 
 
 def run_status(code, text=""):
