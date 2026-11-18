@@ -146,7 +146,7 @@ def items(value: object, what: str, most: int = MAX_ITEMS) -> list[object]:
 def opt_items(value: object, what: str, most: int = MAX_ITEMS) -> list[object]:
     """A list that may be missing or empty (one of several lists where only all of them empty is wrong); otherwise
     checked as `items` checks it."""
-    if value is None or (isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and not value):
+    if value is None or value == [] or value == ():
         return []
     return items(value, what, most)
 
