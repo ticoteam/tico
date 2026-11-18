@@ -58,7 +58,7 @@ def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failu
             "published": "true" if published else "false",
             "dry_run": "" if "validated" in failures else str(dry_run).lower(),
         },
-        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes", "recorder-changes")},
+        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes")},
         "company-matrix": {"enabled": str(enabled).lower()},
     }
     results = {}
@@ -82,9 +82,7 @@ def test_release_build_and_carry_forward_schedules(published):
         "validated",
         "runner-changes",
         "desktop-changes",
-        "recorder-changes",
         "desktop-assets",
-        "recorder-assets",
         *([] if published else ["release"]),
     }
     assert _schedule(published=published, enabled=False)["companies"] == "skipped"
@@ -95,7 +93,7 @@ def test_a_prerelease_builds_the_generic_apps_and_no_company_app(ref):
     # A company's installed apps update from its own bucket's latest.json: a prerelease must never move it.
     results = _schedule(ref=ref)
     assert results["company-matrix"] == results["companies"] == "skipped"
-    assert {"desktop", "desktop-assets", "recorder", "recorder-assets", "macos", "macos-assets"} <= {
+    assert {"desktop", "desktop-assets", "macos", "macos-assets"} <= {
         name for name, result in results.items() if result == "success"
     }
 
@@ -117,8 +115,6 @@ def test_dry_run_and_failed_validation_never_start_optional_jobs():
         ("desktop-changes", {"desktop", "desktop-assets", "company-matrix", "companies"}),
         ("desktop", {"desktop-assets"}),
         ("company-matrix", {"companies"}),
-        ("recorder-changes", {"recorder", "recorder-assets"}),
-        ("recorder", {"recorder-assets"}),
     ],
 )
 def test_failed_prerequisites_block_dependents_even_with_outputs(failed, blocked):
@@ -180,7 +176,7 @@ def app_build_decision(tmp_path, monkeypatch):
     gh.chmod(0o755)
     monkeypatch.setenv("PATH", f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
 
-    def decide(kind, paths=(), *, force=False, assets="latest.json\nrecorder-latest.json"):
+    def decide(kind, paths=(), *, force=False, assets="latest.json"):
         git("checkout", "-qf", "--detach", "v1.0.0")
         for name in paths:
             path = repo / name
@@ -217,22 +213,6 @@ def app_build_decision(tmp_path, monkeypatch):
     ("kind", "paths"),
     [
         (
-            "recorder",
-            [
-                "recorder/tests/updates.cts",
-                "recorder/tests/nested/fixture.json",
-                "recorder/src/network_tests.rs",
-                "recorder/src/stream_tests.rs",
-                "recorder/src/app/tests.rs",
-                "recorder/bench/assist_cases.json",
-                "recorder/ui/preview/mock.ts",
-                "recorder/README.md",
-                "recorder/DEVELOPMENT.md",
-                "recorder/vendor/anarlog/README.md",
-                "recorder/ui/app/docs/guide.md",
-            ],
-        ),
-        (
             "desktop",
             [
                 "app/tests/update_hub.py",
@@ -255,25 +235,6 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
     ("kind", "paths"),
     [
         (
-            "recorder",
-            [
-                "recorder/CHANGES.md",
-                "recorder/src/app/recorder.rs",
-                "recorder/ui/app/app.ts",
-                "recorder/tauri.conf.json",
-                "recorder/icons/icon.icns",
-                "recorder/Cargo.lock",
-                "recorder/package-macos.sh",
-                "recorder/src/new_tests.rs",
-                "recorder/src/capture/tests.rs",
-                "recorder/build-ui.cjs",
-                "scripts/app_release.py",
-                ".github/workflows/recorder.yml",
-                "package.json",
-                "package-lock.json",
-            ],
-        ),
-        (
             "desktop",
             [
                 "app/src/main.rs",
@@ -292,16 +253,15 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
 )
 def test_shipping_changes_still_build_even_alongside_docs(app_build_decision, kind, paths):
     for path in paths:
-        assert app_build_decision(kind, ["recorder/README.md", "app/README.md", path]), path
+        assert app_build_decision(kind, ["app/README.md", path]), path
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("kind", ["desktop", "recorder"])
+@pytest.mark.parametrize("kind", ["desktop"])
 def test_unchanged_apps_build_when_forced_or_missing_previous_assets(app_build_decision, kind):
     assert not app_build_decision(kind)
     assert app_build_decision(kind, force=True)
-    other_manifest = "latest.json" if kind == "recorder" else "recorder-latest.json"
-    assert app_build_decision(kind, assets=other_manifest)
+    assert app_build_decision(kind, assets="other.json")
 
 
 # ---- The release train (train.yml), hotfixes (hotfix.yml) and the validations they dispatch (ci.yml) ----

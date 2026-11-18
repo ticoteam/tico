@@ -59,7 +59,7 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
 
 
 def test_the_v2_aliases_answer_what_the_old_paths_do(api):
-    """The runner hostname only routes /api/v2, so Tico Recorder's Send calls these; each answers as its old path does."""
+    """The runner hostname only routes /api/v2, so clients there call these; each answers as its old path does."""
     rid = record(api, {"title": "Old and new paths"})
     old_edit = api.post(f"/api/meetings/{rid}/edit", json={"title": "Via v1", "version": 1}, headers=headers())
     new_edit = api.post(f"/api/v2/meetings/{rid}/edit", json={"title": "Via v2", "version": 2}, headers=headers())

@@ -186,7 +186,6 @@ def test_a_commit_citing_a_ticket_number_that_is_no_pull_request_is_skipped():
     [
         ("app/main.swift", "app"),
         ("runner_support/x.py", "runner"),
-        ("recorder/src/lib.rs", "recorder"),
         ("templates/catalog/x.md", "templates"),
         (".github/workflows/train.yml", "ci"),
         ("README.md", "other"),

@@ -62,10 +62,8 @@ LIST_FILTERS = frozenset(
         "after",
     }
 )
-# Passed through and ignored. `type`: the Recorder's task picker sends `type=<task type>` from 0.5.181 (Nov 5, 2026)
-# until the build that stopped (recorder/src/task_links.rs `search_tasks`); installed copies keep sending it, so it is
-# accepted rather than refused. The list has no type filter, so it never narrowed the answer.
-_LIST_PASSED = frozenset({"on_behalf_of", "type"})
+# `on_behalf_of`, read by the BotOps middleware (above).
+_LIST_PASSED = frozenset({"on_behalf_of"})
 _FILTER_HINTS = {"assignee": "use owner= (who has it now)"}
 
 

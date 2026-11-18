@@ -1,19 +1,19 @@
-"""Who reads what the Recorder saves: the Team, or only the meeting's participants (owners too are held to it), and
-what is left in Tico when a live share is kept on the computer instead. Synthetic text only."""
+"""Who reads a saved meeting: the Team, or only the meeting's participants (owners too are held to it). Synthetic
+text only."""
 
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.media import import_meeting
-from backend.tests.helpers.recorder_audience import live_meeting, readable
+from backend.tests.helpers.participants_audience import live_meeting, readable
 
 
-def test_participants_only_is_read_by_the_recorder_and_not_by_the_company_owner(api):
-    # ana is the company owner; ben records.
+def test_participants_only_is_read_by_who_filed_it_and_not_by_the_company_owner(api):
+    # ana is the company owner; ben files it.
     rid = import_meeting(
         api, "ben-test", title="Comp review", private=True, audience="participants", participants=["cara@acme.example"]
     )["id"]
     assert readable(api, rid, "ben-test")
     assert not readable(api, rid, "ana-test")
-    # Named participants are not the audience: only the people the Recorder names are.
+    # Named participants are not the audience: only the people the live meeting had are.
     assert not readable(api, rid, "cara-test")
     assert rid not in {row["id"] for row in api.get("/api/meetings", headers=headers()).json()}
     team = import_meeting(api, "ben-test", title="Standup", private=False)["id"]
@@ -23,7 +23,7 @@ def test_participants_only_is_read_by_the_recorder_and_not_by_the_company_owner(
 def test_participants_only_cannot_be_widened_by_a_later_import(api):
     body = {
         "title": "Comp review",
-        "source": "tico-recorder",
+        "source": "granola",
         "external_id": "rec-1",
         "private": True,
         "audience": "participants",
@@ -82,25 +82,6 @@ def test_an_unknown_audience_is_refused_so_nothing_is_shared_wider(api):
     assert get(api, f"meetings/{rid}", token="ben-test")["review_state"] == "pending"
 
 
-def test_discard_ends_the_live_meeting_and_removes_what_was_said(api):
-    mid = live_meeting(api, added="cara")
-    assert api.post(f"/api/v2/live-meetings/{mid}/discard", json={}, headers=headers("cara-test")).status_code == 403
-    assert post(api, f"live-meetings/{mid}/discard", {}, token="ben-test") == {
-        "id": mid,
-        "state": "ended",
-        "discarded": True,
-    }
-    detail = get(api, f"live-meetings/{mid}", token="ben-test")
-    assert detail["state"] == "ended" and detail["chunks"] == [] and detail["chat"] == []
-    with api.app.state.store.read() as c:
-        for table in ("live_meeting_chunks", "live_meeting_chunk_versions", "live_meeting_chat"):
-            assert c.execute(f"SELECT count(*) FROM {table} WHERE meeting_id=?", (mid,)).fetchone()[0] == 0
-        events = [row[0] for row in c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id=?", (mid,))]
-    assert not any("Synthetic" in payload for payload in events)
-    # Discarding again is a no-op answer, not an error.
-    assert post(api, f"live-meetings/{mid}/discard", {}, token="ben-test")["discarded"] is True
-
-
 def test_once_sent_to_a_task_it_cannot_be_narrowed_but_can_be_widened(api):
     mid = live_meeting(api, visibility="team", joiner="cara")
     post(api, f"live-meetings/{mid}/control", {"action": "end"}, token="ben-test")
@@ -137,7 +118,7 @@ def test_a_participants_save_retried_for_the_team_widens(api):
     assert not readable(api, rid, "fay-test")
     post(api, f"meetings/{rid}/review", {"action": "approve", "private": False, "audience": "team"}, token="ben-test")
     assert readable(api, rid, "fay-test")
-    # An older Recorder's retry names no audience; private:false alone still means the Team.
+    # A retry that names no audience: private:false alone still means the Team.
     post(
         api,
         f"meetings/{rid}/review",

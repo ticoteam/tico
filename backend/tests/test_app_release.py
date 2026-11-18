@@ -120,47 +120,6 @@ def test_company_s3_publish_with_prefix_and_quiet_output(tmp_path, monkeypatch, 
     assert not calls
 
 
-def test_recorder_manifest_is_mac_only_and_named_for_the_recorder(tmp_path):
-    names = ["Tico-Recorder.app.tar.gz", "Tico-Recorder_0.2.0_universal.dmg", "Tico-Recorder.dmg"]
-    for name in names:
-        (tmp_path / name).write_bytes(b"bundle")
-    (tmp_path / "Tico-Recorder.app.tar.gz.sig").write_text("recorder-signature")
-    output = tmp_path / "recorder-latest.json"
-    subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts/app_release.py"),
-            "--github",
-            "--kind",
-            "recorder",
-            "--version",
-            "0.2.0",
-            "--tag",
-            "v0.2.0",
-            "--output",
-            str(output),
-            str(tmp_path),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    value = json.loads(output.read_text())
-    assert value["app_kind"] == "recorder"
-    assert set(value["platforms"]) == {"darwin-aarch64", "darwin-x86_64"}
-    assert value["platforms"]["darwin-x86_64"]["url"].endswith("/Tico-Recorder.app.tar.gz")
-    assert value["installers"]["mac"]["url"].startswith("https://github.com/ticoteam/tico/releases/download/v0.2.0/")
-    windows = tmp_path / "windows"
-    windows.mkdir()
-    (windows / "Tico Recorder-setup.exe").write_bytes(b"bundle")
-    (windows / "Tico Recorder-setup.exe.sig").write_text("windows-signature")
-    from scripts.app_release import main
-
-    with pytest.raises(SystemExit, match="Recorder releases need"):
-        main(
-            ["--github", "--kind", "recorder", "--version", "0.2.0", "--output", str(tmp_path / "x.json"), str(windows)]
-        )
-
-
 def test_a_new_version_drops_updates_signed_for_the_previous_one():
     mac = {
         "platforms": {"darwin-aarch64": {"file": "Tico.app.tar.gz", "bytes": 6, "signature": "mac-1.1.0"}},
@@ -180,41 +139,3 @@ def test_a_new_version_drops_updates_signed_for_the_previous_one():
     # A second publish of the same version (another platform's build) keeps what the first one brought.
     again = manifest("1.1.0", "https://hub", [], value)
     assert again["platforms"] == value["platforms"]
-
-
-def test_recorder_notes_come_from_the_newest_changes_section_once(tmp_path):
-    from scripts.app_release import changes_note, main
-
-    text = (
-        "# Tico Recorder changes\n\nIntro.\n\n## 0.5.181\n\n- Newest line.\nMore.\n\n"
-        "## 0.5.178\n\nClearer task linking and @me.\n"
-    )
-    assert changes_note(text) == "Newest line."
-    # The heading is only a label: what counts is whether the last shipped build already showed the line.
-    assert changes_note(text, shown="Built from abc1234") == "Newest line."
-    assert changes_note(text, shown="Newest line.") is None
-    assert changes_note("# Tico Recorder changes\n\n## 1.0\n\n### Fixed\n") is None
-    assert changes_note("no sections\n") is None
-    for name in ["Tico-Recorder.app.tar.gz", "Tico-Recorder.dmg"]:
-        (tmp_path / name).write_bytes(b"bundle")
-    (tmp_path / "Tico-Recorder.app.tar.gz.sig").write_text("sig")
-    changes = tmp_path / "CHANGES.md"
-    changes.write_text(text)
-    output = tmp_path / "recorder-latest.json"
-    base = [
-        "--github",
-        "--kind",
-        "recorder",
-        "--output",
-        str(output),
-        "--notes",
-        "Built from abc1234",
-        "--version",
-        "0.5.190",
-    ]
-    main([*base, "--changes", str(changes), "--shown", "Built from 2b9ab1e", str(tmp_path)])
-    assert json.loads(output.read_text())["notes"] == "Newest line."
-    main([*base, "--changes", str(changes), "--shown", "Newest line.", str(tmp_path)])
-    assert json.loads(output.read_text())["notes"] == "Built from abc1234"
-    main([*base, "--changes", str(tmp_path / "missing.md"), str(tmp_path)])
-    assert json.loads(output.read_text())["notes"] == "Built from abc1234"

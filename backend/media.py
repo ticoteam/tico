@@ -303,7 +303,7 @@ def may_write(who, record):
     """Only the company owner and the person the source belongs to may change or send it."""
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
-    # A meeting saved for its participants only is the recorder's, not the company owner's too.
+    # A meeting saved for its participants only is the filer's, not the company owner's too.
     owner = who.role == "owner" and effective_audience(record["metadata"]) != "participants"
     return owner or (
         who.role in ("human", "owner") and bool(who.email) and record["owner"].lower() == who.email.lower()

@@ -1,4 +1,4 @@
-"""Helpers that other tests share, moved out of test_recorder_audience.py so they import no test file."""
+"""Helpers that other tests share, moved out of test_meeting_participants_audience.py so they import no test file."""
 
 import json
 from backend.tests.helpers.api import headers, post

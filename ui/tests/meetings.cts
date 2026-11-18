@@ -12,7 +12,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
-const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cts');
 
 const ago = (hours: number) => new Date(Date.now() - hours * 36e5).toISOString();
 const meeting = (id: string, title: string, source: string, hours: number, extra: Record<string, unknown> = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),
@@ -343,8 +342,6 @@ async function shot(page: import('playwright').Page, name: string) {
         await context.close();
       }
     }
-    // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
-    await recorderLiveSharing(browser);
     console.log('meetings ok: 6 browser scenarios, including Sources, owner choice, permissions, and mixed-version setup');
   } finally {
     await browser.close();

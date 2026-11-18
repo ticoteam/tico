@@ -1,4 +1,4 @@
-"""Recorder proposals keep the meeting's words and recheck the target's task access."""
+"""Meeting task proposals keep the meeting's words and recheck the target's task access."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from backend import task_engine as E
 
 from backend.tests.helpers.meeting_items import record, add, items, change, headers  # noqa: F401
 from backend.tests.helpers.meeting_task_links import task, get
-from backend.tests.helpers.recorder_audience import live_meeting, readable
+from backend.tests.helpers.participants_audience import live_meeting, readable
 from backend.tests.helpers.api import post
 
 
@@ -77,32 +77,6 @@ def test_private_live_participants_survive_finalize_and_pending_stays_owner_only
     post(api, f'meetings/{rid}/review', {'action': 'approve', 'private': True}, 'ben-test')
     assert readable(api, rid, 'cara-test') and readable(api, rid, 'eve-test')
     assert not readable(api, rid, 'fay-test')
-
-
-def test_this_mac_deletes_pending_discards_live_content_and_keeps_sent_tasks(api):
-    mid = live_meeting(api, visibility='team')
-    post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')
-    rid = post(api, f'live-meetings/{mid}/finalize', {}, 'ben-test')['meeting_id']
-    target = task(api, requester='human:ben', owner='human:ben', private=False)
-    add(
-        api,
-        rid,
-        {'section': 'task', 'text': 'Already sent', 'status': 'pushed', 'result_ref': target['id']},
-        'ben-test',
-    )
-    with api.app.state.store.read() as c:
-        before = dict(c.execute('SELECT * FROM tasks WHERE id=?', (target['id'],)).fetchone())
-        assert c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=?', (rid,)).fetchone()
-    post(api, f'meetings/{rid}/delete', {}, 'ben-test')
-    post(api, f'live-meetings/{mid}/discard', {}, 'ben-test')
-    get(api, f'meetings/{rid}', 'ben-test', expected=404)
-    with api.app.state.store.read() as c:
-        assert c.execute('SELECT deleted_at FROM media_control WHERE meeting_id=?', (rid,)).fetchone()[0]
-        assert c.execute('SELECT discarded_at FROM live_meetings WHERE id=?', (mid,)).fetchone()[0]
-        for table in ('live_meeting_chunks', 'live_meeting_chunk_versions', 'live_meeting_chat'):
-            assert not c.execute(f'SELECT 1 FROM {table} WHERE meeting_id=?', (mid,)).fetchone()
-        assert not c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=?', (rid,)).fetchone()
-        assert dict(c.execute('SELECT * FROM tasks WHERE id=?', (target['id'],)).fetchone()) == before
 
 
 def test_link_proposals_keep_person_and_assistant_permissions_and_refuse_bot_tokens(api):

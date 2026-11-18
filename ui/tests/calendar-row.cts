@@ -61,7 +61,6 @@ async function open(browser: Browser, viewport: {width: number; height: number},
       const occ = (occurrences as {start: string; end: string}[]).filter(o => new Date(o.start).getTime() < to && new Date(o.end).getTime() > from);
       return json({from: q.get('from'), to: q.get('to'), calendars: [ANA], occurrences: occ});
     }
-    if (p === '/api/v2/calendar/settings') return json({record_on_join: true});
     return json(unrouted(p));
   });
   return {page, errors, reads, context};

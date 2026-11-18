@@ -1,13 +1,12 @@
 /* ui/app/thread-call.ts — Calls in a thread (docs/meet.md, docs/dev/meet-calls-contract.md): the phone button in the
    thread's header (a green pill with who is in it while a call is live), the call card a call posts in its thread, the
-   rail's green phone, and the two kinds of call. A Google Meet call opens Meet in a new tab (and the Tico Recorder on a
-   Mac that has it); a Tico Meet call is joined here, with one bar while in it (mute, share screen, add bot, leave).
+   rail's green phone, and the two kinds of call. A Google Meet call opens Meet in a new tab; a Tico Meet call is joined here, with one bar while in it (mute, share screen, add bot, leave).
    Tico Meet is audio and screen share only: the camera is never asked for. Its media client is LiveKit's
    (ui/vendor/livekit-client.umd.min.js, Apache-2.0), loaded on the first call. Ringing is ui/app/call-ring.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Someone in a call, as the call view lists them; `in_call` is what the status source (Google, a Recorder) says now.
+// Someone in a call, as the call view lists them; `in_call` is what the status source (Google) says now.
 interface CallPerson { actor: string; joined_at?: string | null; left_at?: string | null; removed_at?: string | null; in_call?: boolean | number; }
 // The server's call view (GET /v2/calls/{id}, list items, the start and join answers; a Start answer may wrap it in {call}).
 interface CallRecord {
@@ -15,7 +14,6 @@ interface CallRecord {
   thread_id?: string; provider?: string; meet_uri?: string | null; join_url?: string | null;
   live_count?: number; status_source?: string | null; seen_at?: string | null; started_at?: string | null; ended_at?: string | null;
   duration_s?: number | null; ring?: boolean; card_message_id?: string | null; transcript_message_id?: string | null;
-  recorder?: {source?: string | null; installed?: boolean} | null;
   participants?: CallPerson[];
 }
 interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; }
@@ -220,7 +218,7 @@ const CALL_VIEWS = new Map<string, CallRecord>();
 // Calls whose view could not be read (gone, or not the viewer's to read): their cards stay plain rather than asking again.
 const CALL_VIEW_MISSING = new Set<string>();
 const CALL_VIEW_READS = new Map<string, Promise<CallRecord | null>>();
-// A Google Meet call that nothing reports on (no Google status, no Recorder): Tico does not know who is in it, so it
+// A Google Meet call that nothing reports on (no Google status): Tico does not know who is in it, so it
 // shows no count and no faces, only the call. Opening it from Tico is not being in it.
 const callBlind = (c: CallRecord): boolean => c.provider === 'google_meet' && !c.status_source;
 // Who is in it now: the status source's count while there is one; a Tico Meet call has none, so it is who joined.
@@ -310,11 +308,10 @@ function callTabGo(tab: Window | null, url: string): void {
   if (tab && !tab.closed) { try { tab.location.href = url; return; } catch {} }
   window.open(url, '_blank', 'noopener');
 }
-// The Meet is made (or joined): its tab goes there, and the Recorder opens to record it.
+// The Meet is made (or joined): its tab goes there.
 function callMeetLanded(call: CallRecord, tab: Window | null, url: string): void {
   callViewKeep(call);
   callTabGo(tab, url || call.join_url || call.meet_uri || '');
-  callRecorderOpen(call);
 }
 // Join a Google Meet call: the server notes the open and answers its link (with the viewer's Google account).
 async function callMeetJoin(call: CallRecord): Promise<void> {
@@ -336,46 +333,16 @@ function callJoinAny(call: CallRecord): Promise<void> {
   return callJoin(tid, call, threadTitle(threadsRow(tid)) || call.title || 'Call').catch(e => callNoted(tid, e));
 }
 
-// ----------------------------------------------------------------- the Recorder
-// A Mac, and not an iPad asking for the desktop site: where Tico Recorder runs. Also the calendar's Join (calendar-row.ts).
-function recorderMac(): boolean {
-  const ua = (navigator as Navigator & {userAgentData?: {platform?: string}}).userAgentData;
-  if (ua?.platform) return ua.platform === 'macOS';
-  return /Mac/.test(navigator.platform || '') && !(navigator.maxTouchPoints > 1);
-}
-// Starting or joining a Google Meet call on a Mac opens the Tico Recorder on it, to record it into the call. The desktop
-// app opens it itself (`recordCall`, no browser prompt; it answers false when no Recorder is installed); a browser follows
-// the Recorder's link without leaving the page. An app without `recordCall` opens nothing: its `openRecorder` only opens
-// the Recorder on the org.
-function callRecorderOpen(call: CallRecord): void {
-  if (call.provider !== 'google_meet' || !call.id) return;
-  if (window.ticoNative) {
-    if (nativeHas('recordCall')) try { void Promise.resolve(nativeHandler('recordCall')?.postMessage({call: call.id})).catch(() => {}); } catch {}
-    return;
-  }
-  if (!call.recorder?.installed || !recorderMac()) return;
-  recorderLinkOpen(`tico-recorder://record?server=${encodeURIComponent(location.origin)}&call=${encodeURIComponent(call.id)}`, 'call-recorder-link');
-}
-// Follows a `tico-recorder://record` link without leaving the page (a hidden frame, gone after 3 s); with no Recorder
-// installed nothing happens. The Recorder checks the link with the org before it records anything.
-function recorderLinkOpen(link: string, cls: string): void {
-  const frame = document.createElement('iframe');
-  frame.hidden = true; frame.className = cls; frame.src = link;
-  document.body.append(frame);
-  setTimeout(() => frame.remove(), 3000);
-}
-
 // ----------------------------------------------------------------- the card
 // A call's card in its thread (a message with refs.call.card): live, the phone, who is in it, how long, Join, and End for
 // whoever started a Google Meet; ended, how long it was and its transcript, or the missed mark for a Google Meet that
-// Google or a Recorder watched and saw nobody in. The red dot says a Recorder is recording it. A Google Meet nothing reports on shows only the call.
+// Google watched and saw nobody in. A Google Meet nothing reports on shows only the call.
 function callCardHTML(m: ThvMessage): string {
   const id = String(m.refs?.call?.id || '');
   const v = id ? CALL_VIEWS.get(id) : undefined;
   if (id && !v && !CALL_VIEW_MISSING.has(id)) void callViewRead(id);
   const head = (cls: string, svg = CALL_SVG, label = '') => `<span class="call-card-ic${cls}"${label ? ` title="${label}" aria-label="${label}" role="img"` : ''}>${svg}</span><b class="call-card-t">Call</b>`;
   if (!v) return `<div class="call-card" data-call-card="${esc(id)}">${head('')}</div>`;
-  const rec = v.recorder?.source ? '<span class="call-rec" title="Recording" aria-label="Recording"></span>' : '';
   if (v.state === 'live') {
     const blind = callBlind(v), faces = callFaces(v), since = blind ? '' : v.seen_at || v.started_at || '';
     const end = v.provider === 'google_meet' && v.connector && v.connector === myActor()
@@ -383,10 +350,10 @@ function callCardHTML(m: ThvMessage): string {
     if (since) callTick();
     return `<div class="call-card on" data-call-card="${esc(id)}">${head(' on')}${
       faces.length ? `<span class="call-card-ppl">${faces.slice(0, 4).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 20)}</span>`).join('')}</span>` : ''}${
-      since ? `<span class="call-card-n muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${rec}
+      since ? `<span class="call-card-n muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}
       <span class="spacer"></span>${end}<button type="button" class="primary small call-card-join" data-call-join="${esc(id)}">Join</button></div>`;
   }
-  // Missed only when something watched the call (Google or a Recorder) and saw nobody; a call nothing watched just ended.
+  // Missed only when something watched the call (Google) and saw nobody; a call nothing watched just ended.
   const missed = v.provider === 'google_meet' && v.duration_s == null && !!v.status_source;
   const len = callLength(v.duration_s);
   const tid = v.thread_id || m.thread_id || '';

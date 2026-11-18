@@ -9,13 +9,13 @@
 # gate: its plan goes one level further (two, at most nineteen Python VMs) and keeps every other job's condition. A fork's
 # pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
-# a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
+# a failure shows before the change is enqueued: the Rust lint, desktop and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
 # no VM, on a pull request and in a group alike. The timing receipt, flake artifact and merge commit checks are
 # queue-only (a pull request's own static checks and types jobs run the same list on its own head).
 # A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
 # the group's merged change reaches within two levels (release validation runs the rest), and the same Rust lint,
-# desktop, recorder and Caddy jobs. The group's base is the head of the group
+# desktop and Caddy jobs. The group's base is the head of the group
 # queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
 # ahead of it. The static checks and types jobs run on the pull request only; the group's merge commit checks job runs every
 # static check again on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), beside the plan and the
@@ -69,7 +69,6 @@ jobs:
       caddy: ${{ steps.plan.outputs.caddy }}
       rust_lint: ${{ steps.plan.outputs.rust_lint }}
       desktop: ${{ steps.plan.outputs.desktop }}
-      recorder: ${{ steps.plan.outputs.recorder }}
     steps:
       - id: checkout_first
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -283,7 +282,7 @@ jobs:
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck), workflows (actionlint), and shared gates
     # (scripts/gates.sh: gate scripts and ast-grep rules with fixtures). Seconds each
     # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too, and
-    # its Node counterpart for scripts/ and recorder/ (scripts/check_node_types.py).
+    # its Node counterpart for scripts/ (scripts/check_node_types.py).
     name: static checks
     if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
@@ -344,7 +343,7 @@ jobs:
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
       - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
-      - name: Node types (the scripts under scripts/ and recorder/, and the Recorder window, type-check strictly, no baseline)
+      - name: Node types (the scripts under scripts/ type-check strictly, no baseline)
         run: python3 scripts/check_node_types.py
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
@@ -553,54 +552,6 @@ jobs:
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: cargo +1.92.0 test --locked
 
-  recorder:
-    # The Rust crate with the desktop feature (the window, the updater), on macOS: it links the system frameworks.
-    # Merge queue groups, and a ready pull request from this repository, when the plan sees a change under recorder/.
-    name: recorder tests
-    needs: plan
-    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.recorder == 'true' }}
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - id: checkout_first
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-        timeout-minutes: 3
-        continue-on-error: true
-      - if: ${{ steps.checkout_first.outcome == 'failure' }}
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-        timeout-minutes: 3
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: recorder
-          shared-key: pr-recorder
-      - name: Rust 1.92.0 for the format and lint step (the version scripts/rust_checks.sh pins)
-        run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24.22.3'
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: The window's scripts (TypeScript, stripped into recorder/dist, which the desktop build embeds)
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          node recorder/build-ui.cjs
-      - name: Format and lint, with the desktop and cli features
-        working-directory: recorder
-        run: |
-          cargo +1.92.0 fmt --check
-          cargo +1.92.0 clippy --locked --all-targets --features desktop,cli -- -D warnings
-      - name: Tests with the desktop feature
-        working-directory: recorder
-        run: cargo test --locked --features desktop,cli
-
   caddy-linux:
     # Merge queue groups, and a ready pull request from this repository, when the plan selects the Caddy image.
     needs: plan
@@ -694,7 +645,7 @@ jobs:
     # Merge queue groups only. A failed tests leg cancels the run, and a canceled run ends here: a final job
     # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    needs: [plan, tests, caddy-linux, static, types, merge-checks, rust-lint, desktop-app, recorder]
+    needs: [plan, tests, caddy-linux, static, types, merge-checks, rust-lint, desktop-app]
     runs-on: ubuntu-24.04
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
@@ -754,10 +705,10 @@ jobs:
   checks:
     # The one required check, on every pull request to main and on the merge queue. It fails when a job it needs failed or
     # was cancelled. A skipped job passes: a change that does not reach a job skips it, a fork's pull request skips the
-    # tests and the Rust, desktop, recorder and Caddy jobs, and a draft pull request skips every job.
+    # tests and the Rust, desktop and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, types, merge-checks, tests, rust-lint, desktop-app, recorder, caddy-linux]
+    needs: [plan, static, types, merge-checks, tests, rust-lint, desktop-app, caddy-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -770,7 +721,6 @@ jobs:
           TESTS: ${{ needs.tests.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
-          RECORDER: ${{ needs.recorder.result }}
           CADDY: ${{ needs.caddy-linux.result }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -790,7 +740,6 @@ jobs:
           check tests "$TESTS"
           check rust-lint "$RUST_LINT"
           check desktop-app "$DESKTOP_APP"
-          check recorder "$RECORDER"
           check caddy-linux "$CADDY"
           # A failed leg cancels the whole run, itself included, so its job reads "cancelled". Name the step that
           # really failed, or say that nothing did (cancelled from outside: a superseded queue group, or by hand).

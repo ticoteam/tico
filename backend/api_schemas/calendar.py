@@ -69,7 +69,6 @@ SCHEMAS.update(
                 "work_starts": "s",
                 "work_ends": "s",
                 "work_days": "s",
-                "record_on_join": "b",
             }
         ),
     }
