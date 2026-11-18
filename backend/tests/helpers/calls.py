@@ -38,6 +38,7 @@ class FakeMedia:
     """A stand-in for LiveKit: rooms are sets of identities, and the recorder is a callback the test feeds."""
 
     url = "wss://meet.acme.example"
+    speech_frames = staticmethod(call_media.speech_frames)
 
     def __init__(self):
         self.rooms, self.removed, self.recorders, self.ended = {}, [], {}, []

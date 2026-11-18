@@ -147,7 +147,7 @@ A Google Meet call still opens Meet in a tab of its own.
    screen's sound). Each speaker's audio is cut after about 450 ms of quiet. A fragment with less than 600 ms of speech
    gets 700 ms of quiet so the speaker has more time to continue. A clip keeps 200 ms before the first loud frame and
    after the last, and is cut at 60 seconds when nobody pauses. A clip needs at least 200 ms of speech.
-   If microphone frames stop coming, a timer on the recorder's loop flushes the clip after 450 ms. The recorder flushes
+   If microphone frames stop coming, the recorder's timer uses the same pause threshold. The recorder flushes
    immediately when the track ends. Each clip goes to the Gateway's speech-to-text (`tico-transcribe-1.1`; when the
    Gateway answers 400 that it does not know that model, the call falls back once to `elevenlabs/scribe-v2` and logs
    it). Clips are transcribed on workers, so the recorder never waits on the Gateway, and are stored in the order they

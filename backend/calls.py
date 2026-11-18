@@ -64,7 +64,6 @@ from .api_contract import api_v2
 log = logging.getLogger("tico.calls")
 
 ROOM_PREFIX = "tico-call-"
-IDLE_SECONDS = call_media.QUIET_SECONDS  # a person who stopped sending audio this long has what they said sent
 TRANSCRIPT_BYTES = 12_000
 LIST_LIMIT = 50
 PARTICIPANT_LIMIT = 200
@@ -1433,7 +1432,7 @@ class Calls:
 
     def _audio_for(self, call_id):
         def on_audio(identity, pcm, start_ms):
-            self.ingest(call_id, identity, pcm, start_ms)
+            return self.ingest(call_id, identity, pcm, start_ms)
 
         return on_audio
 
@@ -1455,23 +1454,23 @@ class Calls:
             segmenter = self.buffers.get(key)
             if segmenter is None:
                 segmenter = self.buffers[key] = call_voice.Segmenter()
-            segmenter.at = time.monotonic()
+            segmenter.at = self.voice.clock()
             was = segmenter.speaking
             clips = segmenter.feed(pcm, start_ms)
             for start, clip in clips:
                 self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
             if was and not segmenter.speaking and not clips:
                 self._kick(call_id)  # a cough, not speech: a clip it held back may be stored now
+            return segmenter.idle_seconds()
 
     def flush(self, call_id=None, identity=None, *, idle=False):
-        """Send the speech that is waiting: all of it for the call (or every call, or one speaker of the call), or only a
-        speaker's whose audio stopped coming IDLE_SECONDS ago (muted, or left mid-sentence)."""
-        now = time.monotonic()
+        """Send waiting speech, or with idle=True only speech whose pause has reached its threshold."""
+        now = self.voice.clock()
         with self.lock:
             for key, segmenter in list(self.buffers.items()):
                 if call_id is not None and key[0] != call_id or identity is not None and key[1] != identity:
                     continue
-                if idle and now - segmenter.at < IDLE_SECONDS:
+                if idle and now - segmenter.at < segmenter.idle_seconds():
                     continue
                 was = segmenter.speaking
                 clip = segmenter.flush()

@@ -2,8 +2,9 @@
 and when, the bots' spoken replies, End, presence and the bot limit. LiveKit and the Gateway are fakes (FakeMedia, the
 meet fixture), and every name is synthetic (Acme, acme.example)."""
 
-import logging
+import asyncio
 import json
+import logging
 import threading
 from array import array
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ import pytest
 from backend import call_media, call_voice, calls, live_meetings, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, runner
-from backend.tests.helpers.call_media import wait_until
+from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
 from backend.tests.helpers.calls import (
     PCM_EIGHT_SECONDS,
     PCM_ONE_SECOND,
@@ -642,8 +643,66 @@ def test_a_speaker_whose_audio_stops_has_what_they_said_sent_without_the_sweep(m
     machine, media = meet.app.state.calls, meet.app.state.call_media
     machine.ingest(call["id"], "human:ana", PCM_ONE_SECOND * 2, 0)  # then muted: no pause is ever heard
     assert machine.settle() and _chunks(meet, call["meeting_id"]) == []
-    media.quiet[call["id"]]("human:ana")  # the media loop's timer, QUIET_SECONDS after their last frame
+    media.quiet[call["id"]]("human:ana")  # the media loop's timer after their last frame
     assert machine.settle() and [chunk["text"] for chunk in _chunks(meet, call["meeting_id"])] == [SYNTHETIC_SPEECH]
+
+
+@pytest.mark.parametrize("end", ["timer", "sweep", "track"])
+def test_missing_mic_packets_give_a_fragment_its_full_pause(meet, fake_rtc, end):
+    call = start_call(meet, thread(meet), speak_replies=False)
+    machine, fake = meet.app.state.calls, meet.app.state.call_media
+    call_id, meeting_id, identity = call["id"], call["meeting_id"], "human:ana"
+    now = [1000.0]
+    machine.voice.clock = lambda: now[0]
+    on_audio, on_quiet = fake.recorders[call_id], fake.quiet[call_id]
+    fragment = ms(300, SPEECH)
+
+    if end == "sweep":
+        on_audio(identity, fragment, 0)
+        now[0] += 0.5
+        machine.flush(idle=True)
+        assert machine.settle() and _chunks(meet, meeting_id) == []
+        now[0] += 0.201
+        machine.flush(idle=True)
+    else:
+        heard, flushed = threading.Event(), threading.Event()
+
+        def feed(*args):
+            delay = on_audio(*args)
+            heard.set()
+            return delay
+
+        def flush(who):
+            on_quiet(who)
+            flushed.set()
+
+        live_media = call_media.LiveKitMedia(CONFIG)
+        live_media.start_recorder(call_id, "tico-call-test", feed, flush)
+        loop = live_media.loop
+        loop.time = lambda: now[0]
+        track = fake_rtc.hear(loop, call_media.RECORDER_PREFIX + call_id, identity, [fragment], held=True)
+        release = track.release
+
+        async def advance(at):
+            now[0] = at
+            marker = loop.create_future()
+            loop.call_at(at, marker.set_result, None)
+            await marker
+
+        try:
+            assert heard.wait(5), "the recorder did not receive the microphone fragment"
+            asyncio.run_coroutine_threadsafe(advance(1000.5), loop).result(5)
+            assert not flushed.is_set()
+            if end == "track":
+                release.set()
+            else:
+                asyncio.run_coroutine_threadsafe(advance(1000.701), loop).result(5)
+            assert flushed.wait(5), "the recorder did not flush the microphone fragment"
+        finally:
+            release.set()
+            live_media.stop_recorder(call_id)
+
+    assert machine.settle() and [chunk["text"] for chunk in _chunks(meet, meeting_id)] == [SYNTHETIC_SPEECH]
 
 
 # --- two bots, the voice cap and the ticker

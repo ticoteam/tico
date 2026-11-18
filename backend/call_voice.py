@@ -112,6 +112,12 @@ class Segmenter:
     def speaking(self) -> bool:
         return self.pcm is not None
 
+    def _pause_ms(self) -> int:
+        return FRAGMENT_SILENCE_MS if self.speaking and self.voiced < FRAGMENT_SPEECH_MS else SILENCE_MS
+
+    def idle_seconds(self) -> float:
+        return (self._pause_ms() - self.quiet) / 1000
+
     def feed(self, pcm: bytes, start_ms: int) -> list[tuple[int, bytes]]:
         """Take one piece of speech; returns the utterances it ended, as (start_ms, pcm)."""
         data = self.rest + pcm
@@ -143,8 +149,7 @@ class Segmenter:
                 self.voiced, self.quiet = self.voiced + FRAME_MS, 0
             else:
                 self.quiet += FRAME_MS
-        pause = FRAGMENT_SILENCE_MS if self.voiced < FRAGMENT_SPEECH_MS else SILENCE_MS
-        if self.quiet >= pause or len(self.pcm) >= QUESTION_MAX_MS * BYTES_PER_MS:
+        if self.quiet >= self._pause_ms() or len(self.pcm) >= QUESTION_MAX_MS * BYTES_PER_MS:
             return self._take()
         return None
 
@@ -629,13 +634,15 @@ class Voice:
                 if timing is not None:
                     timing["tts_chunk"] = self.clock()
 
-            async def frames() -> AsyncGenerator[tuple[int, bytes]]:
-                nonlocal why
+            def request_started() -> None:
                 if timing is not None:
                     timing["tts_requested"] = self.clock()
+
+            async def frames() -> AsyncGenerator[tuple[int, bytes]]:
+                nonlocal why
                 try:
-                    audio: AsyncGenerator[tuple[int, bytes]] = call_media.speech_frames(
-                        base, key, sentences_to_say, name, first_chunk
+                    audio: AsyncGenerator[tuple[int, bytes]] = media.speech_frames(
+                        base, key, sentences_to_say, name, first_chunk, request_started=request_started
                     )
                     async with aclosing(audio):
                         async for frame in audio:

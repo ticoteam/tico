@@ -28,8 +28,9 @@ import urllib.error
 import urllib.request
 import wave
 from array import array
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 
 import httpx
 
@@ -56,7 +57,6 @@ SPEECH_TIMEOUT = 15  # one sentence's speech from the Gateway
 SPEECH_CHARS = 4000  # the Gateway's limit for one request
 VOICES_TTL_SECONDS = 3600  # the Gateway's voice list, kept this long
 END_PAUSE_MS = 450
-QUIET_SECONDS = END_PAUSE_MS / 1000  # a speaker whose audio stopped coming this long has what they said sent
 SPEECH_TRANSPORT = None  # tests supply the Gateway at the HTTP boundary
 
 
@@ -211,9 +211,9 @@ def _ws_url(url):
 class Recorder:
     """The server's audio participant in one call's room. Its frames arrive on the media loop, so `on_audio` must not
     block: backend/calls.py hands each clip to a worker. `on_quiet(identity)`, when given, is called on the media loop
-    once a speaker's audio has stopped coming for QUIET_SECONDS (muted, left), so what they said is sent without waiting
-    for the sweep. It also speaks: `play` sends 48 kHz mono speech on its microphone track, and `hush` stops whatever is
-    playing at once."""
+    when a speaker's audio stops coming (muted, left), so what they said is sent without waiting for the sweep.
+    `on_audio` can return the number of seconds to wait for missing audio. The recorder also plays 48 kHz mono speech
+    on its microphone track, and `hush` drops the queued audio."""
 
     def __init__(self, sdk, loop, url, token, on_audio, on_quiet=None):
         self.sdk, self.loop, self.url, self.token, self.on_audio = sdk, loop, url, token, on_audio
@@ -222,7 +222,10 @@ class Recorder:
         self.room = None
         self.source = None  # the voice track's audio source, once published
         self.hushed = 0  # bumped by hush: a playback that started before it stops
+        self.cleared = 0  # the last hush generation applied to the native queue
         self.streams = {}  # media-loop playback tasks and their hush counts
+        self.playback = asyncio.Lock()
+        self.capturing = None
         self.joined_at = None
         self.lost = self.closed = False
 
@@ -265,23 +268,23 @@ class Recorder:
                     break
                 if base is None:
                     base = int((time.monotonic() - self.joined_at) * 1000)
-                self.on_audio(identity, bytes(event.frame.data), base + heard * 1000 // SAMPLE_RATE)
+                delay = self.on_audio(identity, bytes(event.frame.data), base + heard * 1000 // SAMPLE_RATE)
                 heard += event.frame.samples_per_channel
-                self._arm(identity)
+                self._arm(identity, delay if delay is not None else END_PAUSE_MS / 1000)
         except Exception:  # noqa: BLE001 - one speaker's stream failing must not end the recording
             log.warning("The call recorder stopped hearing one speaker", exc_info=True)
         finally:
             self._went_quiet(identity)  # their track ended (they left): what they said is sent now
             await stream.aclose()
 
-    def _arm(self, identity):
+    def _arm(self, identity, delay):
         """Start (again) the timer that says a speaker went quiet: each frame they send pushes it back."""
         if self.on_quiet is None:
             return
         handle = self.quiet.pop(identity, None)
         if handle is not None:
             handle.cancel()
-        self.quiet[identity] = self.loop.call_later(QUIET_SECONDS, self._went_quiet, identity)
+        self.quiet[identity] = self.loop.call_later(delay, self._went_quiet, identity)
 
     def _went_quiet(self, identity):
         handle = self.quiet.pop(identity, None)
@@ -303,85 +306,88 @@ class Recorder:
         first frame sent. Returns the milliseconds sent: less than the whole when `hush` stopped it. `mark` is the hush
         count the caller read when it decided the speech may play (LiveKitMedia.mark): a hush since then, however soon,
         means none of it plays. Blocks the caller, never the media loop."""
-        if self.source is None or not self.alive():
-            return 0
         generation = self.hushed if mark is None else mark
-        future = asyncio.run_coroutine_threadsafe(self._play(pcm, generation, started), self.loop)
-        try:
-            return future.result(timeout)
-        except Exception:  # noqa: BLE001 - a playback that failed or overran is cut; the text is in the thread
-            future.cancel()
-            self.hush()
-            log.warning("A bot's speech stopped playing in a call", exc_info=True)
-            return 0
-
-    async def _play(self, pcm, generation, started):
         step = VOICE_FRAME_BYTES
-        sent, source = 0, self.source
-        if source is None:
-            return 0
-        for at in range(0, len(pcm), step):
-            if self.hushed != generation or self.closed:
-                break
-            chunk = pcm[at : at + step]
-            if len(chunk) < step:
-                chunk = chunk + bytes(step - len(chunk))
-            await source.capture_frame(self.sdk.AudioFrame(chunk, VOICE_RATE, 1, step // 2))
-            if not sent and started is not None:
-                started()
-            sent += VOICE_FRAME_MS
-        if self.hushed == generation and not self.closed:
-            await source.wait_for_playout()
+
+        async def frames():
+            for at in range(0, len(pcm), step):
+                yield 0, pcm[at : at + step].ljust(step, b"\0")
+
+        budget = ((len(pcm) + step - 1) // step) * VOICE_FRAME_MS
+        sent, _ = self.play_stream(
+            frames(), generation, budget, lambda _: True, lambda _: started() if started else None, timeout=timeout
+        )
         return sent
 
-    def play_stream(self, frames, generation, budget, before, started):
+    def play_stream(self, frames, generation, budget, before, started, *, timeout=120):
         """Play indexed 48 kHz frames as they arrive. Return (milliseconds sent, hit the call's cap)."""
+        if self.source is None or not self.alive():
+            return 0, False
+        usage = _PlaybackUsage()
         future = asyncio.run_coroutine_threadsafe(
-            self._play_stream(frames, generation, budget, before, started), self.loop
+            self._play_stream(frames, generation, budget, before, started, usage), self.loop
         )
         try:
-            return future.result(120)
-        except Exception:  # noqa: BLE001 - a playback that failed or overran is cut; the text is in the thread
-            future.cancel()
-            self.hush()
+            return future.result(timeout)
+        except TimeoutError:
+            if self.hushed == generation:
+                self.hush()
             log.warning("A bot's speech stopped streaming in a call", exc_info=True)
-            return 0, False
+            return usage.sent, False
 
-    async def _play_stream(self, frames, generation, budget, before, started):
-        source = self.source
-        if source is None or self.hushed != generation or not self.alive():
-            return 0, False
+    async def _play_stream(self, frames, generation, budget, before, started, usage):
         task = asyncio.current_task()
         assert task is not None
         self.streams[task] = generation
-        sent, current, capped = 0, None, False
         try:
-            async with aclosing(frames):
-                async for index, frame in frames:
-                    if self.hushed != generation:
-                        break
-                    if sent + VOICE_FRAME_MS > budget:
-                        capped = True
-                        break
-                    first = index != current
-                    if first:
-                        if current is not None:
-                            await source.wait_for_playout()
-                        if not await asyncio.to_thread(before, index) or self.hushed != generation:
+            async with self.playback:
+                source = self.source
+                current, capped = None, False
+                async with aclosing(frames):
+                    if source is None or self.hushed != generation or not self.alive():
+                        return 0, False
+                    self._clear_hush()
+                    while self.hushed == generation:
+                        if usage.sent + VOICE_FRAME_MS > budget:
+                            capped = True
                             break
-                        current = index
-                    await source.capture_frame(self.sdk.AudioFrame(frame, VOICE_RATE, 1, len(frame) // 2))
-                    sent += VOICE_FRAME_MS
-                    if first and self.hushed == generation:
-                        started(index)
-            if self.hushed == generation:
-                await source.wait_for_playout()
+                        item = await anext(frames, None)
+                        if item is None or self.hushed != generation:
+                            break
+                        index, frame = item
+                        first = index != current
+                        if first:
+                            if current is not None:
+                                await source.wait_for_playout()
+                            if not await asyncio.to_thread(before, index) or self.hushed != generation:
+                                break
+                            current = index
+                        self.capturing = task
+                        try:
+                            await source.capture_frame(self.sdk.AudioFrame(frame, VOICE_RATE, 1, len(frame) // 2))
+                            usage.sent += VOICE_FRAME_MS
+                        finally:
+                            self.capturing = None
+                            hush = self.hushed
+                            if hush != generation:
+                                # The native capture can enqueue a frame after the first clear.
+                                source.clear_queue()
+                                self.cleared = hush
+                        if first and self.hushed == generation:
+                            started(index)
+                if self.hushed == generation:
+                    await source.wait_for_playout()
+                return usage.sent, capped
         except asyncio.CancelledError:
             if self.hushed == generation:
                 raise
+        except Exception:  # noqa: BLE001 - a playback failure cuts the audio but still charges the submitted frames
+            if self.hushed == generation:
+                self.hush()
+            log.warning("A bot's speech stopped streaming in a call", exc_info=True)
         finally:
             self.streams.pop(task)
-        return sent, capped
+        return usage.sent, False
 
     def hush(self):
         """Stop the voice at once: what is queued is dropped and a playback under way stops at its next frame."""
@@ -390,11 +396,17 @@ class Recorder:
             self.loop.call_soon_threadsafe(self._hush, self.hushed)
 
     def _hush(self, generation):
-        if self.source is not None:
-            self.source.clear_queue()
+        self._clear_hush()
         for task, mark in self.streams.items():
-            if mark < generation:
+            # LiveKit owns the frame pointer until its async capture callback completes.
+            if mark < generation and task is not self.capturing and not task.cancelling():
                 task.cancel()
+
+    def _clear_hush(self):
+        generation = self.hushed
+        if self.source is not None and self.cleared != generation:
+            self.source.clear_queue()
+            self.cleared = generation
 
     def close(self):
         self.hush()
@@ -405,6 +417,11 @@ class Recorder:
             asyncio.run_coroutine_threadsafe(self.room.disconnect(), self.loop).result(CONNECT_TIMEOUT)
         except Exception:  # noqa: BLE001 - leaving the room is best effort; the call is over either way
             log.warning("The call recorder did not leave its room cleanly", exc_info=True)
+
+
+@dataclass
+class _PlaybackUsage:
+    sent: int = 0
 
 
 class LiveKitMedia:
@@ -418,6 +435,7 @@ class LiveKitMedia:
         self.lock = threading.Lock()  # guards `recorders` and the media loop
         self.starting = threading.Lock()  # one recorder joins at a time, so a call never has two
         self.loop = None
+        self.speech_clients = _SpeechClients()
 
     @property
     def url(self):
@@ -525,6 +543,11 @@ class LiveKitMedia:
             return 0, False
         return recorder.play_stream(frames, mark[1], budget, before, started)
 
+    def speech_frames(self, base, key, sentences, voice, first_chunk, *, request_started):
+        return speech_frames(
+            base, key, sentences, voice, first_chunk, request_started=request_started, clients=self.speech_clients
+        )
+
     def hush(self, call_id):
         recorder = self.recorders.get(call_id)
         if recorder is not None:
@@ -612,7 +635,41 @@ def resample(pcm, rate, target):
     return out.tobytes()
 
 
-async def speech_frames(base, key, sentences, voice, first_chunk):
+def _new_speech_client(trust_env, transport=None):
+    return httpx.AsyncClient(
+        timeout=SPEECH_TIMEOUT,
+        trust_env=trust_env,
+        transport=transport,
+        # A connection pool can serve successive Gateway keys.
+        cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=())),
+    )
+
+
+class _SpeechClients:
+    """The process-lifetime media loop owns one connection pool for each proxy policy."""
+
+    def __init__(self):
+        self.clients = {}
+        self.lock = asyncio.Lock()
+
+    async def get(self, trust_env):
+        async with self.lock:
+            if trust_env not in self.clients:
+                self.clients[trust_env] = await asyncio.to_thread(_new_speech_client, trust_env)
+            return self.clients[trust_env]
+
+
+@asynccontextmanager
+async def _speech_client(trust_env, clients):
+    transport = SPEECH_TRANSPORT
+    if clients is not None and transport is None:
+        yield await clients.get(trust_env)
+    else:
+        async with await asyncio.to_thread(_new_speech_client, trust_env, transport) as client:
+            yield client
+
+
+async def speech_frames(base, key, sentences, voice, first_chunk, *, request_started=None, clients=None):
     """Stream the indexed sentences as 48 kHz frames. Read ahead one sentence while playing the current one."""
     from clients import gateway as G
 
@@ -626,14 +683,13 @@ async def speech_frames(base, key, sentences, voice, first_chunk):
         "User-Agent": G.user_agent(),
     }
     # The Gateway allows plain HTTP to loopback only. A proxy must never see that key in clear.
-    async with httpx.AsyncClient(
-        headers=headers, timeout=SPEECH_TIMEOUT, trust_env=url.startswith("https:"), transport=SPEECH_TRANSPORT
-    ) as client:
+    async with _speech_client(url.startswith("https:"), clients) as client:
         ahead = None
         try:
             for index, text in enumerate(sentences):
                 if ahead is None:
-                    frames, head = _sentence_frames(client, url, text, voice, first_chunk), None
+                    frames = _sentence_frames(client, url, headers, text, voice, first_chunk, request_started)
+                    head = None
                 else:
                     frames, head = ahead
                     ahead = None
@@ -641,7 +697,7 @@ async def speech_frames(base, key, sentences, voice, first_chunk):
                     frame = await (head if head is not None else anext(frames))
                     yield index, frame
                     if index + 1 < len(sentences):
-                        next_frames = _sentence_frames(client, url, sentences[index + 1], voice, None)
+                        next_frames = _sentence_frames(client, url, headers, sentences[index + 1], voice, None, None)
                         ahead = next_frames, asyncio.create_task(anext(next_frames))
                     async for frame in frames:
                         yield index, frame
@@ -653,7 +709,48 @@ async def speech_frames(base, key, sentences, voice, first_chunk):
                 await next_frames.aclose()
 
 
-async def _sentence_frames(client, url, text, voice, first_chunk):
+class _SpeechPCM:
+    """Resample mono PCM across input blocks and frame the output on the 48 kHz track's clock."""
+
+    def __init__(self, rate):
+        self.rate = rate
+        self.samples = array("h")
+        self.start = self.next_output = 0
+        self.output = bytearray()
+
+    def _convert(self, pcm, final):
+        self.samples.frombytes(pcm)
+        end = self.start + len(self.samples)
+        limit = end * VOICE_RATE // self.rate
+        if final:
+            limit = max(1, limit)  # even a one-sample answer has audio after downsampling
+        else:
+            # Leave interpolation that needs the next input block for when its first sample arrives.
+            limit = min(limit, ((end - 1) * VOICE_RATE + self.rate - 1) // self.rate)
+        converted = array("h")
+        for n in range(self.next_output, limit):
+            index, fraction = divmod(n * self.rate, VOICE_RATE)
+            at = index - self.start
+            left = self.samples[at]
+            right = self.samples[min(at + 1, len(self.samples) - 1)]
+            converted.append(int((left * (VOICE_RATE - fraction) + right * fraction) / VOICE_RATE))
+        self.next_output = limit
+        consumed = min(len(self.samples), limit * self.rate // VOICE_RATE - self.start)
+        del self.samples[:consumed]
+        self.start += consumed
+        return converted.tobytes()
+
+    def frames(self, pcm, *, final=False):
+        self.output += pcm if self.rate == VOICE_RATE else self._convert(pcm, final)
+        while len(self.output) >= VOICE_FRAME_BYTES:
+            yield bytes(self.output[:VOICE_FRAME_BYTES])
+            del self.output[:VOICE_FRAME_BYTES]
+        if final and self.output:
+            yield bytes(self.output).ljust(VOICE_FRAME_BYTES, b"\0")
+            self.output.clear()
+
+
+async def _sentence_frames(client, url, headers, text, voice, first_chunk, request_started):
     """The Gateway's response is raw little-endian mono PCM. HTTP chunks can split a sample or a frame."""
     from clients import gateway as G
 
@@ -662,7 +759,9 @@ async def _sentence_frames(client, url, text, voice, first_chunk):
         body["voice"] = voice
     status = 0
     try:
-        async with client.stream("POST", url, json=body, follow_redirects=False) as response:
+        if request_started is not None:
+            request_started()
+        async with client.stream("POST", url, headers=headers, json=body, follow_redirects=False) as response:
             status = response.status_code
             if status != 200:
                 raise MediaUnavailable(f"The Gateway's text-to-speech answered {status}", status)
@@ -671,6 +770,7 @@ async def _sentence_frames(client, url, text, voice, first_chunk):
             if not 8000 <= rate <= 96000:
                 rate = G.SPEECH_RATE
             frame_bytes = rate * VOICE_FRAME_MS // 1000 * 2
+            pcm = _SpeechPCM(rate)
             tail, received = b"", 0
             async for chunk in response.aiter_bytes():
                 if not received and first_chunk is not None:
@@ -679,14 +779,15 @@ async def _sentence_frames(client, url, text, voice, first_chunk):
                 if received > G.RELAY_LIMIT:
                     raise MediaUnavailable("The Gateway's speech answer was too large", status)
                 data = tail + chunk
-                whole = len(data) - len(data) % frame_bytes
+                whole = len(data) - len(data) % 2
                 for at in range(0, whole, frame_bytes):
-                    yield resample(data[at : at + frame_bytes], rate, VOICE_RATE).ljust(VOICE_FRAME_BYTES, b"\0")
+                    for frame in pcm.frames(data[at : min(at + frame_bytes, whole)]):
+                        yield frame
                 tail = data[whole:]
             if not received or received % 2:
                 raise MediaUnavailable("The Gateway's text-to-speech answered with invalid audio", status)
-            if tail:
-                yield resample(tail, rate, VOICE_RATE).ljust(VOICE_FRAME_BYTES, b"\0")
+            for frame in pcm.frames(b"", final=True):
+                yield frame
     except httpx.HTTPError as exc:
         raise MediaUnavailable("The Gateway's speech connection stopped", status) from exc
 
