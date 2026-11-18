@@ -1230,7 +1230,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
     // A whole read begun before the run's line on screen was read keeps that newer line (a redraw of what is on
     // screen, as "earlier" asks, is no read).
     const began = state.drawing ?? state.dialog.taskLive?.readStarted ?? performance.now();
-    if (state.data && (state.executionAt ?? -1) > began) data = {...data, execution: state.data.execution};
+    if (state.data && (state.executionAt ?? -1) > began) data = {...data, execution: state.data.execution ?? null};
     state.wholeAt = Math.max(state.wholeAt ?? -1, began);
   }
   state.data = data;

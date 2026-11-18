@@ -11,6 +11,7 @@ from backend.tests.helpers import api as T
 from backend.tests.helpers.api_app import api_client
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
 from backend.tests.helpers.bot_list_reads import add_bots
+from backend.tests.helpers.participants_audience import on_roster
 
 # Tool calls each run streams. Every step names its own call id, so a run of N steps used to cost about N queries.
 STEPS = 10
@@ -156,5 +157,6 @@ def test_the_run_line_alone_is_the_task_pages_own(api):
     assert alone.json() == {"execution": page.json()["execution"]}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (tid,))
+    on_roster(api, "eve")
     page, alone = both("eve-test")
     assert page.status_code == alone.status_code and page.status_code in (403, 404), (page.text, alone.text)
