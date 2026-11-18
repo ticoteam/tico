@@ -191,14 +191,15 @@ function pageHeadFold(head: HTMLElement, fold: boolean): void {
     head.classList.add('ph-fold');
     return;
   }
-  const menu = group!.parentElement as HTMLElement;
+  if (!group) return;
+  const menu = group.parentElement as HTMLElement;
   if (menu.matches(':popover-open')) menu.hidePopover();
-  for (const tool of [...group!.children]) {
+  for (const tool of [...group.children]) {
     const spot = PAGE_HEAD_SPOT.get(tool);
     if (spot?.parentNode === tools) spot.replaceWith(tool); else tools.append(tool);
   }
   for (const node of [...tools.childNodes]) if (node.nodeType === Node.COMMENT_NODE && node.textContent === 'ph-tool') node.remove();
-  group!.remove();
+  group.remove();
   head.classList.remove('ph-fold');
   pageHeadTidyMenu(head);
 }
