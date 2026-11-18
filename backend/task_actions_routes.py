@@ -334,6 +334,15 @@ def register_core(
                 **privacy.page(c, who, row["conversation_id"], task_id=tid),
             }
 
+    @app.get("/api/v2/tasks/{tid}/execution")
+    def task_execution_read(request: Request, tid: str):
+        """The run the task's page follows (`execution` of GET /api/v2/tasks/{tid}, the same value), alone: the page
+        reads it as the run's steps come in, without reading the whole task each time."""
+        who = request.state.identity
+        with store.read_transaction() as c:
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            return {"execution": task_execution(c, who, row)}
+
     def task_execution(c, who, row):
         """The run the task's page follows in its own room, as a conversation snapshot shows it, or None: the owning
         bot's newest run, or a newer one for a message a person sent there, whichever bot it was routed to (the bot

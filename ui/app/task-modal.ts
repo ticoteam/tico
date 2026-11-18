@@ -677,6 +677,18 @@ interface TaskChatState {
   reach?: ComposeReach; goalOnce?: boolean; openLines?: Set<string>; count?: number;
   /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
   shown?: number; earlier?: boolean;
+  /** How many times the conversation was drawn from a read of the whole task: a run's line read before the latest such
+   *  draw is older than it (taskExecutionRead). */
+  draws?: number;
+  /** A change came while the tab was hidden: it is read when the tab shows again. */
+  hiddenChange?: boolean;
+}
+const TASK_EXECUTION_ONLY = new WeakSet<ModalDetail>();   // a last read's copy with only its run's line read again
+// The open task's own stream (taskLiveStart) reads the whole task again on each change of it, with its files
+// (taskLiveRead, taskModalShow): the page's task events need not read it a second time.
+function taskChatFollowsItself(state: TaskChatState): boolean {
+  const live = state.dialog.taskLive;
+  return state.dialog.open && !!live?.shared && String(live.id) === String(state.id);
 }
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 function taskChatStop() {
@@ -688,8 +700,13 @@ function taskChatStop() {
 // its files (a new file or version, or an answer on one), once per burst.
 function taskChatLive(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.stopped) { if (TASK_CHAT === state && !state.dialog.open) taskChatStop(); return; }
+  if (document.hidden) { state.hiddenChange = true; return; }
+  const seen = performance.now();
   liveSoon('task:' + state.id, () => {
     if (!taskChatCurrent(state) || state.stopped) return;
+    // A comment changes the task too: the task's own stream has read it since, or will once its read on the way lands.
+    const live = state.dialog.taskLive;
+    if (taskChatFollowsItself(state) && live && (live.again || (live.readStarted ?? -1) >= seen)) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});
     void taskFilesTabLoad(state.dialog, state.id);
@@ -1202,6 +1219,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
     });
   }
   state.data = data;
+  if (!TASK_EXECUTION_ONLY.has(data)) state.draws = (state.draws || 0) + 1;
   taskYoursDotSync(state.dialog, data.task);
   taskDocsSync(state.dialog, data.task);
   taskComposerToPaint(state);
@@ -1303,6 +1321,32 @@ async function taskChatRead(state: TaskChatState) {
     else state.host.innerHTML = `<p class="err" role="status">Conversation unavailable: ${esc(errorMessage(e, ''))}</p>`;
   } finally { state.reading = false; }
 }
+// A run's step moves only its line (`execution`, the run the task follows), so only that is read
+// (GET /v2/tasks/{id}/execution answers the task page's own `execution`) and drawn with the rest as last read. A whole
+// read of the task drawn since this one was asked for is as new or newer: this answer is dropped. Without a whole read
+// yet, or while one is on its way, the whole task is read as before.
+async function taskExecutionRead(state: TaskChatState) {
+  if (!state.data || state.reading) { void taskChatRead(state); return; }
+  if (state.sending) return;
+  const draws = state.draws;
+  try {
+    const r = await get<{execution?: ModalExecution | null}>(`${state.path}/execution`, {fresh: true});
+    if (!taskChatCurrent(state) || state.stopped || state.sending || state.draws !== draws || !state.data) return;
+    const data = {...state.data, execution: r.execution ?? null};
+    TASK_EXECUTION_ONLY.add(data);
+    taskCommentsRender(state, data);
+  } catch (e) {
+    if (taskChatCurrent(state) && [403, 404].includes(errorStatus(e) ?? 0)) void taskChatRead(state);   // its own read says why
+  }
+}
+// A change that came while the tab was hidden is read once it shows (taskChatLive); the task's own stream reads it
+// then if it follows the task (shared-edit.ts sharedPlaceStart).
+document.addEventListener('visibilitychange', () => {
+  const state = TASK_CHAT;
+  if (document.hidden || !state?.hiddenChange) return;
+  state.hiddenChange = false;
+  if (!taskChatFollowsItself(state)) taskChatLive(state);
+});
 async function taskChatLoad(id: string | number, dialog: ModalDialog, data: ModalDetail | null = null) {
   const state: TaskChatState = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, sending: false, reading: false};
@@ -1318,8 +1362,8 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     liveOn('runs', (d: {conversation_id?: string; output?: unknown}) => {
       if (d.conversation_id !== cid) return;
       if (!d.output) { taskChatLive(state); return; }
-      // Output moves the "Working" line on: the thread alone, at most every 1.5 s and not while the tab is hidden.
-      liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskChatRead(state); }, 1500);
+      // Output moves the "Working" line on: that run's line alone, at most every 1.5 s and not while the tab is hidden.
+      liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskExecutionRead(state); }, 1500);
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }

@@ -126,3 +126,35 @@ def test_priming_the_task_reads_does_not_change_the_page(api, monkeypatch):
         unbatched, _ = page_statements(api, monkeypatch, tid, "cara-test")
     assert batched == unbatched
     assert len(batched["comments"]) >= 5 and any(m.get("run") for m in batched["comments"])
+
+
+def test_the_run_line_alone_is_the_task_pages_own(api):
+    """GET /api/v2/tasks/{tid}/execution, which the task page reads as a run's steps come in, answers the page's own
+    `execution` while the run works and once it ends, to whoever may read the task, and nothing to anyone else."""
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid = post(api, "tasks", {"owner": "ops", "title": "Watch the run", "body": "Do it."})["id"]
+    aid = claim(api, machine)["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t1"}, machine["token"])
+    steps = [{"seq": 1, "kind": "tool", "payload": {"tool": "Read", "item_id": "r1", "status": "started"}}]
+    steps.append({"seq": 2, "kind": "message", "payload": {"text": "Reading the spec.", "final": False}})
+    post(api, f"attempts/{aid}/events", {"events": steps}, machine["token"])
+
+    def both(token):
+        page = api.get(f"/api/v2/tasks/{tid}", headers=T.headers(token))
+        alone = api.get(f"/api/v2/tasks/{tid}/execution", headers=T.headers(token))
+        return page, alone
+
+    page, alone = both("ana-test")
+    assert page.status_code == alone.status_code == 200, (page.text, alone.text)
+    working = page.json()["execution"]
+    assert working and working["state"] == "running" and working["parts"], working
+    assert alone.json() == {"execution": working}
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 2}, machine["token"])
+    page, alone = both("ana-test")
+    assert alone.json() == {"execution": page.json()["execution"]}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (tid,))
+    page, alone = both("eve-test")
+    assert page.status_code == alone.status_code and page.status_code in (403, 404), (page.text, alone.text)

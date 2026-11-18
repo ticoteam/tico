@@ -11,6 +11,7 @@ answer's size, and the statements it repeats most. With a path, it also writes t
 import collections
 import contextlib
 import json
+import os
 import re
 import statistics
 import sys
@@ -117,6 +118,48 @@ def counting(store, seen):
             setattr(store, name, opened)
 
 
+def sites(store, path, token, api):
+    """Each statement of one warm call with where it ran from: the innermost backend frames outside the store."""
+    import traceback
+
+    found = []
+
+    def traced(opened):
+        @contextlib.contextmanager
+        def borrowed(*args, **kwargs):
+            with opened(*args, **kwargs) as c:
+                record = recorder(found)
+
+                def hook(sql):
+                    record(sql)
+                    if found and found[-1] is sql:
+                        frames = [
+                            f"{Path(f.filename).name}:{f.lineno}:{f.name}"
+                            for f in traceback.extract_stack()[:-1]
+                            if "/backend/" in f.filename and "/tests/" not in f.filename
+                        ]
+                        found[-1] = (sql, " < ".join(reversed(frames[-4:])))
+
+                c.set_trace_callback(hook)
+                try:
+                    yield c
+                finally:
+                    c.set_trace_callback(None)
+
+        return borrowed
+
+    originals = {name: getattr(store, name) for name in ("read", "read_transaction", "transaction")}
+    try:
+        for name, opened in originals.items():
+            setattr(store, name, traced(opened))
+        with measuring(found):
+            api.get(path, headers=headers(token))
+    finally:
+        for name, opened in originals.items():
+            setattr(store, name, opened)
+    return [f if isinstance(f, tuple) else (f, "?") for f in found]
+
+
 def shape(sql):
     sql = re.sub(r"'[^']*'", "?", sql)
     sql = re.sub(r"\b\d+\b", "?", sql)
@@ -183,6 +226,9 @@ def main(out=None):
                 )
                 for q, k in r["top"]:
                     print(f"      {k:4d}  {q}")
+                if os.environ.get("SITES"):
+                    for n, (sql, where) in enumerate(sites(api.app.state.store, path, token, api)):
+                        print(f"   {n:3d} {shape(sql)[:110]}\n         {where}")
             if out:
                 Path(out).write_text(json.dumps(results, indent=1))
         finally:
