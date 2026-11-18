@@ -654,6 +654,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "replay",
     "replay show",
     "repo",
+    "repo claim",
     "repo default",
     "repo grant",
     "repo list",

@@ -14,6 +14,8 @@ interface HlFix {
   login?: { runner_id: string; runtime: string; computer: string };
   move?: { bot: string; runner_id: string; computer: string };
   finish?: { bot: string };
+  /** Bot history's "made by someone else" repositories: POST /v2/repositories/claim. */
+  claim?: boolean;
 }
 
 interface HlCheck {
@@ -289,6 +291,7 @@ function hlFixHtml(fix: HlFix): string {
   if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
   if (fix.finish) return `<button class="ghost" type="button" data-stuck-finish="${esc(fix.finish.bot)}">${esc(fix.label)}</button>`;
+  if (fix.claim) return `<button class="ghost" type="button" data-hl-claim>${esc(fix.label)}</button>`;
   if (fix.click) return `<button class="ghost" type="button" data-hl-click="${esc(fix.click)}">${esc(fix.label)}</button>`;
   // A page outside the app (Add credit's billing page) opens in a new tab, as the credit strip's link does.
   const away = /^https?:/.test(fix.href || '') ? ' target="_blank" rel="noopener noreferrer"' : '';
@@ -463,6 +466,21 @@ async function hlStuckFinish(button: HTMLButtonElement): Promise<void> {
   }
 }
 
+// Bot history: the repositories Tico left alone as made by someone else are this company's (a moved bot's, say).
+async function hlClaim(button: HTMLButtonElement): Promise<void> {
+  const label = button.textContent || '';
+  button.disabled = true;
+  try {
+    const result = await post('/v2/repositories/claim', {});
+    const n = (result.claimed || []).length, shared = (result.left || []).length;
+    toast(`${n} claimed${shared ? ` · ${shared} shared by two bots, left` : ''}`);
+    void hlRefresh();
+  } catch (error) {
+    toast(errorMessage(error, ''), true);
+    button.disabled = false; button.textContent = label;
+  }
+}
+
 function hlPageDraw(): void {
   const host: HTMLElement | null = $('#hl-page');
   if (!host) return;
@@ -621,6 +639,8 @@ document.addEventListener('click', event => {
   if (move) { void hlStuckMove(move); return; }
   const finish = el?.closest<HTMLButtonElement>('[data-stuck-finish]');
   if (finish) { void hlStuckFinish(finish); return; }
+  const claim = el?.closest<HTMLButtonElement>('[data-hl-claim]');
+  if (claim) { void hlClaim(claim); return; }
   const open = el?.closest<HTMLElement>('[data-hl-click]');
   // After this click finishes: the page's outside-click handler would otherwise close the popup it opens.
   if (open) setTimeout(() => document.querySelector<HTMLElement>(String(open.dataset.hlClick))?.click(), 0);

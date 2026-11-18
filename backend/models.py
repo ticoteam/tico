@@ -2012,6 +2012,9 @@ class BotDefinitionCreate(Contract):
     # reviewed for it. Both are empty for a bot typed in by hand.
     template: str = Field(default="", max_length=80)
     instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
+    # A bot moving here from another server (its address or name): its repository, made there long before this bot,
+    # is this company's own from the start, whatever its name (backend/repositories.py, Homes).
+    moved_from: str = Field(default="", max_length=200)
 
 
 class BotBranch(Contract):

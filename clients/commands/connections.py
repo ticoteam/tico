@@ -511,6 +511,20 @@ def repo_refresh(api, args):
 
 
 @tool(
+    "tico_repo_claim",
+    "Say the bot repositories Tico leaves alone as made by someone else (Health's Bot history line) are this "
+    "company's, as a bot moved from another server's are (the Owner or an admin): Tico uses each from now on. "
+    "`bots` limits it to those bots. A repository two bots have as their own is left. "
+    "Example: tico repo claim --bot legal-owner",
+    {"bots": {"type": "array", "items": {"type": "string"}, "description": "Only these bots (slugs); default all"}},
+    writes=True,
+)
+def repo_claim(api, args):
+    body = {"bots": list(args["bots"])} if args.get("bots") else {}
+    return _as_person(api).post("repositories/claim", body, key=_key(args))
+
+
+@tool(
     "tico_repo_default",
     "The repository access a new bot starts with: own (its own repository only) or all (All ticked repos). Without "
     "`mode` it reads it; setting it is the Owner's or an admin's. Example: tico repo default own",
@@ -788,6 +802,13 @@ REPO = (
         "read the repository list from GitHub again (the Owner or an admin)",
         convert=_key_if_set,
         example="tico repo refresh",
+    ),
+    Command(
+        "repo claim",
+        "bot repositories Tico left alone as made by someone else are this company's (the Owner or an admin)",
+        args=(Arg("bots", "--bot", metavar="SLUG"),),
+        convert=_key_if_set,
+        example="tico repo claim --bot legal-owner",
     ),
     Command(
         "repo default",
