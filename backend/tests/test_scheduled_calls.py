@@ -13,6 +13,7 @@ from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.calls import join, meet, thread  # noqa: F401
 from backend.tests.helpers.live_meetings import live  # noqa: F401
+from backend.tests.helpers.new_bot_flows import create_bot
 
 ANA = "ana@acme.example"
 
@@ -291,6 +292,17 @@ def test_the_sweep_preps_the_exact_bot_once_and_at_once_inside_thirty_minutes(me
 
     assert sweep(meet) == {}  # prepped: nothing more, however often the sweep runs
     assert len(_prep_tasks(meet)) == 1
+
+
+def test_a_bot_booked_by_its_slug_is_held_and_prepped_by_its_id(meet, google):
+    """Schedule names bots as Call now does, by slug; a bot made through the API has a UUIDv7 id, which the call keeps
+    and its prep task is given to."""
+    google.connected.add(ANA)
+    bot = create_bot(meet, "field-helper")
+    call = schedule(meet, thread(meet), minutes=10, bots=["field-helper"])
+    assert call["bots"] == [bot] != ["field-helper"]
+    assert sweep(meet) == {"prepped": 1}
+    assert [owner for _, owner, _ in _prep_tasks(meet)] == ["bot:" + bot]
 
 
 def test_a_company_threads_prep_task_is_public(meet, google):

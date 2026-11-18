@@ -1,8 +1,8 @@
 // The one page header every top-level screen draws (spec: "One page header on every screen", task #338; style guide
 // "Top bars: one line"): the title at the content's left edge, tabs on the title line in one look, quiet tools, the one
 // filled button (or a quiet +), then ⋯, last at the far right. It keeps itself to one line for every caller: tabs past
-// the fifth go into ⋯, and when the row is tight a tool's word becomes its icon, then the tools go into ⋯, then the
-// last tabs do. On a phone the tabs take a row of their own under the title line, by the same rules.
+// the fifth go into ⋯, and when the row is tight a tool's word becomes its icon, then the tools go into ⋯ (a search
+// never: it keeps the row), then the last tabs do. On a phone the tabs take a row of their own under the title line, by the same rules.
 // Styles: ui/styles/page-head.css, linked after every page stylesheet so it wins ties with the old page rules.
 'use strict';
 
@@ -54,7 +54,7 @@ function pageHeadAdd(label: string, attrs = ''): string {
 }
 
 // ⋯ and its list. The list is a named group of plain buttons and links, not an ARIA menu: it can also hold the folded
-// tools (a search box, a switch), which a menu may not. Items in it are buttons (aria-pressed for a choice that is on).
+// tools (a switch, a filter), which a menu may not. Items in it are buttons (aria-pressed for a choice that is on).
 function pageHeadMore(items: string, moreId: string, menuId: string): string {
   return `<button type="button" class="ph-more" id="${esc(moreId)}" popovertarget="${esc(menuId)}" aria-label="More" title="More" aria-expanded="false">`
     + `<span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="ph-menu" id="${esc(menuId)}" popover role="group" aria-label="More">${items}</div>`;
@@ -118,13 +118,28 @@ function pageHeadSet(head: HTMLElement, part: PageHeadPart, html: string): void 
 
 // Too narrow for one row, the header gives way in the style guide's order ("Top bars: one line") and never hides a
 // control for good: a search shrinks first (to 160px, CSS); then a tool's word becomes its icon (.ph-icons: tools that
-// carry a .nav-icon or an svg show only it); then the tools go into ⋯ (.ph-fold); then the last tabs do, the current one
-// staying on the row. The title and the filled button keep the row, and a button's words never wrap (task #450). There
+// carry a .nav-icon or an svg show only it); then the tools go into ⋯ (.ph-fold), all but a search, which keeps the row
+// (Chris, Nov 18: "search should not be in the dropdown"); then the search becomes its magnifier (.ph-find), which a tap
+// opens over the title line; then the last tabs do, the current one staying on the row. On a phone the magnifier comes
+// before the fold, as Tasks' search always was one there. The title and the filled button keep the row, and a button's words never wrap (task #450). There
 // is no second row on a computer. On a phone the tabs have a row of their own (CSS) and the same steps fit both rows:
 // the title line gives way before the title is cut, the tab row before a tab is.
-// A header's tools wherever they are: in the row, or folded into ⋯. Pages reach them through this (or pageHeadSet), never
-// through `header > .ph-tools`, which misses them while they are folded.
-const pageHeadTools = (head: HTMLElement | null | undefined): HTMLElement | null => head?.querySelector<HTMLElement>(':scope > .ph-tools, :scope > .ph-menu > .ph-tools') || null;
+// A header's tools on the row. Folded, the tools but a search wait in ⋯'s own .ph-tools (pageHeadFolded), each put back
+// where it was when they unfold; a page sets them again through pageHeadSet, which unfolds them first.
+const pageHeadTools = (head: HTMLElement | null | undefined): HTMLElement | null => head?.querySelector<HTMLElement>(':scope > .ph-tools') || null;
+const pageHeadFolded = (head: HTMLElement): HTMLElement | null => head.querySelector<HTMLElement>(':scope > .ph-menu > .ph-tools');
+// A search: a box, or a tool holding one (its icon, its list of hits). It is never folded into ⋯.
+const pageHeadFinds = (tool: Element): boolean => tool.matches('input[type=search]') || !!tool.querySelector('input[type=search]');
+// Where each folded tool stood on the row: a comment left in its place.
+const PAGE_HEAD_SPOT = new WeakMap<Element, Comment>();
+// The search becomes its magnifier (.ph-find on the header, .ph-q on the search: page-head.css). Says whether there
+// was a search to turn.
+function pageHeadFind(head: HTMLElement): boolean {
+  const finds = [...pageHeadTools(head)?.children || []].filter(pageHeadFinds);
+  for (const tool of finds) if (!tool.classList.contains('ph-q')) tool.classList.add('ph-q');
+  if (finds.length) head.classList.add('ph-find');
+  return finds.length > 0;
+}
 const pageHeadMenu = (head: HTMLElement) => head.querySelector<HTMLElement>(':scope > .ph-menu');
 // The ⋯ menu, made when the header has none (its button last, after the filled button). A made menu goes again once
 // nothing is left in it.
@@ -153,27 +168,39 @@ function pageHeadEnsureMore(head: HTMLElement): void {
   delete menu.dataset['phMade'];
   if (!menu.querySelector(':scope > :not(.ph-tools, .ph-mtabs)')) menu.insertAdjacentHTML('beforeend', PAGE_HEAD_COPY);
 }
-// Move the tools into the ⋯ menu (above its own items, under any tabs held there) or back to their place in the row,
-// after the spacer.
+// Move the tools but a search into the ⋯ menu (their own group, above its items, under any tabs held there), or each
+// back to its place in the row.
 function pageHeadFold(head: HTMLElement, fold: boolean): void {
-  const tools = pageHeadTools(head);
-  if (!tools || fold === (tools.parentElement !== head)) return;
+  const tools = pageHeadTools(head), group = pageHeadFolded(head);
+  if (!tools || fold === !!group) return;
   if (fold) {
-    if (!tools.firstChild) return;
+    const moving = [...tools.children].filter(tool => !pageHeadFinds(tool));
+    if (!moving.length) return;
     const menu = pageHeadMakeMenu(head);
     if (!menu) return;
+    const into = document.createElement('div');
+    into.className = 'ph-tools';
+    for (const tool of moving) {
+      const spot = document.createComment('ph-tool');
+      tool.replaceWith(spot);
+      PAGE_HEAD_SPOT.set(tool, spot);
+      into.append(tool);
+    }
     const tabs = menu.querySelector(':scope > .ph-mtabs');
-    if (tabs) tabs.after(tools); else menu.prepend(tools);
+    if (tabs) tabs.after(into); else menu.prepend(into);
     head.classList.add('ph-fold');
-    pageHeadHeld(head);
     return;
   }
-  const menu = tools.parentElement as HTMLElement;
+  const menu = group!.parentElement as HTMLElement;
   if (menu.matches(':popover-open')) menu.hidePopover();
-  head.querySelector(':scope > .ph-sp')?.after(tools);
+  for (const tool of [...group!.children]) {
+    const spot = PAGE_HEAD_SPOT.get(tool);
+    if (spot?.parentNode === tools) spot.replaceWith(tool); else tools.append(tool);
+  }
+  for (const node of [...tools.childNodes]) if (node.nodeType === Node.COMMENT_NODE && node.textContent === 'ph-tool') node.remove();
+  group!.remove();
   head.classList.remove('ph-fold');
   pageHeadTidyMenu(head);
-  pageHeadHeld(head);
 }
 const pageHeadIsCur = (tab: Element) => tab.matches('.cur, [aria-current=page], [aria-selected=true]');
 // Show at most `max` tabs on the row; the rest are hidden there (.ph-over) and listed at the top of ⋯ (.ph-mtabs), the
@@ -233,20 +260,8 @@ document.addEventListener('click', (event: MouseEvent) => {
   if (!eventElement(event)?.closest('.ph-menu .ph-copy')) return;
   navigator.clipboard?.writeText(location.href).then(() => toast('Link copied'), () => toast('Could not copy the link', true));
 });
-// A folded search that holds text still filters the page while ⋯ is closed: ⋯ shows a dot (.ph-held) and says so.
-function pageHeadHeld(head: HTMLElement): void {
-  const more = head.querySelector<HTMLElement>(':scope > .ph-more');
-  if (!more) return;
-  const held = [...head.querySelectorAll<HTMLInputElement>(':scope > .ph-menu > .ph-tools input[type=search]')].some(i => i.value.trim() !== '');
-  more.classList.toggle('ph-held', held);
-  more.setAttribute('aria-label', held ? 'More, a search is applied' : 'More');
-}
 // A tool kept in place while it had the focus fits again once the focus leaves it.
 document.addEventListener('focusout', (event: Event) => { if (eventElement(event)?.closest('header.ph .ph-tools')) pageHeadFitSoon(); });
-document.addEventListener('input', (event: Event) => {
-  const head = eventElement(event)?.closest<HTMLElement>('.ph-menu > .ph-tools')?.closest<HTMLElement>('header.ph');
-  if (head) pageHeadHeld(head);
-});
 // Whether the header is past its room: a part runs past the header's right edge, a row of controls holds more than it
 // shows, or (a phone) the title line has cut the title. `tabs` false leaves out a tab row that holds more than it shows:
 // on a phone that row is its own, and only the tabs give way for it.
@@ -270,10 +285,14 @@ function pageHeadOver(head: HTMLElement, tabs = true): boolean {
   const title = head.querySelector<HTMLElement>(':scope > .ph-t');
   return !!title && getComputedStyle(title).position === 'static' && title.scrollWidth > title.clientWidth + 1;
 }
-// A row of controls holding more than it shows: its last control is cut off, or slides under the next part.
+// A row of controls holding more than it shows: its last control is cut off, or slides under the next part. A control
+// placed over the row (an open magnifier's search) is not in it.
 function pageHeadHolds(part: Element): boolean {
   const r = part.getBoundingClientRect();
-  return [...part.children].some(c => { const cr = c.getBoundingClientRect(); return cr.width > 0 && cr.right > r.right + 0.5; });
+  return [...part.children].some(c => {
+    const cr = c.getBoundingClientRect();
+    return cr.width > 0 && cr.right > r.right + 0.5 && getComputedStyle(c).position !== 'absolute';
+  });
 }
 // Before a tool's words give way to its icon (.ph-icons), a bare word in it is wrapped in .ph-w, so CSS can hide the
 // words alone and keep its counts and badges. The tool says its words as a hover title (a screen reader still reads them).
@@ -299,13 +318,18 @@ function pageHeadFit(head: HTMLElement): void {
   try { pageHeadFitNow(head); } finally { head.getBoundingClientRect(); head.classList.remove('ph-fit'); }
 }
 function pageHeadFitNow(head: HTMLElement): void {
-  // Tools someone is using (typing in the search, in the row or in ⋯, or ⋯ open) stay where they are until they are
-  // done: moving a focused field drops its focus. An open ⋯ keeps the tabs split as it was (data-ph-tabs), even when the
-  // page draws its tabs again meanwhile, so its items stay right and the row never shows them all.
-  const tools = pageHeadTools(head), menu = pageHeadMenu(head);
-  const open = !!menu?.matches(':popover-open');
-  const busy = !!tools && (tools.contains(document.activeElement) || (tools.parentElement !== head && open));
+  // Tools someone is using (typing in the search, a tool in the row or in ⋯ focused, or ⋯ open on folded tools) stay
+  // where they are until they are done: moving a focused field drops its focus. An open ⋯ keeps the tabs split as it was
+  // (data-ph-tabs), even when the page draws its tabs again meanwhile, so its items stay right and the row never shows them all.
+  // A search being typed in never moves, so the other tools may still fold around it; it only keeps its magnifier
+  // state (open over the title line) until it is left.
+  const tools = pageHeadTools(head), group = pageHeadFolded(head), menu = pageHeadMenu(head);
+  const open = !!menu?.matches(':popover-open'), active = document.activeElement;
+  const finding = !!tools && [...tools.children].some(tool => pageHeadFinds(tool) && tool.contains(active));
+  const busy = !!tools && ((!finding && tools.contains(active)) || !!group?.contains(active) || (!!group && open));
+  const phone = matchMedia('(max-width:760px)').matches;
   head.classList.remove('ph-icons');
+  if (!finding) head.classList.remove('ph-find');
   if (!busy) pageHeadFold(head, false);
   pageHeadEnsureMore(head);
   let shown = pageHeadTabsShow(head, open ? Number(head.dataset['phTabs']) || PAGE_HEAD_TABS_MAX : PAGE_HEAD_TABS_MAX);
@@ -315,10 +339,12 @@ function pageHeadFitNow(head: HTMLElement): void {
       head.classList.add('ph-icons');
       pageHeadIconWords(head);
       if (!pageHeadOver(head)) return;
+      if (phone && !finding && pageHeadFind(head) && !pageHeadOver(head)) return;
       if (!busy && pageHeadOver(head, false)) {
         pageHeadFold(head, true);
         if (!pageHeadOver(head)) return;
       }
+      if (!phone && !finding && pageHeadOver(head, false) && pageHeadFind(head) && !pageHeadOver(head)) return;
     }
     if (open) return;
     // The last tabs go into ⋯ while their row is too narrow. On a phone the tabs have a row of their own: only that row
@@ -379,7 +405,6 @@ document.addEventListener('toggle', (event: Event) => {
   const open = pageHeadOpening(event);
   const button = menu.parentElement?.querySelector<HTMLElement>(`:scope > .ph-more[popovertarget="${CSS.escape(menu.id)}"]`);
   button?.setAttribute('aria-expanded', String(open));
-  if (menu.parentElement instanceof HTMLElement) pageHeadHeld(menu.parentElement);   // a pick clears the search without an input event
   if (!open) pageHeadFitSoon();   // tools kept folded while ⋯ was open may fit in the row again (the window widened)
   if (open && button) pageHeadPlaceMenu(menu, button);   // again, now its size is known
 }, true);

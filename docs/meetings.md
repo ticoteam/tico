@@ -44,7 +44,7 @@ in the tool that made it. Media files can be attached too.
 
 | Door | For | How |
 |---|---|---|
-| **Add notes** on the Meetings page | a human with notes to write, a transcript file or a paste | title, date and time (default now), participants from the roster plus emails or names, markdown notes, and an optional bot to send them to. **Upload a file** (or drop one on the dialog) or **Paste** adds a transcript: a `.txt`, `.vtt`, `.srt` or `.json` file, with its source (`upload` by default) and an optional recording link. Files through this same API: notes alone as source `manual`, a transcript as the source you chose |
+| **Log a meeting** (the notes icon) on the Meetings page | a human with notes to write, a transcript file or a paste | title, date and time (default now), participants from the roster plus emails or names, markdown notes, and an optional bot to send them to. **Upload a file** (or drop one on the dialog) or **Paste** adds a transcript: a `.txt`, `.vtt`, `.srt` or `.json` file, with its source (`upload` by default) and an optional recording link. Files through this same API: notes alone as source `manual`, a transcript as the source you chose |
 | `tico meeting import <file>` | a human or script on a computer | `tico meeting import call.vtt --title "Pricing call" --date 2026-09-28T16:00 --participant dana@example.com --source zoom --external-id 123` |
 | `tico_meeting_import` (MCP) | a human's external agent | the same fields; the agent reads the file and sends the text |
 | `POST /api/v2/meetings/import` | anything else | one JSON body, below |
@@ -72,7 +72,7 @@ search and filters. Hidden meetings are never included, even if previously selec
 keeps each meeting's source privacy. Restore in Dismissed
 returns a meeting to Pending. Two words sound alike: a dismissed meeting can be restored; a deleted
 meeting cannot be restored. **Settings** controls future imports and, for the owner, the Team default.
-Human **Add notes** stays live, including a pasted or uploaded transcript; a human API caller
+Human **Log a meeting** stays live, including a pasted or uploaded transcript; a human API caller
 can also choose `review: "live"`. Computer importers keep using the same payloads: the server
 decides the review state for the person named in `owner_email`.
 
@@ -315,7 +315,7 @@ source has **Sync now** (Granola), **Sign in again** or **Reconnect** when it ne
 that disconnects your account, for an importer it turns the importer off (owners only), and Close is managed on its
 tool page. The rest have **Connect**: Granola's sign-in for anyone, Close's tool page, and for the others a dialog with
 the same form as Tools > Meeting importers (owners only). With no meetings and nothing connected, the page shows them
-as large tiles instead (**Add notes** stays in the header).
+as large tiles instead (**Log a meeting** stays in the header).
 
 ## Meeting importers
 

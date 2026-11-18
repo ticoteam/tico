@@ -1,8 +1,8 @@
 import type {Route} from 'playwright';
-// The Meetings page (ui/app/meetings.ts pageNotes, ui/meeting-importers.ts): a header with search and one
-// "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
+// The Meetings page (ui/app/meetings.ts pageNotes, ui/meeting-importers.ts): a header with search, filter and the
+// Log a meeting icon (the search on the row at every width, a phone's a magnifier), an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
 // link (ui/app/meetings-sources.ts) whose dialog lists every source with its status and error, Remove and Connect;
-// filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
+// filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Log a meeting.
 // Filters sit behind the shared filter icon (the Tasks popover: fields, then a field's values with a way back); a filter
 // in force is a chip under the header with "N of M", and no row of bare selects or "N total" is drawn.
 // Fixtures only, no network.
@@ -126,14 +126,16 @@ async function shot(page: import('playwright').Page, name: string) {
   try {
     {
       const scheme = 'dark';
-      // ---- nothing yet, nothing connected: the empty state is the source tiles alone; Add notes is the header's
+      // ---- nothing yet, nothing connected: the empty state is the source tiles alone; Log a meeting is the header's
       let w = world();
       let {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme});
       await page.goto('https://tico-ui.test/#/meetings');
       await page.locator('.meet-blank').waitFor();
       assert.equal(await page.locator('#notes-import').count(), 0, scheme + ': no Import button under the title');
       assert.equal(await page.locator('[data-gs-card=meetings]').count(), 0, scheme + ': no intro banner');
-      assert.equal(await page.getByRole('button', {name: 'Add notes', exact: true}).count(), 1, scheme + ': one Add notes button');
+      assert.equal(await page.getByRole('button', {name: 'Log a meeting', exact: true}).count(), 1, scheme + ': one Log a meeting button');
+      assert.equal(await page.locator('#notes-manual').evaluate(b => (b as HTMLElement).innerText.trim()), 'edit_note', scheme + ': Log a meeting is its icon alone');
+      assert.equal(await page.locator('#meet-live-now').count(), 0, scheme + ': no Live now');
       assert.equal(await page.locator('.meet-blank h2, .meet-blank .meet-or').count(), 0, scheme + ': no heading over the tiles');
       await shot(page, 'empty-desktop-' + scheme);
       assert.equal(await page.locator('#meet-sources').evaluate((el: HTMLElement) => el.hidden), true, scheme + ': the large tiles stand in for Sources');
@@ -183,7 +185,7 @@ async function shot(page: import('playwright').Page, name: string) {
       await page.keyboard.press('Escape');
       await page.locator('#meet-src-dialog').waitFor({state: 'detached'});
 
-      // Add notes: notes alone are filed as "manual"; a dropped or uploaded transcript files as an upload.
+      // Log a meeting: notes alone are filed as "manual"; a dropped or uploaded transcript files as an upload.
       await page.locator('#notes-manual').click();
       const notes = page.locator('#manual-modal');
       await notes.locator('#manual-form').waitFor();
@@ -310,6 +312,64 @@ async function shot(page: import('playwright').Page, name: string) {
           assert(r.x + r.width <= box.x + box.width, theme + ': buttons on screen');
         }
         await shot(page, `sources-${device}-${theme}`);
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
+
+      // ---- the header at every width (Chris, Nov 18: "search should not be in the dropdown"): the search keeps the row,
+      // never ⋯; every control is in view and is what a click at its centre hits; the title is whole. On a phone the
+      // search is its magnifier: a tap opens it in the title's place, and leaving it gives the title back, its words kept.
+      for (const [width, look] of [[1440, 'dark'], [1280, 'light'], [1024, 'dark'], [900, 'light'], [800, 'dark'], [390, 'dark'], [390, 'light']] as [number, string][]) {
+        w = world({sources: SOME, meetings: MEETINGS});
+        ({page, errors, context} = await open(browser, {width, height: 844}, w, {colorScheme: look}));
+        await page.goto('https://tico-ui.test/#/meetings');
+        await page.locator('.meet-row').first().waitFor();
+        await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));   // the header fits itself in the next frame
+        const head = await page.evaluate(() => {
+          const h = document.querySelector<HTMLElement>('header.notes-head')!, vw = document.documentElement.clientWidth, bad: string[] = [];
+          const q = document.querySelector<HTMLElement>('#notes-search')!;
+          if (!q.closest('header.notes-head > .ph-tools')) bad.push('the search is not on the row');
+          if (q.closest('.ph-menu')) bad.push('the search is in ⋯');
+          const hits = (el: HTMLElement) => { const r = el.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return r.width > 0 && r.left >= 0 && r.right <= vw + 0.5 && !!top && el.contains(top); };
+          for (const sel of ['.meet-q', '#notes-manual', ':scope > .ph-more']) {
+            const el = h.querySelector<HTMLElement>(sel);
+            if (!el || !hits(el)) bad.push(sel + ' is not in view on top');
+          }
+          const filter = document.querySelector<HTMLElement>('#notes-filter')!;
+          if (!filter.closest('.ph-menu') && !hits(filter)) bad.push('the filter is on the row but not in view on top');
+          const t = h.querySelector<HTMLElement>(':scope > .ph-t')!;
+          if (t.scrollWidth > t.clientWidth + 1) bad.push('the title is cut');
+          if (document.documentElement.scrollWidth > window.innerWidth) bad.push('the page scrolls sideways');
+          return {bad, box: Math.round(document.querySelector<HTMLElement>('.meet-q')!.getBoundingClientRect().width)};
+        });
+        assert.deepEqual(head.bad, [], `${width}px header`);
+        if (width > 760) assert.ok(head.box >= 120, `${width}px: the search is a box (${head.box}px)`);
+        else {
+          assert.ok(head.box <= 48, `phone: the search is its magnifier (${head.box}px)`);
+          await shot(page, `header-${width}-${look}`);
+          const line = () => page.evaluate(() => {
+            const h = document.querySelector<HTMLElement>('header.notes-head')!, r = (sel: string) => h.querySelector<HTMLElement>(sel)!.getBoundingClientRect();
+            const q = r('.meet-q'), more = r(':scope > .ph-more');
+            const top = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+            return {more: Math.round(more.top), box: Math.round(q.width), left: Math.round(q.left), top: Math.round(q.top),
+              onTop: !!top && !!top.closest('.meet-q'), q: (document.querySelector('#notes-search') as HTMLInputElement).value};
+          });
+          const before = await line();
+          await page.locator('.meet-q').click();
+          assert.equal(await page.evaluate(() => document.activeElement?.id), 'notes-search', 'phone: a tap focuses the search');
+          const opened = await line();
+          // open, it covers the title line, edge to edge inside the gutter; nothing under it moves or wraps
+          assert.ok(opened.box >= 300 && opened.onTop && opened.top === before.top && opened.more === before.more, `phone: the open search covers the title line (${JSON.stringify({before, opened})})`);
+          await shot(page, 'header-search-open-phone-' + look);
+          await page.keyboard.type('Pricing');
+          await page.locator('#notes-search').blur();   // a tap elsewhere
+          const shut = await line();
+          assert.equal(shut.q, 'Pricing', 'phone: leaving the search keeps its words');
+          assert.ok(shut.box <= 48 && shut.more === before.more, `phone: a search holding words is its magnifier again (${JSON.stringify(shut)})`);
+          assert.equal(await page.locator('header.notes-head > .ph-t').evaluate(t => t.scrollWidth <= t.clientWidth + 1 && t.getBoundingClientRect().width > 0), true, 'phone: the title is back, whole');
+        }
+        if (width > 760) await shot(page, `header-${width}-${look}`);
         assert.deepEqual(errors, []);
         await context.close();
       }

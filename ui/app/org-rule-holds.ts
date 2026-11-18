@@ -230,7 +230,7 @@ async function ruleChecksMount(head: HTMLElement | null) {
 // The checks line at the top of ⋯, or none while it is unread or not readable.
 function ruleChecksPaint(head: HTMLElement) {
   const menu = head.querySelector<HTMLElement>(':scope > .ph-menu'), text = head.dataset.checks || '', warn = !!text && head.dataset.checksWarn === 'true';
-  // The dot on ⋯ (its own class: the header's .ph-held dot is page-head.ts's, for a folded search).
+  // The dot on ⋯: rule checks need attention.
   const more = head.querySelector<HTMLElement>(':scope > .ph-more');
   more?.classList.toggle('ru-checks-warn', warn);
   if (warn) more?.setAttribute('aria-description', 'Rule checks need attention'); else more?.removeAttribute('aria-description');

@@ -2243,7 +2243,8 @@ def install_live_meetings(app, store, auth, write):
                 )
                 if cursor.rowcount:
                     added.append(bot_id)
-                attached.append(bot_id)
+                if bot_id not in attached:   # one bot named twice (its slug and its id) is attached once
+                    attached.append(bot_id)
             if added:
                 _event(
                     c,
