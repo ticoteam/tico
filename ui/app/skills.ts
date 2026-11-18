@@ -31,12 +31,14 @@ interface SkillIdea { id: string; kind: string; name: string; target: SkillActor
 interface SkillProposal {
   id: string; name: string; status: string; base_version?: number | null; proposed_by?: SkillActor | null;
   screen_status?: string; created_at: string; decline_reason?: string | null;
+  // Why a not_screened proposal was not screened, what to do about it, and how many screens in a row failed (server).
+  screen_reason?: string | null; screen_action?: string | null; screen_failures?: number; judge_call_id?: string | null;
 }
 interface SkillFinding { file?: string; line?: number | string; severity?: string; issue?: string; detail?: string; }
 interface SkillPattern { file?: string; line?: number | string; pattern?: string; }
 interface SkillScreening {
   risk?: string | null; verdict?: string | null; summary?: string | null; reason?: string | null;
-  findings?: SkillFinding[] | null; patterns?: SkillPattern[] | null;
+  judge_call_id?: string | null; findings?: SkillFinding[] | null; patterns?: SkillPattern[] | null;
 }
 interface SkillFileRow { path: string; content: string; }
 interface SkillVersionRow { number: number; sha256?: string | null; approved_at?: string | null; approved_by_id?: string | null; }
@@ -71,6 +73,10 @@ const skillsErr = (e: unknown) => `<p class="err" data-sk-error>${esc(errorMessa
 const skillsLive = (run: number) => SKP && SKP.run === run;
 const skillsN = (n: unknown) => Number(n || 0).toLocaleString();
 const skillsUses = (n: number | null | undefined) => `${skillsN(n)} ${n === 1 ? 'use' : 'uses'}`;
+// A not_screened reason in a few words (the server's screen_action says what to do about it).
+const SKILLS_REASONS: Record<string, string> = {
+  oversize: 'too big', cap: 'spend cap', unavailable: 'no model', timeout: 'timed out', error: 'error',
+};
 // The screening as a pill only when it is of interest (style guide, Status: "A row with nothing wrong has no pill";
 // red for what failed, amber for waiting, no hue for the rest): high risk or unsafe and not screened are red, a
 // screening still running is amber, medium risk is a plain pill, and a low-risk screening shows nothing.
@@ -80,7 +86,10 @@ function skillsScreenPill(p: SkillProposal, screen?: SkillScreening | null) {
     if (!bad && risk !== 'medium') return '';
     return `<span class="pill${bad ? ' blocked' : ''}" data-sk-screen="screened">Screened${risk ? ' · ' + esc(risk) : ''}</span>`;
   }
-  if (p.screen_status === 'not_screened') return '<span class="pill blocked" data-sk-screen="not_screened">Not screened</span>';
+  if (p.screen_status === 'not_screened') {
+    const why = SKILLS_REASONS[p.screen_reason || ''];
+    return `<span class="pill blocked" data-sk-screen="not_screened"${p.screen_action ? ` title="${esc(p.screen_action)}"` : ''}>Not screened${why ? ' · ' + esc(why) : ''}</span>`;
+  }
   return '<span class="pill waiting" data-sk-screen="pending">Pending</span>';
 }
 // A decided proposal's state: a plain pill (approved is not a warning, so it has no hue).
@@ -278,9 +287,32 @@ function skillsRowLinks(box: HTMLElement) {
   }; });
 }
 
+// Re-run: send it back to screening, then watch for the result. A screen takes up to 90 seconds (STRICT_SECONDS in
+// backend/judge.py), and a pass screens up to three waiting proposals one at a time (BATCH in backend/skill_screening.py),
+// so the watch allows one full pass ahead of this proposal plus its own screen: 90 + 3 x 90 seconds.
+const SKILLS_RESCREEN_WAIT_MS = (90 + 3 * 90) * 1000, SKILLS_RESCREEN_EVERY_MS = 3_000;
 async function skillsRescreen(id: string) {
-  try { await post(`/v2/skills/proposals/${encodeURIComponent(id)}/rescreen`, {}); toast('Screening'); skillsRedraw(); }
-  catch (e) { toast(errorMessage(e, ''), true); }
+  try { await post(`/v2/skills/proposals/${encodeURIComponent(id)}/rescreen`, {}); }
+  catch (e) { toast(errorMessage(e, ''), true); return; }
+  toast('Screening'); skillsRedraw();
+  const run = SKP?.run;  // the page the Re-run redrew: leaving it stops the watch
+  const until = Date.now() + SKILLS_RESCREEN_WAIT_MS;
+  while (Date.now() < until) {
+    await new Promise(r => setTimeout(r, SKILLS_RESCREEN_EVERY_MS));
+    let p: SkillProposal;
+    try { p = (await get<SkillProposalDetail>('/v2/skills/proposals/' + encodeURIComponent(id), {fresh: true})).proposal; }
+    catch { return; }
+    if (!SKP || SKP.run !== run) return;
+    if (p.screen_status === 'pending' || p.screen_status === 'screening') continue;
+    if (p.screen_status === 'not_screened') toast(`${(p.screen_failures || 0) > 1 ? `Still not screened (${p.screen_failures} in a row)` : 'Not screened'}. ${p.screen_action || ''}`, true);
+    else toast('Screened');
+    skillsRedraw();
+    return;
+  }
+  // The window ended with no result: the screen may still be queued or running, so say so and show what the page holds.
+  if (!SKP || SKP.run !== run) return;
+  toast('Still screening; this page shows the result when you open it again');
+  skillsRedraw();
 }
 
 // ----------------------------------------------------------------- one skill
@@ -507,7 +539,13 @@ async function pageSkillProposal(id: string) {
 function skillsScreeningHTML(p: SkillProposal, s: SkillScreening | null | undefined, pending: boolean) {
   const rerun = pending ? ' <button type="button" class="ghost small" data-sk-rescreen>Re-run</button>' : '';
   if (p.screen_status === 'pending') return '<p class="muted">Screening runs before anyone can approve.</p>';
-  if (p.screen_status === 'not_screened' || !s) return `<p class="muted" data-sk-screen-reason>${esc(s?.reason || 'Not screened.')}${rerun}</p>`;
+  if (p.screen_status === 'not_screened' || !s) {
+    const reason = p.screen_reason || s?.reason, call = p.judge_call_id || s?.judge_call_id, n = p.screen_failures || 0;
+    return `<p data-sk-screen-reason${reason ? ` data-sk-reason-code="${esc(reason)}"` : ''}>Not screened${reason ? ` (${esc(SKILLS_REASONS[reason] || reason)})` : ''}.
+        ${esc(p.screen_action || 'Re-run screening.')}${rerun}</p>
+      ${n > 1 ? `<p class="muted" data-sk-screen-failures>Failed ${n} times in a row.</p>` : ''}
+      ${call ? `<dl class="tt-kv"><dt>Judge call</dt><dd><code data-sk-judge-call>${esc(call)}</code></dd></dl>` : ''}`;
+  }
   // A finding's severity: high is red, medium a plain pill, low plain muted words.
   const sev = (v?: string) => v === 'high' || v === 'medium' ? `<span class="pill${v === 'high' ? ' blocked' : ''}">${esc(v)}</span>` : `<span class="muted">${esc(v || '')}</span>`;
   const where = (x: {file?: string; line?: number | string}) => `<code>${esc(x.file || '')}${x.line ? ':' + esc(x.line) : ''}</code>`;
