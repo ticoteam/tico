@@ -51,16 +51,16 @@ async function shot(page: Page, name: string) {
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
 }
 
-async function world(browser: Browser, viewport: {width: number; height: number}, theme: string, hash = '#/tasks', start = HOLDS) {
+async function world(browser: Browser, viewport: {width: number; height: number}, theme: string, hash = '#/tasks', start = HOLDS, size = 50) {
   let holds = start();
   const posted: string[] = [];
   const failing = new Set<string>();
   const routes = async (page: Page) => {
     await page.route(url => url.pathname === '/api/v2/rule-holds', route => {
-      // Pages of 50, as the server's: a cursor continues after the last one.
+      // Pages of 50, as the server's (or `size`): a cursor continues after the last one.
       const at = Number(new URL(route.request().url()).searchParams.get('cursor') || 0);
-      const summaries = holds.slice(at, at + 50).map(({text, why, nonce, ...rest}) => ({...rest, appealed: false, rules: rest.rules.map(({part, ...r}) => r)}));
-      const next = at + 50 < holds.length ? String(at + 50) : null;
+      const summaries = holds.slice(at, at + size).map(({text, why, nonce, ...rest}) => ({...rest, appealed: false, rules: rest.rules.map(({part, ...r}) => r)}));
+      const next = at + size < holds.length ? String(at + size) : null;
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({holds: summaries, next_cursor: next})});
     });
     await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+$/.test(url.pathname), route => {
@@ -170,6 +170,20 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
       await g.locator('[data-rh-keep-all]').click();
       await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-done') !== null, null, {timeout: t(15000)});
       assert.equal(posted.length, 53, 'every page decided');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // A review whose list runs past 40 pages (here 45 pages of 3): every page is read, counted and decided.
+    {
+      const LOTS = () => Array.from({length: 135}, (_, n) => hold(`l-${n}`, 60 + n, 'ops', 'Sam', `Note ${n} names Brightway.`, null));
+      const {page, errors, posted} = await world(browser, {width: 1440, height: 900}, 'dark', '#/tasks', LOTS, 3);
+      await page.evaluate(() => { decideOpen('rq'); });
+      const g = group(page);
+      await g.locator('.rh-brief').first().waitFor({timeout: t(10000)});
+      assert.equal(await g.locator('.rh-gcount').innerText(), '· 135 holds');
+      await g.locator('[data-rh-keep-all]').click();
+      await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-done') !== null, null, {timeout: t(30000)});
+      assert.equal(posted.length, 135, 'every page past the fortieth decided');
       assert.deepEqual(errors, []);
       await page.close();
     }

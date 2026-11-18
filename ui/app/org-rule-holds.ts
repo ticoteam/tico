@@ -67,8 +67,8 @@ async function ruleHoldsLoad(slot: HTMLElement, id: string, cursor = '') {
   const holds = await Promise.all((page.holds || []).map(h =>
     get<RuleHold>('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => h)));
   // Two or more still held: the rule's group first, read from every page (not the cards' page alone), whose Keep all
-  // and Send all decide every hold it counts.
-  const held = cursor ? [] : await ruleReviewRead(id).catch(() => holds.filter(h => (h.state || 'held') === 'held'));
+  // and Send all decide every hold it counts. When every page can't be read there is no group: each card keeps its own.
+  const held = cursor ? [] : await ruleReviewRead(id).catch(() => [] as RuleHold[]);
   if (slot.dataset.task !== id) return;
   $('.rh-more', slot)?.remove();
   if (!cursor) slot.innerHTML = '';
@@ -224,22 +224,24 @@ function ruleReviewWire(root: HTMLElement, holds: RuleHold[], after: () => unkno
 // of summaries, cheap) and draws the group again only when the holds waiting changed, so the count keeps up.
 interface RuleReviewDc { el: HTMLElement; holds: RuleHold[]; open: boolean; reading: boolean; timer?: number; }
 const RH_DC = new Map<string, RuleReviewDc>();
-// The pages of a review's holds read at most (the list's pages are 50): far more than a rule holds before it is edited.
-const RH_PAGES = 40;
 // How often a review shown in Needs you reads its list again, so a hold that joins is counted while it is open.
 const RH_TICK_MS = 10000;
 /** Every hold of a review still held, each opened for its text; `known` are holds read before, opened again only when
-    their state changed or their failing part was still coming when they were read. */
+    their state changed or their failing part was still coming when they were read. Every page is read, to the list's
+    end: a group's count and Keep all / Send all cover all its holds. A list that cannot be read to its end (an error,
+    or a cursor that comes back) throws, so no group is drawn as if it were complete. */
 async function ruleReviewRead(taskId: string, known: RuleHold[] = []): Promise<RuleHold[]> {
   const listed: RuleHold[] = [];
+  const seen = new Set<string>();
   let cursor = '';
-  for (let n = 0; n < RH_PAGES; n++) {
+  do {
     const page = await get<RuleHoldPage>('/v2/rule-holds?task=' + encodeURIComponent(taskId) +
       (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
     listed.push(...(page.holds || []));
+    seen.add(cursor);
     cursor = page.next_cursor || '';
-    if (!cursor) break;
-  }
+    if (cursor && seen.has(cursor)) throw new Error('The list of holds came back to a page it had read.');
+  } while (cursor);
   const had = new Map(known.map(h => [h.id, h]));
   return Promise.all(listed.filter(h => (h.state || 'held') === 'held').map(h => {
     const old = had.get(h.id);
