@@ -261,6 +261,8 @@ def main(out=None):
                 (f"/api/v2/tasks/{tid}", "ana-test"),
                 (f"/api/v2/tasks/{tid}", "cara-test"),
                 (f"/api/v2/tasks/{listed}", "ana-test"),
+                # what the open page reads, in place of the whole task, while its run works (bench/task-page-reads.cts)
+                (f"/api/v2/tasks/{tid}/execution", "ana-test"),
                 ("/api/v2/tasks?brief=1&owner=human:ana&status=all", "ana-test"),
                 (f"/api/v2/tasks?owner=ops&status=done,closed&snoozed=all&brief=true&updated_since={old}", "ana-test"),
                 ("/api/v2/tasks?brief=1&status=open", "ben-test"),
