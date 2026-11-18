@@ -146,6 +146,7 @@ def edited(text, edits, rng):
 
 def seed(c, ids, *, owners, private=0, created="2026-01-01T00:00:00Z"):
     """Tasks with these ids, owned and requested in turn by `owners`."""
+    people(c)
     c.executemany(
         "INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
         "VALUES(?,?,?,?,'open',?,?,?)",
@@ -154,6 +155,14 @@ def seed(c, ids, *, owners, private=0, created="2026-01-01T00:00:00Z"):
             for n, tid in enumerate(ids)
         ],
     )
+
+
+def people(c):
+    """Eve and Cara, whom the api fixture's test identities name but its roster leaves out."""
+    for slug in ("eve", "cara"):
+        c.execute(
+            "INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)", (slug, slug.title(), slug + "@acme.example")
+        )
 
 
 def random_ids(count, rng):

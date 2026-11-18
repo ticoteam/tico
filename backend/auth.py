@@ -72,12 +72,12 @@ def near_task_sql(typed):
     """A filter that keeps every id within edit distance 2 of `typed` (already lowercased) and drops nearly all
     others, with its parameters. Two edits touch at most two of the three pieces typed[:12], typed[12:24] and
     typed[24:] (an insertion before the first or after the last character counts against the end piece), so a match
-    keeps one of them whole: it starts with the first, ends with the last, or holds the middle one somewhere, since
-    edits before it only move it."""
-    head, middle, tail = typed[:12], typed[12:24], typed[24:]
-    if not tail:
+    holds one of them whole. Each is looked for anywhere in the id with instr, which reads past a NUL where substr
+    and length stop; a piece of ten or more characters is rarely anywhere in an unrelated id."""
+    pieces = (typed[:12], typed[12:24], typed[24:])
+    if not all(pieces):
         return "1", ()  # too short to split in three: every id is a candidate, as before
-    return "(substr(id,1,12)=? OR substr(id,?)=? OR instr(id,?)>0)", (head, -len(tail), tail, middle)
+    return "(instr(id,?)>0 OR instr(id,?)>0 OR instr(id,?)>0)", pieces
 
 
 OPERATOR_SQL = "SELECT owner_id FROM bot_config WHERE bot=?"
@@ -1469,8 +1469,9 @@ class Auth:
             close, params = near_task_sql(typed)
             for row in H._rows(
                 c.execute(
+                    # In table order, as the scan of every task gave them: the first three of a tie are named.
                     "SELECT id,title,owner_id,requester_id FROM tasks WHERE length(id) BETWEEN ? AND ? "
-                    "AND " + close + " AND (" + visible + ")",
+                    "AND " + close + " AND (" + visible + ") ORDER BY rowid",
                     (len(ident) - 2, len(ident) + 2, *params),
                 )
             ):

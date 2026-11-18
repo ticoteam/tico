@@ -57,11 +57,18 @@ def test_prefilter_keeps_every_id_two_edits_away():
             for k1, k2 in itertools.product(kinds, repeat=2)
             if (k1 == "ins" or p1 < length) and (k2 == "ins" or p2 < length)
         ]
+        changes += [[("ins", p), ("ins", p)] for p in range(length + 1)]
+        changes += [[("sub", p), ("ins", p)] for p in range(length)]
         for change in changes:
             typed = edited(stored, change, rng)
             close, params = near_task_sql(typed)
             kept = c.execute("SELECT count(*) FROM (SELECT ? AS id) WHERE " + close, (stored, *params)).fetchone()[0]
             assert kept == 1, (stored, typed, change)
+    # SQLite's substr and length stop at a NUL; instr does not.
+    for stored in ["a" * 12 + "b" * 12 + "c" * 11 + "\0", "\0" + "d" * 35, "e" * 18 + "\0" + "f" * 17]:
+        for change in ([("sub", 0), ("sub", 12)], [("sub", 0), ("sub", 30)], [("sub", 13), ("sub", 30)]):
+            close, params = near_task_sql(edited(stored, change, rng))
+            assert c.execute("SELECT count(*) FROM (SELECT ? AS id) WHERE " + close, (stored, *params)).fetchone()[0]
 
 
 def test_near_misses_in_every_piece_are_still_suggested(api):
@@ -157,3 +164,20 @@ def test_suggestions_match_the_old_resolver_on_random_typos(api):
             assert new == old, (token, typo)
             suggested += "Did you mean" in new[2] if new[0] == "not_found" else 0
     assert suggested > 50  # the set exercises suggestions, not only refusals
+
+
+def test_a_tie_names_the_first_three_in_table_order(api):
+    """Five tasks one edit from what was typed, inserted out of id order: the same three, in the same order."""
+    rng = random.Random(17)
+    typed = random_ids(1, rng)[0]
+    tied = [edited(typed, [("sub", p)], rng) for p in (30, 2, 20, 9, 14)]
+    stray = "a" * 12 + "b" * 12 + "c" * 11 + "\0"  # a NUL ends SQLite's length and substr, not instr
+    with api.app.state.store.transaction() as c:
+        seed(c, random_ids(50, rng) + tied + [stray], owners=VISIBLE)
+    for token in ("ana-test", "eve-test"):
+        new, old = answers(api, token, typed)
+        assert new == old
+        assert [tid for tid in tied if tid in new[2]] == tied[:3]
+        assert new[2].index(tied[0]) < new[2].index(tied[1]) < new[2].index(tied[2])
+        new, old = answers(api, token, edited(stray, [("sub", 0), ("sub", 12)], rng))
+        assert new == old and named(new, stray)

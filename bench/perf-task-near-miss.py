@@ -31,7 +31,7 @@ def median_ms(fn, runs):
     return statistics.median(walls) * 1000
 
 
-def plans(store, auth, who, typed):
+def plans(store, auth, caller, who, typed):
     with store.read() as c:
         visible = auth.task_sql(c, who)
         close, params = near_task_sql(typed)
@@ -47,12 +47,12 @@ def plans(store, auth, who, typed):
                 + close
                 + " AND ("
                 + visible
-                + ")",
+                + ") ORDER BY rowid",
                 (34, 38, *params),
             ),
         }
         for name, (sql, args) in statements.items():
-            print(f"EXPLAIN QUERY PLAN ({name}):")
+            print(f"EXPLAIN QUERY PLAN, {caller} ({name}):")
             for row in c.execute("EXPLAIN QUERY PLAN " + sql, args):
                 print("   ", "  " * (row[1] > 0), row[3])
 
@@ -84,7 +84,8 @@ def test_near_miss_time_by_task_count(api):
             "no-match": random_ids(1, rng)[0],
         }
         if not printed:
-            plans(store, auth, who["bot"], typed["typo"])
+            for caller, identity in who.items():
+                plans(store, auth, caller, identity, typed["typo"])
             printed = True
         for caller, identity in who.items():
             for label, ident in typed.items():
