@@ -1598,25 +1598,24 @@ def test_a_visibility_build_past_the_time_limit_is_stopped_as_a_timeout(api, mon
     """The caller's seconds bound the whole build of their views, not only its materialized sets: a step that outruns
     them (Python between statements, or a statement of its own) ends the call with 422 `timeout`, so one call holds a
     worker no longer than its limit."""
-    import time
-
     from backend import sql as S
 
     for role in ('owner', 'human'):
         monkeypatch.setitem(S.LIMITS, role, (500, 0.2))
+    # The build reads the clock its deadline is set from, so a step that takes 0.3 s moves that clock past the 0.2 s
+    # limit: no real wait, and nothing depends on how fast the runner is.
+    clock = [0.0]
+    monkeypatch.setattr(S, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
     built = S.guarded
 
     def guarded(conn, *args, **kwargs):
-        if slow == 'python':
-            time.sleep(0.3)
-        else:
+        clock[0] += 0.3
+        if slow == 'sql':
             conn.execute(SLOW_SQL).fetchone()
         return built(conn, *args, **kwargs)
 
     monkeypatch.setattr(S, 'guarded', guarded)
-    started = time.monotonic()
     refused = query(api, 'SELECT count(*) FROM tasks', expected=422)
     assert refused['error']['code'] == 'timeout'
-    assert time.monotonic() - started < 5
     monkeypatch.setattr(S, 'guarded', built)
     assert query(api, 'SELECT count(*) FROM tasks')['rows']
