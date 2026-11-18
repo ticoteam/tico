@@ -899,6 +899,9 @@ def claim_runner_turn(c, rid, turn_id, bot, *, auth=None, job=None):
     if _meeting(c, rid)["state"] == "ended":
         _finish_pass(c, rid, turn, "meeting_ended_before_claim")
         return {"id": turn_id, "status": "skipped", "reason": "meeting_ended_before_claim"}
+    if turn["voice_expires_at"] and turn["voice_expires_at"] <= H.now():
+        _finish_pass(c, rid, turn, "voice_deadline")
+        return {"id": turn_id, "status": "skipped", "reason": "voice_deadline"}
     if auth:
         reason = _attachment_authority(c, auth, rid, bot)
         if reason:

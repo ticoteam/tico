@@ -90,4 +90,7 @@ A runner advertises `voice_sessions_v1` to take a call's resident model job. The
 `message.refs.live_meeting.voice_call` names that call. The same attempt's `inputs` reply has a `call_voice` field
 with `closed` and, when a question is ready, its turn ID, text and notes. The runner sends that turn's ID as
 `voice_turn` on its delta and final message events. The lease and the attachment must still belong to that attempt
-when the server accepts output. Older hubs negotiate the capability away through the heartbeat 422 fallback.
+when the server accepts output. The optional `voice=busy` query parameter checks the current utterance without
+claiming another. `voice=restart` returns a fresh primer and notes stamp with a bounded transcript recap.
+After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
+Older hubs negotiate the capability away through the heartbeat 422 fallback.

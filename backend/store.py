@@ -115,6 +115,11 @@ def is_poll(operation, result):
         return False
     if operation.endswith("/inputs"):
         return isinstance(result, dict) and not result.get("messages")
+    if operation.endswith("/complete"):
+        from .call_sessions import CLOSED_COMPLETION
+
+        # A call's closed lease has a content-free, repeatable acknowledgement.
+        return result == CLOSED_COMPLETION
     return operation.endswith(("/renew", "/events"))
 
 

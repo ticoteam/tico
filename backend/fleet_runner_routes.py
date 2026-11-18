@@ -1,6 +1,7 @@
 """Computer, placement, runner, agent sync and attempt routes."""
 
 from . import built_on
+from .call_sessions import CLOSED_COMPLETION, VoicePhase, closed_attempt
 from . import runner_online
 from . import org_rule_check
 from . import placement as placing
@@ -633,15 +634,16 @@ def register(
             # permissions again, and only reuses this graph while its source clock matches.
             with store.read_transaction() as c:
                 if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
-                    execution.attempt(c, request.state.identity, aid, active=False)
+                    execution.attempt(c, request.state.identity, aid, active=False, voice_control=True)
             from . import skill_runtime
 
             def ingest(c):
                 before = skill_runtime.last_seq(c, aid)  # events after it are new: a resent batch counts nothing
                 acked = execution.events(c, request.state.identity, aid, body)
-                skill_runtime.record_runner_usage(
-                    c, aid, body.events, after_seq=before
-                )  # a Skill call's name, scrubbed above
+                if not (acked["historical"] and closed_attempt(c, aid)):
+                    skill_runtime.record_runner_usage(
+                        c, aid, body.events, after_seq=before
+                    )  # a Skill call's name, scrubbed above
                 return acked
 
             return mutate(request, body, ingest)
@@ -676,7 +678,7 @@ def register(
             return stream_capture.export(c, request.state.identity, auth, aid, full=full)
 
     @app.post("/api/v2/attempts/{aid}/inputs")
-    def inputs(request: Request, aid: str, body: M.Empty):
+    def inputs(request: Request, aid: str, body: M.Empty, voice: VoicePhase = "ready"):
         key = request.headers.get("idempotency-key", "")
         if 0 < len(key) <= 200:
             with store.read_transaction() as c:
@@ -685,11 +687,11 @@ def register(
                     "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                     (request.state.identity.actor, request.url.path, key),
                 ).fetchone():
-                    idle = execution.idle_inputs(c, request.state.identity, aid)
+                    idle = execution.idle_inputs(c, request.state.identity, aid, voice=voice)
                     if idle is not None:
                         privacy.require_payload(c, request.state.identity, idle)
                         return idle
-        return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid))
+        return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid, voice=voice))
 
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
     def input_ack(request: Request, aid: str, mid: str, body: M.Empty):
@@ -1043,7 +1045,11 @@ def register_completion(
                 note_timings(c, aid, rule_check_ms, arrived)
             return done
 
-        return mutate(request, body, finish)
+        result = mutate(request, body, finish)
+        if result == CLOSED_COMPLETION:
+            # The route already authenticated the runner for this ID. The acknowledgement carries no call data.
+            return {"attempt_id": aid, **result}
+        return result
 
     @org_rule_check.replayer("reply")
     def rule_replay_reply(c, bot, hold, replay, ingest, gate=None):
@@ -1141,7 +1147,7 @@ def register_completion(
             row = c.execute(
                 "SELECT a.bot_id, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)
             ).fetchone()
-            msg = H.message(c, row["message_id"], include_deleted=True) if row else None
+            msg = H.message(c, row["message_id"], include_deleted=True) if row and not closed_attempt(c, aid) else None
             if not msg or msg["deleted_at"] is not None:
                 return None
             # A carrier-started turn answers the message it carries, so its reply is checked as going to that sender.

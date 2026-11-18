@@ -215,6 +215,7 @@ class ReplyStream:
         self.timing = timing
         self.pending = ""
         self.raw = ""
+        self.consumed = 0
         self.count = 0
         self.closed = False
         self.buffer: list[str] = []
@@ -238,9 +239,14 @@ class ReplyStream:
         chunk = text[: SPOKEN_CHARS - len(self.raw)]
         self.raw += chunk
         self.pending += chunk
-        while boundary := re.search(r"[.!?](?:[\"'”’]+)?(?:\s+|$)", self.pending):
+
+        self._drain(at)
+
+    def _drain(self, at: float) -> None:
+        while boundary := re.search(r"[.!?…](?:[\"'”’]+)?\s+", self.pending):
             end = boundary.end()
             sentence, self.pending = self.pending[:end], self.pending[end:]
+            self.consumed += end
             self._sentence(sentence, at)
 
     def _sentence(self, text: str, at: float) -> None:
@@ -254,8 +260,13 @@ class ReplyStream:
             self.send(clean[:left])
 
     def finish(self, full: str, at: float) -> None:
-        if full.startswith(self.raw):
-            self.add(full[len(self.raw) :], at)
+        if self.closed:
+            return
+        prefix = self.raw[: self.consumed].strip()
+        full = full.strip()
+        if full.startswith(prefix):
+            self.pending = full[len(prefix) : SPOKEN_CHARS]
+            self._drain(at)
         self._sentence(self.pending, at)
         self.close()
 

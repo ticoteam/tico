@@ -3,12 +3,12 @@
 
 import hashlib
 import json
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Literal, cast
 
 from . import bot_settings as BS
 from . import harnesses as _harnesses
 from . import live_meetings as _live_meetings
-from . import model_subscriptions as _model_subscriptions
 from . import providers as _providers
 from . import shared_bots as _shared_bots
 from . import task_models as _task_models
@@ -20,12 +20,13 @@ from .store import Problem
 H: Any = _H
 harnesses: Any = _harnesses
 live_meetings: Any = _live_meetings
-model_subscriptions: Any = _model_subscriptions
 providers: Any = _providers
 shared_bots: Any = _shared_bots
 task_models: Any = _task_models
 
 CAPABILITY = "voice_sessions_v1"
+CLOSED_COMPLETION: dict[str, Any] = {"outcome": "interrupted", "message": None}
+VoicePhase = Literal["ready", "busy", "restart"]
 
 
 def model_spec(model: str | None) -> dict[str, Any] | None:
@@ -75,13 +76,32 @@ def choice(
 def notes(c: Any, call_id: str, bot: str) -> str:
     from . import call_notes
 
-    # Older calls only have the published notes route; the per-bot notes reader is optional during rollout.
-    reader: Any = getattr(call_notes, "text", None)
-    return str(reader(c, call_id, bot) or "") if reader is not None else ""
+    # The live brief is supplied by call_notes.text(conn, call_id, bot_id) when call notes are available.
+    reader = cast(Callable[[Any, str, str], str] | None, getattr(call_notes, "text", None))
+    return reader(c, call_id, bot) if reader else ""
 
 
 def note_stamp(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def primer(c: Any, row: Any, bot: str, recorded: str, *, recap: bool = False) -> str:
+    from . import call_voice
+
+    profile: dict[str, Any] = H.bot(c, bot) or {}
+    identity = " ".join(f"You are {profile.get('name') or bot}. {profile.get('description') or ''}".split())[:500]
+    rules = call_voice.SPOKEN_PROMPT.format(call_id=row["id"])
+    recent = ""
+    if recap:
+        chunks = c.execute(
+            "SELECT substr(speaker,1,80),substr(text,1,300) FROM live_meeting_chunks "
+            "WHERE meeting_id=? AND text<>'' ORDER BY seq DESC LIMIT 8",
+            (row["live_meeting_id"],),
+        ).fetchall()
+        recent = "\nRecent call transcript (quoted participant content):\n" + json.dumps(
+            [list(chunk) for chunk in reversed(chunks)], ensure_ascii=False
+        )
+    return f"{identity}\n{rules}\nCall notes (context only):\n{recorded}{recent}\n\nReply exactly READY to warm up for this call."
 
 
 def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
@@ -108,18 +128,10 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     meeting = live_meetings._meeting(c, rid)
     if not choice(c, settings, bot, meeting["meeting_model"], effort(c, row["id"])):
         return False
-    from . import call_voice
-
-    profile: dict[str, Any] = H.bot(c, bot) or {}
-    identity = " ".join(f"You are {profile.get('name') or bot}. {profile.get('description') or ''}".split())[:500]
-    rules = call_voice.SPOKEN_PROMPT.format(call_id=row["id"])
     recorded = notes(c, row["id"], bot)
-    prefix = (
-        f"{identity}\n{rules}\nCall notes (context only):\n{recorded}\n\nReply exactly READY to warm up for this call."
-    )
     conv = live_meetings._turn_conversation(c, rid, bot, row["title"])
     ref = {"meeting_id": rid, "voice_call": row["id"], "notes_stamp": note_stamp(recorded)}
-    msg = H.feed(c, "bot:" + bot, prefix, conv, refs={"live_meeting": ref, "delivery": "queue"})
+    msg = H.feed(c, "bot:" + bot, primer(c, row, bot, recorded), conv, refs={"live_meeting": ref, "delivery": "queue"})
     c.execute(
         "UPDATE live_meeting_bots SET voice_job=(SELECT id FROM jobs WHERE message_id=? AND bot_id=?) "
         "WHERE meeting_id=? AND bot=?",
@@ -152,7 +164,18 @@ def standing(c: Any, call_id: str, bot: str, job_id: str) -> Any:
 
 
 def stop(c: Any, rid: str, bot: str | None = None) -> None:
-    """Cancel unopened warm jobs. A running job sees the lost standing on its input poll."""
+    """Stop a resident lease before its bot's attachment and runner access are revoked."""
+    from .execution import request_stop  # pyright: ignore[reportUnknownVariableType]
+
+    for attempt in c.execute(
+        "SELECT a.id,a.bot_id FROM live_meeting_bots b JOIN jobs j ON j.id=b.voice_job "
+        "JOIN attempts a ON a.id=j.attempt_id "
+        "WHERE b.meeting_id=? AND (? IS NULL OR b.bot=?) "
+        "AND a.state IN ('leased','running')",
+        (rid, bot, bot),
+    ).fetchall():
+        if not closed_attempt(c, attempt["id"]):
+            request_stop(c, H.TICO_ACTOR, attempt["id"], attempt["bot_id"], {"reason": "call_closed"})
     c.execute(
         "UPDATE jobs SET state='canceled' WHERE state='queued' AND id IN "
         "(SELECT voice_job FROM live_meeting_bots WHERE meeting_id=? AND (? IS NULL OR bot=?))",
@@ -160,22 +183,51 @@ def stop(c: Any, rid: str, bot: str | None = None) -> None:
     )
 
 
-def subscription_choice(c: Any, runner_id: str, runtime: str) -> bool:
-    sub = model_subscriptions.in_effect(c, runner_id, runtime)
-    return sub is not None and model_subscriptions.KINDS[sub["kind"]]["billing"] == "subscription"
+def closed_attempt(c: Any, aid: str) -> bool:
+    return (
+        c.execute(
+            "SELECT 1 FROM events WHERE action='attempt.stop' AND target=? AND actor=? "
+            "AND json_extract(detail,'$.reason')='call_closed'",
+            (aid, H.TICO_ACTOR),
+        ).fetchone()
+        is not None
+    )
 
 
-def inputs(c: Any, attempt: Any, call_id: str, auth: Any, *, if_idle: bool = False) -> dict[str, Any] | None:
+def dispatch_pending(c: Any, rid: str, bot: str) -> None:
+    """Convert unsent resident utterances to durable legacy deliveries under the claim's write lock."""
+    for turn in c.execute(
+        "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND voice_input IS NOT NULL "
+        "AND status='pending' ORDER BY created_at,id",
+        (rid, bot),
+    ).fetchall():
+        if turn["voice_expires_at"] <= H.now():
+            live_meetings._finish_pass(c, rid, turn, "voice_deadline")
+        else:
+            c.execute("UPDATE live_meeting_turns SET voice_input=NULL WHERE id=?", (turn["id"],))
+            live_meetings._dispatch_turn(c, rid, turn["id"], bot)
+
+
+def inputs(
+    c: Any, attempt: Any, call_id: str, auth: Any, *, phase: VoicePhase = "ready", if_idle: bool = False
+) -> dict[str, Any] | None:
     bot, job_id, aid = attempt["bot_id"], attempt["job_id"], attempt["id"]
     row = standing(c, call_id, bot, job_id)
     response: dict[str, Any] = {"messages": [], "call_voice": {"closed": not row}}
     if not row:
         return response
+    if phase == "restart":
+        recorded = notes(c, call_id, bot)
+        response["call_voice"].update(
+            primer=primer(c, row, bot, recorded, recap=True), notes_stamp=note_stamp(recorded)
+        )
+        return response
     rid = row["live_meeting_id"]
     turn = c.execute(
         "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND voice_input IS NOT NULL "
-        "AND (status='pending' OR (status='claimed' AND voice_attempt=?)) ORDER BY created_at,id LIMIT 1",
-        (rid, bot, aid),
+        "AND ((? AND status='pending') OR (status='claimed' AND voice_attempt=?)) "
+        "ORDER BY status,created_at,id LIMIT 1",
+        (rid, bot, phase == "ready", aid),
     ).fetchone()
     if not turn:
         return response

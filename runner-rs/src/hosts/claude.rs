@@ -180,6 +180,8 @@ pub(crate) struct VoiceSession {
     stdin: tokio::process::ChildStdin,
     stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     stopper: super::Stopper,
+    exited: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+    usage: Usage,
 }
 
 impl VoiceSession {
@@ -207,11 +209,40 @@ impl VoiceSession {
             .await
             .map_err(|e| failed(e.to_string()))?
         {
-            if let Ok(value) = serde_json::from_str(&line) {
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                if let Some((id, tokens)) = request_usage(&value) {
+                    self.usage.record_request(&value, id, tokens);
+                }
+                if value["type"] == "result" && value["parent_tool_use_id"].is_null() {
+                    self.usage.add_result_counts(&value);
+                }
                 return Ok(value);
             }
         }
         Err(failed("Claude closed the voice session"))
+    }
+
+    pub(crate) fn take_usage(&mut self) -> (i64, Value) {
+        let mut u = std::mem::take(&mut self.usage);
+        if u.input == 0 && u.output == 0 {
+            // When a process is stopped before its result, the requests it reported still cost tokens.
+            for (_, r, _) in &u.requests {
+                u.input += r[0] + r[1];
+                u.cached += r[1];
+                u.output += r[2];
+            }
+        }
+        (u.context_tokens(), u.token_event())
+    }
+
+    pub(crate) async fn stop_for_restart(&mut self, grace: Duration) -> Result<(), HostError> {
+        self.stopper.terminate(grace);
+        tokio::time::timeout(Duration::from_secs(2), &mut self.exited)
+            .await
+            .map_err(|_| failed("Claude did not stop for the voice session restart"))?
+            .map_err(|e| failed(e.to_string()))?
+            .map_err(|e| failed(e.to_string()))?;
+        Ok(())
     }
 }
 
@@ -530,6 +561,57 @@ struct Usage {
     requests: Vec<(String, [i64; 3], bool)>,
     /// The request each stream (the bot's, or a subagent's by its `parent_tool_use_id`) is in, for its `message_delta`.
     streaming: HashMap<String, String>,
+}
+
+impl Usage {
+    fn add_result_counts(&mut self, result: &Value) {
+        let usage = &result["usage"];
+        let (input, output) = usage_tokens(usage);
+        self.input += input;
+        self.output += output;
+        self.cached += count(usage, "cache_read_input_tokens");
+        self.cache_write += count(usage, "cache_creation_input_tokens");
+    }
+
+    fn record_request(&mut self, msg: &Value, id: Option<&str>, tokens: [i64; 3]) {
+        let stream = msg["parent_tool_use_id"].as_str().unwrap_or_default();
+        let id = match id {
+            Some(id) => {
+                self.streaming.insert(stream.to_owned(), id.to_owned());
+                Some(id)
+            }
+            None => self.streaming.get(stream).map(String::as_str),
+        };
+        if let Some(id) = id {
+            match self.requests.iter_mut().find(|(seen, _, _)| seen == id) {
+                Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
+                None => self
+                    .requests
+                    .push((id.to_owned(), tokens, stream.is_empty())),
+            }
+        }
+    }
+
+    fn context_tokens(&self) -> i64 {
+        self.requests
+            .iter()
+            .rev()
+            .find(|(_, _, main)| *main)
+            .map_or(self.input + self.output, |(_, r, _)| r.iter().sum())
+    }
+
+    fn token_event(&self) -> Value {
+        json!({
+            "input": self.input, "output": self.output, "total": self.input + self.output,
+            "cost_usd": self.cost,
+            "usage": {
+                "input": self.input, "cached": self.cached, "cache_write": self.cache_write, "output": self.output,
+                // The fourth count tells the server which requests describe the main context.
+                "requests": self.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
+                    .collect::<Vec<_>>()
+            }
+        })
+    }
 }
 
 #[derive(Default)]
@@ -1021,6 +1103,25 @@ impl ClaudeHost {
         effort: Option<&str>,
         aid: &str,
     ) -> Result<VoiceSession, HostError> {
+        self.open_voice(thread_id, thread_id, effort, aid)
+    }
+
+    pub(crate) fn restart_voice(
+        &self,
+        thread_id: &str,
+        effort: Option<&str>,
+        aid: &str,
+    ) -> Result<VoiceSession, HostError> {
+        self.open_voice(thread_id, &uuid::Uuid::new_v4().to_string(), effort, aid)
+    }
+
+    fn open_voice(
+        &self,
+        thread_id: &str,
+        session_id: &str,
+        effort: Option<&str>,
+        aid: &str,
+    ) -> Result<VoiceSession, HostError> {
         let mut thread = self
             .inner()
             .threads
@@ -1028,16 +1129,23 @@ impl ClaudeHost {
             .cloned()
             .ok_or_else(|| failed("Unknown Claude voice session"))?;
         thread.settings.background_wait = None;
+        if session_id != thread_id {
+            thread.started = false;
+            thread.fork_from = None;
+            thread.session_id = None;
+        }
         let (mut child, _stderr, _) = self
-            .launch(thread_id, &thread, effort, aid)
+            .launch(session_id, &thread, effort, aid)
             .map_err(|e| failed(format!("Could not open Claude voice session: {e}")))?;
         let stdin = child.stdin.take().expect("Claude stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("Claude stdout is piped")).lines();
-        let (stopper, _exited) = super::own(child);
+        let (stopper, exited) = super::own(child);
         Ok(VoiceSession {
             stdin,
             stdout,
             stopper,
+            exited,
+            usage: Usage::default(),
         })
     }
 
@@ -1621,16 +1729,12 @@ impl ClaudeHost {
 
     /// A `result` arrived: the turn is over when Claude read every message written to it.
     fn settle(&self, turn: &str, result: &Value) {
-        let (inp, out) = usage_tokens(&result["usage"]);
         let mut inner = self.inner();
         let cost = result["total_cost_usd"].as_f64();
         let text = result["result"].as_str().unwrap_or_default().to_string();
         let mut pipe_cost = inner.pipe.as_ref().map_or(0.0, |p| p.cost);
         let u = inner.usage.entry(turn.into()).or_default();
-        u.input += inp;
-        u.output += out;
-        u.cached += count(&result["usage"], "cache_read_input_tokens");
-        u.cache_write += count(&result["usage"], "cache_creation_input_tokens");
+        u.add_result_counts(result);
         if let Some(c) = cost {
             u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
             pipe_cost = c;
@@ -1661,27 +1765,11 @@ impl ClaudeHost {
             self.on_tools(msg, tid, turn);
         }
         if let Some((id, tokens)) = request_usage(msg) {
-            // Some models price each request by its prompt length (backend/providers.py LONG_PROMPT), subagents' too.
-            let stream = msg["parent_tool_use_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let main = stream.is_empty();
-            let mut inner = self.inner();
-            let u = inner.usage.entry(turn.into()).or_default();
-            let id = match id {
-                Some(id) => {
-                    u.streaming.insert(stream, id.to_string());
-                    Some(id.to_string())
-                }
-                None => u.streaming.get(&stream).cloned(),
-            };
-            if let Some(id) = id {
-                match u.requests.iter_mut().find(|(seen, _, _)| *seen == id) {
-                    Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
-                    None => u.requests.push((id, tokens, main)),
-                }
-            }
+            self.inner()
+                .usage
+                .entry(turn.into())
+                .or_default()
+                .record_request(msg, id, tokens);
         }
         if !msg.is_object() || crate::util::truthy(msg.get("parent_tool_use_id")) {
             return false; // subagent traffic is not the bot's reply
@@ -2052,12 +2140,7 @@ impl ClaudeHost {
             if let Some(u) = usage.as_ref() {
                 // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
                 // is more than it, never less.
-                let last = u
-                    .requests
-                    .iter()
-                    .rev()
-                    .find(|(_, _, main)| *main)
-                    .map_or(u.input + u.output, |(_, r, _)| r[0] + r[1] + r[2]);
+                let last = u.context_tokens();
                 if last > 0 {
                     inner.context.insert(tid.into(), last);
                 }
@@ -2065,17 +2148,7 @@ impl ClaudeHost {
             (inner.interrupted.contains(turn), usage, reply, limited)
         };
         if let Some(u) = usage.as_ref().filter(|u| u.input + u.output > 0) {
-            self.emit(event(
-                "tokens",
-                Some(tid),
-                Some(turn),
-                json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "cache_write": u.cache_write, "output": u.output,
-                                 // The fourth count marks the bot's own requests (1) from its subagents' (0): the
-                                 // newest of the bot's own is the session's context size (backend/topic_change.py).
-                                 "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
-                                     .collect::<Vec<_>>()}}),
-            ));
+            self.emit(event("tokens", Some(tid), Some(turn), u.token_event()));
         }
         self.poll_goal(tid);
         let ok = result
