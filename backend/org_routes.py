@@ -237,7 +237,7 @@ def register(app, auth, settings, settings_admin, store):
                 if activity:
                     row["goal_active"] = readable_active(c, auth, who, bot["id"], rows.goals.get(bot["id"], []))
                 row = redact(row)
-                out.append({name: row[name] for name in wanted if name in row} if wanted else row)
+                out.append({k: v for k, v in row.items() if k in wanted} if wanted else row)
             return out
 
     def cant_run(c, bot, who):

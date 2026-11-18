@@ -475,11 +475,13 @@ def test_fields_keeps_the_named_fields_and_reads_no_activity_it_leaves_out(api, 
     open_work(api, ["ops", "finance"])
     for token in ("ana-test", "cara-test"):
         full, everything = list_statements(api, monkeypatch, token)
-        for fields in ("id,slug,name,revision", "slug,state,onboarding_state", "id,slug,state,repo", "slug,status"):
+        for fields in ("revision,name,slug,id", "onboarding_state,state,slug", "repo,state,slug,id", "status,slug"):
             slim, read = list_statements(api, monkeypatch, token, "bots?fields=" + fields)
             wanted = fields.split(",")
-            assert slim == [{k: row[k] for k in wanted if k in row} for row in full], (token, fields)
-            assert all(list(row) == [k for k in row if k in wanted] for row in slim)
+            # In the full row's order, whatever order they were asked in.
+            assert [list(row.items()) for row in slim] == [
+                [(k, v) for k, v in row.items() if k in wanted] for row in full
+            ], (token, fields)
             if "status" not in wanted:
                 assert read < everything, (token, fields, read, everything)
     assert T.get(api, "bots?fields=", token="ana-test") == T.get(api, "bots", token="ana-test")

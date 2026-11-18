@@ -1173,16 +1173,13 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         they are `close` (close_to); a key on no tool for those only. An Only listed tool stays hidden from anyone it
         does not list."""
         from . import api_tools
+        from .read_cache import one
 
         rows, keep = _granted_tools(c, bot), []
-        # Every granted tool's row in one read, not one per grant.
-        ids, tools = sorted({row["granted"].get("tool_id") for row in rows} - {None, ""}), {}
-        for part in H.chunks(ids):
-            for tool in c.execute("SELECT * FROM tools WHERE id IN (%s)" % ",".join("?" * len(part)), part):
-                tools[tool["id"]] = tool
         for row in rows:
             tool_id = row["granted"].get("tool_id")
-            tool = tools.get(tool_id) if tool_id else None
+            # The row _granted_tools read for its health, in this snapshot: not read again.
+            tool = one(c, "SELECT * FROM tools WHERE id=?", (tool_id,)) if tool_id else None
             if tool is not None:
                 if api_tools.visible(c, who, tool, admins(), auth) or (close and api_tools.audience_of(tool) is None):
                     keep.append(row)
@@ -1202,7 +1199,11 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
     def bot_tools(request: Request, bot: str):
         who = request.state.identity
         auth.domain(who)
+        from . import task_privacy as privacy
+
         with store.read() as c:
+            # One snapshot for the whole answer: who may see what and the rows it shows agree, and each row is read once.
+            privacy.snapshot(c)
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             auth.require_read(c, who, bot)  # a 404 for someone who cannot even see the bot
             if not H.bot(c, bot):
@@ -1212,7 +1213,6 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
             result["tools"] = _merge_granted(result["tools"], shown_grants(c, who, bot, close))
             if close:
                 result["tools"] += _choices(c, bot, result["tools"])
-            from . import task_privacy as privacy
 
             def redact(value):
                 if isinstance(value, dict):

@@ -149,7 +149,10 @@ SCHEMAS.update(
             },
             required=["bot", "see", "read", "write", "revision"],
         ),
-        "BotList": items(ref("Bot")),
+        "BotList": {
+            **items(ref("Bot")),
+            "description": "Each bot as Bot; with ?fields=, each row holds only the named fields it has, none required",
+        },
         "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated_at": "n", "source": "s"}),
         "BotOnboarded": obj(
             {
