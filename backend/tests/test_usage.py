@@ -416,7 +416,7 @@ def test_a_claude_plan_run_that_names_no_runtime_is_read_as_five_minute_writes(a
 def test_haiku_writes_in_a_run_with_a_long_prompt_say_the_estimate_may_be_low():
     """The write premium is at the standard rate; which request wrote is not known, so a long one makes it may-be-low."""
     short, long = [1_000, 50_000, 800], [5_000, 115_000, 2_000]
-    assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short], cache_writes=(0, 900))[1] is False
+    assert providers.estimate("claude-haiku-5-5", 1_000, 50_000, 800, [short], cache_writes=(0, 900))[1] is False
     assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short, long], cache_writes=(0, 900))[1]
     assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short, long])[1] is False
 
