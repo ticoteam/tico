@@ -827,6 +827,9 @@ def _install_request_guard(
 
     app.state.observability = telemetry
     app.state.census = census
+    from .fair_share import FairShare
+
+    app.state.fair_share = FairShare.from_settings(settings)
 
     def raw_who_may(c, request, acting):
         """The catalogue's who-may line for a setting's write its route refused this person (settings_catalog)."""
@@ -1022,7 +1025,7 @@ def _install_request_guard(
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = run_reset = cause_reset = token_reset = None
+        via_reset = delegation_reset = run_reset = cause_reset = token_reset = share = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -1171,6 +1174,9 @@ def _install_request_guard(
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
+                # One API client's burst waits its turn, not the company's (backend/fair_share.py): refused before it
+                # reads anything else.
+                share = app.state.fair_share.admit(who, request.url.path)
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
@@ -1597,6 +1603,8 @@ def _install_request_guard(
             ):
                 return RedirectResponse(owner_link.LINK_PATH, status_code=302)
             response = await problem_handler(request, exc)
+            if exc.status == 429 and (wait := (getattr(exc, "extra", None) or {}).get("retry_after")):
+                response.headers["Retry-After"] = str(wait)
             if exc.status == 401 and path == mcp_oauth.MCP_PATH:
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
@@ -1620,6 +1628,7 @@ def _install_request_guard(
                 )
             raise
         finally:
+            app.state.fair_share.done(share)
             if via_reset is not None:
                 H.VIA.reset(via_reset)
             if token_reset is not None:
