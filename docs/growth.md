@@ -288,6 +288,42 @@ the result is the same as an upload. A missing or wrong signature is refused wit
 of the bot that owns a channel goes on that channel. A bot that owns several channels cannot be split, so its cost goes on
 Unknown and the run result carries a note. `sync` runs it.
 
+## A channel's read and its alerts
+
+A growth agent starts each run with `tico growth channel show <slug>` (API `GET /api/v2/growth/channels/{slug}`, MCP
+`tico_growth_channel_show`). Besides the channel's settings and open `channel:<slug>` tasks it answers, in this order:
+
+1. **KPI.** The KPI the channel moves (`input_kpi_id`, set with `tico growth channel update <slug> --input-kpi <id>` by the bot that owns
+   the channel, the owner or an admin) with its latest value and date, the target and colour of the goal it is linked
+   to, and its last 12 readings. Growth keeps no target of its own: a KPI with no target on any goal says "no target:
+   set on the goal by the Strategy Owner". With no KPI linked, the read says how to link one and who may.
+2. **Months.** The last 6 months of spend, new customers, CAC, kept at 30 days and LTV:CAC, each with its quality.
+3. **Changed.** The newest month against the month before, per figure: value, difference and per cent. A figure not
+   recorded in either month reads "not recorded" and has no change (never 0). Each figure that changed lists what lines
+   up with it since the start of the month before: tests started or finished on the channel (with their result) and
+   stage changes bear on every figure, budget changes on spend, CAC and LTV:CAC; a figure whose source was failing or
+   stale says it "may be a data gap"; when nothing recorded lines up, it says "nothing recorded on this channel explains
+   it". Tico never states a cause. The dated events (tests, stage and budget changes, crossings) follow, each with who
+   and when.
+4. **Tests.** Open tests on the channel with their stage and start date, and tests finished in the last 90 days, kept or
+   dropped, with their `result:` tag. Only tasks the reader may see.
+5. **Sources.** Each source behind the channel's figures with its health and last good update, and "stale" when it is
+   failing or stale or the newest month is more than 45 days old.
+
+`tico growth segment show <label>` (API `GET /api/v2/growth/segments/{label}`, MCP `tico_growth_segment_show`) is the
+same for a segment, from customer facts: new customers, kept at 30 and 90 days and LTV for the last 6 months, and the
+change from the month before. Spend is not split by segment. A month under the team's minimum cohort shows counts only.
+`GET /api/v2/growth/view-reads` counts the channel and segment reads by caller and run.
+
+**Alerts.** Three lines the team already set are watched: the channel's KPI turning red against its goal, its guardrail
+KPI going over its max, and its synced source failing. A KPI reading or a source run that crosses one files one task for
+the channel's owner, filed by the owner itself (so it may close it), labelled `channel:<slug>` and `growth:alert`, in
+General, with the value, the line and the read command. While the channel stays over the line, Tico comments on that
+task at most once a day; once the task is closed or done, the next crossing files a new one. Coming back under the line
+comments once and asks the owner to close the task: Tico never closes it. A channel with no owner tells nobody, and its
+read lists the crossing with "no owner: nobody was told". Each change of state emits `growth.channel.crossed` (ids
+only) for routines and rules. A failure in the check never undoes the reading or the run.
+
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
@@ -351,7 +387,7 @@ it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
 
 ## Who may do what
 
-A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
+A channel's stage and budget are its owner's, and the owning bot may change its why, stage, budget and KPI. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
 
 Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
@@ -370,6 +406,8 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 tico growth numbers                       the page: each month's rows, Unknown and the totals
 tico growth setup                         the four first-run steps, each done or not, and the next one
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
+tico growth channel update SLUG --input-kpi KPI_ID the KPI the channel moves (its target stays on its goal)
+tico growth segment show LABEL            one segment's 6 months from customer facts
 tico growth source list | add | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
 tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN

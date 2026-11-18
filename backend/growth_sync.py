@@ -601,6 +601,10 @@ def run(
         source["id"],
         {k: result[k] for k in ("run", "ok", "error", "written", "held", "not_written_count")},
     )
+    # A channel whose source this is may have started or stopped failing (backend/growth_brief.py).
+    from . import growth_brief
+
+    growth_brief.safely(growth_brief.check_source, c, source["id"], actor)
     return result
 
 

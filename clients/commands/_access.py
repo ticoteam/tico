@@ -342,6 +342,7 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_contacts_history",
         # Finance ad spend setup, run from the CLI; hidden to keep the listing under its size cap.
         "tico_growth_source_campaigns",
+        "tico_growth_segment_show",  # a segment owner bot's read, not a person's; hidden for the listing's size cap
         "tico_credential_grant",
         "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",
