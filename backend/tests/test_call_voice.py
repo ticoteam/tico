@@ -410,6 +410,40 @@ def test_voice_uses_the_company_subscription_meeting_model_at_low_effort(meet):
     assert post(meet, f"attempts/{attempt['id']}/inputs", {}, worker["token"])["call_voice"] == {"closed": False}
 
 
+def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, caplog):
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    voice, now = meet.app.state.calls.voice, [1000.0]
+    voice.clock = lambda: now[0]
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    path, token = f"attempts/{attempt['id']}", worker["token"]
+    _speak(meet, call["id"], 0)
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    post(
+        meet,
+        f"{path}/events",
+        {"events": [{"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "I think"}}]},
+        token,
+    )
+    now[0] += call_voice.ANSWER_SECONDS + 1
+    voice.tick()
+    assert voice.settle(5), "the expired speech stream is still holding a player"
+    [expired] = _turns(meet, call["meeting_id"])
+    assert (expired["status"], expired["skip_reason"]) == ("skipped", "voice_deadline")
+    assert meet.app.state.call_media.said == []
+    [line] = [record.message for record in caplog.records if record.message.startswith("call_voice_turn ")]
+    assert "skip_reason=voice_deadline " in line
+    _speak(meet, call["id"], 10_000)
+    next_turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert next_turn["id"] != turn["id"]
+
+
 def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypatch):
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])

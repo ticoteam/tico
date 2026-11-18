@@ -575,12 +575,13 @@ class Voice:
             if current and current["phase"] == "thinking":
                 turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=?", (current["turn"],)).fetchone()
                 status = turn["status"] if turn else "skipped"
+                reason = turn["skip_reason"] if turn else None
                 ended = ("skipped", None)
                 past_due = status in ("pending", "claimed") and now - current["asked"] >= ANSWER_SECONDS
                 if past_due:
                     live_meetings._finish_pass(c, rid, turn, "voice_deadline")
-                    status = "skipped"
-                if past_due or turn and turn["skip_reason"] == "voice_deadline":
+                    status, reason = "skipped", "voice_deadline"
+                if reason == "voice_deadline":
                     self._note(voice, f"{_name(c, current['bot'])} couldn't answer in time")
                 if status == "replied":
                     with voice.lock:
@@ -590,15 +591,18 @@ class Voice:
                 if status == "skipped":
                     with voice.lock:
                         if voice.open and voice.open["turn"] == current["turn"]:
+                            # A delta may have opened the stream since the ticker read the turn.
+                            ended_turn = voice.open
                             voice.open = None
                             self._set(voice, current["bot"], "listening")
                             moved = True
-                            if stream := current.get("stream"):
+                            if stream := ended_turn.get("stream"):
+                                ended_turn["skip_reason"] = reason or ended[1]
                                 stream.close()
                                 voice.epochs[current["bot"]] = voice.epochs.get(current["bot"], 0) + 1
                                 c.after_commit.append(lambda: self.calls.media.hush(call_id))
                             else:
-                                self._log_turn(c, call_id, current, *ended)
+                                self._log_turn(c, call_id, ended_turn, *ended)
             with voice.lock:
                 if voice.open is None:
                     while voice.waiting:
@@ -837,6 +841,7 @@ class Voice:
                         voice.open = None
                 if _epoch(voice, bot) == epoch:
                     self._set(voice, bot, "listening")
+                why = timing.get("skip_reason") or why
             try:
                 with self.store.transaction() as c:
                     if played:
