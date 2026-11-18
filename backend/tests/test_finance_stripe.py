@@ -698,13 +698,41 @@ def test_the_connections_route_takes_a_stripe_key_through_the_stripe_probe(api, 
 
     monkeypatch.setattr(FA, "stripe_probe", stripe_probe)
     monkeypatch.setattr(FA, "mercury_probe", no_mercury)
-    res = api.post(
-        "/api/v2/finance/connections", json={"provider": "stripe", "credential_id": "cred-stripe"}, headers=headers()
-    )
+    with store.read() as c:
+        lines = {
+            key: str(c.execute("SELECT id FROM fin_accounts WHERE type=? AND active=1 LIMIT 1", (kind,)).fetchone()[0])
+            for key, kind in (("transfer_account_id", "expense"), ("capital_account_id", "liability"))
+        }
+    body = {"provider": "stripe", "credential_id": "cred-stripe", **lines}
+    res = api.post("/api/v2/finance/connections", json=body, headers=headers())
     assert res.status_code == 200, res.text
     assert probed == ["cred-stripe"]
     assert res.json()["status"] == "committed", res.json()
     assert res.json()["result"]["money_accounts"][0]["kind"] == "stripe"
+    with store.read() as c:
+        settings = _settings(c, str(res.json()["result"]["connection_id"]))
+    assert {k: settings[k] for k in lines} == lines
+
+
+def test_the_connections_route_refuses_stripe_lines_for_another_provider_before_any_probe(api, monkeypatch):  # noqa: F811
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        store_keys(c, "cred-stripe")
+
+    probed: list[str] = []
+
+    def no_probe(_store: Any, _vault: Any, credential_id: str) -> tuple[dict[str, object], str]:
+        probed.append(credential_id)
+        return {}, "probed"
+
+    for name in ("mercury_probe", "stripe_probe", "brex_probe"):
+        monkeypatch.setattr(FA, name, no_probe)
+    for provider in ({}, {"provider": "mercury"}, {"provider": "brex"}):
+        body = {**provider, "credential_id": "cred-stripe", "transfer_account_id": "acct-made-up"}
+        res = api.post("/api/v2/finance/connections", json=body, headers=headers())
+        assert res.status_code == 422 and "transfer_account_id" in res.text, (provider, res.text)
+    assert probed == []  # the key never reached a probe
 
 
 def test_a_marked_payment_paid_through_stripe_still_posts_the_fee_so_the_balance_nets(books):
@@ -1532,6 +1560,13 @@ def test_a_line_set_while_the_backfill_reads_is_kept(books):
         settings = _settings(c, cid)
         assert settings["backfilled"] is True and calls[0] >= 4
         assert settings["transfer_account_id"] == sellers
+
+
+def test_connection_create_with_no_probe_points_to_the_connect_route(books):
+    with books.transaction() as c:
+        for provider in ("mercury", "stripe", "brex"):
+            done = act(c, OWNER, "connection_create", {"provider": provider, "credential_id": "cred-stripe"})
+            assert done.status != "committed" and "/api/v2/finance/connections" in str(done.reason), done
 
 
 def test_a_new_stripe_connection_takes_its_transfer_line_and_refuses_a_wrong_type(books):
