@@ -371,7 +371,12 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     )
     target = tmp_path / "plan.json"
     jobs = checks.prepare("pull_request", "base", target)["matrix"]["include"]
-    assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
+    assert {
+        "suite": "conformance",
+        "files": [checks.CONFORMANCE],
+        "crates": ["relay-rs", "runner-rs"],
+        "history": True,
+    } in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     (tmp_path / "runner_support/tests").mkdir(parents=True)
@@ -2877,6 +2882,24 @@ def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_
     assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
 
 
+def test_a_base_missing_from_a_one_commit_checkout_is_fetched_before_it_is_read(python_retry_leg, monkeypatch):
+    base_sha = "b" * 40
+    monkeypatch.setenv("BASE_SHA", base_sha)
+
+    def output(command, *args, **kwargs):
+        if command[:2] == ["git", "rev-parse"] and "--verify" in command:
+            raise subprocess.CalledProcessError(1, command)
+        return "a" * 40 + "\n"
+
+    monkeypatch.setattr(checks.subprocess, "check_output", output)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=head)
+    assert status == 0
+    fetch, cat = calls[2][0], calls[3][0]
+    assert fetch == ["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha]
+    assert cat[:3] == ["git", "cat-file", "-e"]
+
+
 @pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
 def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
     monkeypatch.setenv("BASE_SHA", base_sha)
@@ -3564,6 +3587,11 @@ def test_every_test_that_reads_this_checkouts_history_gets_a_full_checkout(tmp_p
     jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
     marked = {job["suite"]: job.get("history", False) for job in jobs}
     assert marked == {"python-1": True, "python-2": False}
+
+    # The conformance VM always keeps full history: the Rust updater test reads main's parser from origin/main.
+    picked |= {"conformance": True, "rust": ["runner-rs"]}
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    assert {job["suite"]: job.get("history", False) for job in jobs}["conformance"] is True
 
 
 def _two_groups(counts):
