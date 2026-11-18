@@ -29,6 +29,9 @@
 .tsection{margin:12px 0}
 /* Runs on: the one model picker (settings-bots-choice.ts), as wide as its words, never past the rail. */
 .task-run-pick{display:flex;min-width:0;max-width:100%}
+/* In the task's facts the closed button is as wide as its words ("Same as bot 150K"): its -7px pull to line up with the
+   other facts sits on the wrapper, since on the button it came off the button's own width and clipped the words. */
+span.task-run-pick{margin-left:-7px}span.task-run-pick .sb-pick{width:auto;margin-left:0}
 .tlabels,.tlinks{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .tlabels form.inline,.tlinks form.inline{display:inline-flex;margin:0}
 .tlabels form.inline input,.tlinks form.inline input{font-size:var(--t-sm);padding:2px 6px;width:auto}

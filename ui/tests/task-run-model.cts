@@ -79,6 +79,8 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     const box = sec.locator('[data-bot-choice]');
     await box.waitFor();
     assert.equal(await closedText(box), 'Same as bot', 'no choice of its own: Same as bot, nothing else');
+    // The closed words are whole, not cut to "Same as…" by the facts row.
+    assert.ok(await box.locator('.sb-pick-text').evaluate(el => el.scrollWidth <= el.clientWidth), 'the closed button shows all its words');
     // The old stacked selects are gone: one picker.
     assert.equal(await sec.locator('select').count(), 0);
     const panel = await openPicker(box);
