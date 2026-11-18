@@ -334,6 +334,7 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
     heard = threading.Event()
     media = meet.app.state.call_media
+
     def record(call_id, frames, mark, budget, before, started):
         async def play():
             previous, played = None, 0

@@ -769,8 +769,12 @@ class Voice:
                     return
                 loop = asyncio.get_running_loop()
                 ready: asyncio.Queue[str | None] = asyncio.Queue()
+
+                def send(sentence: str | None) -> None:
+                    loop.call_soon_threadsafe(ready.put_nowait, sentence)
+
                 with voice.lock:
-                    stream.connect(lambda sentence: loop.call_soon_threadsafe(ready.put_nowait, sentence))
+                    stream.connect(send)
                 try:
                     while (sentence := await ready.get()) is not None:
                         yield sentence
@@ -783,7 +787,13 @@ class Voice:
                 planned = 0
                 async with aclosing(incoming()) as pending:
                     async for sentence in pending:
-                        if not self._standing(call_id, bot, voice, epoch):
+                        with voice.lock:
+                            canceled = _epoch(voice, bot) != epoch
+                        if (
+                            canceled
+                            or stream is not None
+                            and not await asyncio.to_thread(self._standing, call_id, bot, voice, epoch)
+                        ):
                             why = "canceled"
                             return
                         planned += estimate_ms(sentence)
