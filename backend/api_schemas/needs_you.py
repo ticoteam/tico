@@ -39,6 +39,11 @@ NEEDS_ITEM = obj(
         "type": "string",
         "description": "In GET /api/v2/needs-you/snoozed: when this snoozed ask comes back",
     },
+    about={
+        "type": "string",
+        "description": "An OK whose task is titled by its kind alone (\"Send an email\"): what this one is about, "
+        "in its subject's words (\"Send email: November update\"), for its party; the row's first line",
+    },
 )
 
 

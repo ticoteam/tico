@@ -418,15 +418,19 @@ def needs_act(it):
 
 
 def needs_brief(items, n):
-    """The first `n` Needs you items (views.needs_items) as a card's rows. A row is titled by its task's title, from the
-    brief needs_items gives for a task the reader may read; a Paused cause and an item without a task by its own `line`.
+    """The first `n` Needs you items (views.needs_items) as a card's rows. A row is titled by what an OK is about
+    (`about`, for a task filed for an OK), else its task's title, from the brief needs_items gives for a task the reader
+    may read; a Paused cause and an item without a task by its own `line`.
     `line` (the ask, the missing work, the cause, the mention's first line) goes along as the row's tooltip, and `act`
     (needs_act) as the word at its right."""
     return [
         {
             "id": it.get("id"),
             "kind": it.get("kind"),
-            "title": (it.get("kind") != "paused" and (it.get("task") or {}).get("title")) or it.get("line") or "",
+            "title": it.get("about")
+            or (it.get("kind") != "paused" and (it.get("task") or {}).get("title"))
+            or it.get("line")
+            or "",
             "line": it.get("line") or "",
             "act": needs_act(it),
             "task_id": it.get("task_id") or (it.get("id") if it.get("kind") == "task" else None),

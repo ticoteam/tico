@@ -168,7 +168,7 @@ const VIEW = {width: 390, height: 844};
       check(cb.height >= 44 || cb.width >= 44, `the version control is tappable (${cb.width}x${cb.height})`);
       await ctl.click();
       const info = (await dialog.locator('.dc-vmenu .dc-vinfo').allInnerTexts()).map(t => t.trim());
-      check(JSON.stringify(info) === JSON.stringify(['Tasks Product Owner · Spec · v3 · Nov 13', 'Decision model: Meets · Clear']),
+      check(JSON.stringify(info) === JSON.stringify(['Tasks Product Owner · Spec · v3 · Nov 13', 'Decision model: Meets the bar · Clear']),
         `the menu says the rest in full (${JSON.stringify(info)})`);
       const items = dialog.locator('.dc-vmenu [data-dc-ver]');
       check(await items.count() === 3, `the menu lists three versions (${await items.count()})`);

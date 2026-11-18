@@ -52,14 +52,19 @@ What goes at the top, before `#details`:
   the solution before and after with arrows.
 - **Feature spec:** the goal (who, and what they can do after that they cannot now), then the solution before and
   after, one pair per screen in the order a person meets them.
-- **QA page:** the result and what was not checked, then the plan (the spec's acceptance criteria, one row each) with
-  each result, then the proof and the findings.
+- **QA page:** the result and what was not checked, then the verdict strip (four tiles: criteria passed of those due
+  before release, checks at the head, open review findings, risk in five words or fewer; then "Approve = ship to
+  production"), the plan (the spec's acceptance criteria, one row each, in its order, with how each was checked and
+  pass, fail or after launch), the proof, how it works (the parts the change touches as boxes, the changed ones
+  `class="box changed"`, and the files changed with their lines and a total; a one-file change names its file
+  instead), risk and rollback (how to undo it, and whether stored data changes), then the findings. Output over 10
+  lines (a log, the CI job list) is folded in a `<details>`.
 - **Release report:** the changelog first, written for customers, then why we are confident, the plan and the biggest
   risks (three at most).
 
 Below the line, only what the builder, QA or release needs. Each template has the sections its stage's checker reads
 (a spec: goal, scope, acceptance criteria; a review: the head commits, each model's checks and findings; QA: the
-proof, the checks at the head, what each reviewer found; Checked in production: the version and what was run there).
+strip, the proof, how it works, risk and rollback, the checks at the head, what each reviewer found; Checked in production: the version and what was run there).
 Keep every section; write "Nothing." in one that has nothing, and delete the pictures only where no screen changed
 (show the call and its output in two `<pre>` blocks instead, and say so in the opening).
 

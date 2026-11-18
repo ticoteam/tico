@@ -251,6 +251,66 @@ FILED_TITLES: dict[str, str] = {
 }
 
 
+def _clip_words(text: object, most: int = 120) -> str:
+    said = " ".join(str(text or "").split())
+    return said if len(said) <= most else said[: most - 1].rstrip() + "…"
+
+
+def _named(content: object, *path: str) -> str:
+    """The text at `path` in an OK's content, or ""."""
+    at: object = content
+    for key in path:
+        at = cast("dict[str, object]", at).get(key) if isinstance(at, dict) else None
+    return _clip_words(at) if isinstance(at, str) else ""
+
+
+# What an OK of each OWNED kind is about, in its subject's own words, from the content it binds: the line a party's
+# Needs you row shows instead of the filed task's FILED_TITLES (task #389: "Send an email" twice on one phone). Read
+# from the content, not stored, so an OK asked before this shows its subject too. Only a party to the OK ever sees it
+# (views.needs_items gives it with the ask entry their own read of the task gives).
+ABOUT: dict[str, Callable[[object], str]] = {
+    "email_send": lambda c: f"Send email: {s}" if (s := _named(c, "subject")) else "",
+    "letter": lambda c: f"Mail a letter to {n}" if (n := _named(c, "recipient", "name")) else "",
+    "edition": lambda c: f"Publish: {t}" if (t := _named(c, "title")) else "",
+    "webhook": lambda c: f"Make webhook endpoint {n}" if (n := _named(c, "name")) else "",
+    "publish": lambda c: f"Publish to the roadmap: {t}" if (t := _published_title(c)) else "",
+}
+
+
+def _published_title(content: object) -> str:
+    """The public title a roadmap OK publishes: its content's text is the JSON of the published values
+    (roadmaps.publication_payload). "" when the change does not set one (a summary only); about() then reads the task's
+    own public title."""
+    text = cast("dict[str, object]", content).get("text") if isinstance(content, dict) else None
+    try:
+        values: object = json.loads(text) if isinstance(text, str) else None
+    except ValueError:
+        return ""
+    return _named(values, "public_title")
+
+
+def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "") -> str:
+    """What one OK is about for its parties' Needs you rows: its subject's words (ABOUT); else the ask's own line when it
+    says more than a question of the kind does (a Finance action's line names the payee and amount); else ""."""
+    found = grant(conn, requirement_id)
+    if not found:
+        return ""
+    kind = kind_of(found["subject"])
+    said = ABOUT.get(kind, lambda _c: "")(found["content"])
+    if said:
+        return said
+    if kind == "publish":
+        # A change that leaves the public title as it is: the task's public title is what the post is about (public text,
+        # never the internal title).
+        row = conn.execute(
+            "SELECT public_title FROM tasks WHERE id=?", (str(found["subject"]).partition(":")[2],)
+        ).fetchone()
+        if row and (title := _clip_words(row[0])):
+            return f"Publish to the roadmap: {title}"
+    line = _clip_words(line)
+    return line if line and not line.endswith("?") else ""
+
+
 def generic(subject: str) -> bool:
     """Whether a bot may ask for and use an OK of this subject through the generic routes: a GENERIC kind only."""
     return ":" in str(subject) and kind_of(subject) in GENERIC

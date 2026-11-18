@@ -994,7 +994,9 @@ function decideBarSet(): HTMLElement | null {
 }
 const DEC_BAR_WATCH = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { decideBarSet(); });
 // ---- a page that comes back: the right side in parts
-const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['–', 'Not checked'], not_met: ['✗', "Doesn't"]};
+/** The Decision model's word on the meta line and in its menu: "Meets the bar", "Not sure", "Falls short" or "Not
+    checked", never a bare "Unsure" or "Doesn't" (task #389). */
+const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets the bar'], unsure: ['?', 'Not sure'], failed: ['–', 'Not checked'], not_met: ['✗', 'Falls short']};
 /** A person's own words, cut to 2 lines, with "more" (shown in full once opened). */
 function decideClampHTML(st: DecState, it: NeedsEntry, part: string, text: string): string {
   const open = st.open.has(`${it.id}:more:${part}`);
@@ -1007,6 +1009,26 @@ function decideRoundAnswer(r: DecRound, last: boolean): string {
   const a = decideAnswerOf(r, myActor(), true);
   if (a) return a.answer === 'no' ? 'Sent back' : "OK'd";
   return last ? '' : 'Replaced';
+}
+/** Notes longer than this, with no verdict line of their own, show this much and More. */
+const DEC_NOTICE_CUT = 120;
+/** One notice above the page's parts (why they are asked again, what a reviewer said of the new commits): its first
+    line alone, the verdict ("No blockers", "Blocks: …", "Unsure: …"), and More for the rest, so at most a few lines sit
+    above Notes on a phone (task #389: 18 lines of commits and commands came first). A note with no line break of its own
+    shows its first DEC_NOTICE_CUT characters. */
+function decideNoticeHTML(st: DecState, it: NeedsEntry, notice: string): string {
+  const text = notice.trim(), br = text.indexOf('\n');
+  let head = br < 0 ? text : text.slice(0, br).trim(), rest = br < 0 ? '' : text.slice(br + 1).trim();
+  if (!rest && head.length > DEC_NOTICE_CUT) {
+    const cut = head.lastIndexOf(' ', DEC_NOTICE_CUT);
+    const at = cut > DEC_NOTICE_CUT / 2 ? cut : DEC_NOTICE_CUT;
+    [head, rest] = [`${head.slice(0, at).trim()}…`, head.slice(at).trim()];
+  }
+  if (!rest) return `<p class="dc-notice" role="note">${esc(head)}</p>`;
+  const key = `notice:${text.length}:${head.slice(0, 40)}`, open = st.open.has(`${it.id}:more:${key}`);
+  return `<div class="dc-notice" role="note"><p>${esc(open && head.endsWith('…') && br < 0 ? text : head)}</p>`
+    + (open ? (br < 0 ? '' : `<p class="dc-notice-rest">${esc(rest)}</p>`)
+      : `<button type="button" class="linkish dc-more-btn" data-dc-more="${esc(key)}">More</button>`) + '</div>';
 }
 /** The right side of a page's OK, in parts. First one meta line, one control: who asked (`by`), the stage, the
     version, its date and Jev's word (a phone keeps the mark and leaves the date and the word to the menu), then the
@@ -1042,7 +1064,7 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   const sub = `<div class="dc-meta"><span class="dc-vwrap"><button type="button" class="dc-vbtn${since?.on ? ' on' : ''}" data-dc-vmenu aria-haspopup="menu" aria-expanded="${menu}">`
     + `${line}${TL_ICON.caret}</button><span class="dc-menu dc-vmenu" role="menu"${menu ? '' : ' hidden'}>${sheet}</span></span>${tag}</div>`
     // Why they are asked again, and a conflict their OK hands to the Builder: said before anything else is read.
-    + notices.map(n => `<p class="dc-notice" role="note">${esc(n)}</p>`).join('');
+    + notices.map(n => decideNoticeHTML(st, it, n)).join('');
   const parts: string[] = [];
   if (now.changed.length) {
     parts.push(`<section class="dc-part"><h4>What changed in v${now.version}</h4><ul class="dc-changed-list">${now.changed.slice(0, 5).map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`);

@@ -682,14 +682,17 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
         A.answer(c, row["id"], rid, BEN, "ok")  # no person OK before the review
     with _refused("Say which commits you read"):
         _bot(c, row, rid, REVIEWER, "ok")
-    _bot(c, row, rid, REVIEWER, "ok", "Read dce5a62: sign() fixed, the tests cover 0.")
+    _bot(c, row, rid, REVIEWER, "ok", "No blockers\nRead dce5a62: sign() fixed, the tests cover 0.")
     assert R.unreviewed(c, E.task(c, row["id"])) is None, "the reviewer's OK names the commit it read"
     standing = _f2(c, row)
     assert (standing.state, standing.on) == (R.WAITING, None), "now any person's"
     assert standing.line == "Pre-release"
     # The decision view draws the page's rounds instead of this line: the bot's read stays on the face as a notice,
     # and so does a merge conflict the person's OK hands to the Builder (as Needs you adds it to the line).
-    read = "reviewer reviewed the commits since the reviews: Read dce5a62: sign() fixed, the tests cover 0."
+    # The notice keeps the verdict's line apart for the review screen (task #389).
+    read = (
+        "reviewer reviewed the commits since the reviews: No blockers.\nRead dce5a62: sign() fixed, the tests cover 0."
+    )
     assert standing.notices == (read,)
     assert PR.notices(c, row["id"], rid) == [read]
     from backend import pr_conflicts as PC
@@ -703,6 +706,18 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
     A.answer(c, row["id"], rid, BEN, "ok")
     assert PR.notices(c, row["id"], rid) == [], "nothing to say once it is OK'd"
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
+
+
+def test_a_reviewers_note_keeps_its_verdict_line_apart_for_the_review_screen():
+    # Task #389: an 18-line note of commits and commands sat above Notes on a phone. The first line is the verdict,
+    # kept on its own; the rest is one line after it, which the review screen folds behind More.
+    assert R.verdict_and_rest("No blockers\n\nRead dce5a62..9f1:\n  pytest -q: 41 passed\n") == (
+        "No blockers",
+        "Read dce5a62..9f1: pytest -q: 41 passed",
+    )
+    assert R.verdict_and_rest("Read dce5a62: sign() fixed.") == ("Read dce5a62: sign() fixed.", "")
+    assert R.verdict_and_rest("  \n ") == ("", "")
+    assert R.verdict_and_rest(None) == ("", "")
 
 
 def test_a_qa_with_no_new_commits_goes_straight_to_the_person(c, store):

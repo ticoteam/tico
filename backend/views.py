@@ -2030,7 +2030,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
-        from . import task_calls
+        from . import task_asks, task_calls
         from .files import readable_earlier
 
         # Every ask's task read together: the list costs what one task's view does.
@@ -2050,6 +2050,13 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 item["line"] = item["ask"]["line"]
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
+                    # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
+                    # this one is about, to its party, in place of that title (task #389).
+                    title = str((item.get("task") or {}).get("title") or "")
+                    if title in task_asks.FILED_TITLES.values():
+                        said = task_asks.about(c, item["requirement_id"], item["line"])
+                        if said:
+                            item["about"] = said
     return sorted(items, key=needs_key)
 
 

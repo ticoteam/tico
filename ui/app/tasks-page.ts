@@ -595,11 +595,12 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean), line = it.line.toLowerCase();
   return !taskFiltersOn(state.filters) && words.every(w => line.includes(w));
 }
-/** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
+/** A Needs you row's first line: what an OK is about when its task is titled by its kind alone ("Send an email"), else
+    its task's title; a Paused cause or a mention outside a task by its own line. */
 function needsTitle(it: NeedsEntry): string {
   // A bot's ❓: its task's title like any ask; in a direct chat with the bot, the bot's name. Its question goes under it.
-  if (it.kind === 'question') return it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
-  return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
+  if (it.kind === 'question') return it.about || it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
+  return it.about || (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
 }
 /** Its second line: the question, under an Answer row's title; other asks keep it as the tooltip. */
 function needsAsk(it: NeedsEntry): string {

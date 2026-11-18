@@ -173,6 +173,29 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "Can't tell what Reviewer 2 found.",
             "Has Reviewer 2's findings.",
         ),
+        # Task #389 (Chris, Nov 13: the QA review "should look really, really clear", with architecture diagrams): what
+        # a person reads first, how the change works, and how to undo it. Nov 14's five QA pages had none of the three.
+        Part(
+            "strip",
+            "opens with a verdict a person reads first, before the details: how many of the acceptance criteria passed, "
+            "the checks, the open review findings and the risk (four short tiles or one line)",
+            "No verdict strip to read first (criteria passed, checks, findings, risk).",
+            "Can't tell if there is a verdict to read first.",
+        ),
+        Part(
+            "how",
+            "shows how the change works: a diagram of the parts it touches with the changed ones marked, and the files "
+            "changed with their line counts; a change to one file may name that file instead of a diagram",
+            "No diagram of how it works, or no list of the files changed.",
+            "Can't tell if it shows how the change works.",
+        ),
+        Part(
+            "rollback",
+            "says the risk (what could go wrong, and for whom) and the rollback: how to undo the change, and whether "
+            "stored data changes",
+            "No risk and rollback (how to undo it, and whether stored data changes).",
+            "Can't tell if it says how to undo the change.",
+        ),
     ),
     "validate": (
         Part(
