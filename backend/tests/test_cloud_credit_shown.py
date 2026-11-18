@@ -39,6 +39,15 @@ def test_a_machine_refused_for_credit_is_out_of_credit_everywhere_while_hq_still
         c.execute("UPDATE cloud_machines SET problem='out_of_credit' WHERE bot='_shared'")
     shown = _shown(api)
     assert (shown["access"], shown["reason"]) == ("frozen", "out_of_credit")
+    # The status every page reads goes through it: an idle bot on the refused machine reads stopped for credit.
+    with store.transaction() as c:
+        c.execute("INSERT INTO bot_status(bot,state,focus,open_tasks,needs_human) VALUES('botops','idle','',1,0)")
+    line = api.get("/api/v2/status?bot=botops", headers=signed_in()).json()["status"]
+    assert (line["state"], line["stopped"], line["focus"]) == ("paused", "out_of_credit", events.CREDIT_FOCUS)
+    # A message to it is kept and says why it waits.
+    sent = api.post("/api/v2/chat/botops", json={"text": "Are you there?"}, headers=signed_in())
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["message"]["warning"] == holds.CREDIT_WARNING
     with store.read() as c:
         row = events.credit_overlay(c, {"bot": "botops", "state": "idle"})
         assert (row["state"], row["stopped"]) == ("paused", "out_of_credit")
@@ -65,6 +74,7 @@ def test_a_machine_refused_for_credit_is_out_of_credit_everywhere_while_hq_still
     with store.read() as c:
         assert events.credit_overlay(c, {"bot": "botops", "state": "idle"})["state"] == "idle"
         assert holds.warning(c, "bot:botops") is None
+    assert api.get("/api/v2/status?bot=botops", headers=signed_in()).json()["status"]["state"] == "idle"
 
 
 def test_a_frozen_company_stops_its_cloud_bots_too(environment, monkeypatch):

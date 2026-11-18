@@ -98,6 +98,10 @@ async function open(browser: import('playwright').Browser, role: string, hash: s
       assert.match(await page.locator('#bot-alert').innerText(), /Out of credit/);
       await page.locator('#bot-alert [data-cloud-pay]').waitFor();
       assert.equal(await page.locator('#bot-alert [data-bot-release]').count(), 0);
+      // The chat's notice says the same: the server's words, Add credit, and no Release.
+      await page.locator('#conv-paused [data-cloud-pay]').waitFor();
+      assert.match(await page.locator('#conv-paused').innerText(), new RegExp(CREDIT));
+      assert.equal(await page.locator('[data-bot-release]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
