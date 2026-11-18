@@ -376,7 +376,7 @@ def production_shaped(api, unread, threads_n=10):
                 refs = {"task": task["id"], "trigger": "comment", "wake": f"w-{n}", "news": [f"n-{n}"]}
                 if n % 25 == 24:
                     refs["reconcile"] = {"active": [{"id": other}]}
-                wake = threads.post(c, H.KEEPER, thread["id"], f"Wake {n}", refs=refs)
+                wake = threads.post(c, H.TICO_ACTOR, thread["id"], f"Wake {n}", refs=refs)
                 reply = threads.post(
                     c,
                     "bot:ops",
@@ -418,8 +418,8 @@ def statements_of(api, path):
 def test_the_bench_rail_and_catch_up_on_production_shaped_posts(api, capsys, monkeypatch, unread, threads_n):
     """Criterion 7's bench, on synthetic posts shaped like production's: the rail and Catch up for a reader with
     `unread` new posts across `threads_n` task threads, then the same posts all restricted (what the rule before this
-    wrote). Plain posts need no per-message check and fewer statements; it prints statements, checks and the median of
-    five loads in ms for both. It asserts no timing."""
+    wrote). Plain posts need no per-message check; it prints statements, checks and the median of five loads in ms for
+    both, and asserts neither statements nor timing (main reads restricted posts in batches, so those barely differ)."""
     import time
 
     made = production_shaped(api, unread, threads_n=threads_n)
@@ -449,4 +449,3 @@ def test_the_bench_rail_and_catch_up_on_production_shaped_posts(api, capsys, mon
             f"\n{unread} unread in {threads_n} threads (statements, checks, ms): plain {plain}, restricted {restricted}"
         )
     assert plain[1] == 0 and restricted[1] > 0
-    assert plain[0] < restricted[0]
