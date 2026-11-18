@@ -116,6 +116,16 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
     assert checks.durations([xml]) == {"a.py": 4, "b.py": 3}
 
 
+def test_durations_use_only_the_initial_python_report(tmp_path, monkeypatch):
+    report = '<testsuite><testcase file="a.py" time="2"/></testsuite>'
+    for suffix in ("", "-retry", "-base"):
+        source(tmp_path, f"ci-results/python-1{suffix}.xml", report)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "durations"])
+    assert checks.main() == 0
+    assert json.loads((tmp_path / "durations.json").read_text()) == {"a.py": 2}
+
+
 def test_a_plan_packs_by_the_seconds_the_last_green_queue_groups_measured_averaged_per_file(tmp_path, monkeypatch):
     """One group's seconds for a file swing by 2x, so the plan averages the groups it restored (a file one group did not
     run keeps the others' figure), and the queue's own timings job saves what the next plans read."""
@@ -2477,6 +2487,9 @@ def test_a_fail_fast_cancel_names_the_first_failing_tests(tmp_path, monkeypatch,
         '</testcase><testcase classname="backend.tests.test_ok" name="test_fine"/>'
         '<testcase classname="backend.tests.test_b" name="test_err"><error message="y"/></testcase></testsuite>'
     )
+    (tmp_path / "python-7-base.xml").write_text(
+        '<testsuite><testcase classname="backend.tests.test_base" name="test_unrelated"><error/></testcase></testsuite>'
+    )
     (tmp_path / "broken.xml").write_text("<testsuite")
     assert checks.junit_failed([tmp_path / "python-7.xml"], limit=1) == [
         "test_thread_halfway.py::test_bounded",
@@ -2666,29 +2679,55 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
     assert "scripts/pr_checks.py run --quarantine" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "quarantine" not in (workflows / name).read_text(), name
+        assert "--quarantine" not in (workflows / name).read_text(), name
 
 
 @pytest.fixture
 def python_retry_leg(tmp_path, monkeypatch):
     test_file = "backend/tests/test_x.py"
     source(tmp_path, test_file, "")
+    monkeypatch.delenv("BASE_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n")
 
-    def run(first, retry=None, *, quarantine=True, suite="python-1", first_status=1, retry_status=0, **extra):
+    def run(
+        first,
+        retry=None,
+        *,
+        quarantine=True,
+        suite="python-1",
+        first_status=1,
+        retry_status=0,
+        base=None,
+        base_status=1,
+        base_file_exists=True,
+        **extra,
+    ):
         plan = {"matrix": {"include": [{"suite": suite, "files": [test_file]}]}, **extra}
         target = tmp_path / "plan.json"
         target.write_text(json.dumps(plan))
         calls = []
 
-        def fake(command, cwd, env, **kwargs):
-            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+        def fake(command, cwd, env=None, *, check=False, timeout=None):
             calls.append((command, env))
-            retrying = report.endswith("-retry.xml")
-            xml = retry if retrying else first
+            if command[0] == "git":
+                assert cwd == tmp_path and check
+                if command[1] == "cat-file" and not base_file_exists:
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0)
+            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+            if report.endswith("-base.xml"):
+                assert timeout == 300 and cwd != tmp_path and Path(report).is_absolute()
+                if base_status is None:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                xml, status = base, base_status
+            elif report.endswith("-retry.xml"):
+                xml, status = retry, retry_status
+            else:
+                xml, status = first, first_status
             if xml is not None:
                 (cwd / report).write_text(xml)
-            return SimpleNamespace(returncode=retry_status if retrying else first_status)
+            return SimpleNamespace(returncode=status)
 
         monkeypatch.setattr(checks.subprocess, "run", fake)
         return checks.run(target, suite, root=tmp_path, quarantine=quarantine), calls
@@ -2748,7 +2787,7 @@ def test_a_python_retry_that_still_fails_names_the_remaining_test_and_leaves_no_
     python_retry_leg, tmp_path, monkeypatch, capsys
 ):
     first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
-    retry = retry_junit(("test_a", ""), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", '<failure message="assert False"/>'))
     status, calls = python_retry_leg(first, retry, retry_status=1)
     assert status == 1 and len(calls) == 2
     assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
@@ -2756,6 +2795,93 @@ def test_a_python_retry_that_still_fails_names_the_remaining_test_and_leaves_no_
     monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(tmp_path / "ci-results")])
     assert checks.main() == 0
     assert capsys.readouterr().out.strip() == "test_x.py::test_b"
+
+
+def test_a_python_leg_passes_when_the_base_matches_and_records_a_flaky_retry_pass(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    base_sha = "b" * 40
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    failure = ("test_a", '<failure message="bad  value at 0x7fa100&#10;head detail"/>')
+    first = retry_junit(failure, ("test_b", "<failure/>"))
+    retry = retry_junit(failure, ("test_b", ""))
+    base = retry_junit(("test_a", '<error message="bad value at 0x7fa200&#10;base detail"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1, base=base)
+    assert status == 0
+    cat, add, test, remove = [command for command, _ in calls[2:]]
+    worktree = add[-2]
+    test_id = "backend/tests/test_x.py::test_a"
+    results = tmp_path / "ci-results"
+    assert cat == ["git", "cat-file", "-e", f"{base_sha}:backend/tests/test_x.py"]
+    assert add == ["git", "worktree", "add", "--detach", worktree, base_sha]
+    assert remove == ["git", "worktree", "remove", "--force", worktree]
+    assert test == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        "0",
+        *checks.PYTEST_FLAGS,
+        "-o",
+        "junit_family=xunit1",
+        f"--junitxml={(results / 'python-1-base.xml').resolve()}",
+        "--quarantine",
+        test_id,
+    ]
+    assert (results / "python-1-base.xml").read_text() == base
+    assert json.loads((results / "base-broken-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": [test_id],
+        "base": base_sha,
+        "commit": "a" * 40,
+    }
+    assert json.loads((results / "flaky-python-1.json").read_text())["tests"] == ["backend/tests/test_x.py::test_b"]
+    warning = (
+        f"{test_id} fails the same way on {base_sha[:10]}; this change did not break it. "
+        "Release validation and main-red track the fix."
+    )
+    assert f"::warning title=Already failing underneath this change::{warning}" in capsys.readouterr().out.splitlines()
+    assert summary.read_text() == warning + "\n"
+
+
+@pytest.mark.parametrize("base_outcome, base_status", [("", 0), ('<failure message="wrong value"/>', 1)])
+def test_a_python_leg_stays_red_when_the_base_does_not_match(
+    python_retry_leg, tmp_path, monkeypatch, base_outcome, base_status
+):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    base = retry_junit(("test_a", base_outcome))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=base, base_status=base_status)
+    assert status == 1 and len(calls) == 6
+    assert not (tmp_path / "ci-results/base-broken-python-1.json").exists()
+
+
+def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_file_exists=False)
+    assert status == 1 and len(calls) == 3
+    assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
+
+
+@pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
+def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1)
+    assert status == 1 and len(calls) == 2
+
+
+def test_a_base_timeout_removes_the_worktree_and_keeps_the_leg_red(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_status=None)
+    assert status == 1 and len(calls) == 6
+    worktree = calls[3][0][-2]
+    assert calls[-1][0] == ["git", "worktree", "remove", "--force", worktree]
 
 
 def test_a_python_retry_that_skips_a_failed_test_leaves_the_leg_red(python_retry_leg, tmp_path):
@@ -2772,8 +2898,9 @@ def test_a_python_leg_with_more_than_five_failures_does_not_retry(python_retry_l
     assert status == 1 and len(calls) == 1
 
 
-def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retry(python_retry_leg):
-    first = retry_junit(("test_a", "<failure/>"))
+def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retry(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    first = retry_junit(("test_a", '<failure message="assert False"/>'))
     for suite, enabled in (("python-1", False), ("contracts-1", True), ("conformance", True)):
         status, calls = python_retry_leg(first, suite=suite, quarantine=enabled)
         assert status == 1 and len(calls) == 1

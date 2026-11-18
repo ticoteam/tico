@@ -15,8 +15,8 @@ What is held is decided at enqueue time by the `wake_preset_hold` trigger on job
 way, and only from Tico's own notices (sender H.TICO_ACTOR): nobody can make a wake wait by sending text that looks like
 one. Two kinds wait:
 
-- a nonblocking notice the server marks with `refs.wake_batch` (BATCH_KINDS: a finished request, review comments, a
-  failing check nobody armed a wait for): one built-in wait of NOTICE_SECONDS, Prefers warm off, Run cold. Notices for
+- a notice a rule batched (`refs.wake_batch`, BATCH_KINDS; backend/rules.py): one built-in wait of NOTICE_SECONDS,
+  Prefers warm off, Run cold. News about a task's pull request is never marked: it is the owner's turn. Notices for
   one conversation that arrive inside the wait are let go together (one turn, or one digest). A Lead's notices wait for
   its daily digest hour instead (backend/profiles.py), one digest for the bot.
 - a job whose notice carries `refs.release` (a policy): a scheduled routine's run (`automations.release_of`) and, in
@@ -202,10 +202,9 @@ def waits(config):
 
     hour = profiles.digest_hour(config)
     summary = (
-        f"Finished requests, review comments and check results wait {_duration(NOTICE_SECONDS)}, one wake per "
-        f"conversation; a routine runs at least {_duration(REPEAT_SECONDS)} after its last run started, and waits for a "
-        "warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it "
-        "at once."
+        "News about a task it owns (checks, reviews, a finished request) wakes it at once, on its turn; a routine runs "
+        f"at least {_duration(REPEAT_SECONDS)} after its last run started, and waits for a warm session as its own "
+        "settings say. People, assignments, questions, awaited results and blockers wake it at once."
     )
     if hour is not None:
         summary = (

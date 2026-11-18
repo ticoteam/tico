@@ -307,6 +307,12 @@ async function needsYou(): Promise<NeedsEntry[]> {
   return res.items || [];
 }
 
+/** Who else reads a private task as it moves through `pipeline` (backend/private_readers.py, Product #449): for a new
+    task for `owner` under `parent`, or an existing `task` as if it were made private. `line` is null when nobody does. */
+interface PrivateReaders { private: boolean; line: string | null; }
+const pipelinePrivateReaders = (pipeline: string, q: {owner?: string; parent?: string | undefined; task?: string}): Promise<PrivateReaders> =>
+  get<PrivateReaders>(`/v2/pipelines/${encodeURIComponent(pipeline)}/private-readers?${new URLSearchParams(Object.entries(q).filter((kv): kv is [string, string] => !!kv[1]))}`, {fresh: true});
+
 // ---- writes on a task
 /** `message`: the task's first chat message, from whoever creates it (a task has no description). */
 interface TaskNew { title: string; message?: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }

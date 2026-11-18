@@ -823,6 +823,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   assignee_id: v => v ? `made ${actorLabel(v)} its developer` : 'took its developer off',
   ladder: v => `asked the ${v || 'next person'} instead`, requester: v => v ? `made ${actorLabel(v)} a requester` : 'removed a requester',
   stage_rule: () => 'applied a stage rule', readers: () => 'changed who can see it',
+  private_readers: v => `was told who else reads it: ${clipLine(String(v || ''), 400)}`,
   private: v => ['1', 'true'].includes(String(v)) ? 'made it private' : 'made it visible to the team', from_private: () => 'filed it from a private task',
   visibility: v => v === 'public' ? 'put it on the public roadmap' : 'took it off the public roadmap', size: () => 'set its size',
   type: v => `made it a ${v || 'task'}`, step: v => `moved it to ${v || 'a step'}`};

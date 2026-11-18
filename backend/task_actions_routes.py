@@ -912,6 +912,7 @@ def register_core(
             **org_rule_check.answer(rule_gate),
             **({"warning": note} if note else {}),
             **({"warnings": row["warnings"]} if row.get("warnings") else {}),
+            **({"private_readers": row["private_readers"]} if row.get("private_readers") else {}),
         }
 
     def cap_before_preflight(request, who, owner_ref, parent_ref=None):

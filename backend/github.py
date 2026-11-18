@@ -96,28 +96,20 @@ def _save_burst(c, task, burst, **parts):
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
 
-def queue_wake(c, task, item, batch=None):
+def queue_wake(c, task, item):
     """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
 
-    `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a finished
-    request), which the release policy's notice wait holds. A burst stays batchable only while every item in it is;
-    one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once. The burst
-    also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each sent as its own
-    message so one can never lift or lower another."""
+    News about a task's pull request is its owner's turn: it starts at once, never held by the notice wait (Product
+    #546). The burst also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each
+    sent as its own message so one can never lift or lower another."""
     from .repositories import metadata
 
     burst = metadata(c, "github-task-wake:" + task["id"])
     items = burst.get("items", [])
     if item not in items:
         items = (items + [item[:1000]])[-50:]
-    kind = batch if not burst.get("items") or burst.get("batch") == batch else None
-    _save_burst(
-        c,
-        task,
-        {k: v for k, v in burst.items() if k != "batch"},
-        items=items,
-        **({"batch": kind} if kind else {}),
-    )
+    # `batch`: the notice-wait mark an earlier build kept on a burst, dropped with the burst's next item.
+    _save_burst(c, task, {k: v for k, v in burst.items() if k != "batch"}, items=items)
 
 
 def queue_note(c, task, item):
@@ -207,7 +199,6 @@ def flush_wakes(c):
                         task["id"],
                         "\n".join(burst["items"]),
                         f"github:{at}:items",
-                        refs={"wake_batch": burst["batch"]} if burst.get("batch") else None,
                         trigger="pr_checks",
                     )
                 if burst.get("notes"):  # reviews that are not a person's: a note for the next run
@@ -867,7 +858,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             closed = False
         if closed or conflict_wake:
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
-            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
+            queue_wake(c, task, item)
         if not read_refresh:
             _review_role(c, task, payload, review_role)
         H.event(c, H.TICO_ACTOR, "github.pull_request", task["id"], {"action": action, "url": url})
@@ -1467,7 +1458,7 @@ def pr_signal(c, event, payload):
         detail = H._json(link.get("detail"), {}) or {}
         fields = {}
         label = link["title"]
-        wake, batch, who_key = False, None, ""
+        wake, is_review, who_key = False, False, ""
         if event in ("check_run", "check_suite", "status", "workflow_run"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
@@ -1563,12 +1554,12 @@ def pr_signal(c, event, payload):
                 )
             )
             item = f"Review {state.replace('_', ' ')} on {label}"
-            batch, who_key = "review", "review"
+            is_review, who_key = True, "review"
             if fresh and payload.get("action") == "submitted" and state in ("approved", "changes_requested"):
                 who = str((review.get("user") or {}).get("login") or "")
                 done = item + (f" by {who}" if who else "") + " " + str(review.get("html_url") or link["url"])
                 if fire_once(detail, done):
-                    wake, item, batch = True, done, None
+                    wake, item, is_review = True, done, False
         else:
             action = payload.get("action")
             if action not in ("created", "deleted"):
@@ -1587,7 +1578,7 @@ def pr_signal(c, event, payload):
             )
             wake = action == "created" and not _own_comment(c, task, payload, "comment", detail)
             item = f"{fields['pending_comments']} review comments on {label}"
-            batch, who_key = "review", "comment"
+            is_review, who_key = True, "comment"
         if event in ("pull_request_review", "pull_request_review_comment"):
             fields["activity_at"] = H.now()  # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
@@ -1599,10 +1590,10 @@ def pr_signal(c, event, payload):
             "UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
             (*fields.values(), link["id"]),
         )
-        if wake and batch == "review" and not by_person(c, payload, who_key):
+        if wake and is_review and not by_person(c, payload, who_key):
             queue_note(c, task, item)  # a bot's or an App's review is news for the next run, not a wake
         elif wake:
-            queue_wake(c, task, item, batch)
+            queue_wake(c, task, item)
     return {"tasks": len({l["task_id"] for l in links})}
 
 

@@ -29,8 +29,9 @@ An install that had routines moved them once, on the upgrade to Automations; see
   ```
 
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
-  `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved off
-  unless the flow sends `"enabled": true`.
+  `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved on
+  unless the flow sends `"enabled": false`. What BotOps or Assistant drafts is saved off and waits for a person to
+  turn it on.
 
 ## Before a due date
 

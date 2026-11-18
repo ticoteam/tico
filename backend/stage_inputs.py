@@ -286,8 +286,6 @@ def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[s
     filed that `readable(task_id)` allows. With none linked, on a pipeline whose stages read PRs (Engineering), every
     repository In use (docs/repositories.md), from the moment the task is filed: a Builder woken on a filed task once
     worked in its own checkout and asked a person which repository to use. Empty otherwise."""
-    import sqlite3
-
     from .item_sources import github as G
 
     found: dict[str, str] = {}
@@ -300,6 +298,14 @@ def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[s
         return list(found.values())
     if not conn.execute(_CODE, (task_id,)).fetchone():
         return []
+    return in_use(conn)
+
+
+def in_use(conn: "sqlite3.Connection") -> list[str]:
+    """Every repository In use (docs/repositories.md), `owner/name`: where a code pipeline's work goes before any PR
+    is linked. Empty when GitHub was never set up here."""
+    import sqlite3
+
     try:
         return [str(row[0]) for row in conn.execute(_IN_USE).fetchall()]
     except sqlite3.OperationalError:

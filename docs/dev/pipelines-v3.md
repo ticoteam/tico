@@ -1966,7 +1966,11 @@ How each one works on the engine.
   private with the task's readers, for itself or for someone who already reads the task. The filer keeps reading what
   it filed after it leaves the stage, as any requester does, and shares that no more than the task it came from. On a pipeline holding an open private task only a person changes who holds a stage.
   Anyone else a stage needs (a person asked for an OK, an assignee, the General Manager) must already
-  read the task: until someone shares it, the task waits and the line names who can.
+  read the task: until someone shares it, the task waits and the line names who can. Whoever files a private task
+  into a pipeline is told, before Create, who reads it that way and, when a stage waits on an open PR, that its code
+  and pull request go to GitHub: a line in the new-task window, under Private in Visible to, and in `tico task create`
+  and its dry run. It never refuses the filing, and the task's history keeps what they were told
+  (backend/private_readers.py).
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
 - **An idea you don't want yet.** Snooze it with no end date. It leaves the stage's count.
 

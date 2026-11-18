@@ -105,6 +105,7 @@ jobs:
           sparse-checkout: |
             scripts/release_increment.py
             scripts/pr_checks.py
+            scripts/flake_quarantine.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       # An incremental validation makes its plan from the candidate's history (the anchor is an ancestor of main).
@@ -582,7 +583,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.workflow_sha }}
-          sparse-checkout: scripts/pr_checks.py
+          sparse-checkout: |
+            scripts/pr_checks.py
+            scripts/flake_quarantine.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

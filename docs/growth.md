@@ -297,7 +297,8 @@ Ads and Social Ads (the growth channel packs in the same section).
 
 - **Channel.** A `channel:<slug>` label on the task or its sub-task. A channel's marketing work on this page is its open
   tasks with that label, in any pipeline. The department is the task's team.
-- **Prediction and result.** The Go-live page in Building gives the prediction as a number; the Results page in Running
+- **Prediction and result.** An idea carries no prediction. The Go-live page in Building gives it once, as a number: the
+  metric from where it is now to where it should get to, by the end date; the Results page in Running
   gives the number before and after. The result is a label: `result:failed`, `result:worked-once` or
   `result:watching`, and `result:watching` files a Monitoring task as the experiment's follow-up.
 - **Ending.** A measured experiment is Done; one stopped before it is measured is Closed with the reason. A Monitoring

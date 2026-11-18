@@ -898,7 +898,7 @@ def register_placement(
                     result["issues"].append(
                         {
                             **item,
-                            "kind": check["id"],
+                            "kind": item.get("kind") or check["id"],
                             "severity": "high"
                             if check["status"] == "bad"
                             else "low"

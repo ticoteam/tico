@@ -9,7 +9,7 @@ A person reads a page to decide: OK a spec, ship a change, start a release. They
 desktop, without opening the app or the code, and finish it with no doubt about what they are agreeing to. So every
 page is built the same way, from one of seven templates, and is never sent until it was seen rendered.
 
-## The six rules
+## The seven rules
 
 1. **The opening says what it is and what to decide.** Two or three short lines in `<div id="lead">`: what the page is
    about and its result, then a line that starts **Decide:**. A bug spec opens with **Report:**, any other spec with
@@ -28,6 +28,10 @@ page is built the same way, from one of seven templates, and is never sent until
 6. **Every sentence names something specific**: a number, a screen, a file, a person, a command. Cut any sentence
    that would fit another page, and any section that only restates the top. No "overview", "summary", "benefits",
    "considerations" or "next steps". A section with nothing in it says "Nothing." or "None."
+7. **Colour comes from the tokens.** Keep the template's `<style>` block. Colour only through its tokens (`var(--ink)`,
+   `var(--muted)`, `var(--surface)`, `var(--line)`...), which the app supplies in light and dark. No hex or rgb colour of
+   your own. A page that really needs one also gives dark values, under `@media (prefers-color-scheme: dark)`.
+   `page.py check` refuses a page that breaks this.
 
 The page brings the proof. It never asks its reader to test, look at the app, or send a screenshot.
 
@@ -110,7 +114,7 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
 
 1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/YYYY-MM-DD.N.html` or
    `reports/YYYY-MM-DD-checked-<slug>.html`.
-   Replace every `{{...}}`. Keep its styles: they use only Tico's colour tokens, so the page follows light and dark.
+   Replace every `{{...}}`. Keep its styles (rule 7): they use only Tico's colour tokens, so the page follows light and dark.
 2. Take the screenshots and set the arrows.
 3. Build and check it (`page.py` is in this skill's folder):
 

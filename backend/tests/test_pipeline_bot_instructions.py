@@ -347,6 +347,33 @@ def test_the_page_check_refuses_what_people_sent_back(tmp_path):
     assert any("never asks the reader" in p for p in tool.problems_in(asks, "screen-spec"))
 
 
+def test_a_page_of_its_own_light_colours_needs_dark_values_too(tmp_path):
+    # The Spec that read near-black on the app's dark background: its own light colours and no dark values. The template's
+    # tokens (fallbacks included), a picture's url() and the red arrows page.py draws are not its own colours and pass.
+    tool = page_tool()
+    (tmp_path / "shots").mkdir()
+    draft = tmp_path / "draft.html"
+    draft.write_text(filled("screen-spec", tmp_path))
+    tool.build(draft, tmp_path / "page.html")
+    good = (tmp_path / "page.html").read_text()
+    assert tool.problems_in(good, "screen-spec") == []
+    light_only = "colours are light-only"
+    styled = good.replace("</style>", ".card{background:#fff;color:#1d1d1f;border:1px solid #e5e5e5}\n</style>", 1)
+    assert any(light_only in p for p in tool.problems_in(styled, "screen-spec"))
+    inline = good.replace('<section id="details">', '<section id="details"><p style="color:rgb(34, 34, 34)">x</p>', 1)
+    assert any(light_only in p for p in tool.problems_in(inline, "screen-spec"))
+    named = good.replace("</style>", "p.note{color:white}\n</style>", 1)
+    assert any(light_only in p for p in tool.problems_in(named, "screen-spec"))
+    dark = styled.replace(
+        "</style>", "@media (prefers-color-scheme: dark){.card{background:#111;color:#eee}}\n</style>", 1
+    )
+    assert not any(light_only in p for p in tool.problems_in(dark, "screen-spec"))
+    picture = good.replace(
+        "</style>", ".hero{background:url(data:image/png;base64,iVBORw0KGgo=) no-repeat}\n</style>", 1
+    )
+    assert tool.problems_in(picture, "screen-spec") == []
+
+
 def test_each_page_opens_the_way_its_reader_needs(tmp_path):
     # A bug spec opens with the report, a change spec with its goal; a release report names at most three risks and
     # its changelog is written for customers, so it can be published as it is (Chris, Nov 13).
