@@ -453,7 +453,7 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
 .grl-chip:hover{background:var(--hover)}
 .grl-chip[aria-pressed=true]{border-color:var(--ink)}
 .grl-chip.grl-bad{border-color:color-mix(in srgb,var(--wait) 55%,var(--line))}
-.grl-chip-h{font-size:var(--t-2xs);color:var(--wait)}
+.grl-chip-h{font-size:var(--t-2xs);color:var(--wait-ink)}
 .grl-name{background:none;border:0;padding:0;color:var(--ink);font:inherit;font-weight:600;cursor:pointer;text-align:left}
 .grl-name[aria-pressed=true]{text-decoration:underline}
 .grl-owner{font-size:var(--t-xs);width:100%}
@@ -462,7 +462,7 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
 .grl-num:disabled{cursor:default}
 .grl-v{font-variant-numeric:tabular-nums;font-size:var(--t-sm)}
 .grl-mark{font-size:var(--t-2xs);color:var(--muted)}
-.grl-mark.grl-stale{color:var(--wait)}
+.grl-mark.grl-stale{color:var(--wait-ink)}
 .grl-over{font-size:var(--t-2xs);color:var(--fail)}
 .grl-bar{position:relative;display:block;width:64px;height:4px;margin:2px 0;border-radius:2px;background:var(--surface2)}
 .grl-bar i{position:absolute;inset:0 auto 0 0;border-radius:2px;background:var(--muted)}
