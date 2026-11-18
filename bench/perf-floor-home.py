@@ -33,7 +33,6 @@ from backend import cards as CARDS
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend import threads
-from backend import views as V
 from backend.store import H, Problem
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers
@@ -48,7 +47,7 @@ THREADS = int(os.environ.get("THREADS", 150))
 RUNS = int(os.environ.get("RUNS", 21))
 WORKERS = [f"worker{n:02d}" for n in range(30)]
 PEOPLE = ["human:ana", "human:ben", "human:cara"]
-READS = ("/api/v2/company/floor", "/api/v2/places/person:me")
+READS = ("/api/v2/company/floor", "/api/v2/places/person:me", "/api/v2/health")
 SKIP = (Problem, H.Refused)  # a move or an ask the engine refuses for this task: the bench goes on without it
 
 
@@ -163,7 +162,10 @@ def seed(api):
             "inputs,source,meetings) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
-    with store.read() as c:
+
+
+def sizes(api):
+    with api.app.state.store.read() as c:
         return {
             "open pipeline tasks": c.execute(
                 "SELECT count(*) FROM tasks WHERE status='open' AND pipeline_id IS NOT NULL"
@@ -211,10 +213,55 @@ def tracing(store, seen):
             setattr(store, name, opened)
 
 
+# The functions whose statements each read is split into: Needs you's build, each Home card, the Floor's own reads and
+# Health's parts, as "module:function" (a span inside another counts in both).
+SPANS = (
+    "backend.views:needs_items",
+    "backend.company_floor:_needs_task_ids",
+    "backend.company_floor:_holders",
+    "backend.company_floor:_rates",
+    "backend.company_floor:_moves",
+    "backend.company_floor:_unknown",
+    *(
+        "backend.health:" + name
+        for name in (
+            "_prime_claims",
+            "_computers",
+            "_waiting",
+            "_stuck",
+            "_fallbacks",
+            "_failed",
+            "refused_queues",
+            "_fallback_lines",
+            "company_import_failed",
+            "runner_route_latency",
+            "_listening",
+            "storage_settings",
+            "last_start",
+            "waiting_go_lives",
+            "_withheld",
+            "_history_check",
+            "_unpublished",
+            "_harness_denies_check",
+            "worktree_waiting",
+            "_bot_names",
+            "_bot_name",
+            "release_history",
+        )
+    ),
+    "backend.setup_stuck:stuck",
+    "backend.runner_online:online_rows",
+    "backend.usage_limits:company",
+    "backend.org_turns:admission",
+)
+
+
 @contextlib.contextmanager
 def attributed(seen, spans):
-    """Which statements of `seen` ran inside needs_items and inside each Home card ({name: [count]})."""
-    needs_items, card_data = V.needs_items, CARDS.card_data
+    """How many statements of `seen` ran inside each of SPANS, and inside each Home card ({name: count})."""
+    import importlib
+
+    patched = []
 
     def counted(name, call):
         def run(*args, **kwargs):
@@ -226,12 +273,20 @@ def attributed(seen, spans):
 
         return run
 
-    V.needs_items = counted("needs_items", needs_items)
+    for entry in SPANS:
+        module_name, _, attr = entry.partition(":")
+        module = importlib.import_module(module_name)
+        if hasattr(module, attr):
+            patched.append((module, attr, getattr(module, attr)))
+            setattr(module, attr, counted(attr, getattr(module, attr)))
+    card_data = CARDS.card_data
+    patched.append((CARDS, "card_data", card_data))
     CARDS.card_data = lambda ctx, template, settings: counted("card " + template, card_data)(ctx, template, settings)
     try:
         yield
     finally:
-        V.needs_items, CARDS.card_data = needs_items, card_data
+        for module, attr, original in reversed(patched):
+            setattr(module, attr, original)
 
 
 def shape(sql):
@@ -279,8 +334,8 @@ def report(api):
                 f"\n{path} as {token[:3]}: {out['statements']} statements, {out['median_ms']:.1f} ms median of {RUNS}"
                 f" (needs_items: {spans.get('needs_items', 0)} statements)"
             )
-            for name, n in sorted(spans.items()):
-                if name.startswith("card "):
+            for name, n in sorted(spans.items(), key=lambda kv: -kv[1]):
+                if n and name != "needs_items":
                     print(f"    {name:28s} {n:5d} statements")
             print("    top statement shapes (calls, ms to the next statement):")
             for sql, n in out["counts"].most_common(12):
@@ -329,8 +384,19 @@ def plans(api):
 
 def main(api):
     began = time.perf_counter()
-    sizes = seed(api)
-    print(f"seeded in {time.perf_counter() - began:.1f}s: {sizes}")
+    if os.environ.get("HUB_SEED"):
+        # Another bench's company (bench/perf-hub-overload.py: 165 bots on 4 computers, 1,500 open tasks), seeded by
+        # its own `seed(api)`.
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("hub_seed", os.environ["HUB_SEED"])
+        assert spec and spec.loader
+        hub = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hub)
+        hub.seed(api)
+    else:
+        seed(api)
+    print(f"seeded in {time.perf_counter() - began:.1f}s: {sizes(api)}")
     report(api)
     plans(api)
 
