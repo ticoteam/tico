@@ -105,6 +105,9 @@ interface DecState {
   botsName: string;
   ping: DecPing;
   asking: boolean;
+  /** The rest of Needs you is still being read for this walk (decideStageOpen): the mark moves, and with nothing held
+      to show yet the screen waits on it rather than say All done. */
+  filling: boolean;
 }
 /** Who All done's "Ping your bots" asks (POST /v2/flow/ping): the person's reports, one bot, or a team's bots. */
 interface DecPing {scope: 'reports' | 'bot' | 'group' | 'setup'; id?: string}
@@ -278,7 +281,7 @@ function decideNeedsText(root: HTMLElement) {
 function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage: string = '', pipeline: string = '', end = false): boolean {
   if (decideNoFlow()) return false;
   const fresh = !DEC;
-  const st: DecState = DEC || {...decideBlank(document.activeElement as HTMLElement | null), stage, pipeline};
+  const st: DecState = DEC || {...decideBlank(decideFocused()), stage, pipeline};
   const to0 = (s: string, p: string) => { st.stage = s; st.pipeline = p; st.order = []; st.gone.clear(); st.at = null; };
   // Opening one item from a list walks the list it is in; Flow on a stage or a pipeline walks it, from its first item.
   if ((st.stage !== stage || st.pipeline !== pipeline) && (stage || pipeline || !id)) to0(stage, pipeline);
@@ -293,11 +296,13 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   decideOpinions(st);
   return true;
 }
+/** What had focus as the screen opens: closing gives it back. */
+const decideFocused = () => document.activeElement as HTMLElement | null;
 /** A screen not open yet: nothing walked, nothing answered, its ping to the person's reports. */
 const decideBlank = (opener: HTMLElement | null): DecState => ({order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(),
   more: '', busy: false, error: '', barTimer: 0, opener, off: [], stage: '', pipeline: '', snoozedAsks: null,
   snoozedOpen: false, snzOther: false, files: [], open: new Set(), seen: new Set(), bots: [], botsName: '', ping: {scope: 'reports'},
-  asking: false});
+  asking: false, filling: false});
 /** "Getting ready to flow" with the mark, for well under a second over the first item, which is drawn and takes input
     under it (decide.css .dc-start). None with reduced motion. */
 function decideStart(d: HTMLDialogElement) {
@@ -363,12 +368,50 @@ function decideHeldAsk(taskId: string): string {
   const it = [...decideSource(), ...needsHeld()].find(x => x.kind === 'ask' && decideTaskId(x) === taskId);
   return it ? decideRid(it) : '';
 }
-/** Flow on a stage, or with `pipeline` and no stage on a pipeline: every page of Needs you is read first, then its items
-    are walked. False when none wait. */
+/** How many items wait on the person in a stage, or in a pipeline's stages, over the whole of Needs you while only some
+    pages are held: the server's counts (needsStageCounts). Null when it gave none, or the pipeline is not known. */
+function decideWaiting(stage: string, pipeline: string): number | null {
+  const whole = S.v2?.needsStages, p = stage ? null : decidePipelines().find(x => x.id === pipeline);
+  if (!whole || !stage && !p) return null;
+  return stage ? whole[stage] || 0 : (p?.stages || []).reduce((n, s) => n + (whole[s.id || ''] || 0), 0);
+}
+/** Flow on a stage, or with `pipeline` and no stage on a pipeline. Its items can be past the pages held, and reading
+    every page takes seconds, so the screen opens at once on what is held (or, with none of the walk held yet, waits
+    there with its mark moving) and the rest joins as decideRefresh adds a read list: the walk's order once all is read
+    is the one reading first gave. False when none wait: the server's count says so before any page is read. */
 async function decideStageOpen(stage: string, pipeline: string = ''): Promise<boolean> {
   if (!stage && !pipeline || decideNoFlow()) return false;
-  if (!needsAll()) await needsReadAll();
-  return decideOpen('', decideSource(), stage, stage ? '' : pipeline);
+  const walk = stage ? '' : pipeline;
+  if (needsAll()) return decideOpen('', decideSource(), stage, walk);
+  const waiting = decideWaiting(stage, walk);
+  if (waiting === 0) return false;
+  const rest = needsReadAll();
+  const fresh = !DEC;
+  if (!DEC) DEC = {...decideBlank(decideFocused()), stage, pipeline: walk};
+  const st = DEC;
+  st.filling = true;
+  if (!decideOpen('', decideSource(), stage, walk, waiting !== null)) {
+    // None of it held and no count to go on (a server without stage counts): every page is read first.
+    st.filling = false;
+    if (fresh) DEC = null;
+    await rest;
+    return decideOpen('', decideSource(), stage, walk);
+  }
+  const shown = !!decideCurrent(st);
+  const filled = rest.catch(() => {}).then(() => {
+    if (DEC !== st) return true;
+    st.filling = false;
+    decideRefresh(st, decideSource());
+    if (decideCurrent(st)) return true;
+    // Nothing more came: All done after items were shown; with none ever shown (a count the whole list did not bear
+    // out), as if nothing had opened.
+    if (shown || st.stage !== stage || st.pipeline !== walk) { decideRender(st); return true; }
+    decideStop();
+    return false;
+  });
+  if (!shown) return filled;
+  void filled;
+  return true;
 }
 /** A deep link to a stage's review (#/decide?stage=<id>): its walk, or, with nothing there, its pipeline on that stage
     saying so. */
@@ -594,7 +637,7 @@ function decidePaintHead(st: DecState) {
   // Tico thinking: the mark moves while the item on screen waits on its opinion, and the next ask still waiting is
   // named, faint, before ‹ › (none on a phone, decide.css).
   const thinking = (k: string) => DEC_OP.state.get(k) === 'pending';
-  $('.dc-flow .flow-mark', root)?.classList.toggle('live', decideOpWaits(it));
+  $('.dc-flow .flow-mark', root)?.classList.toggle('live', st.filling || decideOpWaits(it));
   const next = live.find(k => k !== st.at && thinking(k)), upItem = next ? st.items.get(next) : undefined;
   const up = upItem ? upItem.task?.title || upItem.line : '', upEl = $('.dc-up', root)!;
   if (upEl.textContent !== up) upEl.textContent = up;
@@ -729,8 +772,9 @@ function decideRender(st: DecState) {
     root.classList.remove('dc-solo');
     $('.dc-head-acts', root)?.replaceChildren();
     $('.dc-thing', root)!.innerHTML = '';
-    $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
+    $('.dc-side', root)!.innerHTML = st.filling ? `<div class="dc-done" aria-busy="true">${flowMarkHTML(48, true)}</div>` : decideDoneHTML(st);
     decideBarRoom();
+    if (st.filling) return;
     if (st.snoozedAsks === null && !DEC_SNZ_READ) { DEC_SNZ_READ = true; void decideSnoozedRead(st).finally(() => { DEC_SNZ_READ = false; }); }
     return;
   }
