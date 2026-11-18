@@ -166,6 +166,19 @@ fn values(secrets: &[String]) -> BTreeSet<String> {
 struct Built {
     values: Vec<String>,
     matcher: Option<AhoCorasick>,
+    /// The values' UTF-16 LE and BE bytes as raw bytes. `matcher` holds them as latin-1 text, which only `holds` reads
+    /// that way; raw bytes need these: a UTF-16 file is left out whatever its first 8000 bytes hold (`file_outcome`),
+    /// and a non-ASCII value in UTF-16 is masked in bytes before anything decodes them (`scrub_bytes`).
+    wide: Option<AhoCorasick>,
+}
+
+/// `utf16_forms` as raw bytes: each latin-1 character back to the one byte it stands for.
+fn utf16_bytes(value: &str) -> [Vec<u8>; 2] {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    [
+        units.iter().flat_map(|u| u.to_le_bytes()).collect(),
+        units.iter().flat_map(|u| u.to_be_bytes()).collect(),
+    ]
 }
 
 /// Login values the browser types: masked down to `LOGIN_MIN_LENGTH` characters, shorter than other secrets, because
@@ -202,9 +215,23 @@ fn build_values(chosen: BTreeSet<String>) -> Built {
             .build(forms.iter())
             .ok()
     };
+    let wide_forms: BTreeSet<Vec<u8>> = vals
+        .iter()
+        .flat_map(|v| utf16_bytes(v))
+        .filter(|f| !f.is_empty())
+        .collect();
+    let wide = if wide_forms.is_empty() {
+        None
+    } else {
+        AhoCorasickBuilder::new()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(wide_forms.iter())
+            .ok()
+    };
     Built {
         values: vals,
         matcher,
+        wide,
     }
 }
 
@@ -351,10 +378,19 @@ impl Redactor {
     }
 
     /// Bytes scrubbed as they are: bytes that are not UTF-8 are kept, not replaced (Python's surrogateescape).
+    /// A value in UTF-16 is masked as raw bytes first: a non-ASCII one is not valid UTF-8, so decoding before this
+    /// (run_diagnostics' stderr lines) would replace it and leave it unmatched.
     pub fn scrub_bytes(&self, data: &[u8]) -> Vec<u8> {
-        let out = match &self.inner.read().unwrap().matcher {
-            Some(m) => m.replace_all_bytes(data, &vec![MASK.as_bytes(); m.patterns_len()]),
-            None => data.to_vec(),
+        let inner = self.inner.read().unwrap();
+        let data: Cow<[u8]> = match &inner.wide {
+            Some(w) if w.is_match(data) => {
+                Cow::Owned(w.replace_all_bytes(data, &vec![MASK.as_bytes(); w.patterns_len()]))
+            }
+            _ => Cow::Borrowed(data),
+        };
+        let out = match &inner.matcher {
+            Some(m) => m.replace_all_bytes(&data, &vec![MASK.as_bytes(); m.patterns_len()]),
+            None => data.into_owned(),
         };
         mask_codes(&out, &self.codes.read().unwrap()).unwrap_or(out)
     }
@@ -393,14 +429,23 @@ impl Redactor {
     }
 
     /// What one changed file's bytes become (redact.py file_outcome): Clean when no form of a secret is in them;
-    /// LeftOut when git would treat them as binary (a NUL in the first 8000 bytes, which every UTF-16 text with ASCII
-    /// in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still hold a form once masked (a
-    /// UTF-16 text with no NUL); else the masked bytes. A file left out is not committed and is named in the reply.
+    /// LeftOut when a UTF-16 form of one is in them (wherever it is: a UTF-16 file whose first NUL comes after 8000
+    /// bytes is not rewritten, criterion 9), git would treat them as binary (a NUL in the first 8000 bytes, which every
+    /// UTF-16 text with ASCII in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still hold
+    /// a form once masked; else the masked bytes. A file left out is not committed and is named in the reply.
     pub fn file_outcome(&self, data: &[u8]) -> FileScrub {
         if !self.holds(data) {
             return FileScrub::Clean;
         }
-        if data.iter().take(8000).any(|&b| b == 0)
+        let wide = self
+            .inner
+            .read()
+            .unwrap()
+            .wide
+            .as_ref()
+            .is_some_and(|w| w.is_match(data));
+        if wide
+            || data.iter().take(8000).any(|&b| b == 0)
             || data.starts_with(&[0xff, 0xfe])
             || data.starts_with(&[0xfe, 0xff])
             || data.len() as u64 > TEXT_LIMIT
@@ -1160,6 +1205,73 @@ mod tests {
         sh("checkout -q --detach");
         assert!(r.scrub_tree(&root, &since).committed);
         let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A UTF-16 file with no byte order mark whose first NUL comes after git's 8000-byte binary window (text in a script
+    /// whose UTF-16 units have no zero byte, then the secret): left out and named, never rewritten (criterion 9, Review
+    /// on c4b9a23). `left_out` is what the reply names: "left out of the commit: <name> (contains a secret)".
+    #[test]
+    fn a_utf16_file_whose_first_nul_is_late_is_left_out_in_both_byte_orders() {
+        let secret = "granted-wide-secret-value";
+        let r = Redactor::new(&[secret.to_string()]);
+        let text = format!("{}{secret}\n", "漢字".repeat(2100));
+        let le: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        let be: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        for data in [&le, &be] {
+            assert!(!data.iter().take(8000).any(|&b| b == 0) && !data.starts_with(&[0xff, 0xfe]));
+            assert!(
+                matches!(r.file_outcome(data), FileScrub::LeftOut),
+                "{:?}",
+                r.file_outcome(data)
+            );
+        }
+        let root =
+            std::env::temp_dir().join(format!("tico-scrub-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(Command::new("sh")
+            .arg("-c")
+            .arg("git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init")
+            .current_dir(&root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap()
+            .status
+            .success());
+        std::fs::write(root.join("notes-le.txt"), &le).unwrap();
+        std::fs::write(root.join("notes-be.txt"), &be).unwrap();
+        let tree = r.scrub_tree(&root, "");
+        let mut named: Vec<String> = tree
+            .left_out
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        named.sort();
+        assert_eq!(named, ["notes-be.txt", "notes-le.txt"], "{tree:?}");
+        assert!(tree.rewritten.is_empty(), "{tree:?}");
+        assert_eq!(
+            std::fs::read(root.join("notes-le.txt")).unwrap(),
+            le,
+            "left as it was"
+        );
+        assert_eq!(
+            std::fs::read(root.join("notes-be.txt")).unwrap(),
+            be,
+            "left as it was"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A non-ASCII secret in UTF-16 is not valid UTF-8: bytes are masked before anything decodes them.
+    #[test]
+    fn a_non_ascii_secret_in_utf16_bytes_is_masked_before_decoding() {
+        let secret = "granted-wïde-sécret";
+        let r = Redactor::new(&[secret.to_string()]);
+        for wide in utf16_bytes(secret) {
+            let mut line = b"failed: ".to_vec();
+            line.extend(&wide);
+            let out = r.scrub_bytes(&line);
+            assert_eq!(out, [b"failed: ".as_slice(), MASK.as_bytes()].concat());
+        }
     }
 
     /// Cases A-E (spec E-607), from the file runner_support/tests/test_redact.py reads too, so both scrubs agree.

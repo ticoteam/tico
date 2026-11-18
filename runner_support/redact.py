@@ -130,6 +130,9 @@ class Redactor:
         self.pattern = (
             re.compile("|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))) if forms else None
         )
+        # The UTF-16 forms alone (redact.rs Built.wide): a file holding one is left out wherever it is.
+        wide = {f for value in self.values for f in utf16_forms(value)} - {""}
+        self.wide = re.compile("|".join(re.escape(f) for f in sorted(wide, key=len, reverse=True))) if wide else None
 
     def add(self, secrets):
         with self.update_lock:
@@ -137,7 +140,7 @@ class Redactor:
             if not added:
                 return
             updated = Redactor([*self.values, *added])
-            self.values, self.pattern = updated.values, updated.pattern
+            self.values, self.pattern, self.wide = updated.values, updated.pattern, updated.wide
 
     def scrub_text(self, text):
         if not isinstance(text, str) or self.pattern is None:
@@ -161,12 +164,18 @@ class Redactor:
 
     def file_outcome(self, data):
         """What one changed file's bytes become (redact.rs file_outcome): ("clean", None) when no form of a secret is in
-        them; ("left_out", None) when git would treat them as binary (a NUL in the first 8000 bytes, which every UTF-16
-        text with ASCII in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still hold a form
-        once masked; else ("masked", the masked bytes)."""
+        them; ("left_out", None) when a UTF-16 form of one is in them (wherever it is: a UTF-16 file whose first NUL
+        comes after 8000 bytes is not rewritten), git would treat them as binary (a NUL in the first 8000 bytes, which
+        every UTF-16 text with ASCII in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still
+        hold a form once masked; else ("masked", the masked bytes)."""
         if not self.holds(data):
             return "clean", None
-        if b"\0" in data[:8000] or data.startswith((b"\xff\xfe", b"\xfe\xff")) or len(data) > TEXT_LIMIT:
+        if (
+            (self.wide is not None and self.wide.search(data.decode("latin-1")))
+            or b"\0" in data[:8000]
+            or data.startswith((b"\xff\xfe", b"\xfe\xff"))
+            or len(data) > TEXT_LIMIT
+        ):
             return "left_out", None
         masked = self.scrub_bytes(data)
         if self.holds(masked):

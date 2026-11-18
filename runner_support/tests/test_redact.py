@@ -144,3 +144,13 @@ class Encoded(unittest.TestCase):
         r = redact.Redactor([ENCODED["secret"]])
         for case in ENCODED["logs"]:
             self.assertEqual(r.scrub_text(case["line"]), case["masked"], case["id"])
+
+    def test_a_utf16_file_whose_first_nul_is_late_is_left_out_in_both_byte_orders(self):
+        # No byte order mark, and no NUL in git's first 8000 bytes: still left out, never rewritten (redact.rs).
+        secret = "granted-wide-secret-value"
+        r = redact.Redactor([secret])
+        text = "漢字" * 2100 + secret + "\n"
+        for codec in ("utf-16-le", "utf-16-be"):
+            data = text.encode(codec)
+            assert b"\0" not in data[:8000]
+            self.assertEqual(r.file_outcome(data), ("left_out", None), codec)

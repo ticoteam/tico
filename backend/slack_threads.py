@@ -917,7 +917,8 @@ class Bridge:
             user = str(found[0]) if found else ""
         person = (
             c.execute(
-                "SELECT person_id FROM slack_link_members WHERE link_id=? AND slack_user_id=? LIMIT 1", (link["id"], user)
+                "SELECT person_id FROM slack_link_members WHERE link_id=? AND slack_user_id=? LIMIT 1",
+                (link["id"], user),
             ).fetchone()
             if user
             else None
@@ -1285,7 +1286,9 @@ class Bridge:
                     return "held", "Tico held this edit, so the message in the thread was not changed."
             outcome = _apply_edit(c, self.core(), row, body, deleted=deleted, edited=edited, team=self.gw.team_id)
             # An edit whose key was kept as a mark (threads.apply_revision): its author is told where it still is.
-            kept = _one(c, "SELECT body FROM messages WHERE id=?", (row["message_id"],)) if outcome == "edited" else None
+            kept = (
+                _one(c, "SELECT body FROM messages WHERE id=?", (row["message_id"],)) if outcome == "edited" else None
+            )
             mark = task_text_keys.MARK
             if kept and str(kept["body"] or "").count(mark) > str(body or "").count(mark):
                 return outcome, task_text_keys.told("slack")
