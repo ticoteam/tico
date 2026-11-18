@@ -501,7 +501,7 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
   decideSync(st, asked && !needsAll() && !list.some(it => it.id === asked.id) ? [...list, asked] : list);
   // On All done, what came in (a pinged bot's question) comes on screen.
   if (!st.at) { const first = decideLive(st)[0]; if (first) { decideGo(st, first); return void decideOpinions(st); } }
-  if (st.at !== before) decideRender(st); else decidePaintHead(st);
+  if (st.at !== before) decideRender(st); else { decidePaintHead(st); ruleReviewTick(); }   // an open review counts its holds again
   decideOpinions(st);   // asks that joined
 }
 

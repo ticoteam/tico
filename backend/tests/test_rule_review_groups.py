@@ -219,3 +219,59 @@ def test_the_hold_detail_never_keeps_text_outside_the_reviewers_copy(ruled):
     held = say(api, SPLIT)["held"]
     detail = json.loads(hold_row(api, held["id"])["verdict"])
     assert set(detail["parts"].values()) <= set(SPLIT.split("\n"))
+
+
+# ---- after Review 1 -----------------------------------------------------------------------------------------------
+
+
+def test_a_slow_part_call_never_delays_the_hold(ruled):
+    import threading
+
+    api, judge = ruled
+    escalating(api)
+    judge.part_gate = threading.Event()
+    held = say(api, SPLIT, settle=False)["held"]  # answered while the part call still waits
+    row = hold_row(api, held["id"])
+    assert row["state"] == "held" and row["task_id"] and "parts" not in json.loads(row["verdict"])
+    judge.part_gate.set()
+    K.settle_parts()
+    assert view(api, held["id"])["rules"][0]["part"] == "Our favorite color is gold."
+
+
+def test_an_appealed_hold_joins_the_rules_open_review(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben", who={"bots": ["ops", "finance"]})
+    tasks = []
+    for token in ("ops-test", "finance-test"):
+        held = say(api, "Our favorite color is gold", token=token)["held"]
+        tasks.append(post(api, f"rule-holds/{held['id']}/appeal", {"why": "It is public."}, token=token)["task_id"])
+    assert tasks[0] and tasks[0] == tasks[1]
+    assert len(sql(api, "SELECT id FROM tasks WHERE status='open' AND title LIKE 'Held by: %'")) == 1
+
+
+def test_a_mails_third_block_joins_another_bots_open_review(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben", who={"bots": ["ops", "finance"]})
+    for n in range(3):  # finance's third block escalates: the rule's open review for Ben
+        say(api, f"Try {n}: our favorite color is gold", token="finance-test")
+    [review] = sql(api, "SELECT id FROM tasks WHERE status='open' AND title LIKE 'Held by: %'")
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
+    for _ in range(3):
+        post(api, "bots/ops/mail-check", mail, token="ops-test")
+    [held] = sql(api, "SELECT task_id FROM org_rule_holds WHERE operation='mail'")
+    assert held["task_id"] == review["id"]
+
+
+def test_a_hold_names_the_rule_it_is_on_first_never_a_warn(ruled):
+    from backend.tests.helpers.org_rule_check import rule
+
+    api, judge = ruled
+    judge.needles["Never mention gold."] = "gold"
+    rule(api, {"kind": "internal", "text": "Never mention gold.", "who": {"bots": ["ops"]}, "if_broken": "warn"})
+    escalating(api)
+    with api.app.state.store.transaction() as c:  # the Warn rule first in the verdict's order
+        c.execute("UPDATE org_rules SET created_at='2000-01-01T00:00:00Z' WHERE text='Never mention gold.'")
+    held = say(api, SPLIT)["held"]
+    card = view(api, held["id"])
+    assert len(card["rules"]) == 2
+    assert card["rules"][0]["text"] == COLOR and card["rules"][0]["if_broken"] == "escalate"

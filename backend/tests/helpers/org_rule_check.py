@@ -20,11 +20,14 @@ class Judge:
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
         self.calls, self.locked, self.fail, self.hold = [], [], None, None
         self.parts, self.part_fail = [], None  # rule-part@1's calls, kept apart: `calls` are the rule checks
+        self.part_gate = None  # a threading.Event the part call waits on, to hold it back (a slow call)
 
     def part(self, state, questions):
         """Answers rule-part@1: the first part that holds a needle, else `whole`."""
         self.locked.append(bool(self.store.writer.queue))
         self.parts.append({"state": state, "questions": questions})
+        if self.part_gate is not None:
+            self.part_gate.wait(10)
         if self.part_fail:
             raise self.part_fail
         needles = [n.lower() for n in self.needles.values()]
@@ -61,9 +64,13 @@ def color_rule(api, if_broken="block", **more):
     return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": if_broken, **more})
 
 
-def say(api, text, to="ana", token="ops-test", **more):
+def say(api, text, to="ana", token="ops-test", settle=True, **more):
     r = api.post("/api/v2/messages", json={"to": to, "text": text, **more}, headers=headers(token))
     assert r.status_code == 200, r.text
+    if settle:
+        from backend import org_rule_check
+
+        org_rule_check.settle_parts()  # a held write's part call runs after it: let it finish
     return r.json()
 
 

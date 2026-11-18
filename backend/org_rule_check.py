@@ -342,9 +342,9 @@ def calls_today(c, people=False):
     day = H.now()[:10] + "T00:00:00"
     flag = "IS 1" if people else "IS NOT 1"
     return c.execute(
-        "SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND target LIKE ? AND created_at>=? "
-        f"AND json_extract(detail,'$.people') {flag}",
-        (H.TICO_ACTOR, RULES_TARGET, day),
+        "SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND (target LIKE ? OR target LIKE ?) "
+        f"AND created_at>=? AND json_extract(detail,'$.people') {flag}",
+        (H.TICO_ACTOR, RULES_TARGET, PART_SET + "@%", day),
     ).fetchone()[0]
 
 
@@ -589,15 +589,74 @@ def _shown_parts(parts, text):
     return {rid: part for rid, part in (parts or {}).items() if part and part in (text or "")}
 
 
-def _with_parts(store, engine, verdict, output, parts=None):
-    """A verdict that holds its write, with the part of the output that breaks each rule (`parts`, or one `_parts`
-    call). Any other verdict as it is."""
-    if not needs_parts(verdict):
+def _held_rules(verdict):
+    """The rules a verdict holds its write on: those it broke that are not Warn."""
+    return [r for r in verdict["rules"] if r["id"] in verdict["broken"] and r["if_broken"] != "warn"]
+
+
+def _later_parts(store, engine, verdict, output):
+    """A verdict that holds its write, marked for one `_parts` call once its hold is written (`_write_hold` starts it
+    after the write commits), so the hold never waits on the pointer. Any other verdict as it is."""
+    if not needs_parts(verdict) or engine is None or not split_parts(output):
         return verdict
-    if parts is None:
-        broken = [r for r in verdict["rules"] if r["id"] in verdict["broken"] and r["if_broken"] != "warn"]
-        parts = _parts(store, engine, output, broken)
-    return {**verdict, "parts": parts}
+    return {**verdict, "parts_later": (store, engine, output)}
+
+
+_PART_WORK = []  # the part calls still running, for `settle_parts`
+_PART_LOCK = threading.Lock()
+
+
+def _start_parts(c, verdict, hold_id):
+    """Start the held write's part call once the write that holds it commits."""
+    store, engine, output = verdict["parts_later"]
+    rules, digest = _held_rules(verdict), verdict["digest"]
+
+    def start():
+        work = threading.Thread(
+            target=_fill_parts, args=(store, engine, output, rules, hold_id, digest), name="org-rule-part", daemon=True
+        )
+        with _PART_LOCK:
+            _PART_WORK[:] = [t for t in _PART_WORK if t.is_alive()] + [work]
+        try:
+            work.start()
+        except RuntimeError:  # pragma: no cover - no thread to be had: the card says the whole text breaks it
+            LOG.warning("No thread for the held part")
+
+    hooks = getattr(c, "after_commit", None)
+    if hooks is not None:
+        hooks.append(start)
+    else:  # pragma: no cover - every store transaction has after_commit; a bare connection starts it now
+        start()
+
+
+def _fill_parts(store, engine, output, rules, hold_id, digest):
+    """One `_parts` call for a written hold: the parts its reviewer's copy holds go on the hold's detail, and every
+    part found beside its cached verdict, so a repeat asks nothing more. Never raises."""
+    try:
+        parts = _parts(store, engine, output, rules)
+        if not parts:
+            return
+        with store.transaction() as c:
+            row = c.execute("SELECT payload, verdict FROM org_rule_holds WHERE id=?", (hold_id,)).fetchone()
+            if row:
+                shown = _shown_parts(parts, (json.loads(row[0] or "{}") or {}).get("text"))
+                if shown:
+                    detail = {**json.loads(row[1] or "{}"), "parts": shown}
+                    c.execute("UPDATE org_rule_holds SET verdict=? WHERE id=?", (json.dumps(detail), hold_id))
+            hit = c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (digest,)).fetchone()
+            if hit and not _cached(hit[0])[1]:
+                kept = {"broken": _cached(hit[0])[0], "parts": parts}
+                c.execute("UPDATE org_rule_verdicts SET broken=? WHERE digest=?", (json.dumps(kept), digest))
+    except Exception:  # noqa: BLE001 - the pointer is a help to the reviewer; the hold is already written
+        LOG.warning("The held part could not be kept", exc_info=True)
+
+
+def settle_parts(timeout=10.0):
+    """Wait for the part calls started so far (tests, and a clean shutdown)."""
+    with _PART_LOCK:
+        running = list(_PART_WORK)
+    for work in running:
+        work.join(timeout)
 
 
 @SRC.scoped("rule-check")
@@ -686,7 +745,7 @@ def check_as(
                     **({"unchecked_rules": unchecked} if unchecked else {}),
                 }
                 # The parts its first check found are cached with it: a repeat asks nothing more.
-                return _with_parts(store, None, found, output, _cached_parts(hit[0]) if needs_parts(found) else None)
+                return {**found, "parts": _cached_parts(hit[0])} if needs_parts(found) else found
             if deferred(late, draft, skip, rules):
                 # A Warn never changes what is saved: the write goes now, and this same check runs right after it,
                 # where too long to check, no engine and the day's cap are found and recorded as they are here.
@@ -742,16 +801,16 @@ def check_as(
                 "error": errors[0],
                 "unchecked_rules": failed,
             }
-            return _with_parts(store, engine, partial, output)
-        done = _with_parts(
+            return _later_parts(store, engine, partial, output)
+        done = _later_parts(
             store, engine, {**verdict, "broken": broken, "outcome": "broken" if broken else "pass"}, output
         )
-        # A complete verdict is cached as a plain list of the rules it broke; one that holds keeps its parts beside them.
-        kept = {"broken": broken, "parts": done["parts"]} if done.get("parts") else broken
+        # A complete verdict is cached as a plain list of the rules it broke; its hold's part call, after the write,
+        # adds the parts it finds beside them (`_fill_parts`).
         with store.transaction() as c:
             c.execute(
                 "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
-                (key, json.dumps(kept), call, H.now()),
+                (key, json.dumps(broken), call, H.now()),
             )
             c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
         return {**done, "call": call}
@@ -1346,6 +1405,13 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
+def _strictest_first(broken, strictest):
+    """`broken` with the rule the hold is on first, then the others by STRICT, strictest first."""
+    rest = [r for r in broken if r["id"] != strictest["id"]]
+    rest.sort(key=lambda r: -STRICT.get(r.get("if_broken"), 0))
+    return [strictest, *rest] if any(r["id"] == strictest["id"] for r in broken) else rest
+
+
 def review_title(rule):
     """A review task's title: the rule its holds broke, one line, cut at REVIEW_TITLE_MAX. It names no one; the held
     text is never in it, nor in the body (only the hold's own card shows that, to the people who may read it)."""
@@ -1758,7 +1824,8 @@ def _write_hold(
             json.dumps(stored, default=str),
             author,
             json.dumps(verdict["recipients"]),
-            json.dumps([r["id"] for r in broken if r["id"]]),
+            # The rule the hold is on first, then the others strictest first: a card names the first.
+            json.dumps([r["id"] for r in _strictest_first(broken, strictest) if r["id"]]),
             json.dumps(detail),
             nonce,
             "held",
@@ -1768,6 +1835,8 @@ def _write_hold(
             check,
         ),
     )
+    if verdict.get("parts_later") and not detail.get("parts"):
+        _start_parts(c, verdict, hold_id)  # the pointer to the part is found after this write, never before it
     action = "rules.escalated" if mode == "escalate" else "rules.blocked"
     H.event(
         c,

@@ -14,7 +14,7 @@ const RH_OUTCOME: Record<'blocked' | 'escalated', readonly [string, string]> = {
 
 /** One rule a hold was checked against: the card's Rule block. `part`: the part of the held text that breaks it
     (backend `_parts`), null when no single part does; only an opened hold carries it. */
-interface RuleHoldRule { id: string; kind: string; text: string; part?: string | null; }
+interface RuleHoldRule { id: string; kind: string; text: string; if_broken?: string; part?: string | null; }
 /** A rule hold: a list gives summaries, GET /v2/rule-holds/<id> the card (its text, rules and the actions the reader may take). */
 interface RuleHold {
   id: string;
@@ -64,16 +64,18 @@ async function ruleHoldsLoad(slot: HTMLElement, id: string, cursor = '') {
   } catch { page = {holds: []}; }
   const holds = await Promise.all((page.holds || []).map(h =>
     get<RuleHold>('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => h)));
+  // Two or more still held: the rule's group first, read from every page (not the cards' page alone), whose Keep all
+  // and Send all decide every hold it counts.
+  const held = cursor ? [] : await ruleReviewRead(id).catch(() => holds.filter(h => (h.state || 'held') === 'held'));
   if (slot.dataset.task !== id) return;
   $('.rh-more', slot)?.remove();
   if (!cursor) slot.innerHTML = '';
-  // Two or more still held: the rule's group first, whose Keep all and Send all decide the cards drawn under it.
-  const group = !cursor && holds.filter(h => (h.state || 'held') === 'held').length > 1 ? ruleReviewHTML(holds, {brief: false}) : '';
+  const group = held.length > 1 ? ruleReviewHTML(held, {brief: false}) : '';
   slot.insertAdjacentHTML('beforeend', group + holds.map(ruleHoldHTML).join('') +
     (page.next_cursor ? `<button class="ghost small rh-more" type="button">Show more</button>` : ''));
   slot.hidden = !slot.querySelector('[data-hold]');
   ruleHoldsWire(slot, id);
-  if (group) ruleReviewWire(slot, holds, () => ruleHoldsLoad(slot, id));
+  if (group) ruleReviewWire(slot, held, () => ruleHoldsLoad(slot, id));
   const more: HTMLButtonElement | null = $('.rh-more', slot);
   more?.addEventListener('click', () => {
     more!.disabled = true;
@@ -95,13 +97,14 @@ function ruleHoldHTML(h: RuleHold): string {
   const reviewer = !!h.nonce || h.can_send;
   const decided = h.state === 'sent' ? `Sent anyway${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}`
     : h.state === 'kept' ? `Kept blocked${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}` : '';
-  const rule = h.rules?.[0];
-  const to = h.to || [];
+  const rule = rhRule(h);
+  const to = h.to || [], text = rhText(h), cut = text.length > RH_TEXT_MAX;
+  const shown = cut ? text.slice(0, RH_TEXT_MAX).trimEnd() : text, part = rhPart(h);
   return `<article class="rh-card" data-hold="${esc(h.id)}">
     <header><span class="rh-pill ${cls}">${word}</span><span class="rh-to muted">${esc(h.author_name || actorLabel(h.author))}${
       to.length ? ' → ' + esc(to.join(', ')) : ''}</span></header>
-    <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${rhMarkedHTML(h.text || '', rhPart(h))}${h.text_cut ? '…' : ''}</div>${
-      h.rules?.length && !rhPart(h) ? '<p class="rh-whole muted">The whole text breaks it.</p>' : ''}</div>
+    <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${rhMarkedHTML(shown, shown.includes(part) ? part : '')}${cut || h.text_cut ? '…' : ''}</div>${
+      h.rules?.length && !part ? '<p class="rh-whole muted">The whole text breaks it.</p>' : ''}</div>
     <div><div class="rh-lbl">Rule</div>${rules || '<div class="rh-rule muted">A rule that no longer exists</div>'}</div>
     ${RH_FAILED.has(h.id) ? `<p class="rh-err" role="alert">${esc(RH_FAILED.get(h.id) || '')}</p>` : ''}
     ${h.why ? `<div><div class="rh-lbl">Appeal</div><div class="rh-why">${esc(h.why)}</div></div>` : ''}
@@ -119,10 +122,20 @@ function ruleHoldHTML(h: RuleHold): string {
 // many wait, the part of each that broke the rule, and one decision for them all. Needs you shows the first RH_BRIEF
 // with the part and a line around it, then "+N more" and Show each (the full cards); the task window shows every card.
 const RH_BRIEF = 2;
+// A hold's text on its card: the first RH_TEXT_MAX characters, then "…".
+const RH_TEXT_MAX = 600;
+const RH_ASKS = ['question', 'chat_question', 'task_ask'];
+/** A hold's text as its reviewer reads it: an ask held before its copy dropped its labels reads without them too. */
+const rhText = (h: RuleHold): string => {
+  const text = h.text || '';
+  return RH_ASKS.includes(h.operation || '') ? text.replace(/^(?:Ask|Shows): /gm, '') : text;
+};
+/** The rule a hold is on: the first that is not Warn (the server lists it first; an older hold may not). */
+const rhRule = (h: RuleHold): RuleHoldRule | undefined => (h.rules || []).find(r => r.if_broken !== 'warn') || h.rules?.[0];
 // Why a hold Send all could not send, by hold id: said under that hold until it is decided.
 const RH_FAILED = new Map<string, string>();
 /** The part of a hold's text the first rule that names one says breaks it, '' when none does. */
-const rhPart = (h: RuleHold): string => (h.rules || []).map(r => r.part || '').find(p => !!p && (h.text || '').includes(p)) || '';
+const rhPart = (h: RuleHold): string => (h.rules || []).map(r => r.part || '').find(p => !!p && rhText(h).includes(p)) || '';
 /** `text` with `part` marked (the fail tint and a 2px bar: not colour alone), escaped. */
 function rhMarkedHTML(text: string, part: string): string {
   const at = part ? text.indexOf(part) : -1;
@@ -131,10 +144,10 @@ function rhMarkedHTML(text: string, part: string): string {
 }
 /** A hold in brief: who wrote it, to whom and when, then the line with its part and at most one line around it. */
 function rhBriefHTML(h: RuleHold): string {
-  const lines = (h.text || '').split('\n').map(l => l.trim()).filter(Boolean), part = rhPart(h);
+  const lines = rhText(h).split('\n').map(l => l.trim()).filter(Boolean), part = rhPart(h);
   const at = part ? lines.findIndex(l => l.includes(part)) : -1;
   const from = at < 0 ? 0 : Math.max(0, at - 1), shown = at < 0 ? lines.slice(0, 2) : lines.slice(from, at + 2);
-  const asks = ['question', 'chat_question', 'task_ask'].includes(h.operation || '');
+  const asks = RH_ASKS.includes(h.operation || '');
   const to = (h.to || []).join(', ');
   const failed = RH_FAILED.get(h.id);
   return `<div class="rh-brief" data-rh-brief="${esc(h.id)}">
@@ -153,7 +166,7 @@ function ruleReviewHTML(holds: RuleHold[], {brief, open = false}: {brief: boolea
   const held = holds.filter(h => (h.state || 'held') === 'held');
   if (!held.length) return holds.length ? '<p class="muted rh-done">Every hold here is decided.</p>' : '';
   const reviewer = held.some(h => !!h.nonce || h.can_send), n = held.length;
-  const rule = held.map(h => h.rules?.[0]).find(Boolean);
+  const rule = held.map(rhRule).find(Boolean);
   const title = rule ? `Held by: ${rule.text}` : 'Held by a rule that no longer exists';
   const shown = brief && !open ? held.slice(0, RH_BRIEF) : [], rest = brief && !open ? n - shown.length : 0;
   const sendable = held.filter(h => h.can_send && h.nonce);
@@ -207,12 +220,34 @@ function ruleReviewWire(root: HTMLElement, holds: RuleHold[], after: () => unkno
 // The review's item in Needs you (ui/app/decide-about.ts) holds a slot, data-rh-dc, under the task's text: its group
 // is read once per task while the screen is open and moves into each redraw; each redraw reads the list again (a page
 // of summaries, cheap) and draws the group again only when the holds waiting changed, so the count keeps up.
-interface RuleReviewDc { el: HTMLElement; holds: RuleHold[]; open: boolean; reading: boolean; }
+interface RuleReviewDc { el: HTMLElement; holds: RuleHold[]; open: boolean; reading: boolean; timer?: number; }
 const RH_DC = new Map<string, RuleReviewDc>();
-async function ruleReviewRead(taskId: string): Promise<RuleHold[]> {
-  const page = await get<RuleHoldPage>('/v2/rule-holds?task=' + encodeURIComponent(taskId), {fresh: true});
-  return Promise.all((page.holds || []).filter(h => (h.state || 'held') === 'held')
-    .map(h => get<RuleHold>('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => h)));
+// The pages of a review's holds read at most (the list's pages are 50): far more than a rule holds before it is edited.
+const RH_PAGES = 40;
+// How often a review shown in Needs you reads its list again, so a hold that joins is counted while it is open.
+const RH_TICK_MS = 10000;
+/** Every hold of a review still held, each opened for its text; `known` are holds read before, opened again only when
+    their state changed. */
+async function ruleReviewRead(taskId: string, known: RuleHold[] = []): Promise<RuleHold[]> {
+  const listed: RuleHold[] = [];
+  let cursor = '';
+  for (let n = 0; n < RH_PAGES; n++) {
+    const page = await get<RuleHoldPage>('/v2/rule-holds?task=' + encodeURIComponent(taskId) +
+      (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
+    listed.push(...(page.holds || []));
+    cursor = page.next_cursor || '';
+    if (!cursor) break;
+  }
+  const had = new Map(known.map(h => [h.id, h]));
+  return Promise.all(listed.filter(h => (h.state || 'held') === 'held').map(h => {
+    const old = had.get(h.id);
+    return old && (old.state || 'held') === 'held' ? old
+      : get<RuleHold>('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => h);
+  }));
+}
+/** The list was read again (decide.ts decideRefresh): each review on screen counts its holds again. */
+function ruleReviewTick() {
+  RH_DC.forEach((v, taskId) => { if (v.el.isConnected) void ruleReviewRefresh(taskId, v); });
 }
 function ruleReviewDraw(taskId: string, v: RuleReviewDc) {
   v.el.innerHTML = v.holds.length ? ruleReviewHTML(v.holds, {brief: true, open: v.open}) : '<p class="muted rh-done">Every hold here is decided.</p>';
@@ -223,7 +258,7 @@ async function ruleReviewRefresh(taskId: string, v: RuleReviewDc, always = false
   if (v.reading) return;
   v.reading = true;
   try {
-    const holds = await ruleReviewRead(taskId);
+    const holds = await ruleReviewRead(taskId, always ? [] : v.holds);
     const key = (hs: RuleHold[]) => hs.map(h => `${h.id}:${h.state || 'held'}`).join(' ');
     if (always || key(holds) !== key(v.holds)) { v.holds = holds; ruleReviewDraw(taskId, v); }
   } catch { if (!v.holds.length) v.el.innerHTML = '<p class="muted">The held items could not be read.</p>'; }
@@ -234,16 +269,21 @@ function ruleReviewMount(host: HTMLElement) {
   const slot = host.querySelector<HTMLElement>('[data-rh-dc]');
   const taskId = slot?.dataset.rhDc || '';
   if (!slot || !taskId) return;
-  let v = RH_DC.get(taskId);
+  const v = RH_DC.get(taskId);
   if (v) {
     if (slot !== v.el) slot.replaceWith(v.el);
     void ruleReviewRefresh(taskId, v);
     return;
   }
   slot.innerHTML = skelRows(3);
-  v = {el: slot, holds: [], open: false, reading: false};
-  RH_DC.set(taskId, v);
-  void ruleReviewRefresh(taskId, v, true);
+  const made: RuleReviewDc = {el: slot, holds: [], open: false, reading: false};
+  RH_DC.set(taskId, made);
+  void ruleReviewRefresh(taskId, made, true);
+  // While its review is shown, a hold that joins is counted; once it leaves the screen the timer stops.
+  made.timer = window.setInterval(() => {
+    if (!made.el.isConnected) { window.clearInterval(made.timer); if (RH_DC.get(taskId) === made) RH_DC.delete(taskId); return; }
+    void ruleReviewRefresh(taskId, made);
+  }, RH_TICK_MS);
 }
 
 // `after(card, hold, path)` runs once an action is taken; a task's cards redraw in place, a chat's leave the thread.
