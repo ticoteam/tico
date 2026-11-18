@@ -34,6 +34,7 @@
     "heartbeat.request.capabilities[]=\"harness_allocation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; without allocation reporting the hub preserves existing grants under memory pressure",
     "heartbeat.request.capabilities[]=\"browser_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it no browser command is sent to that computer",
     "heartbeat.request.capabilities[]=\"plan_switch_resume_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it a move between Claude plans starts that computer's Claude sessions fresh, as before",
+    "heartbeat.request.capabilities[]=\"push_hints_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it no `pushed` event is sent to that computer, and its chat turns trust its own fetch for up to 5 minutes, as before",
     "heartbeat.request.capabilities[]=\"voice_sessions_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422; only an advertising runner can claim a resident voice session",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
     "heartbeat.request.readiness.browser": "runner-rs/src/runner.rs: sent only once GET config says readiness_browser (fallback.rs server_takes_browser)",
@@ -233,7 +234,7 @@
         "seq": {"type": "integer"},
         "kind": {"type": "string", "x-open-enum": true, "enum": [
           "work", "assignments", "repositories", "credentials", "config", "worktrees", "restart", "performance",
-          "capacity", "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open"],
+          "capacity", "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open", "pushed"],
           "x-note": "A runner re-reads everything for a kind it does not know (runner-rs/src/events.rs channels)."},
         "bots": {"type": "array", "items": {"type": "string"}},
         "session_id": {"type": "string"}

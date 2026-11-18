@@ -2113,6 +2113,40 @@ def push(c, payload):
     return {"ref": ref, "commits": n}
 
 
+# A computer that says it takes them (runner-rs/src/fetch_fresh.rs) is told of a push to its bots' repositories.
+PUSH_HINTS = "push_hints_v1"
+
+
+def tell_pushed(c, settings, payload):
+    """A push to a repository's default branch, the branch a bot's checkout tracks: each computer that runs a bot whose
+    repository it is, and says it takes the hint (PUSH_HINTS), gets a `runner` row `pushed` naming the bot. It fetches
+    that checkout at once, and no chat turn there starts on its fetch from before the push. A computer that does not
+    say so is told nothing: an older runner reads every endpoint again for a kind it does not know. The bots told."""
+    from .execution import _github_app, bot_repository, capability_set
+
+    found = payload.get("repository") or {}
+    repo = str(found.get("full_name") or "").lower()
+    default = str(found.get("default_branch") or "main")
+    if not repo or payload.get("deleted") or str(payload.get("ref") or "") != "refs/heads/" + default:
+        return []
+    app = (_github_app(c),)
+    told = []
+    for row in c.execute(
+        "SELECT a.bot,a.runner_id,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+        "WHERE r.revoked_at IS NULL ORDER BY a.bot"
+    ).fetchall():
+        if PUSH_HINTS not in capability_set(row["capabilities"]):
+            continue
+        if (bot_repository(c, settings, row["bot"], app=app) or "").lower() != repo:
+            continue
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,bot,created_at) VALUES('runner','pushed',?,?,?)",
+            (row["runner_id"], row["bot"], H.now()),
+        )
+        told.append(row["bot"])
+    return told
+
+
 DEPLOY_QUERY = (
     "SELECT l.*,p.seq AS merge_seq FROM task_links l JOIN tasks t ON t.id=l.task_id "
     "LEFT JOIN main_pushes p ON p.sha=l.pr_sha "
@@ -2422,7 +2456,8 @@ def install_github(app, settings, store):
             return {"ok": True}
         if event == "merge_group":
             return merge_group(headers, payload)
-        with store.transaction() as c:
+        # notify: a push tells the computers of the bots it concerns at once (tell_pushed), through their streams' bell.
+        with store.transaction(notify=True) as c:
             from .item_sources import github as GS
 
             # A delivery GitHub sends again (a retry, a redelivery) is taken once (docs/dev/pipelines-v3.md "GitHub").
@@ -2445,6 +2480,7 @@ def install_github(app, settings, store):
             elif event == "push":
                 result = push(c, payload)
                 result["shipped"] = ship_deployed(c, settings)
+                result["told"] = tell_pushed(c, settings, payload)
             elif event == "release":
                 result = release(c, payload, release_repo=settings.release_repo)
             elif metadata:

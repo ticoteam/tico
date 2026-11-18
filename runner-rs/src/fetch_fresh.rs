@@ -11,14 +11,23 @@
 //! FETCH_HEAD or the remote-tracking ref the running turn and its git see. Every other turn, and a chat turn with no
 //! recent fetch (the first after a pause, a restart or a placement, after a background fetch failed, or when the
 //! remote's branch was rewritten), fetches before it starts, as before.
+//!
+//! A hub that knows of pushes (its GitHub App's webhook) tells this runner of a push to a bot's repository at once
+//! (`pushed` on the event stream, to a runner that advertises PUSH_HINTS: `run_loop`). The runner forgets its fetch of
+//! that checkout (`Upstream::stale`), so a chat turn that starts before the next fetch lands fetches first, and fetches
+//! it in the background at once. Without the webhook, CHAT_FRESH_FOR is the bound on how old a chat turn's start is.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::env::Env;
+use crate::util::text_of;
+
+/// The heartbeat capability that asks the hub for `pushed` events (backend/github.py tell_pushed).
+pub const PUSH_HINTS: &str = "push_hints_v1";
 
 /// How long a turn's fetch of a repository stands for a later one in the same turn.
 const FRESH_FOR: Duration = Duration::from_secs(15);
@@ -83,10 +92,94 @@ fn note_synced(key: &str, began: Instant) {
     }
 }
 
-/// Repository and upstream -> a background fetch of it is running: one at a time.
-fn running() -> &'static Mutex<HashSet<String>> {
-    static RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// Repository and upstream -> a background fetch of it is running (one at a time), and whether another must follow it
+/// (a push was heard while it ran, so it may have missed it).
+fn running() -> &'static Mutex<HashMap<String, bool>> {
+    static RUNNING: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
     RUNNING.get_or_init(Default::default)
+}
+
+/// Repository and upstream -> when the hub last said it was pushed to: only a fetch that began after it counts.
+fn pushed() -> &'static Mutex<HashMap<String, Instant>> {
+    static PUSHED: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    PUSHED.get_or_init(Default::default)
+}
+
+/// Bots whose repositories the hub said were pushed to, not yet handled by `run_loop`.
+struct Heard {
+    bots: Mutex<HashSet<String>>,
+    wake: tokio::sync::Notify,
+}
+
+fn heard_pushes() -> &'static Heard {
+    static HEARD: OnceLock<Heard> = OnceLock::new();
+    HEARD.get_or_init(|| Heard {
+        bots: Mutex::new(HashSet::new()),
+        wake: tokio::sync::Notify::new(),
+    })
+}
+
+/// The event stream said these bots' repositories were pushed to (crate::events).
+pub fn heard(bots: &[String]) {
+    let heard = heard_pushes();
+    heard.bots.lock().unwrap().extend(bots.iter().cloned());
+    heard.wake.notify_one();
+}
+
+#[cfg(test)]
+pub(crate) fn heard_of(bot: &str) -> bool {
+    heard_pushes().bots.lock().unwrap().contains(bot)
+}
+
+/// Each bot of this runner the hub said was pushed to: its checkout's fetch is forgotten and fetched again at once in
+/// the background. A shared checkout, which no chat turn starts on a recent fetch of, is left alone.
+pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
+    let heard = heard_pushes();
+    while !runner.stopping() {
+        heard.wake.notified().await;
+        let bots: Vec<String> = heard.bots.lock().unwrap().drain().collect();
+        let mine = runner.config.runner_id();
+        let assignments = runner.assignments_seen();
+        for bot in bots {
+            let Some(entry) = assignments
+                .iter()
+                .find(|e| text_of(&e["bot"]) == bot && text_of(&e["runner_id"]) == mine)
+            else {
+                continue;
+            };
+            if crate::sessions::is_shared(&entry["config"]) {
+                continue;
+            }
+            let path = crate::sessions::local_path(&runner.config, &bot, &entry["config"]);
+            if crate::repo_safety::outside_installation(&path).is_err()
+                || !path.join(".git").exists()
+            {
+                continue;
+            }
+            match runner.github_access(&bot, entry).await {
+                Ok(env) => after_push(&path, &crate::safegit::environment(&env)).await,
+                Err(why) => {
+                    // Without the bot's GitHub access the fetch cannot run: its next chat turn fetches first.
+                    forget(
+                        &path,
+                        &crate::safegit::environment(&crate::env::process_environment()),
+                    )
+                    .await;
+                    crate::util::diagnostic(&format!(
+                        "Tico runner: {bot}: heard of a push but cannot fetch it now ({why}); its next chat turn fetches first"
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The hub said the checkout's repository was pushed to: no chat turn starts on a fetch from before, and one runs now.
+pub async fn after_push(path: &Path, env: &Env) {
+    if let Some(up) = upstream(path, env).await {
+        up.stale();
+        up.refresh_behind(path, env);
+    }
 }
 
 /// Runs `work` as turn `aid`'s: its fetches and pushes count for each other. `chat`: a person waits for this turn in
@@ -183,12 +276,24 @@ impl Upstream {
     /// CHAT_FRESH_FOR: the turn may start on that (`take_behind`), and fetches behind it (`refresh_behind`).
     pub fn recent(&self) -> bool {
         let span = chat_fresh_for();
+        let since_push = pushed().lock().unwrap().get(&self.key).copied();
         self.chat
             && synced()
                 .lock()
                 .unwrap()
                 .get(&self.key)
-                .is_some_and(|at| at.elapsed() < span)
+                .is_some_and(|at| at.elapsed() < span && since_push.is_none_or(|p| *at > p))
+    }
+
+    /// The hub said the remote was pushed to: a fetch or push that began before now no longer stands for a chat
+    /// turn's start, and a background fetch running now is followed by another.
+    pub fn stale(&self) {
+        let mut pushed = pushed().lock().unwrap();
+        pushed.retain(|_, at| at.elapsed() < CHAT_FRESH_FOR);
+        pushed.insert(self.key.clone(), Instant::now());
+        if let Some(again) = running().lock().unwrap().get_mut(&self.key) {
+            *again = true;
+        }
     }
 
     /// Whether a person waits for this turn in the bot's own checkout (`in_turn`).
@@ -237,28 +342,59 @@ impl Upstream {
     /// turn's tree, its remote-tracking ref and FETCH_HEAD stay as they are. One at a time per repository and upstream.
     /// A failed fetch forgets the last one, so the next chat turn fetches before it starts and says why, as before.
     pub fn refresh_behind(&self, path: &Path, env: &Env) {
-        if !running().lock().unwrap().insert(self.key.clone()) {
-            return;
+        {
+            let mut running = running().lock().unwrap();
+            if running.contains_key(&self.key) {
+                return;
+            }
+            running.insert(self.key.clone(), false);
         }
         let (path, env, key) = (path.to_path_buf(), env.clone(), self.key.clone());
         let (behind, tracked) = (self.behind_ref(), self.tracked.clone());
         tokio::spawn(async move {
-            let began = Instant::now();
-            let fetched = fetch_behind(&path, &env, &tracked, &behind).await;
-            if fetched {
-                note_synced(&key, began);
-            } else {
-                synced().lock().unwrap().remove(&key);
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                crate::util::diagnostic(&format!(
-                    "Tico runner: {name}: the background fetch after a chat turn's start failed; the next chat turn fetches before it starts"
-                ));
+            // A push heard while it ran: fetch once more, so the push is not missed.
+            loop {
+                if !fetch_once(&path, &env, &key, &tracked, &behind).await {
+                    running().lock().unwrap().remove(&key);
+                    break;
+                }
+                if !again(&key) {
+                    break;
+                }
             }
-            running().lock().unwrap().remove(&key);
         });
+    }
+}
+
+/// One background fetch into `behind`: true when it succeeded.
+async fn fetch_once(path: &Path, env: &Env, key: &str, tracked: &str, behind: &str) -> bool {
+    let began = Instant::now();
+    let fetched = fetch_behind(path, env, tracked, behind).await;
+    if fetched {
+        note_synced(key, began);
+    } else {
+        synced().lock().unwrap().remove(key);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        crate::util::diagnostic(&format!(
+            "Tico runner: {name}: a background fetch failed; the next chat turn fetches before it starts"
+        ));
+    }
+    fetched
+}
+
+/// After a background fetch of `key` that succeeded: whether a push was heard while it ran (`Upstream::stale`), so
+/// another must follow; if not, the fetch is no longer running. One lock, so no push is heard in between.
+fn again(key: &str) -> bool {
+    let mut running = running().lock().unwrap();
+    if running.get(key) == Some(&true) {
+        running.insert(key.to_string(), false);
+        true
+    } else {
+        running.remove(key);
+        false
     }
 }
 
@@ -794,5 +930,56 @@ mod tests {
         })
         .await;
         assert_eq!(pulled, (true, ("r1".to_string(), false)));
+    }
+
+    #[tokio::test]
+    async fn a_push_the_hub_tells_of_makes_the_next_chat_turn_fetch_first_and_is_fetched_at_once() {
+        let f = fixture();
+        let env = turn_env(&f.root);
+        assert_eq!(
+            in_turn("h1", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            ""
+        );
+        // The hub says the repository was pushed to; a chat turn that starts before the fetch it asks for lands
+        // fetches first.
+        push_elsewhere(&f.seed, "late.md");
+        upstream(&f.mine, &env).await.unwrap().stale();
+        assert_eq!(
+            in_turn("h2", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            ""
+        );
+        assert!(
+            f.mine.join("late.md").is_file(),
+            "a chat turn started on a fetch from before a push the hub told of"
+        );
+        // The hint's own fetch runs at once, beside nothing: the next chat turn starts on it, push and all.
+        push_elsewhere(&f.seed, "hinted.md");
+        let fetch_head_was = fetch_head(&f.mine);
+        after_push(&f.mine, &env).await;
+        behind_done(&f.mine, &env).await;
+        assert_eq!(head(&f.mine, BEHIND_MAIN), head(&f.seed, "HEAD"));
+        assert_eq!(fetch_head(&f.mine), fetch_head_was);
+        assert_eq!(
+            in_turn("h3", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            ""
+        );
+        assert!(f.mine.join("hinted.md").is_file());
+        assert_eq!(
+            fetch_head(&f.mine),
+            fetch_head_was,
+            "the chat turn fetched first"
+        );
+    }
+
+    #[test]
+    fn a_push_heard_while_a_background_fetch_runs_gets_one_more() {
+        let key = format!("again-{}", uuid::Uuid::new_v4().simple());
+        running().lock().unwrap().insert(key.clone(), true);
+        assert!(again(&key), "the push heard while it ran was dropped");
+        assert!(!again(&key));
+        assert!(
+            !running().lock().unwrap().contains_key(&key),
+            "still running"
+        );
     }
 }

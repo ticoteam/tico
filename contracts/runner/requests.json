@@ -1068,7 +1068,8 @@
        "make_page",
        "memory_tidy_keep_v1",
        "browser_v1",
-       "plan_switch_resume_v1"
+       "plan_switch_resume_v1",
+       "push_hints_v1"
       ],
       "type": "string"
      },

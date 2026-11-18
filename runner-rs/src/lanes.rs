@@ -51,6 +51,8 @@ pub const CAPABILITIES: &[&str] = &[
     FRESH_SESSION,
     PLAN_SWITCH_RESUME,
     VOICE_SESSIONS,
+    // A push to a bot's repository is heard at once, so its chat turns never start on an older fetch (fetch_fresh.rs).
+    crate::fetch_fresh::PUSH_HINTS,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -201,6 +203,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            crate::fetch_fresh::PUSH_HINTS,
             VOICE_SESSIONS,
             PLAN_SWITCH_RESUME,
             crate::claude_login::CAPABILITY,
