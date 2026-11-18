@@ -1349,7 +1349,8 @@ def _author_name(c, author):
 def review_title(rule):
     """A review task's title: the rule its holds broke, one line, cut at REVIEW_TITLE_MAX. It names no one; the held
     text is never in it, nor in the body (only the hold's own card shows that, to the people who may read it)."""
-    text = " ".join(str((rule or {}).get("text") or "").split())
+    raw = rule.get("text") if isinstance(rule, dict) else rule
+    text = " ".join(str(raw or "").split())
     title = REVIEW_TITLE_RULE.format(rule=text) if text else REVIEW_TITLE
     return title if len(title) <= REVIEW_TITLE_MAX else title[: REVIEW_TITLE_MAX - 1].rstrip() + "\u2026"
 

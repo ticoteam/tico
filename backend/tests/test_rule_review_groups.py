@@ -164,6 +164,7 @@ def test_a_review_title_is_one_line_and_cut():
     title = K.review_title(long)
     assert "\n" not in title and len(title) == K.REVIEW_TITLE_MAX and title.endswith("…")
     assert K.review_title({"text": ""}) == K.REVIEW_TITLE
+    assert K.review_title("No Markdown") == "Held by: No Markdown"  # an appeal names its rule as text
 
 
 # ---- the reviews made one per hold, regrouped at start ------------------------------------------------------------
