@@ -311,6 +311,9 @@ def compare(a, b):
             isinstance((left.get(key) or [0, 0])[1], list) and items(left.get(key)) == items(right.get(key))
         )
         print(("same     " if one == two else "reordered" if same else "DIFFERENT"), key)
+        if not same:
+            at = next((i for i, (x, y) in enumerate(zip(one, two, strict=False)) if x != y), min(len(one), len(two)))
+            print("    before:", one[max(0, at - 80) : at + 80], "\n    after: ", two[max(0, at - 80) : at + 80])
 
 
 def main():
