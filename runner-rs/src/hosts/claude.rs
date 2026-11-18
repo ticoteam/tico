@@ -3166,7 +3166,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn voice_primes_and_answers_twice_from_the_same_process() {
+    async fn voice_uses_the_handed_model_effort_and_style_for_both_utterances() {
         let dir = std::env::temp_dir().join(format!("claude-voice-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("claude");
@@ -3175,6 +3175,7 @@ mod tests {
             r#"#!/bin/sh
 case "$1" in --version) echo '2.1.296 (Claude Code)'; exit 0;; esac
 echo "$$" >> launches
+printf '%s\n' "$@" > args
 IFS= read -r line || exit 1
 case "$line" in *READY*) printf '%s\n' '{"type":"result","result":"READY"}';; *) exit 2;; esac
 IFS= read -r line || exit 1
@@ -3188,11 +3189,12 @@ case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; 
         host.start().await.unwrap();
         let thread = host.start_thread(&Settings {
             cwd: dir.display().to_string(),
+            model: Some("synthetic-voice-model".into()),
+            effort: Some("low".into()),
+            output_style: Some("Concise".into()),
             ..Default::default()
         });
-        let mut resident = host
-            .start_voice(&thread, Some("low"), "voice-attempt")
-            .unwrap();
+        let mut resident = host.start_voice(&thread, None, "voice-attempt").unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
             resident.send("Reply with READY").await.unwrap();
             assert_eq!(resident.frame().await.unwrap()["result"], "READY");
@@ -3205,6 +3207,13 @@ case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; 
         .await
         .expect("the resident Claude process did not answer each input");
         drop(resident);
+        let argv = std::fs::read_to_string(dir.join("args")).unwrap();
+        let args: Vec<_> = argv.lines().collect();
+        let value_after = |flag| args.windows(2).find(|pair| pair[0] == flag).unwrap()[1];
+        assert_eq!(value_after("--model"), "synthetic-voice-model");
+        assert_eq!(value_after("--effort"), "low");
+        let settings: Value = serde_json::from_str(value_after("--settings")).unwrap();
+        assert_eq!(settings["outputStyle"], "Concise");
         assert_eq!(
             std::fs::read_to_string(dir.join("launches"))
                 .unwrap()
