@@ -97,7 +97,9 @@ def test_a_credit_mark_left_after_credit_returned_clears_at_the_next_look(enviro
     api = _cloud_company(environment, monkeypatch)
     store, manager = api.app.state.store, api.app.state.cloud_machines
     with store.transaction() as c:
-        c.execute("INSERT INTO cloud_machines(bot, mode, state) VALUES('botops', 'cloud', 'none') ON CONFLICT(bot) DO NOTHING")
+        c.execute(
+            "INSERT INTO cloud_machines(bot, mode, state) VALUES('botops', 'cloud', 'none') ON CONFLICT(bot) DO NOTHING"
+        )
         c.execute("UPDATE cloud_machines SET problem='out_of_credit', problem_at='2026-11-17T13:29:52Z'")
         # A 402 still backing off keeps its mark: HQ refused that machine, and it is asked again later.
         c.execute("UPDATE cloud_machines SET next_try_at=? WHERE bot='_shared'", (2**40,))
