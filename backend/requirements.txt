@@ -28,7 +28,7 @@ charset-normalizer==3.5.2
     # via reportlab
 click==8.5.0
     # via uvicorn
-croniter==6.2.4
+croniter==7.0.0
     # via -r requirements.in
 cryptography==50.0.2
     # via

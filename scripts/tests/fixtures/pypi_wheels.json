@@ -297,7 +297,7 @@
  "click==8.5.0": [
   "py3-none-any"
  ],
- "croniter==6.2.4": [
+ "croniter==7.0.0": [
   "py3-none-any"
  ],
  "cryptography==50.0.2": [
