@@ -86,6 +86,17 @@ def run(store, onboarding, telemetry, vault=None):
             old_questions.carry_over(c)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("old_questions", exc)
+    # Once, in batches: task-thread messages of the last 30 days that the old rule marked restricted and that read as
+    # their thread become plain, so the rail and Catch up count them in SQL (threads.plain_backfill_batch).
+    try:
+        from . import threads
+
+        while True:
+            with _transaction(store) as c:
+                if not threads.plain_backfill_batch(c):
+                    break
+    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+        telemetry.capture("plain_backfill", exc)
     # Once: a stored key that is a tool's setting (a host, a region, a profile) becomes that setting, on a tool each of
     # its holders still gets it from (backend/tool_settings.py move_once). It reads values, so it needs the vault.
     if vault is not None:

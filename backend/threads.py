@@ -51,6 +51,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -4358,6 +4359,114 @@ def _restamp(c, message, thread, attempt=None):
         ok = task_privacy.reads_as_thread(c, thread, {**stored, "refs": {**refs, "turn_id": attempt}})
     if not ok:
         c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message["id"],))
+
+
+PLAIN_KEY = "threads.plain_backfill"  # registry_metadata: {"since", "after" (rowid), "done"}
+PLAIN_DAYS = 30
+PLAIN_BATCH = 500
+RESTAMP_LIMIT = 2000  # messages one commit re-checks; past it the rest of what it reached is made restricted
+
+
+def restamp_dirty(c):
+    """Called inside a write transaction just before it commits (backend/store.py `transaction`). What a plain
+    task-thread message's provenance reads may have changed in it (messages_plain_dirty: a message's refs, parent or
+    thread; messages_plain_runs: a run's inputs, task, job or carried tasks; messages_plain_rooms: a room's task, meeting
+    or audience; and what the read index found a settled row depends on). Each message so changed or in such a room,
+    each message the changed runs wrote, and every reply or answer below them, is checked again by the task-thread rule
+    as stored now and can only become restricted, so a plain message keeps answering message_readable as its thread
+    does."""
+    try:
+        ids = [r[0] for r in c.execute("SELECT message_id FROM messages_plain_dirty")]
+        runs = [r[0] for r in c.execute("SELECT attempt_id FROM messages_plain_runs")]
+        rooms = [r[0] for r in c.execute("SELECT conversation_id FROM messages_plain_rooms")]
+    except sqlite3.OperationalError:
+        return  # a file from before the triggers' migration
+    if not ids and not runs and not rooms:
+        return
+    c.execute("DELETE FROM messages_plain_dirty")
+    c.execute("DELETE FROM messages_plain_runs")
+    c.execute("DELETE FROM messages_plain_rooms")
+    for cid in rooms:
+        ids.extend(r[0] for r in c.execute("SELECT id FROM messages WHERE conversation_id=?", (cid,)))
+    from . import message_links
+
+    fresh = {}  # links of rows written in this transaction, not yet in message_links (refresh_dirty runs after this)
+    for row in c.execute(
+        "SELECT m.id, m.refs, m.in_reply_to FROM message_links_dirty d JOIN messages m ON m.id=d.message_id"
+    ):
+        fresh[row[0]] = message_links.links_for({"refs": row[1], "in_reply_to": row[2]})
+
+    def linked(kind, target):
+        found = {
+            r[0] for r in c.execute("SELECT message_id FROM message_links WHERE kind=? AND target=?", (kind, target))
+        }
+        found.update(mid for mid, links in fresh.items() if (kind, target) in links)
+        return found
+
+    queue, done, seen_runs = list(ids), set(), set()
+    for mid in ids:  # a message a run read: the run's own words may now carry more
+        runs.extend(r[0] for r in c.execute("SELECT attempt_id FROM attempt_inputs WHERE message_id=?", (mid,)))
+    while runs or queue:
+        while runs:
+            aid = runs.pop()
+            if aid not in seen_runs:
+                seen_runs.add(aid)
+                queue.extend(linked("attempt", aid))
+        if not queue:
+            break
+        mid = queue.pop()
+        if mid in done:
+            continue
+        done.add(mid)
+        row = c.execute("SELECT id, conversation_id, restricted FROM messages WHERE id=?", (mid,)).fetchone()
+        if row is None:
+            continue
+        if len(done) > RESTAMP_LIMIT:
+            c.execute("UPDATE messages SET restricted=1 WHERE id=? AND restricted=0", (mid,))
+        elif row[2] == 0:
+            _restamp(c, {"id": row[0]}, thread_row(c, row[1]))
+        queue.extend(linked("parent", mid))
+
+
+def plain_backfill_batch(c, batch=PLAIN_BATCH):
+    """One batch of the once-only pass that marks plain the task-thread messages of the last PLAIN_DAYS that the rule
+    before task_privacy.reads_as_thread marked restricted. Only a never-edited, undeleted, non-legacy message with its
+    own origin is looked at, and only one reads_as_thread accepts as it is stored now becomes 0: the same rule a new
+    post gets, on today's provenance. Re-runnable (deleting PLAIN_KEY starts it over); returns the rows looked at, 0
+    once done."""
+    state = H._json(
+        (c.execute("SELECT value FROM registry_metadata WHERE key=?", (PLAIN_KEY,)).fetchone() or [None])[0], {}
+    )
+    state = state if isinstance(state, dict) else {}
+    if state.get("done"):
+        return 0
+    since = state.get("since") or H.shift(H.now(), days=-PLAIN_DAYS)
+    after = int(state.get("after") or 0)
+    rows = c.execute(
+        "SELECT m.rowid, m.id, m.refs, m.in_reply_to, m.conversation_id FROM messages m "
+        "JOIN conversations t ON t.id=m.conversation_id WHERE m.rowid>? AND m.created_at>=? AND m.restricted=1 "
+        "AND m.legacy_audience IS NULL AND m.deleted_at IS NULL AND COALESCE(m.revision,0)=0 AND t.task_id IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=m.origin_id AND o.id<>m.id) "
+        "ORDER BY m.rowid LIMIT ?",
+        (after, since, batch),
+    ).fetchall()
+    from . import task_privacy
+
+    for rowid, mid, refs, in_reply_to, cid in rows:
+        conv = thread_row(c, cid)
+        if (
+            conv
+            and audience_of(conv) != "meeting"
+            and task_privacy.reads_as_thread(c, conv, {"refs": refs, "in_reply_to": in_reply_to})
+        ):
+            c.execute("UPDATE messages SET restricted=0 WHERE id=?", (mid,))
+        after = rowid
+    state = {"since": since, "after": after, "done": len(rows) < batch}
+    c.execute(
+        "INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (PLAIN_KEY, H._dump(state)),
+    )
+    return len(rows)
 
 
 def edit_message(c, principal, message_id, body):

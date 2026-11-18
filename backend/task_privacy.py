@@ -562,7 +562,9 @@ def message_readable(c, actor, message, current=False):
 def reads_as_thread(c, conv, message):
     """Whether `message` (as stored or about to be: conversation_id, refs, in_reply_to) in task thread `conv` gives
     every reader the same answer from message_readable as the thread does, so its restricted flag may be 0 and the
-    fast paths (threads.readable_sql: a task thread is read only by those who read its task) count it in SQL.
+    fast paths count it in SQL once the thread check passes. For a task thread that check is the Python one
+    (threads.readable_ids: a task thread needs Python, thread_readable reads its task), not readable_sql's `tasks`
+    default, which lists every task. Files (`attachments`) keep a message restricted, as a post with files is.
     True only when each part of message_readable reduces to the thread: its tasks (refs, answers, inputs, parents and
     its run, message_tasks) are exactly the thread's task, no page is named by it, its reply chain or its run's
     messages, no meeting is in its provenance, and it carries no other message. Anything it cannot authorize is False.
@@ -574,7 +576,7 @@ def reads_as_thread(c, conv, message):
         return False
     message = {**dict(message), "conversation_id": conv["id"]}
     refs = H._json(message.get("refs"), {}) or {}
-    if not isinstance(refs, dict) or refs.get("carries"):
+    if not isinstance(refs, dict) or refs.get("carries") or refs.get("attachments"):
         return False
     try:
         if _message_tasks(c, message, set(), include_run=True, current=True) != {tid}:
