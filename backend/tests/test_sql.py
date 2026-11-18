@@ -1588,3 +1588,35 @@ def test_task_waits_reads_the_engines_waits_over_the_callers_own_tasks(api, worl
     assert ben == sorted(world[k]["id"] for k in ("coo_task", "finance_task"))
     # Built only for a statement that names it.
     assert query(api, "SELECT count(*) FROM tasks", "ben-test")["rows"] == [[2]]
+
+
+SLOW_SQL = 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<50000000) SELECT sum(x) FROM n'
+
+
+@pytest.mark.parametrize('slow', ['python', 'sql'])
+def test_a_visibility_build_past_the_time_limit_is_stopped_as_a_timeout(api, monkeypatch, slow):
+    """The caller's seconds bound the whole build of their views, not only its materialized sets: a step that outruns
+    them (Python between statements, or a statement of its own) ends the call with 422 `timeout`, so one call holds a
+    worker no longer than its limit."""
+    import time
+
+    from backend import sql as S
+
+    for role in ('owner', 'human'):
+        monkeypatch.setitem(S.LIMITS, role, (500, 0.2))
+    built = S.guarded
+
+    def guarded(conn, *args, **kwargs):
+        if slow == 'python':
+            time.sleep(0.3)
+        else:
+            conn.execute(SLOW_SQL).fetchone()
+        return built(conn, *args, **kwargs)
+
+    monkeypatch.setattr(S, 'guarded', guarded)
+    started = time.monotonic()
+    refused = query(api, 'SELECT count(*) FROM tasks', expected=422)
+    assert refused['error']['code'] == 'timeout'
+    assert time.monotonic() - started < 5
+    monkeypatch.setattr(S, 'guarded', built)
+    assert query(api, 'SELECT count(*) FROM tasks')['rows']

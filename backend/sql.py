@@ -1043,12 +1043,24 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     if trace:
         conn.set_trace_callback(trace)
     trusted = [False]
+
+    def in_time():
+        # The Python steps between statements: the progress handler stops only SQLite's own work.
+        if deadline is not None and time.monotonic() > deadline:
+            raise sqlite3.OperationalError("interrupted")
+
     try:
+        # The whole visibility build is under the caller's time limit, not only its materialized sets: a build that
+        # outruns it is stopped like a query that does (422 `timeout`), so one slow call holds a worker only that long.
+        if deadline is not None:
+            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
         # Predicates, provenance and result rows use one read snapshot.
         conn.execute("BEGIN")
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
+        in_time()
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        in_time()
         readable = tables.pop(READABLE_MESSAGES)
         # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
         source_tables = set(tables) | {
@@ -1194,15 +1206,14 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             names = ",".join(f'"{column}"' for column in exposed[table])
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
-        if deadline is not None:
-            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
+        in_time()
         tables = materialize(conn, index, {**tables, READABLE_MESSAGES: readable}, inner, function, private)
         readable = tables.pop(READABLE_MESSAGES)
         # The rule over the unfiltered messages: each row is `source`, as materialize's gates read it.
         conn.execute(
             f"CREATE TEMP VIEW {inner(READABLE_MESSAGES)} AS SELECT * FROM {inner('messages')} AS source WHERE {readable[0]}"
         )
-        conn.set_progress_handler(None, 0)
+        in_time()
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
         masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
         from . import threads
@@ -1247,6 +1258,8 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         worked_out = {name for name in WORKED_OUT if re.search(rf"\b{name}\b", statement or "", re.I)}
         if "task_waits" in worked_out:
             task_waits(conn, c, private, set(unseen) | set(bots))
+        in_time()
+        conn.set_progress_handler(None, 0)
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
