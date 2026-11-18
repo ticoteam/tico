@@ -367,6 +367,15 @@ def _reaction_path(args):
     return "messages/" + quote(args["message_id"], safe="") + "/reactions/" + quote(args["emoji"], safe=":+")
 
 
+SHARED_FILES = {
+    "type": "array",
+    "maxItems": 10,
+    "items": {"type": "string"},
+    "description": "Files already in Tico to attach, as file_id@version (tico file list prints both): any file you "
+    "can open, such as one you published; the thread's readers open it from the message",
+}
+
+
 def _thread_message(args, **more):
     """A message body for a thread post or reply: the text, who it is addressed to and its references."""
     body = {"text": args["text"], "kind": "say", "to": args.get("to"), **more}
@@ -465,14 +474,16 @@ def thread_create(api, args):
         "to": THREAD_ACTOR,
         "reply_to": _s("The id of the message this answers, in the same thread or a sub-thread under it"),
         "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"},
+        "attachments": SHARED_FILES,
     },
     required=("thread", "text"),
     writes=True,
 )
 def thread_post(api, args):
+    more = {"attachments": args["attachments"]} if args.get("attachments") else {}
     return api.post(
         _thread_path(args["thread"], "messages"),
-        _thread_message(args, in_reply_to=args.get("reply_to")),
+        _thread_message(args, in_reply_to=args.get("reply_to"), **more),
         key=_key(args),
     )
 
@@ -831,7 +842,8 @@ def thread_delete(api, args):
 @tool(
     "tico_thread_upload",
     "Post a message with a local file to a thread: the file is streamed to Tico, and `text` is the "
-    "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from.",
+    "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from; "
+    "a file already in Tico goes with tico_thread_post's attachments.",
     {
         "thread": THREAD_ID,
         "path": _s("A local file on this computer"),
@@ -857,7 +869,7 @@ def thread_upload(api, args):
     }
     fields = {name: value for name, value in fields.items() if value is not None}
     return api.post_multipart(
-        "uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path}, fields, key=_key(args)
+        "uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"files": path}, fields, key=_key(args)
     )
 
 
@@ -954,9 +966,9 @@ CLI = (
     ),
     Command(
         "thread post",
-        "post a message to a thread",
-        args=(Arg("reply_to", metavar="MESSAGE"), _REFS),
-        example="tico thread post th_1 'Shipped it' --ref task:42",
+        "post a message to a thread, with files already in Tico attached by --file",
+        args=(Arg("reply_to", metavar="MESSAGE"), _REFS, Arg("attachments", "--file", metavar="ID@VERSION")),
+        example="tico thread post th_1 'The draft' --file f_1@2",
     ),
     Command(
         "thread bot-status",

@@ -86,6 +86,8 @@ class ThreadPost(BaseModel):
     defer_for: str | None = None  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
     # Digests of suspect keys the person un-marked in the Tools chat (backend/secret_drop.py); never stored.
     unmarked: list[str] = Field(default_factory=list, max_length=50)
+    # Files already in Tico shared with the message, as `<file id>@<version>` or {ref, title} (shared_files).
+    attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)
 
 
 class MessagePatch(BaseModel):
@@ -133,6 +135,36 @@ class ThreadUpload(BaseModel):
     titles: list[str] = Field(default_factory=list, max_length=10)
     delivery: Way | None = None
     defer_for: str | None = None
+    attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)  # as ThreadPost's
+
+
+SHARE_REFUSED = (
+    "File {ref} is not one you can open. Share a file of yours as <file id>@<version> (tico file list prints both), "
+    "or post a file from your checkout with tico thread upload."
+)
+
+
+def shared_files(c, files, who, attachments):
+    """The items an upload's files would be for files already in Tico that a post shares, in order: each version's bytes
+    as a new blob of the poster's, which threads._post links to the message as it links an upload, so whoever reads the
+    message opens it and the file keeps its own access. Only a version of a file the poster may open is shared."""
+    from .blobs import register
+
+    items = []
+    for attachment in attachments:
+        fid, number, title = visuals.parse(attachment)
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        version = (
+            c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
+            if row and not row["archived"] and files.visible(c, who, row, {})
+            else None
+        )
+        if version is None:
+            raise Problem("not_found", SHARE_REFUSED.format(ref=f"{fid}@{number}"), 404)
+        item = register(c, who, version["digest"], version["size"], version["name"], version["mime"])
+        item["title"] = title or row["title"] or version["name"]
+        items.append(item)
+    return items
 
 
 def _unmarked(who, body):
@@ -941,6 +973,7 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, who)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
+            shared = shared_files(c, app.state.files, who, body.attachments)
             message = threads.post(
                 c,
                 v,
@@ -954,6 +987,7 @@ def install(app, store, auth, mutate, rule_check):
                 reach=True,
                 in_reply_to=replying,
                 unmarked=_unmarked(who, body),
+                attachments=shared or None,
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
@@ -1262,19 +1296,20 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "uploadThreadMessage",
-            "A person's message with files in a thread (multipart: text, titles and the files, and `in_reply_to` as a post takes it); each file is linked to the message, under the chat upload limit",
+            "A person's or a bot's message with files in a thread (multipart: text, titles and the files, `attachments` and `in_reply_to` as a post takes them); each file is linked to the message, under the chat upload limit",
             "ThreadUploaded",
             openapi_extra=upload_contract(ThreadUpload),
         ),
     )
     async def thread_upload(request: Request, thread_id: str):
-        """A person's message with files in a thread, stored as a chat's files are: each one linked to the message, under
-        the same upload limit. Who may post is checked and the rule check runs before any byte is stored."""
+        """A person's or a bot's message with files in a thread, stored as a chat's files are: each one linked to the
+        message, under the same upload limit. Who may post is checked and the rule check runs before any byte is stored."""
         from .blobs import register
-        from .views import human_only
+        from .media import write_upload
 
         who = request.state.identity
-        human_only(who)
+        if who.role not in ("owner", "human", "bot"):
+            raise Problem("identity", "A person or a bot posts files to a thread", 403)
         thread_id = bot_home_merge.named_home(store, thread_id)  # as post_message names it: the Home, before the check
         checked = {}
 
@@ -1285,7 +1320,7 @@ def install(app, store, auth, mutate, rule_check):
             checked["rc"] = check(who, thread_id, body)
 
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)
-        if not body.text.strip() and not uploads:
+        if not body.text.strip() and not uploads and not body.attachments:
             raise Problem("empty", "A message needs text or a file", 422)
 
         def work(c):
@@ -1296,6 +1331,7 @@ def install(app, store, auth, mutate, rule_check):
             for index, item in enumerate(items):
                 caption = body.titles[index] if index < len(body.titles) else ""
                 item["title"] = caption or item["name"]
+            items += shared_files(c, app.state.files, who, body.attachments)
             posted = threads.post(
                 c,
                 v,
@@ -1318,7 +1354,7 @@ def install(app, store, auth, mutate, rule_check):
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {"thread": threads.get(c, v, thread_id), "message": message}
 
-        return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
+        return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
 
     # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
     # so the first call that finds the index marks search ready (at boot if it is there, else on the first search).

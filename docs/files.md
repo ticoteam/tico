@@ -116,6 +116,11 @@ tico file list
 
 A bot can write only its own files: the authenticated bot decides, never a parameter.
 
+To hand a file to the person it is talking to, a bot attaches it to its message in that thread (its Home, a DM, a
+task's thread): `tico thread post <thread> "..." --file <file id>@<version>` for a file already in Tico (the ids
+`tico file publish` and `tico file list` print), or `tico thread upload <thread> <path> --text "..."` from its checkout.
+Everyone who reads the message opens it ([Threads](threads.md)).
+
 **Automatically**, at the end of a completed run, the runner uploads new or changed files under
 the bot checkout's `reports/` and `artifacts/`, comparing against what it published before. Choose
 other folders (or none) per bot in `bot.yaml`:

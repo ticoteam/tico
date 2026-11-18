@@ -1553,9 +1553,10 @@ def guard_write(c, who, path, auth):
         raise Problem("privacy", PRIVATE_MEETING_REFUSAL, 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
-    native = re.fullmatch(r"/api/v2/threads/([^/]+)/messages", path)
+    native = re.fullmatch(r"/api/v2/(?:uploads/)?threads/([^/]+)/messages", path)
     if native:
-        # The native message route: admitted only into the run's own private task thread (private_thread_destination).
+        # The native message route, with files or without: admitted only into the run's own private task thread
+        # (private_thread_destination).
         from . import threads
 
         thread = threads.thread_row(c, native[1])
