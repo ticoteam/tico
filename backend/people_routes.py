@@ -169,7 +169,9 @@ def register(app, auth, mutate, settings, store, visual_view):
         Otherwise my conversations, or the owner's view of a bot's."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # One snapshot from the start: each row's read check below reads its room, root, task and membership from
+        # read_cache, which prime_rooms and prime_members fill for the whole list first.
+        with store.read_transaction() as c:
             if bot and who.role != "owner":
                 raise Problem("forbidden", "Only the owner may inspect a bot's conversations", 403)
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -184,6 +186,12 @@ def register(app, auth, mutate, settings, store, visual_view):
                 if chat_with
                 else H.conversations_for(c, "bot:" + bot if bot else who.actor)
             )
+            from . import threads
+
+            if len(rows) > 1:  # one row is checked as cheaply alone
+                ids = [row["id"] for row in rows]
+                privacy.prime_rooms(c, ids)
+                threads.prime_members(c, who, ids, roots={row.get("root_id") or row["id"] for row in rows})
             visible = []
             for row in rows:
                 try:

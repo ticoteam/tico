@@ -730,7 +730,9 @@ def install(app, store, auth, mutate, rule_check):
     def get_thread(request: Request, thread_id: str):
         """The thread view, with its first page of members under `members` (the members route's shape, capped)."""
         v = threads.viewer(auth, request.state.identity)
-        with store.read() as c:
+        # One snapshot from the start, so the view and its members share read_cache's rows (a plain read only began
+        # caching once the first read check opened a transaction).
+        with store.read_transaction() as c:
             return {**threads.get(c, v, thread_id), "members": threads.members(c, v, thread_id, limit=50)}
 
     @app.get(
