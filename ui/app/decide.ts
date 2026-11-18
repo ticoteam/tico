@@ -476,7 +476,7 @@ function decideStop() {
   DEC = null; DEC_VOICE = false;
   decideOpinionsEnd();
   decideChatStop(); DEC_APPROVED.clear(); DEC_BROWSED.clear();
-  DEC_ABOUT.clear(); RH_DC.clear();
+  DEC_ABOUT.clear(); ruleReviewReset();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
