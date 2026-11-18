@@ -12,7 +12,8 @@
    `inline` puts the list in the dialog's own flow instead, under the field, where it pushes what follows down: it opens
    the same ways, stays open after a pick (the field clears and the list shows who is left) and when the field is
    emptied, and closes only on Esc or once nobody is left; a click outside or a blur leaves it, so a press on a button
-   under it never lands after the list closed and the button moved.
+   under it never lands after the list closed and the button moved. `under` is HTML placed between the field and its
+   list (Call now's chosen chips), so it stays put while picks shorten the list.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -26,11 +27,11 @@ interface WhoPicker {refresh: () => void; close: () => void; input: HTMLInputEle
 const WHO_KIND_RANK: Record<string, number> = {group: 0, person: 1, bot: 2};
 let whoPickerSeq = 0;
 
-function whoPickerHTML(opts: {placeholder?: string; label?: string; inline?: boolean} = {}): string {
+function whoPickerHTML(opts: {placeholder?: string; label?: string; inline?: boolean; under?: string} = {}): string {
   const id = `who-pick-${++whoPickerSeq}`, placeholder = opts.placeholder || 'Add a person, bot or group';
   return `<div class="settings-combo who-pick${opts.inline ? ' who-pick-inline' : ''}" data-who-pick><input type="text" class="who-pick-q" role="combobox" aria-expanded="false"
     aria-controls="${id}" aria-autocomplete="list" aria-label="${esc(opts.label || placeholder)}" placeholder="${esc(placeholder)}"
-    autocomplete="off" spellcheck="false" autocapitalize="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+    autocomplete="off" spellcheck="false" autocapitalize="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">${opts.under || ''}
     <div class="settings-combo-list who-pick-list" id="${id}" role="listbox" ${opts.inline ? 'hidden' : 'popover="manual"'} aria-label="${esc(opts.label || placeholder)}"></div></div>`;
 }
 

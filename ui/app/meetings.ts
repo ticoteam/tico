@@ -163,11 +163,11 @@ async function pageNotes(): Promise<void> {
 }
 
 // Call now: the people and bots to call, picked in the who picker (its list in the dialog's flow, open for the next
-// pick; who is chosen leaves it), and an optional title; Start makes the call (thread-call.ts callTeammates), which
+// pick; who is chosen leaves it; their chips between the field and the list, so they stay put), and an optional title; Start makes the call (thread-call.ts callTeammates), which
 // opens its meeting window, and a refusal shows here. A tap on a chosen one's chip takes them out again.
 function meetCallNow(): void {
   const chosen: string[] = [];
-  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot', inline: true})}<div class="meet-call-who" data-call-who></div>
+  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
     <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">`, `<button type="submit" class="primary meet-call-start" disabled>${CALL_SVG}Start</button>`);
   dialog.classList.add('meet-call-dialog');
   const who = dialog.querySelector<HTMLElement>('[data-call-who]'), start = dialog.querySelector<HTMLButtonElement>('[type=submit]');

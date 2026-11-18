@@ -77,10 +77,13 @@
 /* The Call now dialog: the meeting window's look (the dialog on --g1, its fields on --g2, a 1px muted border on focus),
    the picker's list in the dialog's flow under its field (who-picker.ts inline), and the chosen as chips a tap removes. */
 dialog.meet-call-dialog{background:var(--g1)}
+/* light: white, as the meeting window (call-window.css .cw) */
+:root[data-theme="light"] :is(dialog.meet-call-dialog,.meet-call-dialog .wh-foot){background:var(--g0)}
+@media (prefers-color-scheme:light){:root[data-theme="system"] :is(dialog.meet-call-dialog,.meet-call-dialog .wh-foot){background:var(--g0)}}
 .meet-call-dialog :is(input.who-pick-q,input[name=title]){background-color:var(--g2)}
 .meet-call-dialog :is(input.who-pick-q,input[name=title]):is(:focus,:focus-visible){outline:0;box-shadow:none;border:1px solid var(--muted)}
 .meet-call-dialog input[name=title]{box-sizing:border-box;width:100%}
-.meet-call-who{display:flex;flex-wrap:wrap;gap:6px}
+.meet-call-who{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .meet-call-who:empty{display:none}
 .meet-call-who .nm-chip{cursor:pointer}
 .meet-call-start{display:inline-flex;align-items:center;gap:8px}
@@ -88,6 +91,7 @@ dialog.meet-call-dialog{background:var(--g1)}
 @media (max-width:760px){
   dialog.tmodal.meet-call-dialog{top:max(12px,env(safe-area-inset-top));right:16px;bottom:auto;left:16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}
   .meet-call-who .nm-chip{height:32px;border-radius:16px}
+  .meet-call-dialog .who-pick-list .settings-combo-opt{min-height:44px}
 }
 .ph #notes-search{width:240px;flex:0 1 240px}
 /* Sources in the ⋯ menu carries a dot when a source needs a look; the closed ⋯ carries it too. */

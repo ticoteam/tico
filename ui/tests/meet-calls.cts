@@ -534,6 +534,10 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await ops.count(), 0, 'who is chosen leaves the list');
     const [under, below] = [await list.boundingBox(), await start.boundingBox()];
     assert.ok(under && below && below.y >= under.y + under.height, 'Start below the list');
+    // The chips sit between the field and the list, so a pick never moves them.
+    const [field, chip] = [await dialog.locator('.who-pick-q').boundingBox(), await dialog.locator('.nm-chip[data-actor="bot:ops"]').boundingBox()];
+    assert.ok(field && chip && under && chip.y >= field.y + field.height && under.y >= chip.y + chip.height, 'chips under the field, the list under them');
+    if (phone) assert.ok(((await list.locator('[role="option"]').first().boundingBox())?.height || 0) >= 44, 'rows 44px on a phone');
     await themed(page, 'call-now-dialog', phone);
     mode.start = 'tico';
     await page.evaluate(() => { window.__order = []; });
