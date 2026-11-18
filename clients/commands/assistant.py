@@ -284,8 +284,10 @@ def update_settings(api, args):
 @tool(
     "tico_run_list",
     "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), "
-    "end_reason, last_event_at, stalled, tokens and estimated cost (`est_cost_usd`) and start/end "
-    "load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
+    "end_reason, last_event_at, stalled, tokens and estimated cost (`est_cost_usd`), start/end "
+    "load snapshots (`load_start`, `load_end`) and `timings` (where the turn's time went: each mark's ms "
+    "since its computer claimed it, transcript_bytes, send_to_claim_ms, rule_check_ms, received_ms). "
+    "Yours, and those of the bots that report to you.",
     {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")},
     required=("bot",),
 )

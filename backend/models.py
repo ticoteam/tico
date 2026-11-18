@@ -2887,6 +2887,16 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class RunTimings(Contract):
+    """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
+    `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
+    the size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings)."""
+
+    claimed_at: float = Field(ge=0)
+    phases: dict[Annotated[str, Field(max_length=40)], Annotated[int, Field(ge=0, le=10**9)]] = Field(max_length=40)
+    transcript_bytes: int | None = Field(default=None, ge=0)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2928,6 +2938,7 @@ class Completion(Contract):
     rotated: RunRotation | None = None
     # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
     session: RunSession | None = None
+    timings: RunTimings | None = None  # feature `run_timings`
 
 
 class Retry(Contract):
