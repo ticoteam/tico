@@ -178,12 +178,7 @@ def test_a_compact_step_counts_its_size_in_utf8_bytes(api):
 def test_a_reply_s_text_goes_whole_to_a_reader_of_the_thread_as_it_is_written_and_to_nobody_else(api, monkeypatch):
     """A chat draws the reply as it is written (thread-view.ts thvLiveStep): on the compact stream a text delta and an
     assistant message go whole to whoever reads the thread, while thinking and tool steps stay compact. Someone who may
-    not read the thread gets none of it; nor does anyone while org rules hide the bot's replies; and a run given a value
-    mid-way sends no deltas, since a value cut across two of them escapes each upload's scrub."""
-    import time
-
-    from backend import credential_cards
-
+    not read the thread gets none of it; nor does anyone while org rules hide the bot's replies."""
     r, msg, aid, after = started_run(api)
     delta = {"text": "Acme's renewal ", "delta_kind": "text"}
     reply = {"text": "Acme's renewal is due Friday.", "final": False, "item_id": "m1"}
@@ -206,8 +201,5 @@ def test_a_reply_s_text_goes_whole_to_a_reader_of_the_thread_as_it_is_written_an
     assert got[2]["compact"] is True and "payload" not in got[2]
     assert got[4]["compact"] is True and "payload" not in got[4]
     assert outputs("cara-test") == {}
-    monkeypatch.setitem(credential_cards._recent, aid, (time.monotonic() + 60, ["acme-api-key-1234"]))
-    assert sorted(outputs("ana-test")) == [3, 4]
-    monkeypatch.delitem(credential_cards._recent, aid)
     monkeypatch.setattr(org_rule_check, "watched", lambda c, bot: True)
     assert sorted(outputs("ana-test")) == [4]

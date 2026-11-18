@@ -2741,20 +2741,13 @@ def _step_shown(view, bot, event, watched):
             watched[bot] = rules_watch(view.c, bot)
         if watched[bot]:
             return None
-        # A value a person gave this run mid-way is scrubbed from each upload, not from text cut across two deltas.
-        if event["kind"] == "delta":
-            from .credential_cards import set_in_run
-
-            if set_in_run(event["attempt_id"]):
-                return None
     return (decoded,)
 
 
 def _live_text(event, shown):
     """Whether a run step is the reply's own words as they are written (a text delta, an assistant message): a compact
     stream still sends it whole, so a chat on screen draws the reply as it comes (thread-view.ts). A model's thinking
-    stays compact. A secret cut across two deltas is held back by the runner until it can be masked whole (redact.rs
-    Held)."""
+    stays compact."""
     if event["kind"] == "message":
         return True
     payload = (shown[0] or {}).get("payload")

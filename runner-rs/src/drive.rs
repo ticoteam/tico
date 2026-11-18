@@ -146,7 +146,6 @@ impl Runner {
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
         let mut first_output = false;
-        let mut held = crate::redact::Held::default();
         let mut queue: Vec<Value> = vec![];
         // The outbox rows this drain has gathered, not yet written: (kind, JSON payload) in arrival order.
         let mut rows: Vec<(String, String)> = vec![];
@@ -437,20 +436,6 @@ impl Runner {
                     // What ending the wait saved: the rest of the run's time, which the wait would have held.
                     event["background_wait"]["minutes_saved"] =
                         json!(d.limit.saturating_duration_since(Instant::now()).as_secs() / 60);
-                }
-                // The reply's words are shown as they are written (a chat's live row): a secret cut across two of its
-                // pieces is held back until it can be masked whole (redact::Held).
-                if kind == "message" {
-                    held.clear();
-                } else if let Some(r) = d
-                    .redactor
-                    .filter(|_| kind == "delta" && event["delta_kind"] != "thought")
-                {
-                    let shown = r.release(&mut held, &text_of(&event["text"]));
-                    if shown.is_empty() {
-                        continue;
-                    }
-                    event["text"] = json!(shown);
                 }
                 if STREAMED.contains(&kind.as_str()) {
                     let clean = scrubbed(d.redactor, &event);

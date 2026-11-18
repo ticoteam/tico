@@ -140,24 +140,6 @@ fn build_values(chosen: BTreeSet<String>) -> Built {
     }
 }
 
-/// A reply's text as it streams in pieces (deltas), each of which goes up and may be shown as it is written. A secret
-/// split over two pieces passes a scrub of each one, so the text that could still be the start of a secret is held back
-/// (at most the longest secret form's length) until what follows settles it, and what is released is masked whole
-/// (Redactor::release). The assistant message that closes the pieces carries all of its text, scrubbed as one, so the
-/// tail held back at its end is never lost; `clear` then starts the next one.
-#[derive(Default)]
-pub struct Held {
-    text: String,
-    sent: usize,
-}
-
-impl Held {
-    pub fn clear(&mut self) {
-        self.text.clear();
-        self.sent = 0;
-    }
-}
-
 pub struct Redactor {
     inner: RwLock<Built>,
     /// Authenticator codes the browser typed: too short to mask inside other text, so only a whole run of digits
@@ -327,57 +309,6 @@ impl Redactor {
         let mut owned = v.clone();
         mask_in_place(&mut owned, &masks);
         Cow::Owned(owned)
-    }
-
-    /// The released part of `held` after `piece` is added to it, masked: see Held.
-    pub fn release(&self, held: &mut Held, piece: &str) -> String {
-        let inner = self.inner.read().unwrap();
-        let codes = self.codes.read().unwrap();
-        held.text.push_str(piece);
-        let (text, sent) = (held.text.as_str(), held.sent);
-        let bytes = text.as_bytes();
-        // A secret that could still be completed by what comes next starts in the last (longest - 1) bytes.
-        let longest = inner.matcher.as_ref().map_or(0, |m| m.max_pattern_len());
-        let mut end = text
-            .len()
-            .saturating_sub(longest.saturating_sub(1))
-            .max(sent);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        // A code is a whole run of digits: never cut one, nor release one that may go on.
-        if !codes.is_empty() {
-            while end > sent
-                && bytes[end - 1].is_ascii_digit()
-                && (end == bytes.len() || bytes[end].is_ascii_digit())
-            {
-                end -= 1;
-            }
-        }
-        // Never cut a secret already in view.
-        if let Some(m) = &inner.matcher {
-            if let Some(cut) = m
-                .find_iter(&text[sent..])
-                .find(|f| sent + f.start() < end && end < sent + f.end())
-            {
-                end = sent + cut.start();
-            }
-        }
-        if end <= sent {
-            return String::new();
-        }
-        let masks = Masks {
-            matcher: inner.matcher.as_ref(),
-            codes: &codes,
-        };
-        let part = &text[sent..end];
-        let out = if masks.hit(part) {
-            masks.apply(part)
-        } else {
-            part.to_string()
-        };
-        held.sent = end;
-        out
     }
 
     /// Whether these bytes carry a secret in any of its forms (read as latin-1, like the Python check). Codes are
@@ -1183,42 +1114,6 @@ mod tests {
         );
         assert_eq!(*untouched, plain);
         assert!(matches!(r.scrub_text("no secret here"), Cow::Borrowed(_)));
-    }
-
-    #[test]
-    fn a_secret_or_code_cut_across_streamed_pieces_is_never_shown_and_the_rest_streams_masked() {
-        let r = Redactor::new(&["granted-secret-value".into()]);
-        r.add_codes(&["287082".into()]);
-        let reply = "Signed in with granted-secret-value, code 287082, and pushed the branch. Done — all good.";
-        let whole = r.scrub_text(reply).into_owned();
-        let chars: Vec<char> = reply.chars().collect();
-        for size in 1..=9 {
-            let mut held = Held::default();
-            let mut shown = String::new();
-            for piece in chars.chunks(size) {
-                shown.push_str(&r.release(&mut held, &piece.iter().collect::<String>()));
-                // Not even the start of a secret or a code is shown before it can be masked whole.
-                assert!(
-                    !shown.contains("granted-") && !shown.contains("2870"),
-                    "{size}: {shown}"
-                );
-                assert!(whole.starts_with(&shown), "{size}: {shown}");
-            }
-            // All but the held tail went up; the closing message carries that tail.
-            assert!(
-                shown.contains("code ••••") && whole.len() - shown.len() < 30,
-                "{size}: {shown}"
-            );
-            held.clear();
-            // The next message starts afresh, its last (longest secret form - 1) bytes held.
-            assert_eq!(
-                r.release(
-                    &mut held,
-                    "Next one, a long enough piece of text to pass the hold."
-                ),
-                "Next one, a long enough piec"
-            );
-        }
     }
 
     #[test]
