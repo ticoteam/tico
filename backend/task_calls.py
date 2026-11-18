@@ -523,6 +523,7 @@ def task_answer(
     page_version: str | None = None,
     visit_id: str | None = None,
     keyed: bool = False,
+    page_reader: Callable[[list[str]], bool] | None = None,
 ) -> Row:
     """Answer what is asked: `ok` or `no` with a note (send back) on an OK; `ok` or `no` on a page, for the page shown
     (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and a person's answer from a
@@ -550,6 +551,7 @@ def task_answer(
             page_version=page_version,
             visit_id=visit_id,
             keyed=keyed,
+            page_reader=page_reader,
         )
 
 
@@ -752,7 +754,15 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     if not found:
         return None
     ref = f"page:{found['file_id']}@{found['version']}"
-    return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
+    page = {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
+    pages = task_pages.current_pages(conn, visit_id, requirement["id"])
+    if len(pages) > 1:
+        page["pages"] = [
+            {"file_id": p["file_id"], "version": int(p["version"]), "ref": f"page:{p['file_id']}@{p['version']}"}
+            for p in pages
+        ]
+        page["page_version"] = task_pages.version_key(pages)
+    return page
 
 
 def _page_checks(conn: "sqlite3.Connection", ref: object) -> list[str]:
@@ -1007,7 +1017,7 @@ def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
     return {
         "kind": requirement["kind"],
         "line": R.approval_line(requirement),
-        "shows": [page["ref"]] if page else list(requirement.get("shows") or []),
+        "shows": [p["ref"] for p in page.get("pages", [page])] if page else list(requirement.get("shows") or []),
         **({"page": page} if page else {}),
     }
 
@@ -1033,7 +1043,7 @@ def _leave_entry(
     private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
     asked = ask_shown(conn, row, requirement)
     page: Row | None = asked.get("page")
-    shows: list[Any] = [page["ref"]] if page else [] if private else asked["shows"]
+    shows: list[Any] = [] if private else asked["shows"]
     # An OK that names nothing to show: the task's page from an earlier stage, for its parties alone.
     earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
     # An OK that shows a page first (Validate's): what Jev passed on that page, as its check rows.
@@ -1076,6 +1086,14 @@ def _approval_of(row: Row, standing: Any, page: Row | None) -> Row | None:
         "file_id": page["file_id"] if page else None,
         "version": page["version"] if page else None,
         "unchecked": bool(getattr(standing, "unchecked", False)),
+        **(
+            {
+                "pages": [{"file_id": p["file_id"], "version": p["version"]} for p in page["pages"]],
+                "page_version": page["page_version"],
+            }
+            if page and page.get("pages")
+            else {}
+        ),
     }
 
 

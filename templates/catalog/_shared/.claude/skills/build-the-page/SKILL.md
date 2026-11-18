@@ -120,9 +120,10 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
    `check` names each rule the page breaks: the opening, the sections, a picture that is not a screenshot, a picture
    in the details, a placeholder left, a request to test, filler, length, more than three risks, a pull request
    number in a changelog. Fix each and build again.
-4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--spec` for a spec. It
-   prints the file id and anything it removed. Anything of yours removed is a fault to fix; with `--spec`, Tico's own
-   fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are not a fault.
+4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--as Spec` for a spec (or
+   the document's name). It prints the file id and anything it removed. Anything of yours removed is a fault to fix;
+   with `--as Spec`, Tico's own fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are
+   not a fault.
 5. Render the published page and look at it:
 
        python3 .claude/skills/build-the-page/page.py render <file id> --kind <kind>

@@ -18,7 +18,7 @@ type AskKind = 'ok' | 'other' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
     load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
-    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. `shows`: the refs it
+    a page requirement, the version key of the pages an answer is for. `shows`: the refs it
     was read from. Held per ask (decideOkKey): a stage's requirement is the same on every task in the stage. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
@@ -760,9 +760,11 @@ function decidePaintBody(st: DecState) {
     // and the document in the app's colours. The served page stands in only when the task has no such document.
     if (it.ask?.approval) decideAboutLoad(decideTaskId(it));
     const about = it.ask?.approval ? decideAboutOf(it) : undefined;
+    const docs = decideApprovalDocs(it);
     html = bare ? changed + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
       : about?.state === 'loading' ? skelRows(4)
-      : decideApprovalDoc(it) ? changed + '<div class="dc-docview"></div>'
+      : docs.length ? changed + docs.map(doc =>
+        `<div class="dc-docview" data-dc-doc="${esc(doc.file_id)}"></div>`).join('')
       : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
@@ -788,16 +790,23 @@ function decidePaintBody(st: DecState) {
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
 }
-/** The task document a document approval asks about, once the task is read; null for any other item. */
-function decideApprovalDoc(it: NeedsEntry): TaskDoc | null {
-  const fid = it.ask?.approval?.file_id;
-  return fid ? decideAboutOf(it)?.task?.documents?.find(d => d.file_id === fid) || null : null;
+/** The documents in the submission, when the task read can supply each viewer. */
+function decideApprovalDocs(it: NeedsEntry): TaskDoc[] {
+  const ask = it.ask?.approval;
+  if (!ask?.file_id) return [];
+  const docs = decideAboutOf(it)?.task?.documents || [];
+  const pages = ask.pages?.length ? ask.pages : [{file_id: ask.file_id, version: ask.version}];
+  const found = pages.map(p => docs.find(d => d.file_id === p.file_id && d.name === ask.document &&
+    d.versions.some(v => v.n === p.version)));
+  return found.every((doc): doc is TaskDoc => !!doc) ? found : [];
 }
 /** The approval's document on the left (wide screen), mounted as the phone's tab mounts it (task-docs.ts docViewMount),
     so it follows the app's theme unless its own HTML sets its colours; drawn again it moves to a newer version. */
 function decideOkDocMount(host: HTMLElement, it: NeedsEntry) {
-  const slot = host.querySelector<HTMLElement>(':scope > .dc-docview'), doc = decideApprovalDoc(it);
-  if (slot && doc) docViewMount(slot, doc, decideApprovalOn(it, doc));
+  for (const doc of decideApprovalDocs(it)) {
+    const slot = host.querySelector<HTMLElement>(`:scope > [data-dc-doc="${CSS.escape(doc.file_id)}"]`);
+    if (slot) docViewMount(slot, doc, decideApprovalOn(it, doc));
+  }
 }
 /** A document approval's one muted version line over the document on the left ("v2 · submitted for approval ·
     changed: …"), as a phone shows it on the document's tab (task-docs.ts docVersionLine). '' for any other OK. */
@@ -1493,8 +1502,12 @@ async function decideLetSee(st: DecState, it: NeedsEntry, whom: string[]) {
   st.error = said;
   decidePaintSide(st);
 }
-/** A page requirement's ask: the page attached now (`<file id>@<version>`), '' when there is none. */
-const decidePage = (it: NeedsEntry): string => it.ask?.page ? `${it.ask.page.file_id}@${it.ask.page.version}` : '';
+/** A page requirement's version key, covering every submitted page. */
+const decidePage = (it: NeedsEntry): string => {
+  const approval = it.ask?.approval, page = it.ask?.page;
+  if (approval?.pages && approval.pages.length > 1 && approval.page_version) return approval.page_version;
+  return page ? `${page.file_id}@${page.version}` : '';
+};
 /** The page on screen, which an answer is for. A refresh that brought another page leaves the screen as it was read:
     that page is read and shown with "It changed. Look again." and nothing is sent (null). */
 async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | undefined | null> {
@@ -1612,7 +1625,7 @@ let DEC_TAB = 'chat';   // the tab shown for the item on screen: 'chat', 'task' 
 /** The task document an OK's page is, by its file: only then is what the OK shows that document. */
 function decideOkDoc(it: NeedsEntry, docs: TaskDoc[]): TaskDoc | null {
   const fid = decideKind(it) === 'ok' ? it.ask?.page?.file_id : '';
-  return fid ? docs.find(d => d.file_id === fid) || null : null;
+  return fid ? docs.find(d => d.file_id === fid && (!it.ask?.approval || d.name === it.ask.approval.document)) || null : null;
 }
 /** An OK's own tab: the title of what it shows (its page, its content), else what it is (Proof, Spec, Invoice...);
     never the name of a document it is not. */
@@ -1632,9 +1645,10 @@ function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
   const bar = host.querySelector<HTMLElement>(':scope > .dc-tabs');
   if (!bar) return;
   const tabs = decideTabsOf(st, it), said = JSON.stringify(tabs);
-  const own = DEC_TAB === 'task' ? decideOkDoc(it, decideAboutOf(it)?.task?.documents || []) : null;
-  if (own) DEC_TAB = docKey(own.name);   // the OK's page is this document: its tab, with its version line
-  if (!tabs.some(t => t.key === DEC_TAB)) DEC_TAB = 'chat';
+  const docs = decideAboutOf(it)?.task?.documents || [], own = decideOkDoc(it, docs);
+  const active = tabs.some(t => t.key === DEC_TAB);
+  if (own && (DEC_TAB === 'task' || !active)) DEC_TAB = docKey(own, docs);
+  else if (!active) DEC_TAB = 'chat';
   if (bar.dataset.tabs !== said) {
     bar.dataset.tabs = said;
     bar.querySelector('.doc-tabs')?.remove();
@@ -1664,7 +1678,9 @@ function decideTabShow(it: NeedsEntry, key: string) {
     …"): only when the item's page is this document. */
 function decideApprovalOn(it: NeedsEntry, doc: TaskDoc): DocApproval | null {
   const a = it.ask?.approval;
-  return a && a.version != null && a.file_id === doc.file_id ? {version: a.version, unchecked: a.unchecked} : null;
+  if (!a || a.document !== doc.name) return null;
+  const version = a.pages?.find(p => p.file_id === doc.file_id)?.version ?? (a.file_id === doc.file_id ? a.version : null);
+  return version != null ? {version, unchecked: a.unchecked} : null;
 }
 /** The second tab, named for what it holds: the Spec a page's OK is about, the Proof a Validate or QA OK shows, an
     action's Invoice or Email, else the Task. */

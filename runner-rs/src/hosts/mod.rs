@@ -1468,6 +1468,18 @@ mod tests {
     }
 
     #[test]
+    fn page_link_hub_paths_are_write_commands() {
+        for action in ["link", "unlink"] {
+            let command = format!("tico page {action} file-1 --task T1 --as Spec");
+            assert_eq!(command_program(&command), format!("tico page {action}"));
+            assert!(!shell_reads_only(&command));
+        }
+        assert!(shell_reads_only(
+            "tico page list --linked task:T1 --role Spec"
+        ));
+    }
+
+    #[test]
     fn every_hub_read_path_is_a_leaf_command_path() {
         for path in HUB_READ_PATHS {
             assert!(HUB_PATHS.contains(path), "{path} is not a hub command path");

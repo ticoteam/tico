@@ -110,7 +110,7 @@ function taskDialogWire(d: ModalDialog) {
     if (!anchor || anchor.hasAttribute('download') || ev.defaultPrevented) return;
     const url = new URL(anchor.href, location.href);
     const match = url.origin === location.origin && url.pathname.match(/^\/api\/v2\/files\/([^/]+)$/);
-    if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'), {scroll: true})) ev.preventDefault();
+    if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'))) ev.preventDefault();
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
@@ -319,6 +319,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
+  void taskFilesTabLoad(d, task.id);
   void taskRunsLoad(d, task.id);
   void githubNudgeTask(d, full);
 }
@@ -758,6 +759,7 @@ function taskChatLive(state: TaskChatState) {
     if (!taskChatCurrent(state) || state.stopped) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});
+    void taskFilesTabLoad(state.dialog, state.id);
   }, 200);
 }
 const commentAuthor = (a: string | null | undefined, via?: string | null, src: {kind: string; name?: string} | null = null) => {
@@ -1271,10 +1273,10 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   // `can_comment`: false for someone who may read the task but not comment on it; they get no box
   const can = data.can_comment !== false, d = state.dialog;
   $('form', host).hidden = !can;
-  if (d.canComment !== can) { d.canComment = can; if (d.tfEl) tfPaint(d); }
+  if (d.canComment !== can) { d.canComment = can; if (d.tfEl) tfPaint(d); taskPagesActions(d); }
   // a new comment may have carried a new version of a file, or answered a question on one
   const count = (data.comments || data.messages || []).length;
-  if (state.count != null && count !== state.count) void tfLoad(state.dialog, state.id);
+  if (state.count != null && count !== state.count) { void tfLoad(state.dialog, state.id); void taskFilesTabLoad(state.dialog, state.id); }
   state.count = count;
   const files = tfFiles(state.dialog);
   // What is happening now is the chat's last row: a run at work, what the next run waits for, whose turn it is, and
@@ -1456,11 +1458,12 @@ function taskCauseLinkHTML(href: string | null | undefined): string {
   if (!href || !TASK_CAUSE_PAGES[href]) return '';
   return (href === '#/settings/billing' && cloudCreditLinkHTML()) || ` <a href="${esc(href)}">${TASK_CAUSE_PAGES[href]}</a>`;
 }
-// The window shows one thing at a time with the full width: the task's chat; one of its documents (Spec, QA report…,
-// ui/app/task-docs.ts), from the tabs on the title row, which only a task with a document has; or Details (what it is,
-// pages, what it needs to leave its stage, a short list of facts, its files), from its icon in the head, which closes
-// back to what showed before. The style guide's Task window; kept on the dialog across redraws.
-type TaskTab = string;   // 'chat', 'details' or docKey(name)
+// The window shows one thing at a time with the full width: the task's chat; its Files (the pages and files linked to it,
+// task-pages.ts); or one of its documents (QA report…, ui/app/task-docs.ts), from the tabs on the title row (Chat, Files N,
+// then the documents; a Spec is a card under the title, taskSpecsHTML); or Details (what it is, what it needs to leave
+// its stage and a short list of facts), from its icon in the head, which closes back to what showed before. The
+// style guide's Task window; kept on the dialog across redraws.
+type TaskTab = string;   // 'chat', 'files', 'details' or a document's key
 /** The documents the window draws: the task's own read's, else the last read's for the same task. */
 const taskTabRow = (d: ModalDialog) => d.querySelector<HTMLElement>('.tw-tabs');
 const taskDetailsButton = (d: ModalDialog) => d.querySelector<HTMLElement>('[data-task-tab="details"]');
@@ -1469,10 +1472,10 @@ function taskDocsOf(d: ModalDialog, t: ModalTask): TaskDoc[] {
   return d.taskDocs || [];
 }
 function taskTabPaint(d: ModalDialog) {
-  // A document that is gone (archived, unreadable now) shows the chat in its place.
-  if (d.taskTab?.startsWith('doc:') && !docOf(d.taskDocs, d.taskTab)) d.taskTab = 'chat';
-  if (d.taskTabBack?.startsWith('doc:') && !docOf(d.taskDocs, d.taskTabBack)) d.taskTabBack = 'chat';
-  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = docOf(d.taskDocs, tab);
+  // A document that is gone (archived, unreadable now), or a Spec (its card sits under the title), shows the chat instead.
+  if (d.taskTab?.startsWith('doc:') && !taskDocOf(d, d.taskTab)) d.taskTab = 'chat';
+  if (d.taskTabBack?.startsWith('doc:') && !taskDocOf(d, d.taskTabBack)) d.taskTabBack = 'chat';
+  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = taskDocOf(d, tab);
   if (body) body.dataset.taskTabShown = doc ? 'doc' : tab;
   const row = taskTabRow(d);
   if (row) docTabsPaint(row, tab === 'details' ? d.taskTabBack || 'chat' : tab, b => b.dataset.taskTab, tab !== 'details');   // Details covers them: none selected
@@ -1504,12 +1507,16 @@ function taskTabsBind(d: ModalDialog) {
   const details = taskDetailsButton(d);
   if (details) details.onclick = () => taskTabShow(d, d.taskTab === 'details' ? d.taskTabBack || 'chat' : 'details');
 }
-// The documents' tabs on the title row (none when the task has no document), and the change of a document as the task
-// is read again: a new tab, a new version, one gone.
-function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[], tab: TaskTab | undefined) {
-  const on = tab === 'details' || !tab ? 'chat' : tab;
-  return docTabsHTML(docTabs(docs, [], taskYours(t)), docOf(docs, on) ? on : 'chat',
-    key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
+// Spec pages have cards under the title. Every other document gets a tab after Files.
+const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => (docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown');
+const taskDocOf = (d: ModalDialog, key: string | null | undefined): TaskDoc | null => docOf(taskTabDocs(d.taskDocs), key);
+/** The tabs on the title row, and the change of a document as the task is read again: a new tab, a new version, one gone. */
+function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined) {
+  const on = tab === 'details' || !tab ? 'chat' : tab, shown = taskTabDocs(docs);
+  const tabs: DocTab[] = [{key: 'chat', label: 'Chat', dot: taskYours(t)}, {key: TASK_FILES_TAB, label: taskFilesLabel(TFT_COUNT.get(String(t.id)))},
+    ...shown.map(x => docTab(x, shown))];
+  const valid = tabs.some(x => x.key === on);
+  return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
 }
 function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   if (!t || String(t.id) !== String(d.dataset.task) || !Array.isArray(t.documents) || d.classList.contains('thread')) return;
@@ -1517,8 +1524,12 @@ function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   d.taskDocs = t.documents;
   if (JSON.stringify(t.documents) === was) return;
   const row = taskTabRow(d), html = taskDocTabsHTML(t, t.documents, d.taskTab);
-  if (row) { if (html) row.outerHTML = html; else row.remove(); }
-  else if (html) $('.tw-head .tmodal-title', d)?.insertAdjacentHTML('afterend', html);
+  if (row) row.outerHTML = html;
+  else $('.tw-head .tmodal-title', d)?.insertAdjacentHTML('afterend', html);
+  // the Spec cards under the title
+  const specs = taskSpecsHTML(t.documents, String(t.id), TFT_TITLES), card = d.querySelector<HTMLElement>('[data-task-specs]');
+  if (card) { if (specs) card.outerHTML = specs; else card.remove(); }
+  else if (specs) d.querySelector<HTMLElement>('.tmodal-head')?.insertAdjacentHTML('afterend', specs);
   taskTabsBind(d);
 }
 // The tab a task opens on, once its conversation is read: Chat, where the box is and what is happening now. A tab the
@@ -1582,7 +1593,7 @@ function taskDetailsButtonHTML(t: ModalTask) {
     + `<span class="nav-icon" aria-hidden="true">fact_check</span>${blocking ? `<span class="tw-count tnum" data-task-blocking aria-hidden="true">${blocking}</span>` : ''}</button>`;
 }
 // The task in full: the head, a quiet line only while someone else is here or an edit did not save, then the panes:
-// the chat, the document open, and Details (what the task is first). What is happening now (the turn, Answer, a deferred hand-over, a working run) is the chat's last row
+// the chat, the Files tab, the document open, and Details (what the task is first). What is happening now (the turn, Answer, a deferred hand-over, a working run) is the chat's last row
 // (taskCommentsRender), not a line under the title.
 function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; tab?: TaskTab | undefined} = {}) {
   const owner = String(t.owner_id || ''), note = String(t.note || '').trim();
@@ -1593,21 +1604,24 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
     ? `<section class="tw-part task-note"><h3 class="tw-h">${esc(owner ? `Latest from ${actorLabel(owner)}` : 'Latest note')}</h3><div class="tdesc md">${safeMd(note)}</div></section>` : '';
   const criteria = (t.acceptance_criteria || []).length
     ? `<section class="tw-part"><h3 class="tw-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria!.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : '';
-  return `${taskHeadHTML(t, !!opts.thread, opts.docs, opts.tab)}
+  return `${taskHeadHTML(t, !!opts.thread, opts.docs, opts.tab)}${opts.thread ? '' : taskSpecsHTML(opts.docs, String(t.id), TFT_TITLES)}
     <div class="task-edit-meta muted" role="status"><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
     <div class="muted task-edit-current" data-task-edit-current hidden></div>
     <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
+    <div data-task-files></div>
     <div class="tmodal-body task-layout" data-task-tab-shown="chat">
       <section class="task-chat" id="task-pane-chat" role="tabpanel" aria-label="Chat"><p class="muted" role="status">Loading the conversation…</p></section>
       <section class="task-doc" role="tabpanel" aria-label="Document"></section>
+      <section class="task-files-tab" id="task-pane-files" role="tabpanel" aria-label="Files">
+        <div class="tft-list" data-tft-list>${TFT_ROWS.get(String(t.id)) || ''}</div>
+        <section class="task-pages" data-task-pages aria-label="Link a page or file" hidden></section>
+      </section>
       <aside class="task-side" id="task-pane-details" role="region" aria-label="Details">
         ${criteria || latest ? `<section class="task-desc">${criteria}${latest}</section>` : ''}
         ${githubNudgeTaskHostHTML(t)}
-        <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
         ${taskRequirementsHTML(t)}
         <section class="task-props" data-task-props aria-label="Facts">${taskPropsHTML(t, {runsOn: taskRunModelRowHTML(t), goal: t.goal_id || ''})}</section>
         <div class="task-rail" data-task-rail hidden></div>
-        <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
         <section class="task-activity" data-task-activity aria-label="Activity and links"><h3 class="tw-h rail-h">Activity and links</h3>
           <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
             ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x tap-mark" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}

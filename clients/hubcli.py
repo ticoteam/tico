@@ -788,15 +788,15 @@ def parser():
     s.add_argument(
         "--doc",
         metavar="NAME",
-        help="an .html file as the next version of the task's document NAME (a tab beside the task's chat): Spec, "
-        "QA report, Release report and Invoice are the names a stage approves, and writing one in that stage "
-        "submits it for approval; say what changed with --note",
+        help="an .html file as the task's document NAME: a page linked to the task with that role, the same as "
+        "tico page publish FILE --task ID --as NAME. Spec, QA report, Release report and Invoice are the names a "
+        "stage approves; say what changed in a comment (no --note)",
     )
     s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
-    s.add_argument("--note", help="short note on this version (at most 500 characters)")
+    s.add_argument("--note", help="short note on this version (at most 500 characters); not with --doc")
     s.add_argument(
         "--changed",
         action="append",

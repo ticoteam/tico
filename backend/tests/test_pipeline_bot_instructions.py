@@ -213,7 +213,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         assert f"**{stage}" in text, stage
     assert "Pitch" not in text  # a feature starts as a chat; its first approval is the Spec (Nov 16)
     assert "A person approves the Spec and the Release report: you never pass those yourself." in text
-    assert '--doc "Release report"' in text
+    assert '--task <id> --as "Release report"' in text
     for playbook in ("write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
