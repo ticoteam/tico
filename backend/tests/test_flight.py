@@ -145,6 +145,7 @@ def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, c
         deadline = time.monotonic() + 5
         while not store.recorder.waiting and time.monotonic() < deadline:
             time.sleep(0.01)
+        assert store.recorder.waiting, "the writer never reached the write lock"
         sampler.step()
         time.sleep(0.1)
         store.recorder.beat = time.monotonic() - 1
@@ -296,6 +297,8 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
                 if flight.last_start(c):
                     break
             time.sleep(0.05)
+        else:
+            raise AssertionError("the recorder's start event never reached the flight table")
         assert get("cara-test").status_code == 403 and get("runner-test").status_code in (401, 403)
         with app.state.store.transaction() as c:
             c.execute(

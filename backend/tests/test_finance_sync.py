@@ -606,7 +606,7 @@ def test_a_card_change_reaches_mercury_on_commit_without_waiting_for_a_sweep_or_
     assert fake.sent("create_card") == [("user-eve", 20_000)]
     sync.start(books, Vault(books), make=lambda _token: fake)  # the worker runs and waits on its doorbell
     try:
-        time.sleep(0.5)
+        assert sync.FIRST_PASS.wait(10), "the bank worker never finished its first pass"
         rung = sync.BELL.rung
         with books.transaction() as c:
             assert act(c, OWNER, "card_freeze", {"card_id": card_id}).status == "committed"

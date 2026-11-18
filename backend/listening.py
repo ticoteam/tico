@@ -86,7 +86,13 @@ DEFAULT_AT = "08:00"
 
 # The Page source's reader: `backend.market_watch.read`, or a test's own.
 READER = None
-CLOCK = time.monotonic  # the pass's clock, replaced in tests
+
+
+def CLOCK():
+    """Monotonic seconds: the pass's clock. A test replaces this, not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 _PUSHES = {}  # source id -> the times of its last calls, for PUSH_PER_MINUTE
 _PUSH_LOCK = threading.Lock()
 
