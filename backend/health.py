@@ -703,6 +703,11 @@ def repository_fix(c, bot, label, github_owner="", why=""):
     report = ((readiness_document(row[0]).get("bots") or {}).get(bot) or {}) if row else {}
     path = report.get("repository") or "<projects>/" + repo.rstrip("/").split("/")[-1].removesuffix(".git")
     command = f"gh repo clone {shlex.quote(repository)} {shlex.quote(path)}"
+    if "has task worktrees" in why:
+        return repository, (
+            f"The runner on {label} replaces it once the task worktrees named above are finished or removed; "
+            f"moving the folder by hand would cut those tasks off from their work"
+        )
     if "is checked out here but has no" in why:
         aside = f"mv {shlex.quote(path)} {shlex.quote(path + '.set-aside')}"
         return repository, (

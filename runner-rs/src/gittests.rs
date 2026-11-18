@@ -2064,6 +2064,59 @@ async fn a_checkout_with_a_live_task_worktree_is_not_replaced() {
     assert!(path.join("AGENT.md").is_file());
 }
 
+/// A task worktree that git recorded with a relative gitdir (worktree.useRelativePaths) also keeps the checkout in
+/// place: the path is read from the worktree's admin folder, not from the runner's working folder.
+#[tokio::test]
+async fn a_relative_task_worktree_also_keeps_the_checkout_in_place() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-rel");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-rel");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-rel", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    let task = tmp.0.join("tasks/t1/bot-rel");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    sh(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/t1",
+            task.to_str().unwrap(),
+        ],
+    );
+    let admin = path.join(".git/worktrees/bot-rel");
+    // admin -> worktrees -> .git -> bot-rel -> projects -> the temp root
+    std::fs::write(
+        admin.join("gitdir"),
+        "../../../../../tasks/t1/bot-rel/.git\n",
+    )
+    .unwrap();
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem =
+        fetchrepo::heal_or_replace(&lanes, "bot-rel", &path, &env, "org/bot-rel", Some(&url)).await;
+    assert!(problem.contains("task worktrees"), "{problem}");
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "the checkout stays"
+    );
+    assert!(
+        beside(&path).is_empty(),
+        "no clone or copy is left beside it"
+    );
+}
+
 /// A clone whose own commit deleted AGENT.md and was pushed; then GitHub's copy is reverted from the seed.
 async fn wiped_clone(root: &Path, name: &str, env: &Env) -> (PathBuf, PathBuf) {
     let (bare, seed) = remote(root, name);

@@ -336,8 +336,13 @@ fn linked_worktrees(checkout: &Path) -> Vec<std::path::PathBuf> {
     };
     let mut out: Vec<std::path::PathBuf> = entries
         .flatten()
-        .filter_map(|e| std::fs::read_to_string(e.path().join("gitdir")).ok())
-        .map(|g| std::path::PathBuf::from(g.trim()))
+        .filter_map(|e| {
+            // An absolute gitdir wins in join; a relative one (worktree.useRelativePaths) is from the admin folder.
+            let admin = e.path();
+            std::fs::read_to_string(admin.join("gitdir"))
+                .ok()
+                .map(|g| admin.join(g.trim()))
+        })
         .filter(|g| g.symlink_metadata().is_ok())
         .map(|g| g.parent().map_or(g.clone(), Path::to_path_buf))
         .collect();
