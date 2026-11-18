@@ -70,9 +70,13 @@ def up(conn):
         if number >= LIMIT:
             break
         number += 1
-        conn.execute("UPDATE tasks SET number=? WHERE id=?", (number, task_id))
-        if letters:
-            conn.execute("UPDATE tasks SET prefix=? WHERE id=? AND COALESCE(prefix, '')=''", (letter, task_id))
+        if letters:  # one write per task: each fires the live screens' change trigger
+            conn.execute(
+                "UPDATE tasks SET number=?, prefix=CASE WHEN COALESCE(prefix, '')='' THEN ? ELSE prefix END WHERE id=?",
+                (number, letter, task_id),
+            )
+        else:
+            conn.execute("UPDATE tasks SET number=? WHERE id=?", (number, task_id))
         conn.execute(
             "INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, created_at) "
             "VALUES (?, 'task', ?, ?, 'number', NULL, ?, ?, ?)",

@@ -136,3 +136,15 @@ def test_a_pipeline_without_a_prefix_numbers_nothing(c):
     assert H.number_pipeline(c, ANA, "general") == 0
     H.number_task(c, ANA, task_id, "general")
     assert _numbers(c, [task_id]) == [None]
+
+
+def test_the_migration_numbers_general_on_the_real_schema(c):
+    ids = _unnumbered(c, "First", "Second")
+    top = c.execute("SELECT MAX(number) FROM tasks").fetchone()[0] or 0
+    importlib.import_module(MIGRATION).up(c)
+    assert c.execute("SELECT prefix FROM pipelines WHERE id='general'").fetchone()[0] == "G"
+    assert _numbers(c, ids) == [top + 1, top + 2]
+    assert H.ticket_refs(c, [ids[1]])[ids[1]]["label"] == f"G{top + 2}"
+    notes = c.execute("SELECT note FROM history_events WHERE subject_id=? AND kind='number'", (ids[0],)).fetchall()
+    assert [n[0] for n in notes] == ["Numbered when General got the prefix G"]
+    assert X.wakes(c, ids[0]) == []
