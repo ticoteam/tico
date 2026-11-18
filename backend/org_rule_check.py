@@ -1257,6 +1257,26 @@ def _review_task(c, hold_id, author, rule, reviewer):
     return task["id"]
 
 
+def _open_task(c, task_id):
+    """`task_id` while that review task is still open, else None. A review task its reviewer (or Tico) closed or marked
+    done is never reused: a hold attached to it afterwards would reach nobody, and closing it decided none of its holds."""
+    if not task_id:
+        return None
+    row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return task_id if row and row[0] not in ("done", "closed") else None
+
+
+def _repeat_task(c, author, rule_id):
+    """Today's open repeat review task for the bot's escalations of `rule_id`, or None: a closed one is not reused."""
+    row = c.execute(
+        "SELECT h.task_id FROM org_rule_holds h JOIN tasks t ON t.id=h.task_id WHERE h.author=? AND h.created_at>=? "
+        "AND json_extract(h.verdict,'$.rule')=? AND json_extract(h.verdict,'$.repeat')=1 "
+        "AND t.status NOT IN ('done','closed') ORDER BY h.created_at LIMIT 1",
+        (author, _day(), rule_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def appeal_line(c, hold_id, reviewer, author=""):
     """How a bot's held output is appealed (its own `tico rules appeal`). A person's hold has no such line: they ask the
     reviewer themselves."""
@@ -1491,13 +1511,7 @@ def _write_hold(
     task_id = None
     if mode == "escalate":
         if repeat:
-            row = c.execute(
-                "SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
-                "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
-                "ORDER BY created_at LIMIT 1",
-                (author, _day(), strictest["id"]),
-            ).fetchone()
-            task_id = row[0] if row else None
+            task_id = _repeat_task(c, author, strictest["id"])
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
@@ -2584,7 +2598,8 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
 
 
 def appeal(c, who, hold_id, why):
-    """The author bot sends its hold to the reviewer as a review task. `why` stays on the hold, for the reviewer."""
+    """The author bot sends its hold to the reviewer as a review task: the hold's own while it is open, else a new one.
+    `why` stays on the hold, for the reviewer."""
     hold = _hold(c, hold_id)
     if not _is_author(who, hold):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
@@ -2592,7 +2607,7 @@ def appeal(c, who, hold_id, why):
         raise Problem("conflict", "This hold is already decided", 409)
     H._writer(c, who.actor, task_id=hold["task_id"])
     why = str(why or "").strip()[:2000]
-    task_id = hold["task_id"]
+    task_id = _open_task(c, hold["task_id"])  # a closed review task gets a new one: the reviewer must see this hold
     if not hold["reviewer"]:
         raise Problem("no_reviewer", "Nobody on the team can review this hold", 409)
     if not task_id:
@@ -2724,13 +2739,7 @@ def _blocked_again(c, hold, verdict):
             },
         )
         return hold
-    row = c.execute(
-        "SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
-        "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
-        "ORDER BY created_at LIMIT 1",
-        (author, _day(), rid),
-    ).fetchone()
-    task_id = hold["task_id"] or (row[0] if row else None)
+    task_id = _open_task(c, hold["task_id"]) or _repeat_task(c, author, rid)
     if task_id is None and hold["reviewer"]:
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         task_id = _review_task(c, hold["id"], author, dict(rule) if rule else {"text": "a rule"}, hold["reviewer"])
