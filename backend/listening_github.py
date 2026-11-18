@@ -9,10 +9,8 @@ the source's cursor, kept in its `snapshot` as JSON (`{"follow": "prs"|"releases
 - Pull requests are listed most recently updated first. A merged PR's `updated_at` is never before its `merged_at`, so
   the listing stops at the first PR updated before the cursor: nothing past it can have been merged since.
 - A read GitHub refuses part way (a rate limit, an error) saves nothing and keeps the old cursor, so the next read
-  lists the same changes again and none is skipped. A PR listing longer than MAX_PAGES saves what it listed and the
-  next read carries on where it stopped (`_prs`). Only more PRs updated in one hour than a read lists, or more
-  releases than that since the last read, leave changes unread: the read saves what it listed, moves on and its
-  source shows the gap as an error.
+  lists the same changes again and none is skipped. A listing longer than MAX_PAGES saves what it listed and the next
+  read carries on where it stopped (`_listing`); the cursor moves on only once the listing is read to its end.
 
 Each item's id is `gh:<owner/repo>#pr:<number>` or `gh:<owner/repo>#release:<id>`, unique in a listening
 (listening_items' UNIQUE (automation_id, native_id)), so a PR read twice is one item. Items never carry a diff.
@@ -38,7 +36,8 @@ API = "https://api.github.com"
 FOLLOWS = ("prs", "releases")
 REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.\.?$)[A-Za-z0-9._-]{1,100}")  # never `.` or `..`
 PER_PAGE = 100
-MAX_PAGES = 5  # pages a read lists; a longer PR listing carries on at the next read (`_prs`)
+MAX_PAGES = 5  # pages a read lists; a longer listing carries on at the next read (`_listing`)
+MAX_SEGMENTS = 8  # unread stretches a cursor keeps (`_listing`)
 PR_BODY = 1_500
 RELEASE_NOTES = 4_000
 
@@ -62,7 +61,6 @@ class Listing(NamedTuple):
     items: list[Item]
     newest: str | None  # the newest merge or release seen
     carry: dict[str, Any]  # where an unfinished listing carries on at the next read; {} when it finished
-    gap: bool  # changes were left unread: more than a read lists
 
 
 class Minter(Protocol):
@@ -102,10 +100,15 @@ def token_for(service: Minter | None, repo: str) -> str:
     """A token that reads `repo`: the App's for that repository, else its installation's, else none (public API)."""
     if not service:
         return ""
-    choices: list[list[str]] = [[repo], []]
-    for repos in choices:
+    # The repository's own token reads its PRs and releases, private ones too when the App is installed on it, as a
+    # docs source's does (backend/doc_sources.py); the installation's reads public repositories at the App's rate.
+    choices: list[tuple[list[str], dict[str, str]]] = [
+        ([repo], {"metadata": "read", "pull_requests": "read", "contents": "read"}),
+        ([], {"metadata": "read"}),
+    ]
+    for repos, permissions in choices:
         try:
-            return service.mint(repos, {"metadata": "read"}, diagnose=False)[0]
+            return service.mint(repos, permissions, diagnose=False)[0]
         except Problem:
             continue
         except (httpx.HTTPError, OSError, ValueError, KeyError):  # an App half set up must not stop the read
@@ -135,7 +138,7 @@ def _get(path: str, token: str, repo: str) -> Any:
     if status in (401, 403, 404):
         raise Refused(
             "blocked",
-            f"Tico can't see {repo}: no such public repository (private repositories are not read yet)",
+            f"Tico can't see {repo}: no such repository, or it is private and the GitHub App is not installed on it",
         )
     raise Refused("error", f"GitHub answered {status} for {repo}")
 
@@ -180,96 +183,137 @@ def _release_item(repo: str, release: Any) -> Item:
     }
 
 
-def _gap(repo: str, since: str) -> str:
-    return f"More than {MAX_PAGES * PER_PAGE} changes in {repo} since {since[:16].replace('T', ' ')} UTC; some were not read"
+def _listing(
+    page_of: Callable[[int], list[Any]],
+    order: Callable[[Any], str | None],
+    take: Callable[[Any], None],
+    since: str,
+    carry: dict[str, Any],
+) -> dict[str, Any]:
+    """Reads a listing, newest first by `order`, down to `since`, at most MAX_PAGES pages. {} when it is read to its
+    end, else where the next read carries on: `top`, the `order` at the head of the listing now, and `segments`, each
+    `[page, stop, last]`: carry on from `page` down to `stop`; `last` is the `order` of the last row read. Newest first.
+
+    A row moves up to the head of the listing (a PR updated or closed, a release made), which moves the rows it passes
+    down: carrying on from a page reads some twice, saved once by their id. The next read lists the head down to the
+    last read's `top` first, so a row that moved to the head is read there. A row can also leave the listing (a release
+    deleted, a PR reopened), which moves the rows under it up: so a read carries on one page early, and further back
+    while that page starts under `last`. A head longer than a read lists becomes one more segment; past MAX_SEGMENTS
+    the two oldest merge into one from the earlier page, which reads more twice. Nothing is skipped."""
+    budget = MAX_PAGES
+
+    def get(n: int) -> list[Any]:
+        nonlocal budget
+        budget -= 1
+        return page_of(n)
+
+    def walk(n: int, rows: list[Any], stop: str, reach: int = 0) -> list[Any] | None:
+        """From page `n`, already listed as `rows`, down to `stop`, and at least to page `reach`, so a read that
+        carries on always reads one page it has not: None when there, else the segment left."""
+        while True:
+            for row in rows:
+                take(row)
+            last = order(rows[-1]) if rows else None
+            if len(rows) < PER_PAGE or not last or last <= stop:
+                return None
+            if budget <= 0 and n >= reach:
+                return [n + 1, stop, last]
+            n += 1
+            rows = get(n)
+
+    def resume(segment: list[Any]) -> list[Any] | None:
+        reach = int(segment[0])
+        page, stop, last = max(1, reach - 1), str(segment[1]), str(segment[2])
+        # From one page early: a row gone from the listing (a release deleted, a PR reopened) moves the rows under it
+        # up, and a page that now starts under where the last read stopped steps back again, so none is skipped.
+        rows = get(page)
+        while page > 1 and rows and (order(rows[0]) or "") < last:  # past the budget: skipping is worse
+            page -= 1
+            rows = get(page)
+        return walk(page, rows, stop, reach)
+
+    first = get(1)
+    top = order(first[0]) if first else None
+    segments: list[list[Any]] = [list(_list(seg)) for seg in _list(carry.get("segments"))]
+    if not segments:
+        left = walk(1, first, since)
+        return {} if left is None else {"top": top, "segments": [left]}
+    left = walk(1, first, str(carry.get("top") or since))
+    if left is not None:  # more changed since the last read than a read lists
+        segments.insert(0, left)
+        while (
+            len(segments) > MAX_SEGMENTS
+        ):  # the oldest two as one, from the earlier page: more read twice, none skipped
+            newer, older = segments[-2], segments[-1]
+            start = newer if int(newer[0]) <= int(older[0]) else older
+            segments[-2:] = [[start[0], older[1], start[2]]]
+        return {"top": top, "segments": segments}
+    while segments and budget > 0:
+        left = resume(segments[0])
+        if left is None:
+            segments.pop(0)
+        else:
+            segments[0] = left
+    return {"top": top, "segments": segments} if segments else {}
 
 
 def _prs(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Listing:
-    """PRs merged after `since`, listed most recently updated first.
-
-    A listing longer than MAX_PAGES stops and leaves `carry` (`page`, the next page to read; `top`, the `updated_at`
-    at the head of the listing; `newest`): the next read lists the head down to `top` (PRs updated since), then
-    carries on from `page`. Rows only ever move down the listing (a newly updated PR goes to the head), so carrying
-    on from the same page reads some rows twice, saved once by their id, and skips none. `since` stays where it was
-    until the listing is finished."""
+    """PRs merged into the default branch after `since`, from the closed PRs listed most recently updated first: a
+    merged PR's `updated_at` is never before its `merged_at`."""
     branch = str(_map(_get(f"/repos/{repo}", token, repo)).get("default_branch") or "main")
     found: dict[str, Item] = {}
     newest: str | None = str(carry.get("newest") or "") or None
-    budget = MAX_PAGES
 
     def page_of(n: int) -> list[Any]:
-        nonlocal budget
-        budget -= 1
-        return _list(
-            _get(
-                f"/repos/{repo}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page={PER_PAGE}&page={n}",
-                token,
-                repo,
-            )
+        path = (
+            f"/repos/{repo}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page={PER_PAGE}&page={n}"
         )
+        return _list(_get(path, token, repo))
 
-    def take(rows: list[Any]) -> str | None:
-        """Saves the merged ones; the last row's `updated_at`."""
+    def take(pr: Any) -> None:
         nonlocal newest
-        for pr in rows:
-            merged = _iso(pr.get("merged_at"))
-            if merged:
-                newest = max(newest or merged, merged)
-                if since and merged > since:
-                    item = _pr_item(repo, pr)
-                    found[str(item["native_id"])] = item
-        return _iso(rows[-1].get("updated_at")) if rows else None
+        merged = _iso(pr.get("merged_at"))
+        if merged:
+            newest = max(newest or merged, merged)
+            if since and merged > since:
+                item = _pr_item(repo, pr)
+                found[str(item["native_id"])] = item
 
-    def walk(n: int, rows: list[Any], stop: str) -> int | None:
-        """Pages from `n` until one ends before `stop` or the listing ends: None, or the next page when out of pages."""
-        while True:
-            last = take(rows)
-            if len(rows) < PER_PAGE or not last or last <= stop:
-                return None
-            if budget <= 0:
-                return n + 1
-            n += 1
-            rows = page_of(n)
-
-    first = page_of(1)
-    top = _iso(first[0].get("updated_at")) if first else None
     if not since:  # the first read only needs the newest merge
-        take(first)
-        return Listing([], newest, {}, False)
-    if not carry:
-        left = walk(1, first, since)
-    else:
-        if walk(1, first, str(carry.get("top") or since)) is not None:  # more updated in an hour than a read lists
-            return Listing(list(found.values()), newest, {}, True)
-        page = int(carry.get("page") or 2)
-        left = walk(page, page_of(page), since) if budget > 0 else page
-    if left is None:
-        return Listing(list(found.values()), newest, {}, False)
-    return Listing(list(found.values()), newest, {"page": left, "top": top, "newest": newest}, False)
+        for pr in page_of(1):
+            take(pr)
+        return Listing([], newest, {})
+    left = _listing(page_of, lambda pr: _iso(pr.get("updated_at")), take, since, carry)
+    return Listing(list(found.values()), newest, {**left, "newest": newest} if left else {})
 
 
-def _releases(repo: str, token: str, since: str | None) -> Listing:
-    """Releases published after `since`. More than a read lists (MAX_PAGES) is reported as a gap: releases come a few a
-    day, so only a source turned off for a long time could see it."""
-    found: list[Item] = []
-    newest: str | None = None
-    for page in range(1, MAX_PAGES + 1):
-        rows = _list(_get(f"/repos/{repo}/releases?per_page={PER_PAGE}&page={page}", token, repo))
-        older = False
-        for release in rows:
-            if release.get("draft"):
-                continue
-            published = _iso(release.get("published_at"))
-            if not published:
-                continue
-            newest = max(newest or published, published)
-            if since and published > since:
-                found.append(_release_item(repo, release))
-            else:
-                older = True
-        if len(rows) < PER_PAGE or not since or older:
-            return Listing(found, newest, {}, False)
-    return Listing(found, newest, {}, True)
+def _releases(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Listing:
+    """Releases published after `since` (pre-releases too, drafts never), from the releases listed newest first."""
+    found: dict[str, Item] = {}
+    newest: str | None = str(carry.get("newest") or "") or None
+
+    def page_of(n: int) -> list[Any]:
+        return _list(_get(f"/repos/{repo}/releases?per_page={PER_PAGE}&page={n}", token, repo))
+
+    def take(release: Any) -> None:
+        nonlocal newest
+        published = _iso(release.get("published_at"))
+        if release.get("draft") or not published:
+            return
+        newest = max(newest or published, published)
+        if since and published > since:
+            item = _release_item(repo, release)
+            found[str(item["native_id"])] = item
+
+    def order(release: Any) -> str | None:  # GitHub lists releases by when they were made; a draft has no publish time
+        return _iso(release.get("created_at") or release.get("published_at"))
+
+    if not since:
+        for release in page_of(1):
+            take(release)
+        return Listing([], newest, {})
+    left = _listing(page_of, order, take, since, carry)
+    return Listing(list(found.values()), newest, {**left, "newest": newest} if left else {})
 
 
 def read(target: str, follow: str, snapshot: str | None, now: str, token: str = "") -> Result:
@@ -285,9 +329,9 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
         cursor = {}
     same = cursor.get("follow") == follow
     since = (str(cursor.get("since") or "") or None) if same else None
-    carry = _map(cursor.get("carry")) if same and follow == "prs" else {}
+    carry = _map(cursor.get("carry")) if same else {}
     try:
-        listing = _prs(repo, token, since, carry) if follow == "prs" else _releases(repo, token, since)
+        listing = (_prs if follow == "prs" else _releases)(repo, token, since, carry)
     except Refused as refused:
         return {"status": refused.status, "items": [], "snapshot": None, "error": refused.error}
     # GitHub can answer anything (a page that is not a list, a row missing a field): the source says so, the rest read.
@@ -311,7 +355,4 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
         keep = {"follow": follow, "since": since, "carry": listing.carry}
         return {"status": "ok", "items": items, "snapshot": json.dumps(keep), "error": ""}
     keep = {"follow": follow, "since": max(since, listing.newest or since)}
-    if listing.gap:  # moves on, so a very busy repository cannot hold its source at one cursor for ever, and says so
-        log.warning("listening read of %s left changes unread: more than %d pages", repo, MAX_PAGES)
-        return {"status": "error", "items": items, "snapshot": json.dumps(keep), "error": _gap(repo, since)}
     return {"status": "ok", "items": items, "snapshot": json.dumps(keep), "error": ""}

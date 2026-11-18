@@ -60,6 +60,7 @@ class FakeGitHub:
                 "body": body,
                 "draft": draft,
                 "prerelease": prerelease,
+                "created_at": gh(when),
                 "published_at": None if draft else gh(when),
                 "author": {"login": "sam"},
                 "html_url": f"https://github.com/acme/widgets/releases/tag/{tag}",
@@ -75,7 +76,7 @@ class FakeGitHub:
         parts = urlsplit(path)
         bits, query = parts.path.strip("/").split("/"), parse_qs(parts.query)
         repo = "/".join(bits[1:3]).lower()  # GitHub's names are not case-sensitive
-        if repo not in self.repos:
+        if repo not in self.repos or (self.repos[repo].get("private") and token != "tok"):
             return 404, {}, {"message": "Not Found"}
         if len(bits) == 3:
             return 200, {}, self.repos[repo]
@@ -85,7 +86,7 @@ class FakeGitHub:
                 (p for p in self.prs if p["base"] == query["base"][0]), key=lambda p: p["updated_at"], reverse=True
             )
         else:
-            rows = sorted(self.releases, key=lambda r: r["published_at"] or "9", reverse=True)
+            rows = sorted(self.releases, key=lambda r: r["created_at"], reverse=True)
         return 200, {}, rows[(page - 1) * per : page * per]
 
 
@@ -101,9 +102,9 @@ def made(api, sources=(WIDGETS,), rules=()):
         return listening(api, sources=sources, rules=rules, steps=[NOTE])["id"]
 
 
-def run(api, when, judge=None):
+def run(api, when, judge=None, app=None):
     store = api.app.state.store
-    L.run_pass(store, when, judge)
+    L.run_pass(store, when, judge, app)
 
 
 def items(api, aid):
@@ -263,21 +264,69 @@ def test_a_listing_longer_than_a_read_carries_on_at_the_next_read_and_skips_noth
     assert items(api, aid)[-1]["native_id"] == "gh:acme/widgets#pr:21"
 
 
-def test_more_releases_than_a_read_lists_are_saved_as_far_as_listed_and_the_gap_is_shown(api, github, monkeypatch):
+def test_more_releases_than_a_read_lists_carry_on_and_ones_deleted_meanwhile_skip_none(api, github, monkeypatch):
     monkeypatch.setattr(LG, "PER_PAGE", 2)
-    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 3)
     aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
     run(api, START)
-    for n in range(1, 7):
+    for n in range(1, 16):
         github.release(n, f"v1.{n}.0", at(n))
     run(api, at(61))
-    assert len(items(api, aid)) == 4
+    assert len(items(api, aid)) == 6  # a read lists 6
+    # The six releases already read are deleted, three pages: the ones under them move up past the next read's start.
+    github.releases = [r for r in github.releases if r["id"] < 10]
+    run(api, at(130))
+    github.release(20, "v2.0.0", at(140))
+    for hour in range(3, 9):
+        run(api, at(hour * 65))
+    ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
+    assert ids == [*range(1, 16), 20]  # 10 to 15 were saved before they were deleted
     row = source(api, aid)
-    assert row["status"] == "error" and row["last_error"].startswith("More than 4 changes in acme/widgets since")
-    github.release(7, "v1.7.0", at(70))
-    run(api, at(125))
-    assert items(api, aid)[-1]["native_id"] == "gh:acme/widgets#release:7"  # moved on, not stuck at the gap
+    assert row["status"] == "ok" and "carry" not in json.loads(row["snapshot"])
+
+
+def test_more_new_prs_between_two_reads_than_a_read_lists_lose_none(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    monkeypatch.setattr(LG, "MAX_SEGMENTS", 1)  # the head's stretch and the older one merge
+    aid = made(api)
+    run(api, START)
+    for n in range(1, 10):
+        github.merge(n, f"feat: change {n}", at(n))
+    run(api, at(61))
+    for n in range(30, 37):  # 7 more before the next read: its head alone is longer than a read
+        github.merge(n, f"feat: change {n}", at(n + 60))
+    for hour in range(2, 14):
+        run(api, at(hour * 65))
+    ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
+    assert ids == [*range(1, 10), *range(30, 37)]
+    assert "carry" not in json.loads(source(api, aid)["snapshot"])
+
+
+def test_a_private_repository_with_the_app_installed_is_read_with_its_own_token(api, github):
+    github.repos["acme/secret"] = {"default_branch": "main", "private": True}
+
+    class App:
+        def __init__(self):
+            self.asked = []
+
+        def mint(self, repos, permissions, diagnose=True):
+            self.asked.append((list(repos), dict(permissions)))
+            if repos == ["acme/secret"] and permissions.get("pull_requests") == "read":
+                return ("tok", "later")
+            raise Problem("github_access", "not installed", 403)
+
+    app = App()
+    aid = made(api, sources=({"id": "g1", "kind": "github", "target": "acme/secret"},))
+    run(api, START, app=app)
     assert source(api, aid)["status"] == "ok"
+    github.merge(5, "feat: private change", at(20))  # the fake lists one set of PRs for every repository
+    run(api, at(61), app=app)
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/secret#pr:5"]
+    assert app.asked[0] == (["acme/secret"], {"metadata": "read", "pull_requests": "read", "contents": "read"})
+    hidden = made(api, sources=({"id": "g1", "kind": "github", "target": "acme/secret"},))
+    run(api, at(62))  # no App: the same repository is blocked
+    assert source(api, hidden)["status"] == "blocked"
 
 
 def test_changing_what_a_source_follows_starts_it_again_from_now(api, github):
