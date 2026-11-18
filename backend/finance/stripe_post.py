@@ -6,7 +6,11 @@ day's summary entry, linked to its row; a rule that asks holds the sale for a pe
 already summarized adds an adjusting entry. A refund, dispute or returned refund reverses or restores its sale's own
 lines in proportion, and gives back its share of any invoice the sale paid. A payout posts on its day to payouts in
 transit and clears when the bank deposit of the same amount arrives: a deposit that looks like Stripe's, and no other
-receipt. Called from banking's settle step and from the sync worker, inside the caller's transaction."""
+receipt. A platform's other balance activity (Connect transfers, Stripe Capital, reserves, platform fees; see F.STRIPE_CONNECT
+and the kinds after it) posts its gross to its own line with the day's summary, as an ordinary sale does, a posting rule
+overriding it. A kind Finance does not map posts to Stripe suspense, so the balance still ties, and is asked about once
+per Stripe account and kind (_ask_kind), never row by row; a posting rule that covers it takes the rows after it. Called
+from banking's settle step and from the sync worker, inside the caller's transaction."""
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -27,6 +31,13 @@ from .store import ledger as SL
 INCOME_CODE = "4000"
 FEES_CODE, FEES_NAME = "6200", "Payment processing fees"
 TRANSIT_CODE, TRANSIT_NAME = "1060", "Stripe payouts in transit"
+# The lines a platform's other balance activity posts to, found by name (any case) or made at the first free code from
+# the one given: (setting naming the line on the connection, or "", base code, name, type, subtype of the parent line).
+Line = tuple[str, str, str, str, str]
+CONNECT_LINE: Line = ("transfer_account_id", "5300", "Payouts to connected accounts", "expense", "cogs")
+CAPITAL_LINE: Line = ("capital_account_id", "2500", "Stripe Capital loan", "liability", "")
+RESERVE_LINE: Line = ("", "1070", "Stripe reserve", "asset", "")
+SUSPENSE_LINE: Line = ("", "1080", "Stripe suspense", "asset", "")
 STALE_DAYS = 7  # an item still waiting after this many days is asked about
 SUMMARY = "summary"  # the raw copy's mark: the row posts in its day's summary entry
 COUNTER = "counter"  # a summarized sale's own counter lines: [account, amount, tags, contact] each
@@ -43,7 +54,7 @@ Share = tuple[str, int, dict[str, str], str]  # (account id, amount, tags, conta
 
 def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
     """Post one Stripe balance transaction the first time it is seen: a row never changes after. What needs another row
-    waits as new (see batch_done), and a kind nothing posts is asked about."""
+    waits as new (see batch_done); any other kind posts with the day's summary (_other)."""
     if row["entry_id"]:
         return
     fid = str(row["id"])
@@ -54,17 +65,16 @@ def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
     if t.kind in F.STRIPE_PAYOUT_BACK:
         _payout_back(ctx, row, money, t)
         return
-    if t.kind in (*F.STRIPE_CHARGES, *F.STRIPE_UNWINDS, *F.STRIPE_COSTS):
-        if gross == 0 and fee == 0:
-            SK.update(ctx.c, "fin_feed_txns", fid, {"status": "ignored", "updated_at": ctx.at})
-        elif t.kind in F.STRIPE_CHARGES:
-            _sale(ctx, row, money, t, gross, fee)
-        elif t.kind in F.STRIPE_UNWINDS:
-            _unwind(ctx, row, money, t, gross, fee)
-        else:
-            _to_summary(ctx, row)
-        return
-    _ask(ctx, fid, f"Stripe does not post a {t.kind} balance transaction")
+    if gross == 0 and fee == 0:
+        SK.update(ctx.c, "fin_feed_txns", fid, {"status": "ignored", "updated_at": ctx.at})
+    elif t.kind in F.STRIPE_CHARGES:
+        _sale(ctx, row, money, t, gross, fee)
+    elif t.kind in F.STRIPE_UNWINDS:
+        _unwind(ctx, row, money, t, gross, fee)
+    elif t.kind in F.STRIPE_COSTS:
+        _to_summary(ctx, row)
+    else:
+        _other(ctx, row, money, t, gross)
 
 
 def bank_deposit(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> bool:
@@ -91,7 +101,11 @@ def batch_done(ctx: Ctx, money: Any) -> None:
 
 def stale(ctx: Ctx) -> None:
     """Asks about Stripe items that waited past STALE_DAYS: a payout with no deposit, a Stripe-looking deposit with no
-    payout, and a refund, dispute or returned payout with nothing to reverse. Each is asked once."""
+    payout, and a refund, dispute or returned payout with nothing to reverse. Each is asked once. While a connection's
+    backfill runs, a refund waiting for its older sale is expected and not asked about. Once a backfill that started at
+    `history_from` has ended, a row whose sale or payout never came is about one before that day: a refund, dispute or
+    restore posts against Revenue (its sale is in the opening balance), and a returned payout to Stripe suspense, asked
+    about once per kind."""
     cutoff = (dates.day(ctx.today) - timedelta(days=STALE_DAYS)).isoformat()
     for r in SK.stripe_transit(ctx.c, ctx.book.id, start=FAR_PAST, end=cutoff, amount=None, most=WAITING_MOST):
         _ask(ctx, str(r["id"]), "its payout has no bank deposit", "stale")
@@ -100,9 +114,25 @@ def stale(ctx: Ctx) -> None:
     for m in SK.money_accounts(ctx.c, ctx.book.id):
         if str(m["kind"]) != "stripe":
             continue
+        conn = SK.get(ctx.c, "fin_connections", str(m["connection_id"] or "")) if m["connection_id"] else None
+        conf = SK.loads(conn["settings"]) if conn is not None else {}
+        if conn is not None and not conf.get("backfilled"):
+            continue
+        cut = bool(conf.get("history_from"))
         for r in SK.stripe_waiting(ctx.c, str(m["id"]), WAITING, WAITING_MOST):
-            if str(r["txn_date"]) <= cutoff:
+            if str(r["txn_date"]) > cutoff:
+                continue
+            if not cut:
                 _ask(ctx, str(r["id"]), "it has no sale or payout to post against", "stale")
+                continue
+            t = _txn(r)
+            gross, _ = F.stripe_parts(t.raw)
+            if t.kind in F.STRIPE_UNWINDS:
+                _ordinary(ctx, r, m, t, gross, _income(ctx))
+            else:
+                _ordinary(ctx, r, m, t, gross, _line(ctx, m, SUSPENSE_LINE), unmapped=True)
+        if cut:
+            _summarize(ctx, m)
 
 
 def fee_of(row: Any) -> int:
@@ -158,15 +188,20 @@ def _sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) ->
     _ordinary(ctx, row, money, t, gross)
 
 
-def _ordinary(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int) -> None:
-    """A sale no invoice takes: the first posting rule that covers it says where its gross goes (an account, its tags and
-    a contact, as on a bank row), and it posts with the day's summary. A rule that asks holds it for a person; with no
-    rule it is income."""
+def _ordinary(
+    ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, default: L.Account | None = None, unmapped: bool = False
+) -> None:
+    """A sale no invoice takes, or other balance activity (_other): the first posting rule that covers it says where its
+    gross goes (an account, its tags and a contact, as on a bank row), and it posts with the day's summary. A rule that
+    asks holds it for a person; with no rule it goes to `default` (income when none is given), and an `unmapped` kind is
+    asked about once (_ask_kind)."""
     fid = str(row["id"])
     facts = {"amount": gross, "counterparty": t.counterparty, "description": t.description, "kind": t.kind}
     rule = posting_rules.first_for(ctx, posting_rules.feed_facts(facts, money))
     if rule is None:
-        counter: list[Share] = [(_income(ctx).id, -gross, {}, "")]
+        if unmapped:
+            _ask_kind(ctx, row, money, t.kind)
+        counter: list[Share] = [((default or _income(ctx)).id, -gross, {}, "")]
     elif rule.then.outcome == "post" and posting_rules.usable(ctx, rule.then):
         counter = [
             (
@@ -178,9 +213,31 @@ def _ordinary(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int) -> None:
             for line in posting_rules.lines_for(ctx, facts, rule)
         ]
     else:
-        _ask(ctx, fid, "a posting rule asks a person about this sale")
+        _ask(ctx, fid, "a posting rule asks a person about this row")
         return
     _to_summary(ctx, row, counter)
+
+
+def _other(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int) -> None:
+    """Balance activity that is neither a sale, a refund, a payout nor Stripe's own fee: its gross to its kind's line
+    (Connect transfers, Stripe Capital, reserves, platform fees, other costs), else to Stripe suspense, asked about once
+    per kind. A posting rule overrides either, as it does a sale's."""
+    if t.kind in F.STRIPE_CONNECT:
+        line = _line(ctx, money, CONNECT_LINE)
+    elif t.kind in F.STRIPE_CAPITAL:
+        line = _line(ctx, money, CAPITAL_LINE)
+    elif t.kind in F.STRIPE_RESERVE:
+        line = _line(ctx, money, RESERVE_LINE)
+    elif t.kind in F.STRIPE_PLATFORM_FEES:
+        line = _income(ctx)
+    elif t.kind in F.STRIPE_OTHER_COSTS:
+        line = banking.by_code(ctx, banking.OTHER) or banking.new_account(
+            ctx, banking.OTHER, "Other expenses", "expense", "other", SYSTEM
+        )
+    else:
+        _ordinary(ctx, row, money, t, gross, _line(ctx, money, SUSPENSE_LINE), unmapped=True)
+        return
+    _ordinary(ctx, row, money, t, gross, line)
 
 
 def _settle_invoice(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int, doc: Any) -> None:
@@ -262,14 +319,18 @@ def _journals(ctx: Ctx, rows: list[Any]) -> list[list[Any]]:
 SummaryKey = tuple[str, tuple[tuple[str, str], ...], str]  # (account id, tags, contact id) of one summary line
 
 
+def _countered(r: Any, raw: Mapping[str, Any]) -> bool:
+    """Whether a summarized row posts counter lines (a sale, or other activity with its line) rather than to fees (a
+    Stripe cost)."""
+    return str(r["kind"]) in F.STRIPE_CHARGES or COUNTER in raw
+
+
 def _row_keys(ctx: Ctx, r: Any) -> set[SummaryKey]:
-    """The summary lines a row adds: none for a cost, its counter lines for a charge."""
-    if str(r["kind"]) not in F.STRIPE_CHARGES:
+    """The summary lines a row adds: none for a cost, its counter lines otherwise."""
+    raw = SK.loads(r["raw"])
+    if not _countered(r, raw):
         return set()
-    return {
-        (account, tuple(sorted(tags.items())), contact)
-        for account, _, tags, contact in _carried(ctx, SK.loads(r["raw"]))
-    }
+    return {(account, tuple(sorted(tags.items())), contact) for account, _, tags, contact in _carried(ctx, raw)}
 
 
 def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
@@ -282,7 +343,7 @@ def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
         gross, fee = F.stripe_parts(raw)
         net += int(r["amount"])
         fees += fee
-        if str(r["kind"]) in F.STRIPE_CHARGES:
+        if _countered(r, raw):
             for account, amount, tags, contact in _carried(ctx, raw):
                 key = (account, tuple(sorted(tags.items())), contact)
                 counter[key] = counter.get(key, 0) + amount
@@ -340,7 +401,8 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     fid = str(row["id"])
     link = str(t.raw.get("link") or "")
     if not link:
-        _ask(ctx, fid, "it names no sale to reverse")
+        # Not about a sale (an adjustment for anything else): Stripe suspense, asked about once per kind.
+        _ordinary(ctx, row, money, t, gross, _line(ctx, money, SUSPENSE_LINE), unmapped=True)
         return
     original = SK.stripe_source(ctx.c, str(money["id"]), F.STRIPE_CHARGES, link)
     if original is None:
@@ -548,6 +610,17 @@ def _ask(ctx: Ctx, fid: str, why: str, key: str = "") -> None:
     banking.event(ctx, banking.CATEGORY_EVENT, fid, {"feed_id": fid, "why": why}, key)
 
 
+def _ask_kind(ctx: Ctx, row: Any, money: Any, kind: str) -> None:
+    """One ask per Stripe money account and kind Finance does not map (its subject is the money account, so the event's
+    own uniqueness keeps it to one), naming the first row of that kind. The rows post to Stripe suspense meanwhile; a
+    posting rule for the kind takes the rows after it."""
+    fid = str(row["id"])
+    why = f"Finance does not map Stripe {kind or 'unnamed'} balance transactions: they post to Stripe suspense"
+    banking.event(
+        ctx, banking.CATEGORY_EVENT, str(money["id"]), {"feed_id": fid, "why": why, "kind": kind}, f"kind:{kind}"
+    )
+
+
 def _window(day: str) -> tuple[str, str]:
     d = dates.day(day)
     return (d - timedelta(days=banking.MATCH_DAYS)).isoformat(), (d + timedelta(days=banking.MATCH_DAYS)).isoformat()
@@ -569,6 +642,37 @@ def _income(ctx: Ctx) -> L.Account:
 
 def _fees(ctx: Ctx) -> L.Account:
     return banking.by_code(ctx, FEES_CODE) or banking.new_account(ctx, FEES_CODE, FEES_NAME, "expense", "", SYSTEM)
+
+
+def _line(ctx: Ctx, money: Any, line: Line) -> L.Account:
+    """The line a kind of balance activity posts to: the one the connection names (`setting`, when it is still an active
+    line of the right type), else an active line of that name and type (any case: the company may have made it), else a
+    new one at the first free code from `base`, under the first line of the parent subtype when there is one."""
+    setting, base, name, type_, parent = line
+    conn = SK.get(ctx.c, "fin_connections", str(money["connection_id"] or "")) if money["connection_id"] else None
+    named = str(SK.loads(conn["settings"]).get(setting) or "") if conn is not None and setting else ""
+    chosen = ctx.accounts.get(named) if named else None
+    if chosen is not None and chosen.active and chosen.type == type_:
+        return chosen
+    found = next(
+        (
+            a
+            for a in sorted(ctx.accounts.values(), key=lambda a: a.code)
+            if a.active and a.type == type_ and a.name.strip().lower() == name.lower()
+        ),
+        None,
+    )
+    if found is not None:
+        return found
+    under = next(
+        (
+            a
+            for a in sorted(ctx.accounts.values(), key=lambda a: a.code)
+            if parent and a.subtype == parent and a.type == type_
+        ),
+        None,
+    )
+    return banking.new_account(ctx, base, name, type_, "", SYSTEM, under.id if under is not None else "")
 
 
 def _transit(ctx: Ctx) -> L.Account:

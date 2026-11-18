@@ -248,7 +248,28 @@ STRIPE_PAYOUT = "payout"  # the balance moved to the bank: a transfer, never inc
 STRIPE_PAYOUT_BACK = ("payout_failure", "payout_cancel")  # a payout that came back to the balance
 STRIPE_CHARGES = ("charge", "payment")  # sales: income, or the invoice they pay
 STRIPE_UNWINDS = ("refund", "payment_refund", "refund_failure", "adjustment")  # reverse or restore a sale (disputes)
-STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")  # Stripe's own charges: expense, no income
+STRIPE_COSTS = ("stripe_fee", "stripe_fx_fee", "network_cost", "tax_fee")  # Stripe's own charges: expense, no income
+# The other balance transactions a platform's Stripe balance carries, by the line each posts its gross to (stripe_post
+# makes the line on first use). Kinds that move money in pairs (an advance and its funding, a hold and its release) net
+# out on their line. Issuing, top-ups and anything not here are unmapped: Stripe suspense, asked about once per kind.
+STRIPE_CONNECT = (  # money sent to connected accounts, and what came back of it
+    "transfer",
+    "transfer_cancel",
+    "transfer_failure",
+    "transfer_refund",
+    "connect_collection_transfer",
+)
+STRIPE_CAPITAL = ("advance", "advance_funding", "financing_paydown")  # Stripe Capital: the loan in, repaid from sales
+STRIPE_RESERVE = (  # the balance held back and released
+    "reserve_transaction",
+    "reserved_funds",
+    "payment_network_reserve_hold",
+    "payment_network_reserve_release",
+    "payout_minimum_balance_hold",
+    "payout_minimum_balance_release",
+)
+STRIPE_PLATFORM_FEES = ("application_fee", "application_fee_refund")  # a platform's fee income, and what it gave back
+STRIPE_OTHER_COSTS = ("contribution", "climate_order_purchase", "climate_order_refund")  # expense outside Stripe's fees
 STRIPE_LINKED = (*STRIPE_CHARGES, STRIPE_PAYOUT, *STRIPE_PAYOUT_BACK)  # kinds whose source object is the link itself
 
 
