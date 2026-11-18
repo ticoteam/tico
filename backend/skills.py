@@ -134,9 +134,9 @@ _PROPOSAL_SQL = (
 SCREEN_REASONS = {
     "oversize": "The skill is too big to screen (over 120,000 characters with its diff). Make it smaller and propose it again.",
     "cap": "The monthly spend cap for model calls is reached. Raise the cap or wait for it to reset, then re-run screening.",
-    "unavailable": "No screening model is available (no Gateway). Connect the Gateway, then re-run screening.",
+    "unavailable": "No screening model is available: no Gateway, or it refused its key. Connect the Gateway or check its key, then re-run screening.",
     "timeout": "The screening model did not answer in time. Re-run screening.",
-    "error": "Screening failed. Re-run it; if it fails again, send the judge call id to support.",
+    "error": "Screening failed. Re-run it; if it fails again, send support the judge call id, if there is one.",
 }
 NO_REASON = "No reason was recorded. Re-run screening."
 

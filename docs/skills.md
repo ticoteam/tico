@@ -58,8 +58,8 @@ answers in place of Decide High.
   Every proposal in the API carries the reason as `screen_reason`, what to do about it as `screen_action`, how many
   screens in a row were not screened as `screen_failures`, and the last screen's `judge_call_id` (also on `screening`).
   The Skills page shows them on the proposal: `oversize` means make the skill smaller and propose it again; `cap` means
-  raise the spend cap or wait for it to reset, then Re-run; `unavailable` means connect the Gateway, then Re-run;
-  `timeout` means Re-run; `error` means Re-run, and if it fails again, send support the judge call id. After **Re-run**
+  raise the spend cap or wait for it to reset, then Re-run; `unavailable` means connect the Gateway or check its key, then Re-run;
+  `timeout` means Re-run; `error` means Re-run, and if it fails again, send support the judge call id when there is one. After **Re-run**
   the page watches for about a minute and says "Still not screened" with the reason when it fails again.
 - **Cache.** A bundle already screened with the same sha, base and question set version reuses that answer.
 - **A new question set version** sends every pending proposal screened under an older version back to the queue.
