@@ -92,6 +92,7 @@ CONTENT = {
             "sort": 10,
             "owner": "bot:creators",
             "budget_month": 30000,
+            "input_kpi": "subscribers",
             "source": "store",
             "why": "Creators film a 30-second show on their own house. Their codes bring the buyer to the store.",
             "units": (19, 35),
@@ -115,6 +116,7 @@ CONTENT = {
             "sort": 20,
             "owner": "bot:email-owner",
             "budget_month": 12000,
+            "input_kpi": "subscribers",
             "source": "store",
             "why": "Search, email and direct visits to our own shop. The base that every season builds on.",
             "units": (26, 40),
@@ -149,6 +151,7 @@ CONTENT = {
             "sort": 40,
             "owner": "bot:retail",
             "budget_month": 9000,
+            "input_kpi": "installs",
             "source": "retail",
             "created_days": 35,
             "from_days": 35,
@@ -531,6 +534,8 @@ def open_channel(b, s, ch):
             "owner_ref": ch["owner"],
             "budget_month": ch["budget_month"],
             "source_id": s["sources"][ch["source"]],
+            # The input KPI the channel moves, on the Growth line; Marketplace and Paid ads show "No KPI linked".
+            "input_kpi_id": s["kpis"][ch["input_kpi"]] if ch.get("input_kpi") else None,
             "why": ch["why"],
             "sort": ch["sort"],
         },
@@ -658,7 +663,7 @@ def weekly(b, s, days, runs, k, monday, people):
             )
         hubdb.say(c, "bot:" + routine["bot"], "human:ana", summary, refs={"task": ref})
         turn = hubdb.turn_start(
-            c, hubdb.KEEPER, routine["bot"], trigger="routine", message_id=job["message_id"], task_id=ref
+            c, hubdb.TICO_ACTOR, routine["bot"], trigger="routine", message_id=job["message_id"], task_id=ref
         )
         b.clock.at += timedelta(minutes=4)
         model_name, provider, billing = CONTENT["usage"]
@@ -667,7 +672,7 @@ def weekly(b, s, days, runs, k, monday, people):
         cost = providers.estimate_cost(model_name, tokens_in - cached, cached, tokens_out)
         hubdb.turn_finish(
             c,
-            hubdb.KEEPER,
+            hubdb.TICO_ACTOR,
             turn["id"],
             "completed",
             summary,
@@ -685,7 +690,7 @@ def weekly(b, s, days, runs, k, monday, people):
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job["job_id"],))
         # The turn's end, as the runner reports it: the run takes the turn's answer and cost, and its day counts.
         automations.turn_done(c, {"id": turn["id"], "job_id": job["job_id"]}, "completed", summary)
-        hubdb.status_result(c, hubdb.KEEPER, routine["bot"], last_result=summary, last_turn_at=hubdb.now())
+        hubdb.status_result(c, hubdb.TICO_ACTOR, routine["bot"], last_result=summary, last_turn_at=hubdb.now())
 
     b.write(work)
 

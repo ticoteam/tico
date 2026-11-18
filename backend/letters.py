@@ -1165,7 +1165,7 @@ class Letters:
                     task_asks.settle(c, previous["approval_id"], "Mailed the letter.")
                 else:
                     not_mailed(c, previous, NOT_MAILED[status])
-            H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
+            H.event(c, H.TICO_ACTOR, "letter.updated", ident, {"status": status})
 
     def cancel(self, who, ident):
         with self.lock:

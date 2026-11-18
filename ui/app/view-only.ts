@@ -41,7 +41,7 @@ const VIEW_READS = [
   // The task window: opening a subtask or a related task (and unfolding the subtasks), opening a file, copying a session's
   // resume command, and the head's ⋯, which in a view holds only reads (Copy link,
   // Copy session ID, Watch the session; task-props.ts leaves the rest out).
-  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tft-file]', '[data-copy-session]', '[data-task-more]',
   // Replay, Changelog, Usage, Roadmap and What it has learned (the pages a view opens; Usage and Learnings answer a bot
   // with an error): Retry after a failed load, the shared filter icon, and in the shared popover a filter's choices and
   // its search.

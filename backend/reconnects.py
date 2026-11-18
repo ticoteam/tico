@@ -203,7 +203,7 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
         from . import run_failures
 
         run_failures.fold_item(c, bot)
-    H.event(c, H.KEEPER, "task.reconnect_wait", task_id, {"key": key, "bot": bot, "person": person})
+    H.event(c, H.TICO_ACTOR, "task.reconnect_wait", task_id, {"key": key, "bot": bot, "person": person})
     return record
 
 
@@ -444,7 +444,7 @@ def deliver(c, task_id, why=""):
     said = " ".join(_said(c, w) for w in owed)
     H._recount(c, row["owner_id"])
     keys = [w["key"] for w in owed]
-    H.event(c, H.KEEPER, "task.reconnected", row["id"], {"keys": keys, "why": why})
+    H.event(c, H.TICO_ACTOR, "task.reconnected", row["id"], {"keys": keys, "why": why})
     head = "Reconnected" if all(w["ended"] == "fixed" for w in owed) else "Reconnect card closed"
     if all(w["service"] == "access" for w in owed):
         head = "Access granted" if all(w["ended"] == "fixed" for w in owed) else "Access request closed"
@@ -491,7 +491,7 @@ def _release_sign_in_holds(c, bots):
     for bot in sorted(bots or ()):
         hold = run_failures.get(c, bot)
         if run_failures.is_held(hold) and hold["details"].get("error_class") == run_failures.SIGN_IN:
-            run_failures.release(c, _H().KEEPER, bot)
+            run_failures.release(c, _H().TICO_ACTOR, bot)
 
 
 def moved(c, task_id, field, old, new):

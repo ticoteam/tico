@@ -1142,7 +1142,7 @@ def _keep_focus(b, slug):
     from ..demo_content import FOCUS
 
     if FOCUS.get(slug):
-        b.write(lambda c: H.status_set(c, H.KEEPER, slug, focus=FOCUS[slug]))
+        b.write(lambda c: H.status_set(c, H.TICO_ACTOR, slug, focus=FOCUS[slug]))
 
 
 def _claim(b, slug):

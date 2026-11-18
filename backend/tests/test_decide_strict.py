@@ -85,7 +85,7 @@ def test_the_month_at_its_cap_means_no_engine_at_all(api, gateway):
     settings = api.app.state.store.settings
     settings.decisions_monthly_usd = 1.0
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.spend", "earlier", {"cost_usd": 1.5})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "earlier", {"cost_usd": 1.5})
     assert strict(api) is None and gateway.sent == []
 
 

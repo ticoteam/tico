@@ -155,7 +155,7 @@ def test_only_a_bot_marks_and_only_its_own_message(c, general):
     with pytest.raises(H.Refused):
         Q.mark(c, BUILDER, said["id"], ANA)  # not its message
     with pytest.raises(H.Refused):
-        Q.mark(c, H.KEEPER, said["id"], ANA)
+        Q.mark(c, H.TICO_ACTOR, said["id"], ANA)
 
 
 def test_a_question_mark_follows_the_shape_of_an_ask_to_a_person(c, general):

@@ -248,7 +248,7 @@ def _keep(c: sqlite3.Connection, calendar_id: str, item: Row, status: str, now: 
 
 def _announce(c: sqlite3.Connection, calendar_id: str, mailbox: str, action: str, event_id: str, series: object) -> int:
     detail = events.google_detail(calendar_id, "google:" + calendar_id + ":" + event_id)
-    events.emit(c, H.KEEPER, action, str(series or event_id), detail, mailbox=mailbox)
+    events.emit(c, H.TICO_ACTOR, action, str(series or event_id), detail, mailbox=mailbox)
     return 1
 
 

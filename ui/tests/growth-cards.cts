@@ -228,7 +228,7 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
 }
 
 async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4), emptyCards = [] as string[], computed = false} = {}) {
-  const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
+  const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE, timezoneId: 'UTC'});
   const errors: string[] = [], fake = server(me, pipelines, setup, emptyCards, computed);
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);

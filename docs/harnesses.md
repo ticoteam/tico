@@ -227,24 +227,26 @@ A subscription quota response is a usage limit. The runner uses its configured f
 signed-in provider when automatic fallback is on. Without a fallback it keeps the work queued; an explicit
 usage-window reset holds it until that time. **Try now** still lifts the hold after a person renews the plan.
 
-The current OpenAI and Claude choices, reviewed 2026-10-03, are:
+The current OpenAI and Claude choices, reviewed 2026-11-17, are:
 
 | Harness | Model | Model ID | Released |
 |---|---|---|---|
 | Claude Code (Anthropic) | Opus 5.5 | `claude-opus-5-5` | 2026-09-22 |
 | Claude Code (Anthropic) | Sonnet 5.5 | `claude-sonnet-5-5` | 2026-09-28 |
-| Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
+| Claude Code (Anthropic) | Fable 5.2 | `claude-fable-5-2` | 2026-11-09 |
 | Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
-| Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
+| Codex (OpenAI) | Sol 6.2 | `gpt-6.2-sol` | 2026-11-17 |
+| Codex (OpenAI) | Astra 6.2 | `gpt-6.2-astra` | 2026-11-17 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 
 Release dates: [Claude release notes](https://platform.claude.com/docs/en/release-notes/overview)
 and [OpenAI changelog](https://developers.openai.com/api/docs/changelog).
 The offered effort levels are low, medium, high, xhigh and max, supported by the existing runner
 adapters and documented for [Claude](https://platform.claude.com/docs/en/build-with-claude/effort),
-[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
+[Sol 6.2](https://developers.openai.com/api/docs/models/gpt-6.2-sol),
+[Astra 6.2](https://developers.openai.com/api/docs/models/gpt-6.2-astra) (Sol 6.2 and Astra 6.2 also take ultra) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
-Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
+Astra 6, Sol 6, Sol 6.1, Fable 5.1 and Opus 5 remain readable for existing configurations but cannot be newly selected.
 Terra 6.1 (`gpt-6.1-terra`) is offered on Codex with your own ChatGPT plan. The Tico AI Gateway does not offer it.
 No existing bot is migrated automatically.
 
@@ -414,6 +416,8 @@ what they print with the runner's own code (`runner-rs/src/cli_contract.rs`):
 - signed out, `claude auth status --json` and `codex login status` answer in the words the status check reads;
 - `claude setup-token`, in the terminal the runner opens, shows a link and a prompt for the code; a made-up code is
   masked and gives the "OAuth error … Press Enter to retry" screen;
+- `claude auth login --claudeai` (a full Claude login's Connect) shows a link back to the manual-code page and a
+  prompt; a made-up code is masked;
 - `codex login --device-auth` shows a link and a one-time code (never entered);
 - a turn with no login ends as a refused sign-in for both, not as a general failure.
 

@@ -12,7 +12,7 @@ def task(api, requester, owner, title, parent=None):
     with api.app.state.store.transaction() as c:
         row = H.task_create(c, requester, title, f"Confidential: {title}.", owner, private=True, lint=False)
         if parent:
-            TR._insert(c, H.KEEPER, row["id"], parent, "parent", H.now())
+            TR._insert(c, H.TICO_ACTOR, row["id"], parent, "parent", H.now())
         return row
 
 

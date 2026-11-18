@@ -715,7 +715,7 @@ def _ask(c: Any, template_id: Any, label: Any, parts: Any, gained: Any) -> Any:
         + "). Ask a credential administrator whether each should have them; if yes, set their levels, and the next "
         "start groups the tools. If not, leave them apart."
     )
-    task = H.task_create(c, H.KEEPER, f"Group {name}?", body, owner, deduplicate=False, lint=False)
+    task = H.task_create(c, H.TICO_ACTOR, f"Group {name}?", body, owner, deduplicate=False, lint=False)
     H.event(c, "system", "tool.group_asked", key, {"task": task["id"], "tools": [t["id"] for t in parts]})
     return task
 
@@ -890,7 +890,7 @@ def offer_logins(c: Any) -> Any:
             "variables until you have confirmed no bot reads them, then ask for the two keys to be deleted."
         )
         task = H.task_create(
-            c, H.KEEPER, f"Make {pair['prefix']} a website account?", body, owner, deduplicate=False, lint=False
+            c, H.TICO_ACTOR, f"Make {pair['prefix']} a website account?", body, owner, deduplicate=False, lint=False
         )
         H.event(c, "system", "tool.login_offered", key, {"task": task["id"], "keys": [user["id"], password["id"]]})
         made.append(task)

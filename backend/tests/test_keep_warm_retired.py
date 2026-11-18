@@ -34,7 +34,7 @@ def c(company):
 def _room(c):
     """cpo's task from Ana's chat (its replies reach her in the task's own room), with one ordinary reply in it."""
     task_id = X.new_task(c, X.ANA, "Add the export button", assignee=BOT)["id"]
-    H.event(c, H.KEEPER, "task.room", task_id, {})
+    H.event(c, H.TICO_ACTOR, "task.room", task_id, {})
     room = E.task(c, task_id)["conversation_id"]
     H.say(c, BOT, X.ANA, "Fixed the button's label.", conversation_id=room)
     c.execute("DELETE FROM jobs")
@@ -49,7 +49,7 @@ def _notice(c, task_id, room, state):
     c.execute(
         "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,revision,restricted) "
         "VALUES(?,?,?,?,'notice','Keep-warm turn: reply with one word: ok.',?,?,0,1)",
-        (mid, room, H.KEEPER, BOT, json.dumps(refs), H.now()),
+        (mid, room, H.TICO_ACTOR, BOT, json.dumps(refs), H.now()),
     )
     c.execute("UPDATE messages SET seq=NULL WHERE id=?", (mid,))
     c.execute("UPDATE conversations SET last_seq=?, last_unread_seq=? WHERE id=?", (counters[0], counters[1], room))

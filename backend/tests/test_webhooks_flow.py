@@ -42,7 +42,7 @@ def test_a_direct_call_wakes_the_bot_a_rule_names_and_that_bot_may_read_the_call
             "SELECT * FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC LIMIT 1"
         ).fetchone()
     refs = json.loads(message["refs"])
-    assert message["sender_id"] == H.KEEPER and "Order 42 (order.created)" in message["body"]
+    assert message["sender_id"] == H.TICO_ACTOR and "Order 42 (order.created)" in message["body"]
     assert refs["delivery"] == "w1" and refs["rule_id"] == rule["id"] and refs["via"] == "direct"
     as_bot(api, "cpo")
     read = get(api, "triggers/shop/deliveries/w1", token="cpo-test")

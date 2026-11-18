@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Stale PR keeper: brings back pull requests the merge queue dropped for a flake, and says why for the rest.
+"""Stale PR sweep: brings back pull requests the merge queue dropped for a flake, and says why for the rest.
 
-Hourly and on demand (.github/workflows/stale-pr-keeper.yml). For each open pull request to main:
+Hourly and on demand (.github/workflows/stale-pr-sweep.yml). For each open pull request to main:
 
 1. Dropped by the queue (its last queue event is REMOVED_FROM_MERGE_QUEUE_EVENT and it is not back in the queue):
    - failed_checks, and every failure in the failing queue run is a quarantined test (ci/quarantine/, read as
@@ -18,7 +18,7 @@ Hourly and on demand (.github/workflows/stale-pr-keeper.yml). For each open pull
 3. Closes nothing. The run summary lists open pull requests with no push in 7 days (the head's first check suite, the
    GitHub record of its push; the commit date when it has none).
 
-The keeper writes one comment per head, edited as things change. Its hidden marker
+The sweep writes one comment per head, edited as things change. Its hidden marker
 `<!-- stale-pr-keeper:comment <head> queue=<sha> quarantine=<hash>[ requeued][ deferred] -->` (after a line naming the
 failed tests) records what it was written for, so a later run never repeats it, and never re-enqueues a head twice.
 GitHub calls: one GraphQL page per 50 open pull requests; then, for dropped pull requests only, one GraphQL query per 25
@@ -221,7 +221,7 @@ def _marked_tests(body):
 
 
 def markers(comments):
-    """The keeper's markers in [(comment id, body)]."""
+    """The sweep's markers in [(comment id, body)]."""
     return [
         Marker(
             m["sha"],
@@ -459,7 +459,7 @@ REASONS = {
 
 
 def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred=False, header=None):
-    """The keeper's one comment for a head. Its marker records the queue run and the failed tests it was written for,
+    """The sweep's one comment for a head. Its marker records the queue run and the failed tests it was written for,
     and whether the head was re-enqueued (requeued) or a flake was not re-enqueued for want of a token or because the
     pull request conflicted with main (deferred)."""
     why = REASONS.get(pr.removed_reason, pr.removed_reason.replace("_", " "))
@@ -554,7 +554,7 @@ class GitHub:
     def comments(self, heads):
         """{number: [(comment id, body)]} for each pull request in {number: head}: the last 100 comments, 25 pull
         requests a query, and older pages one pull request at a time only while that head has no marker yet. Only the
-        keeper's own comments (the token's) count: a marker anyone else pastes is ignored."""
+        sweep's own comments (the token's) count: a marker anyone else pastes is ignored."""
         out = {}
         numbers = list(heads)
         for start in range(0, len(numbers), 25):

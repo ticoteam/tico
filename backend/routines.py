@@ -467,7 +467,7 @@ def ensure_task_sweep(c, at=None):
         return None
     return create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         slug,
         {"title": "Sweep stuck tasks", "text": SWEEP_TEXT, "cron": "0 9 * * *", "timezone": "America/Los_Angeles"},
         key=SWEEP_KEY,

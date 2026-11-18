@@ -32,7 +32,7 @@ addressee) or the same insert (without one). The primary recipient's delivery ro
 `messages` (one row per message with a `recipient_id`, its state following `delivered_at`/`read_at`), so every legacy
 writer and reader agrees with the inbox. `record` adds the rest: mention rows, the deliveries for everyone the
 message is addressed to (its @mentions, the author of the message it replies to, DM members) and for its followers,
-each at a mode from the message's way and their level (`plan`), woken bots (each through a carrier: a keeper notice
+each at a mode from the message's way and their level (`plan`), woken bots (each through a carrier: a Tico notice
 whose job starts the run, since `jobs.message_id` is unique), and the loop guard, which writes a bot-caused wake past
 LOOP_GUARD_PER_HOUR in a root as `capped` and lets it go later (`resume_capped`). An @mention on a private task adds
 the person or bot to Who can see (`widen`). Nothing is guessed: a message that addresses nobody reaches only the
@@ -1222,7 +1222,7 @@ def _record(c, message, conv):
 def widen(c, root, author, actor):
     """D6, D6a: `author`'s @mention of `actor` on a private task's thread adds `actor` to the task's Who can see, as a
     task event anyone on the task can undo (hubdb.set_task_readers). A bot widens it only to a teammate in its reach
-    (backend/reach.py), and never to a group; the keeper and outside writers never do. True when `actor` reads the
+    (backend/reach.py), and never to a group; Tico and outside writers never do. True when `actor` reads the
     task now."""
     row = _widens(c, root, author, actor)
     if row:
@@ -1406,9 +1406,9 @@ def never_wakes(refs, bot):
 
 
 def system_line(message, posting=None):
-    """Whether a message is a system line (D10): the keeper's (task news, notices), a roundup (refs.no_mentions), a
+    """Whether a message is a system line (D10): Tico's (task news, notices), a roundup (refs.no_mentions), a
     follow-up nudge or card (quiet_notice), or a legacy writer's notice. It reaches whom it addresses, never the
-    followers. Not a system line: another Slack app's post the keeper carries in (refs.slack.app), which reads as a
+    followers. Not a system line: another Slack app's post Tico carries in (refs.slack.app), which reads as a
     plain line from that app."""
     refs = _refs_of(message)
     carried = isinstance(refs.get("slack"), dict) and bool(refs["slack"].get("app"))
@@ -1539,9 +1539,9 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
     author = message.get("sender_id") or ""
     primary = message.get("recipient_id") or None
     refs = _refs_of(message)
-    # An import or replay wakes no bot; nor does a legacy writer's notice (the keeper telling a bot something already
+    # An import or replay wakes no bot; nor does a legacy writer's notice (Tico telling a bot something already
     # starts what it should, hubdb.notice).
-    replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.KEEPER))
+    replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.TICO_ACTOR))
     way, defer_for = message_way(refs)
     system = _is_backfill(refs) or system_line(message, posting)
     reached = plan(
@@ -1664,7 +1664,7 @@ def _replied_author(c, root, target):
         "ON t.id=m.conversation_id WHERE m.id=?",
         (target,),
     ).fetchone()
-    if row and row[0] == H.KEEPER:
+    if row and row[0] == H.TICO_ACTOR:
         carried = (H._json(row[1], {}) or {}).get("carries") if row[1] else None
         row = (
             c.execute(
@@ -2028,10 +2028,10 @@ def still_addressed(c, message, bot):
 
 
 def note_wake(message):
-    """Whether a message is the keeper's notice that starts a run for a thread's waiting private notes."""
+    """Whether a message is Tico's notice that starts a run for a thread's waiting private notes."""
     message = message or {}
     refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
-    return bool(isinstance(refs, dict) and refs.get("wake") == NOTE_WAKE and message.get("sender_id") == H.KEEPER)
+    return bool(isinstance(refs, dict) and refs.get("wake") == NOTE_WAKE and message.get("sender_id") == H.TICO_ACTOR)
 
 
 def replace_note_wake(c, message, bot):
@@ -2108,9 +2108,9 @@ def revalidate_notes(c, bot, notes):
             continue
         c.execute(
             "UPDATE notes SET body='', canceled_at=COALESCE(canceled_at,?), canceled_by=? WHERE id=?",
-            (_now(), H.KEEPER, item["id"]),
+            (_now(), H.TICO_ACTOR, item["id"]),
         )
-        H.event(c, H.KEEPER, "note.cancel", item["id"], {"reason": "source_unreadable"})
+        H.event(c, H.TICO_ACTOR, "note.cancel", item["id"], {"reason": "source_unreadable"})
     return kept
 
 
@@ -2121,7 +2121,7 @@ def _bots_only_room(root):
     return (
         audience_of(root) in ("participants", "personal")
         and bool(people)
-        and all(str(p).startswith("bot:") or p == H.KEEPER for p in people)
+        and all(str(p).startswith("bot:") or p == H.TICO_ACTOR for p in people)
     )
 
 
@@ -2239,7 +2239,7 @@ def _run_session(c, attempt_id):
 
 
 def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, way=None):
-    """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
+    """A Tico notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
     and its legacy audience is copied. `way` (named_way): a queued carrier stays out of a running turn
@@ -2271,11 +2271,11 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     c.execute(
         "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
         "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
-        (cid, thread["id"], H.KEEPER, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
+        (cid, thread["id"], H.TICO_ACTOR, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
     )
     from .enqueue import enqueue
 
-    enqueue(c, {"id": cid, "sender_id": H.KEEPER, "recipient_id": bot, "refs": dumped, "created_at": created})
+    enqueue(c, {"id": cid, "sender_id": H.TICO_ACTOR, "recipient_id": bot, "refs": dumped, "created_at": created})
     return cid
 
 
@@ -2285,7 +2285,7 @@ def _defer_note(c, message, bot):
         body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
         c.execute(
             "INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
-            (_new_id(), message.get("sender_id") or H.KEEPER, bot, body, _now(), refs["message_id"]),
+            (_new_id(), message.get("sender_id") or H.TICO_ACTOR, bot, body, _now(), refs["message_id"]),
         )
     except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
@@ -2335,7 +2335,7 @@ def _capped_notice(c, root):
         (root["id"], _guard_window()),
     ).fetchone():
         return
-    _event(c, H.KEEPER, "thread.capped", root["id"], {"limit": LOOP_GUARD_PER_HOUR})
+    _event(c, H.TICO_ACTOR, "thread.capped", root["id"], {"limit": LOOP_GUARD_PER_HOUR})
 
 
 def capped(c, v):
@@ -2395,7 +2395,7 @@ def resume_capped(c, root_id, *, limit=None):
             (carrier, now, now if limit is not None else d["created_at"], d["id"]),
         )
     if rows:
-        _event(c, H.KEEPER, "thread.resumed", root_id, {"deliveries": len(rows)})
+        _event(c, H.TICO_ACTOR, "thread.resumed", root_id, {"deliveries": len(rows)})
     return len(rows)
 
 
@@ -3196,7 +3196,7 @@ def search(c, v, query, *, limit=20, before=None):
     )
     named = shown_names(c, v, [h["thread_id"] for h in found["hits"] if not h["title"]])
     hits = []
-    for hit in found["hits"]:  # the sender's `source` needs the message's refs (a keeper line's kind)
+    for hit in found["hits"]:  # the sender's `source` needs the message's refs (a Tico line's kind)
         shown = known.message(
             {
                 "sender_id": hit["sender_id"],
@@ -3249,14 +3249,14 @@ def home(c, owner_id, *, create=True):
         name = (H.human(c, ident) or {}).get("name") or ident
     row = _insert_thread(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         title=name,
         audience="home",
         owner_id=owner,
         kind="chat",
         participants=[owner] if kind != "group" else (),
     )
-    _event(c, H.KEEPER, "thread.created", row["id"], {"audience": "home", "home": owner})
+    _event(c, H.TICO_ACTOR, "thread.created", row["id"], {"audience": "home", "home": owner})
     _emit_thread_created(c, row)
     return row
 
@@ -3955,25 +3955,76 @@ def revived_roots(c, v, roots=None):
     """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
     (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
     other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
-    read it is not shown that the thread has moved again."""
+    read it is not shown that the thread has moved again. The posts are read whole and their checks primed together
+    (`prime_checks`), and the answer for every root is kept for the snapshot: the rail and its Catch up walk both ask."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if roots is None:
+        from . import task_privacy
+
+        # Everything readable_sql and the per-message checks read from the viewer, so a snapshot that ever serves two
+        # viewers never hands one the other's answer.
+        key = ("revived_roots", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
+        return read_cache.value(c, key, lambda: _revived_roots(c, v, None), shared=True)
+    return _revived_roots(c, v, roots)
+
+
+def _revived_roots(c, v, roots):
+    from . import task_privacy
+
     scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
-    rows = c.execute(
-        "SELECT m.id, r.id FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
+    rows = []
+    for m in c.execute(
+        "SELECT r.id AS revived_root, m.* FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
         "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
         f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
         "AND m.kind<>'notice' AND m.deleted_at IS NULL "
         "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
         f"AND m.created_at>{_finish_sql('t')}"
-    ).fetchall()
+    ).fetchall():
+        message = dict(m)
+        rows.append((message.pop("revived_root"), message))
+    prime_checks(c, [message for _, message in rows])
+    # Each post's own thread (a sub-thread may be narrower than its root) in one read, then the per-message check.
+    places, _ = read_threads(c, v, [message["conversation_id"] for _, message in rows])
+    tasks = {p["task_id"] for p in places.values() if p.get("task_id")}
+    H.prime_tasks(c, tasks, with_tags=False)  # the thread checks read each task row; the per-message checks its parties
+    task_privacy._task_rows(c, tasks)
     found = set()
-    for message_id, root_id in rows:
-        if root_id in found:
-            continue
-        message = H.message(c, message_id, include_deleted=False)
-        if message and message_readable(c, v, message):
+    for root_id, message in rows:
+        place = places.get(message["conversation_id"])
+        if (
+            root_id not in found
+            and place is not None
+            and thread_readable(c, v, place)
+            and message_readable(c, v, message, thread_checked=True)
+        ):
             found.add(root_id)
     return frozenset(found)
+
+
+def prime_checks(c, rows):
+    """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
+    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
+    with hundreds of bot replies to check costs a fixed number of statements, not several per reply."""
+    if not rows:
+        return
+    from . import provenance_clock, task_privacy
+
+    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
+    for refs in every:
+        run = refs.get("run") if isinstance(refs, dict) else None
+        aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
+            run.get("attempt_id") if isinstance(run, dict) else None
+        )
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
+    H.prime_message_rows(c, rows)
+    task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
+    # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
+    # new message, so most loads) get their whole provenance read together.
+    task_privacy.prime_attempts(c, [aid for aid in runs if not provenance_clock.known(c, ("attempt_tasks", aid))])
+    task_privacy.prime_attempt_messages(c, runs)
+    task_privacy.prime_reply_chains(c, runs)
 
 
 def task_open_sql(c, v, r="r", revived=frozenset()):
@@ -4258,7 +4309,7 @@ def _rewrite_copies(c, message, body):
     ]
     text = "" if body is None else f"{message.get('sender_id') or ''} in this thread: {body}"
     for carrier in carriers:
-        c.execute("UPDATE messages SET body=? WHERE id=? AND sender_id=?", (text, carrier, H.KEEPER))
+        c.execute("UPDATE messages SET body=? WHERE id=? AND sender_id=?", (text, carrier, H.TICO_ACTOR))
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'").fetchone():
         if body is None:
             c.execute(
@@ -4769,7 +4820,7 @@ def reply_quotes(c, v, items):
     carried = {}
     for mid, m in found.items():
         refs = H._json(m.get("refs"), {}) or {}
-        if m.get("sender_id") == H.KEEPER and isinstance(refs, dict) and refs.get("carries"):
+        if m.get("sender_id") == H.TICO_ACTOR and isinstance(refs, dict) and refs.get("carries"):
             carried[mid] = refs["carries"]
     sources = _rows_by_id(c, "SELECT * FROM messages WHERE id IN (%s)", set(carried.values()))
     for mid, source in carried.items():
@@ -5567,7 +5618,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
 
 
 # ----------------------------------------------------------------------------- outside destinations (other tracks)
-def add_outside_delivery(c, thread_id, recipient, *, added_by=H.KEEPER):
+def add_outside_delivery(c, thread_id, recipient, *, added_by=H.TICO_ACTOR):
     """Link an outside destination (`slack:<channel>`) to a thread: every later message gets a
     delivery for it."""
     if not str(recipient).startswith(OUTSIDE_PREFIXES):
@@ -5588,7 +5639,7 @@ def add_outside_delivery(c, thread_id, recipient, *, added_by=H.KEEPER):
 def remove_outside_member(c, principal, thread_id, actor):
     """Take an outside destination (`slack:<channel>`) off a thread: its member row goes and its
     unsent deliveries become `moot`. One check: Manage on the thread, or an admin (who runs the bridges); a system
-    write (an actor string) is the keeper's only. Idempotent: a destination not linked returns removed False."""
+    write (an actor string) is Tico's only. Idempotent: a destination not linked returns removed False."""
     who, v = _actor_of(principal)
     recipient = str(actor or "")
     if not recipient.startswith(OUTSIDE_PREFIXES):
@@ -5598,7 +5649,7 @@ def remove_outside_member(c, principal, thread_id, actor):
         if not (can_manage(c, v, row) or (v.is_person and v.admin(c))):
             raise Problem("forbidden", "Only someone who manages this thread, or an admin, can do that", 403)
     else:
-        if who != H.KEEPER:
+        if who != H.TICO_ACTOR:
             raise Problem("forbidden", "Only Tico itself changes a thread's outside links without a viewer", 403)
         row = thread_row(c, thread_id)
         if row is None:

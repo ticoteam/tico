@@ -108,6 +108,8 @@ NOT_PROVEN = {
     "bot.definition": "422: needs expected_revision",
     "bot.turns_at_once": "422: the body needs expected_revision",
     "bot.manages_reports": "422: the body needs expected_revision",
+    "bot.output_style": "422: the body needs expected_revision",
+    "bot.verbosity": "422: the body needs expected_revision",
     "bot.owners": "422: the entry sends owners without expected_revision",
     "bot.profile": "422: the body shape",
     "rules.system": "422: the body shape",

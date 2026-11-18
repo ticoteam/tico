@@ -191,7 +191,7 @@ def linked_view(row, names=None):
 
 
 def name_of(actor, names):
-    if actor == H.KEEPER:
+    if actor == H.TICO_ACTOR:
         return "Tico"
     return names.get(actor) or (actor.split(":", 1)[-1] if actor else "")
 
@@ -294,7 +294,7 @@ def migrate(c, settings=None):
         now = H.now()
         c.execute(
             "INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-            ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.KEEPER, now, now),
+            ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.TICO_ACTOR, now, now),
         )
         added += 1
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (MIGRATED, encode({"at": H.now(), "linked": added})))
@@ -323,9 +323,9 @@ def refresh_generated_wording(c):
             (text, H.now(), row["id"]),
         )
         fresh = docs.get_row(c, row["id"])
-        docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
+        docs.snapshot(c, fresh, H.TICO_ACTOR, "Updated generated Tico wording")
         index(c, row["rid"], row["title"], row["path"], text)
-        H.event(c, H.KEEPER, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
+        H.event(c, H.TICO_ACTOR, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (marker, encode({"at": H.now()})))
 
 
@@ -350,9 +350,9 @@ def redo_generated_wording(c):
             (text, H.now(), row["id"]),
         )
         fresh = docs.get_row(c, row["id"])
-        docs.snapshot(c, fresh, H.KEEPER, "Redid generated Tico wording")
+        docs.snapshot(c, fresh, H.TICO_ACTOR, "Redid generated Tico wording")
         index(c, row["rid"], row["title"], row["path"], text)
-        H.event(c, H.KEEPER, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
+        H.event(c, H.TICO_ACTOR, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (marker, encode({"at": H.now()})))
 
 
@@ -382,22 +382,22 @@ def refresh_generated_docs(c):
             (title, text, H.now(), row["id"]),
         )
         fresh = docs.get_row(c, row["id"])
-        docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
+        docs.snapshot(c, fresh, H.TICO_ACTOR, "Updated generated Tico wording")
         index(c, row["rid"], title, row["path"], text)
-        H.event(c, H.KEEPER, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
+        H.event(c, H.TICO_ACTOR, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
     for source in c.execute("SELECT * FROM docs WHERE archived=1").fetchall():
-        docs.remove_index_source(c, source, H.KEEPER)
+        docs.remove_index_source(c, source, H.TICO_ACTOR)
     bot = H.bot(c, "librarian")
     if bot and bot["state"] in ("active", "planned"):
         pending = c.execute(
             "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id='bot:librarian' "
             "AND title='Refresh the map' AND status='open'",
-            (H.KEEPER,),
+            (H.TICO_ACTOR,),
         ).fetchone()
         if not pending:
             H.task_create(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "Refresh the map",
                 "Follow playbooks/refresh-the-map.md. Reconcile every cached source against the full live "
                 "doc and link lists, including archived sources and recorded unreadable links. Update "

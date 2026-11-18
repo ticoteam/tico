@@ -584,7 +584,7 @@ def default_placement(c, bot):
     return "own" if OWN_NAME.fullmatch(name) else "shared"
 
 
-def adopt(c, bot, actor=H.KEEPER):
+def adopt(c, bot, actor=H.TICO_ACTOR):
     """A bot of a cloud company with no computer and no choice yet: a cloud machine (the default), shared or its own by
     its role. Returns whether it is in cloud mode now. A bot someone moved to a computer keeps that; an external agent's
     has no computer at all."""
@@ -608,7 +608,7 @@ def adopt(c, bot, actor=H.KEEPER):
 def ensure_shared(c):
     c.execute(
         "INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
-        (SHARED, "cloud", "shared", H.KEEPER, H.now()),
+        (SHARED, "cloud", "shared", H.TICO_ACTOR, H.now()),
     )
 
 
@@ -924,7 +924,7 @@ def enrolled(c, execution, runner_id, key):
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
-    H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
+    H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
     from . import model_subscriptions as MS
@@ -1148,7 +1148,7 @@ def facts(c, settings, current, at):
         restarted = c.execute(
             "SELECT created_at FROM events WHERE actor=? AND action='cloud_machine.stopped' AND target=? "
             "AND detail LIKE ? ORDER BY created_at DESC LIMIT 1",
-            (H.KEEPER, key, f"%{OFFLINE_REASON}%"),
+            (H.TICO_ACTOR, key, f"%{OFFLINE_REASON}%"),
         ).fetchone()
         out["restarted_at"] = epoch(restarted["created_at"]) if restarted else None
     if current["problem"] == "out_of_credit" and not out["frozen"]:
@@ -1637,7 +1637,7 @@ class Manager:
                 with self.store.transaction() as c:
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "cloud_machine.list_refused",
                         "",
                         {"code": str(refused.code)[:60], "status": refused.status},
@@ -1799,7 +1799,7 @@ class Manager:
             if intent["reason"] == "never_enrolled":
                 self.never_enrolled(current, c)
             else:
-                deleted(c, current, H.KEEPER)
+                deleted(c, current, H.TICO_ACTOR)
         c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
 
     def reconcile_delete(self, hq, machine_id):
@@ -1958,7 +1958,7 @@ class Manager:
             if not live or live["problem"] != OFFLINE_RESTARTING or live["problem_at"] != current["problem_at"]:
                 return live  # it checked in, or something else happened, meanwhile
             save(c, key, problem="", problem_at=None)
-            H.event(c, H.KEEPER, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
+            H.event(c, H.TICO_ACTOR, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
             if live["state"] in ON:
                 file_health_card(c, key, None, epoch(live["problem_at"]) or at)
             return row(c, key)
@@ -2002,7 +2002,7 @@ class Manager:
                 )
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "cloud_machine.grew",
                     key,
                     {"from": live["machine_size"], "to": target, "disk_pct": full},
@@ -2011,7 +2011,11 @@ class Manager:
                 save(c, key, problem="disk_full", problem_at=live["problem_at"] or H.now(), grow_note=why)
                 if live["problem"] != "disk_full":
                     H.event(
-                        c, H.KEEPER, "cloud_machine.grow_blocked", key, {"size": live["machine_size"], "disk_pct": full}
+                        c,
+                        H.TICO_ACTOR,
+                        "cloud_machine.grow_blocked",
+                        key,
+                        {"size": live["machine_size"], "disk_pct": full},
                     )
             return row(c, key)
 
@@ -2157,7 +2161,7 @@ class Manager:
                 )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                 key,
                 {
@@ -2179,7 +2183,7 @@ class Manager:
         fails = live["enroll_fails"]
         # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
         # answers with that one (act), which is not the new machine.
-        deleted(c, live, H.KEEPER, details={"reason": "never_enrolled", "tries": fails})
+        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails})
 
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
@@ -2191,7 +2195,7 @@ class Manager:
         elif refused.status == 404 and action != "create":
             # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
             with self.store.transaction() as c:
-                deleted(c, row(c, key), H.KEEPER)
+                deleted(c, row(c, key), H.TICO_ACTOR)
             return
         else:
             failures = current["failures"] + 1
@@ -2269,7 +2273,7 @@ class Manager:
             ):
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "cloud_machine.refused",
                     key,
                     {
@@ -2324,7 +2328,7 @@ class Manager:
         save(c, key, **fields)
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "cloud_machine.refused",
             key,
             {"action": action, "code": code, "size": refused_size, "fallback": target},
@@ -2339,7 +2343,7 @@ class Manager:
         key, refused_size = current["bot"], current["size"]
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "cloud_machine.size_fallback",
             key,
             {"from": refused_size, "to": runs_at, "code": code, "at": at},
@@ -2364,7 +2368,7 @@ class Manager:
         name = "The shared cloud machine" if key == SHARED else f"{bot_name(c, key)}'s cloud machine"
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             chooser,
             f"{name} couldn't start at {cloud_size_name(refused_size)} ({fallback_words(sizes(c), refused_size, code)}), "
             f"so it runs at {cloud_size_name(runs_at)}. Its work isn't waiting. To change it, pick another size in "

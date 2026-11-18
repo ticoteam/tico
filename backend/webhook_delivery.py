@@ -375,7 +375,7 @@ def exhausted(c, send, attempts, status, shown, now):
     person who owns it. Health shows the failure from the rows themselves."""
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "webhook.exhausted",
         send["id"],
         {"webhook": send["webhook_id"], "type": send["type"], "attempts": attempts, "status": status},
@@ -393,7 +393,7 @@ def exhausted(c, send, attempts, status, shown, now):
 
         task = person_asks.task_for(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             f"Webhook {hook['name']} is not receiving events",
             f"Tico gave up on a {send['type']} event after {attempts} attempts ({shown}). "
             f"Check the endpoint, then retry the send from Tools › Webhooks or "

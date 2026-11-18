@@ -1,11 +1,11 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of Flow right after each action (ui/app/decide.ts decideDo, decideApprove, decideBar), at
-// 1200 px and on a 390 px phone: Approve, Approve with comments (an OK with nothing bound, and one bound to what it
+// 1200 px and on a 390 px phone: Approve, Approve with words (an OK with nothing bound, and one bound to what it
 // shows), a comment a rule holds, Send back, a reply to a bot's ❓, Snooze, Skip, Undo after each that has one (and an
 // Undo that fails), and the last item (All done). After each the pane shows the next item (its card and
 // buttons) or All done, the top bar is whole (where you are, ✕), and nothing throws. The undo notice is quiet text in
 // the top bar: no box of its own, over no control, the pane or its buttons, and nothing moves for it.
-// FLOW_SHOTS=<folder> saves the screen after Approve with comments, after a held comment and after a failed Undo,
+// FLOW_SHOTS=<folder> saves the screen after Approve with words, after a held comment and after a failed Undo,
 // desktop and phone, light and dark.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -182,11 +182,11 @@ const BOUND = new Set([3, 4, 13, 14]);
       await whole(`${at} Approve`, 'v90:r90');
       await undo(`${at} Approve`, 'v2:r2', 'v90:r90');
 
-      // Approve with comments, an OK with nothing bound: the words go as its note.
+      // Approve with words, an OK with nothing bound: the words go as its note.
       await open([ok(2), ok(90)]);
       await toChat();
       await composer.fill('Fine, ship it');
-      await page.waitForFunction(() => document.querySelector('#need-card [data-dc="approve"]')?.textContent === 'Approve with comments');
+      await page.waitForFunction(() => document.querySelector('#need-card .dc-side [data-key] > .dc-acts-row')?.classList.contains('dc-with-words'));
       await approve.click();
       await whole(`${at} Approve with comments (unbound)`, 'v90:r90');
       assert.match(await dialog.locator('.dc-bar').innerText(), /Approved with comments/);
@@ -208,11 +208,11 @@ const BOUND = new Set([3, 4, 13, 14]);
       assert.equal(tint[0], tint[1], 'it is in the failure colour');
       await shoot(`undo-failed-${at}`);
 
-      // Approve with comments, an OK bound to what it shows: the OK, then the words as a comment.
+      // Approve with words, an OK bound to what it shows: the OK, then the words as a comment.
       await open([ok(3), ok(90)]);
       await toChat();
       await composer.fill('Send it Monday');
-      await page.waitForFunction(() => document.querySelector('#need-card [data-dc="approve"]')?.textContent === 'Approve with comments');
+      await page.waitForFunction(() => document.querySelector('#need-card .dc-side [data-key] > .dc-acts-row')?.classList.contains('dc-with-words'));
       let n = writes.length;
       await approve.click();
       await whole(`${at} Approve with comments (bound)`, 'v90:r90');

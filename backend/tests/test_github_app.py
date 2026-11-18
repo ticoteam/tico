@@ -294,7 +294,7 @@ def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_wr
                 "VALUES(?,'human:ana','Plan','live',30000,?,?,?,?)",
                 (rid, H.now(), H.now(), H.now(), visibility),
             )
-        conv = H.open_conversation(c, H.KEEPER, ["bot:cmo"], room_key="live-meeting:m-private")
+        conv = H.open_conversation(c, H.TICO_ACTOR, ["bot:cmo"], room_key="live-meeting:m-private")
         H.feed(
             c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-private", "turn_id": "t1"}}
         )

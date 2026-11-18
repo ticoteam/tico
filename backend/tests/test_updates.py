@@ -399,7 +399,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         # private raise plan, which stays out.
         ask = ok_ask(c, budget["id"], "bot:ops", "human:ana", "OK search ads first?")
         H.task_answer(c, "human:ana", budget["id"], ask["requirement_id"], "ok", "Search ads first")
-        on_raise = ok_ask(c, raise_plan["id"], H.KEEPER, "human:ana", "OK the raise to wait?")
+        on_raise = ok_ask(c, raise_plan["id"], H.TICO_ACTOR, "human:ana", "OK the raise to wait?")
         H.task_answer(
             c, "human:ana", raise_plan["id"], on_raise["requirement_id"], "no", "Mixed answer about the raise"
         )
@@ -411,7 +411,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review),
     )
     with store.transaction() as c:
-        H.task_done(c, H.KEEPER, done["id"], "Finished")
+        H.task_done(c, H.TICO_ACTOR, done["id"], "Finished")
         restrict(c, "finance", people=["ana"])
         H.task_create(c, "bot:finance", "Restricted request", "x", "human:ana")
         attended = {"calendar": {"attendees": ["ANA@acme.example"]}}

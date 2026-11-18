@@ -48,7 +48,7 @@ def notices(api, bot="bot:ops"):
             dict(r)
             for r in c.execute(
                 "SELECT body, refs FROM messages WHERE sender_id=? AND recipient_id=? AND kind='notice'",
-                (H.KEEPER, bot),
+                (H.TICO_ACTOR, bot),
             )
         ]
 
@@ -133,7 +133,7 @@ def test_only_open_to_dos_a_bot_filed_for_a_person_are_judged(gate):  # noqa: F8
     for_a_bot = todo(api, DECISION + " (for a bot)", owner="bot:cpo")
     done = todo(api, DECISION + " (done)")
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, done["id"], "Not needed")
+        H.task_close(c, H.TICO_ACTOR, done["id"], "Not needed")
     out = D.sweep(api.app.state.store, model)
     assert out["closed"] == [bots["id"]] and len(model.calls) == 1
     assert task(api, persons["id"])["status"] == "open" and task(api, for_a_bot["id"])["status"] == "open"

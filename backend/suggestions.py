@@ -403,7 +403,7 @@ def expire(c, now=None):
 
 
 def deliver_people(c, settings):
-    """Use spend alerts' company-owner recipient and keeper notice path; never pick an arbitrary person."""
+    """Use spend alerts' company-owner recipient and Tico notice path; never pick an arbitrary person."""
     person = usage_limits.recipients(c, None, settings.owner_email)
     if not person:
         return 0
@@ -417,7 +417,7 @@ def deliver_people(c, settings):
         if not matches(json.loads(row["condition"]), facts):
             _outcome(c, row, "condition_false", now)
             continue
-        H.say(c, H.KEEPER, H.human_actor(person["id"]), row["title"] + "\n\n" + row["body"], kind="notice")
+        H.say(c, H.TICO_ACTOR, H.human_actor(person["id"]), row["title"] + "\n\n" + row["body"], kind="notice")
         c.execute("UPDATE suggestions SET delivered_at=? WHERE id=?", (now, row["id"]))
         _outcome(c, row, "delivered", now)
         sent += 1

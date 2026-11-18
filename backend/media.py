@@ -12,7 +12,7 @@ from email.parser import BytesParser
 from email.policy import HTTP
 from types import SimpleNamespace
 
-from fastapi import Request
+from fastapi import Query, Request
 
 from pydantic import Field, ValidationError
 
@@ -772,10 +772,10 @@ def install_media(
     @app.get(
         "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList")
     )
-    def task_files(request: Request, tid: str):
-        with store.read() as c:
+    def task_files(request: Request, tid: str, all_pages: bool = Query(default=False, alias="all")):
+        with store.read_transaction() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
-            return files.task_listing(c, request.state.identity, task_id)
+            return files.task_listing(c, request.state.identity, task_id, all_pages=all_pages)
 
     @app.post(
         "/api/v2/tasks/{tid}/files",
@@ -908,10 +908,9 @@ def install_media(
 
                 document = TD.named(c, tid, body.document)
                 # A document continues its own file whoever writes it, never another file of the same name.
-                fid, number = files.attach_task(
-                    c, who, tid, item, digest, bot, file=TD.file_of(c, tid, document), series=False
-                )
-                TD.record(c, tid, document, fid)
+                page = TD.file_of(c, tid, document, lambda row: files.visible(c, who, row, {}))
+                fid, number = files.attach_task(c, who, tid, item, digest, bot, file=page, series=False)
+                TD.record(c, tid, document, fid, who.actor)
             else:
                 fid, number = files.attach_task(c, who, tid, item, digest, bot)
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
@@ -929,9 +928,8 @@ def install_media(
             if document:
                 from . import task_pages as TP
 
-                # Written while the task is in the stage that names it for approval, this version is the submission:
-                # no bot asks anyone for an OK. Anywhere else it is just a new version.
-                pinned = TP.submit(c, tid, document, fid, number, who.actor)
+                # Each open approval that uses this shared document sees the same new version.
+                pinned = TP.submit_linked(c, fid, number, who.actor).get((tid, document))
                 submitted = {"requirement": pinned["requirement_id"], "version": number} if pinned else None
             return {
                 "file": {**item, "file_id": fid, "version": number},

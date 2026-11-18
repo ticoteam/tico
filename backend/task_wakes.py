@@ -102,7 +102,7 @@ def tell(conn: "sqlite3.Connection", task: Row, text: str, *, quiet: bool = True
     if not text:
         return None
     if not H.is_bot(owner):
-        return H.task_comment(conn, H.KEEPER, task["id"], text, extra_refs={INSTRUCTIONS: True})["id"]
+        return H.task_comment(conn, H.TICO_ACTOR, task["id"], text, extra_refs={INSTRUCTIONS: True})["id"]
     visit: Row = (
         task.get("visit")
         or H._one(conn, "SELECT * FROM visits WHERE task_id=? AND left_at IS NULL", (task["id"],))
@@ -371,7 +371,7 @@ def add(
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         target,
         text,
         H.conversation(conn, task["conversation_id"]),
@@ -938,7 +938,7 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     said = {"sender_id": found[3], "refs": refs}
     if H.typed_by_person(said):
         return True
-    if found[3] == H.KEEPER and refs.get("command") and refs.get("goal_action") == "clear":
+    if found[3] == H.TICO_ACTOR and refs.get("command") and refs.get("goal_action") == "clear":
         # The server's "/goal clear" (chat_goals.clear_task_goal) does no work on the task: it stops the harness
         # pursuing a task goal that ended, so it reaches the old owner's session even when the task is no longer
         # theirs. Only the server's own: refs a bot sends are not trusted to skip the hold.
@@ -964,7 +964,7 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
 
 def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bool = True) -> str | None:
     """The task a run on this message is about: the task its wake key names, else the one its refs name, else, for the
-    keeper's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the task of the message
+    Tico's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the task of the message
     it carries, else the task its conversation is. The carried message comes before the conversation: a carrier in task
     A's chat of a post about task B is B's run. The claim (`may_start`, the attempt's `task_id`), the start and the
     count of runs all read the task this way, so a carrier is held and counted as the message it carries."""
@@ -980,7 +980,7 @@ def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bo
         return str(found[0]).split(":", 1)[0]
     refs: Row = H._json(found[1], {}) or {}
     named = H.message_task_id({"refs": refs})
-    if not named and carried and found[2] == H.KEEPER and refs.get("carries"):
+    if not named and carried and found[2] == H.TICO_ACTOR and refs.get("carries"):
         named = message_task(conn, str(refs["carries"]), carried=False)
     named = named or H.message_task_id({}, {"task_id": found[3]})
     return str(named) if named else None

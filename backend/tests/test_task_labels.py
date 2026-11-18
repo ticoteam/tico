@@ -322,7 +322,7 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     assert r.status_code == 404, r.text
 
 
-def _a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
+def _a_mover_and_the_tico_create_a_task_with_any_label_as_before(api):
     public_setup(api)
     made = post(
         api,
@@ -332,7 +332,7 @@ def _a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
     )
     assert made["labels"] == ["goal:on", "roadmap"]
     with api.app.state.store.transaction() as c:
-        kept = H.task_create(c, H.KEEPER, "Refresh the map", "x", "bot:ops", labels=["goal:off"])
+        kept = H.task_create(c, H.TICO_ACTOR, "Refresh the map", "x", "bot:ops", labels=["goal:off"])
     assert get(api, "tasks/" + kept["id"])["task"]["labels"] == ["goal:off"]
 
 
@@ -364,7 +364,7 @@ def test_who_changes_a_tasks_labels(subtests, api):
         _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged,
         _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat,
         _label_refusals_on_different_tasks_each_count,
-        _a_mover_and_the_keeper_create_a_task_with_any_label_as_before,
+        _a_mover_and_the_tico_create_a_task_with_any_label_as_before,
         _a_mover_grants_a_bot_one_tag_and_it_sets_that_tag_and_nothing_else,
     )
     for check in checks:

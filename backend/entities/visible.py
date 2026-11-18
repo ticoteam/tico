@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from backend import mailbox_access as MA
-from backend.hubdb_core import KEEPER
+from backend.hubdb_core import TICO_ACTOR
 from backend.finance import context as FC
 from backend.finance.visible import named_all_time
 
@@ -109,8 +109,8 @@ CHECKERS: dict[str, Callable[..., tuple[str, ...] | None]] = {
 def reader(c: sqlite3.Connection, who: str) -> Reader:
     actor = str(who or "").strip()
     key = actor_key(c, actor)
-    # The keeper is the system writing for no one (ingest, Heartbeat steps): it reads as the system does.
-    if actor in (SYSTEM, KEEPER):
+    # Tico is the system writing for no one (ingest, Heartbeat steps): it reads as the system does.
+    if actor in (SYSTEM, TICO_ACTOR):
         return Reader(actor, key, system=True, sensitive=True, grants={t: None for t in CHECKERS})
     fin = _finance(c, actor)
     sensitive = bool(fin and fin[1].everything)

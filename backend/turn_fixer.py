@@ -83,7 +83,7 @@ def _note(c, task, text):
     if not task:
         return
     try:
-        H.task_comment(c, H.KEEPER, task['id'], text, wake=False)
+        H.task_comment(c, H.TICO_ACTOR, task['id'], text, wake=False)
     except H.Refused:
         pass
 
@@ -107,7 +107,7 @@ def free(c, execution):
         msg, task = _task_of(c, row['job_id'])
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'turns.dead_freed',
             row['id'],
             {'bot': row['bot_id'], 'why': why, 'job_state': after['job_state']},
@@ -138,7 +138,7 @@ def free(c, execution):
                 "retried: BotOps checks what already happened first.",
             )
             if not c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?", (row['id'],)).fetchone():
-                H.event(c, H.KEEPER, 'job.held', row['id'], {'job_id': job['id'], 'tools': acted})
+                H.event(c, H.TICO_ACTOR, 'job.held', row['id'], {'job_id': job['id'], 'tools': acted})
                 # The BotOps task is company-wide: it names the task only when BotOps may read the request.
                 if privacy.message_readable(c, 'bot:' + H.FLEET_MAINTAINER, msg):
                     execution._hand_to_maintainer(c, job, msg, task, acted)
@@ -294,7 +294,7 @@ def tend(c, settings, owner_id='', freed=0, draft=None):
                 try:
                     task = H.task_create(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         f"Company turns incident {incident['id'][:8]}: what the turn fixer could not fix",
                         f"The company has been at or over its warning level since {incident['opened_at']} and the turn "
                         f"fixer freed every start it could prove dead.\n\n{found['text']}\n\nFind and fix what keeps "
@@ -305,21 +305,21 @@ def tend(c, settings, owner_id='', freed=0, draft=None):
                     incident['task_id'], incident['handed_to'] = task['id'], helper
                 except H.Refused as exc:
                     incident['handed_to'] = ''
-                    H.event(c, H.KEEPER, 'turns.handoff_refused', incident['id'], {'reason': str(exc)[:300]})
+                    H.event(c, H.TICO_ACTOR, 'turns.handoff_refused', incident['id'], {'reason': str(exc)[:300]})
         needs = found.get('needs_person')
         if owner_id and not incident.get('noticed_at') and (needs or _older(incident['opened_at'], NOTICE_AFTER_S)):
             why = f"it needs {needs}" if needs else "it is still not fixed after an hour"
             try:
                 H.say(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     'human:' + owner_id,
                     f"Your company's turns are at their warning level and {why}. {found['text']}",
                     kind='notice',
                 )
                 incident['noticed_at'] = H.now()
             except H.Refused as exc:
-                H.event(c, H.KEEPER, 'turns.notice_refused', incident['id'], {'reason': str(exc)[:300]})
+                H.event(c, H.TICO_ACTOR, 'turns.notice_refused', incident['id'], {'reason': str(exc)[:300]})
     if incident != old:
         org_turns.save(c, org_turns.INCIDENT, incident)
     return incident

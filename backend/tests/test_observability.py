@@ -66,6 +66,20 @@ def test_sdk_wire_allowlist(settings, recording):
     telemetry.start()
     assert telemetry.client is not None
     assert telemetry.client.integrations == {}
+    assert telemetry.client.options["data_collection"] == {
+        "provided_by_user": True,
+        "user_info": False,
+        "cookies": {"mode": "off"},
+        "http_headers": {"request": {"mode": "off"}},
+        "http_bodies": [],
+        "url_query_params": {"mode": "off"},
+        "graphql": {"document": False, "variables": False},
+        "gen_ai": {"inputs": False, "outputs": False},
+        "database_query_data": False,
+        "queues": False,
+        "stack_frame_variables": False,
+        "frame_context_lines": 0,
+    }
     dirty = {
         "tags": {"source": "request", "status": "503", "secret": SECRET},
         "request": {"url": SECRET, "headers": {"authorization": SECRET}, "data": SECRET},

@@ -78,6 +78,7 @@ def test_an_empty_company_reads_empty_numbers(api):
         "kpis": {"north_star": None, "inputs": [], "guardrails": [], "other": []},
         "markers": [],
         "may_edit": True,
+        "line": None,  # no channel yet: Get started has the page
     }
     add_channel(api)
     assert get(api, "growth/numbers")["channels"] == [

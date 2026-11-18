@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from . import hubdb_core, idea_checks, stage_effects, stage_pick, task_effects
 from . import task_requirements as R
 from . import task_depends, task_wakes, validate_gate
-from .hubdb_core import KEEPER as SYSTEM
+from .hubdb_core import TICO_ACTOR as SYSTEM
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1703,7 +1703,7 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
         hub = _h()
         for standing in unmet:
             conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (hub.now(), standing.requirement["id"]))
-            _event(conn, task_id, hub.KEEPER, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
+            _event(conn, task_id, hub.TICO_ACTOR, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
         unmet = []
     if not target or unmet or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
@@ -1895,6 +1895,8 @@ def reassign(
     said = ". ".join(p for p in (why, f"Overturned rule {overturned['name']}" if overturned else "") if p) or why
     data: Row = {"stage": row["stage_id"], **({"overturned_rule": overturned["id"]} if overturned else {})}
     revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, said, data)
+    if "assignee_id" in fields and fields["assignee_id"] != row.get("assignee_id"):
+        _event(conn, task_id, by, "assignee_id", row.get("assignee_id"), fields["assignee_id"])
     if overturned:
         H.event(conn, by, "stage_rule.overturned", task_id, {"rule": overturned["id"], "owner": owner})
     moved = _task(conn, task_id)

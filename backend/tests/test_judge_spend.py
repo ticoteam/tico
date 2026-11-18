@@ -568,7 +568,7 @@ def test_an_old_rules_spend_row_still_counts_under_its_set_in_the_readout(api):
     with api.app.state.store.transaction() as c:
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "judge.call",
             "rule-check@1",
             {
@@ -582,7 +582,7 @@ def test_an_old_rules_spend_row_still_counts_under_its_set_in_the_readout(api):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "rules.spend",
             "rule-check@1",
             {"label": "rule-check@1", "model": "tico-decide-medium-1.0", "cost_usd": 0.00875},

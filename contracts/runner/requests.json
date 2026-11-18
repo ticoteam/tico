@@ -609,6 +609,17 @@
      "title": "Text",
      "type": "string"
     },
+    "timings": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunTimings"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "tokens_in": {
      "anyOf": [
       {
@@ -1049,12 +1060,14 @@
        "browser_exit_v1",
        "model_subscription_activation_v1",
        "model_connect_v1",
+       "claude_login_v1",
        "threads_v1",
        "memory_tidy_packets_v1",
        "harness_allocation_v1",
        "make_page",
        "memory_tidy_keep_v1",
-       "browser_v1"
+       "browser_v1",
+       "plan_switch_resume_v1"
       ],
       "type": "string"
      },
@@ -1613,6 +1626,49 @@
     "kind"
    ],
    "title": "RunSession",
+   "type": "object"
+  },
+  "RunTimings": {
+   "additionalProperties": false,
+   "description": "Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature\n`run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and\nthe size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings).",
+   "properties": {
+    "claimed_at": {
+     "minimum": 0,
+     "title": "Claimed At",
+     "type": "number"
+    },
+    "phases": {
+     "additionalProperties": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "maxProperties": 40,
+     "propertyNames": {
+      "maxLength": 40
+     },
+     "title": "Phases",
+     "type": "object"
+    },
+    "transcript_bytes": {
+     "anyOf": [
+      {
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Transcript Bytes"
+    }
+   },
+   "required": [
+    "claimed_at",
+    "phases"
+   ],
+   "title": "RunTimings",
    "type": "object"
   },
   "RunUsage": {

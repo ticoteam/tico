@@ -253,7 +253,7 @@ def test_a_pipeline_without_a_manager_cannot_be_made_private(api):
     with api.app.state.store.transaction() as c:
         for body in ({**PS.read(c, 'general'), 'private': True}, {**legal, 'id': 'legal'}):
             with pytest.raises(H.Refused) as refused:
-                PS.save(c, H.KEEPER, body)
+                PS.save(c, H.TICO_ACTOR, body)
             assert "A private pipeline needs a manager" in str(refused.value)
         assert not c.execute('SELECT 1 FROM pipelines WHERE private<>0').fetchone()
         assert not c.execute("SELECT 1 FROM pipelines WHERE id='legal'").fetchone()

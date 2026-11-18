@@ -529,6 +529,7 @@
    "app/goals-kpi-views.ts",
    "app/growth-charts.ts",
    "app/growth-page.ts",
+   "app/growth-line.ts",
    "app/growth-retention.ts",
    "app/brand-page.ts",
    "app/growth-channels.ts",

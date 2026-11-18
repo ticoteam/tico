@@ -319,7 +319,7 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     X.ran(c, task_id, BUILDER, state="expired")  # its job is uncertain
     attempt, job = c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task_id,)).fetchone()
-    H.event(c, H.KEEPER, "job.held", attempt, {"job_id": job, "tools": ["Bash"]})
+    H.event(c, H.TICO_ACTOR, "job.held", attempt, {"job_id": job, "tools": ["Bash"]})
     line = "builder " + task_wakes.RUN_HELD
     assert [(w.state, w.line) for w in W.waiting_on(c, task_id)] == [("paused", line)]
     assert later(hours=2) == {} and _queued(c, task_id) == []  # nobody is woken meanwhile
@@ -353,7 +353,7 @@ def test_a_run_that_stopped_partway_is_never_a_silent_wait(c, general, later):
     job, attempt = c.execute("SELECT id, attempt_id FROM jobs WHERE state='uncertain'").fetchone()
     c.execute(
         "INSERT INTO job_recovery(job_id, attempt_id, decision, note, actor, created_at) VALUES (?,?,?,?,?,?)",
-        (job, attempt, "resume", "", H.KEEPER, H.now()),
+        (job, attempt, "resume", "", H.TICO_ACTOR, H.now()),
     )
     assert _states(c, task_id) == [("bot", REVIEWER)]
 

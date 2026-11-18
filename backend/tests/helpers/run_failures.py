@@ -69,7 +69,7 @@ def failing(c, bot, fails, *, until_at=None, held_at=None, probe_at=None, error_
         holds.FAILING,
         "bot",
         bot,
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         reason=f"Tico stopped {bot}: its last {fails} runs failed within a minute." if held_at else "",
         details=details,
         streak=fails,

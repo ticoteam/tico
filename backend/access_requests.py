@@ -288,7 +288,7 @@ def card_of(c: Any, row: Any) -> Any:
         "level": row["level"],
         "why": row["reason"],
         "auto": bool(row["auto_approved"]),
-        "by": H.actor_name(c, row["resolved_by"]) if row["resolved_by"] and row["resolved_by"] != H.KEEPER else "",
+        "by": H.actor_name(c, row["resolved_by"]) if row["resolved_by"] and row["resolved_by"] != H.TICO_ACTOR else "",
     }
 
 
@@ -355,7 +355,7 @@ def _auto_tool(c: Any, row: Any) -> Any:
 
 
 def _give_tool_read(c: Any, row: Any, keys: Any) -> Any:
-    """The grants at Read on the tool's enforceable keys, made by Tico itself (`granted_by` keeper), with their events."""
+    """The grants at Read on the tool's enforceable keys, made by Tico itself (`granted_by` Tico), with their events."""
     reconnects = _mod("reconnects")
 
     for key in keys:
@@ -363,11 +363,11 @@ def _give_tool_read(c: Any, row: Any, keys: Any) -> Any:
         c.execute(
             "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,access_level) "
             "VALUES(?,?,?,?,?,'read')",
-            (gid, key["id"], row["subject"], H.KEEPER, H.now()),
+            (gid, key["id"], row["subject"], H.TICO_ACTOR, H.now()),
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "credential.granted",
             key["id"],
             {"grant": gid, "subject": row["subject"], "level": "read", "via": "access-request", "request": row["id"]},
@@ -602,7 +602,7 @@ def _approve_at_once(c: Any, auth: Any, row: Any, vault: Any) -> Any:
             return False
         c.execute("SAVEPOINT access_request_auto")
         try:
-            _give_repository(c, row, H.KEEPER)
+            _give_repository(c, row, H.TICO_ACTOR)
         except Problem:
             c.execute("ROLLBACK TO access_request_auto")
             c.execute("RELEASE access_request_auto")
@@ -611,7 +611,7 @@ def _approve_at_once(c: Any, auth: Any, row: Any, vault: Any) -> Any:
     if not has(c, row):
         return False
     c.execute("UPDATE access_requests SET auto_approved=1 WHERE id=?", (row["id"],))
-    _close(c, _row(c, row["id"]), "granted", H.KEEPER, "auto")
+    _close(c, _row(c, row["id"]), "granted", H.TICO_ACTOR, "auto")
     try:
         person = auth.identity_for_actor(c, _connector(c, row)) if _connector(c, row) else None
     except Problem:
@@ -656,7 +656,7 @@ def _close(c: Any, row: Any, state: Any, actor: Any, via: Any) -> Any:
         return False
     row = _row(c, row["id"])
     _refresh_cards(c, row)
-    H.event(c, actor or H.KEEPER, "access." + state, row["id"], {"kind": row["kind"], "via": via})
+    H.event(c, actor or H.TICO_ACTOR, "access." + state, row["id"], {"kind": row["kind"], "via": via})
     if state == "declined":
         reconnects.dropped(c, row["id"])
     elif state == "granted" and via != "auto":  # an approval at once is the asking turn's own answer
@@ -690,7 +690,7 @@ def _via(who: Any = None, actor: Any = "") -> Any:
     if VIA.get():
         return VIA.get()
     actor = str(getattr(who, "actor", "") or actor or "")
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         return "auto" if actor else "sweep"
     if getattr(who, "via", ""):
         return str(who.via)
@@ -934,8 +934,10 @@ def reconcile_tasks(c: Any, close: bool = True, limit: int = 500) -> Any:
         found.append({"task_id": task["id"], "title": task["title"], "close": done})
         if done and close:
             note = "Closed: the access it asks for exists now (" + "; ".join(_label(r) for r in rows) + ")."
-            if H.attempt(c, H.task_close, H.KEEPER, task["id"], note) is not None:
-                H.event(c, H.KEEPER, "access.task_closed", task["id"], {"resources": [r["resource_id"] for r in rows]})
+            if H.attempt(c, H.task_close, H.TICO_ACTOR, task["id"], note) is not None:
+                H.event(
+                    c, H.TICO_ACTOR, "access.task_closed", task["id"], {"resources": [r["resource_id"] for r in rows]}
+                )
     return found
 
 

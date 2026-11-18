@@ -29,6 +29,7 @@ mod browser;
 mod browser_exit;
 mod capture;
 mod checkout_groups;
+mod claude_login;
 mod cli_compat;
 #[cfg(test)]
 mod cli_contract;

@@ -186,4 +186,4 @@ def ok_given(c, grant, ctx):
 def note(c, rid, words):
     """BotOps's notice of a change the hub applied: no task, nothing for it to do unless it sees work outside the hub."""
     if H.bot(c, "botops"):
-        H.say(c, H.KEEPER, H.bot_actor("botops"), words, kind="notice", refs={"approval": rid})
+        H.say(c, H.TICO_ACTOR, H.bot_actor("botops"), words, kind="notice", refs={"approval": rid})

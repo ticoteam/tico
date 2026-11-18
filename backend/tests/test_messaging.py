@@ -65,7 +65,7 @@ def setup_sources(api, tmp_path):
             ),
         )
         conv = H.open_conversation(
-            c, H.KEEPER, [H.KEEPER, "bot:doc-updater"], kind="chat", subject="Slack channels", scope="direct"
+            c, H.TICO_ACTOR, [H.TICO_ACTOR, "bot:doc-updater"], kind="chat", subject="Slack channels", scope="direct"
         )
         message = H.feed(c, "bot:doc-updater", "New Slack channel message", conv)
         c.execute(

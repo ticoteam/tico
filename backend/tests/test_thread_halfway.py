@@ -239,6 +239,52 @@ def test_a_bot_that_posted_since_is_no_longer_waited_on(api):
     assert bot_status(api, thread["id"]) == []
 
 
+def test_a_run_step_moves_the_status_line_again_one_second_after_its_last_change(api):
+    """A step writes its root's bot_status once the root's last one is a second old (events.py _STATUS_QUIET), and a
+    step inside that second is sent by the trailing catch-up once the second has passed."""
+    machine = machine_for(api)
+    thread = new_thread(api)
+    say(api, thread["id"], "@ops check the tax table")
+    attempt = claim(api, machine)
+    root = thread["id"]
+
+    def changes():
+        with api.app.state.store.read() as c:
+            return c.execute(
+                "SELECT COUNT(*) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?", (root,)
+            ).fetchone()[0]
+
+    def age_last_status(seconds):
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "UPDATE changes SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?) "
+                "WHERE topic='threads' AND kind='bot_status' AND subject_id=?",
+                (f"-{seconds} seconds", root),
+            )
+
+    def step(seq):
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
+                "VALUES(?,?,'tool','{}',strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                (attempt["id"], seq),
+            )
+
+    before = changes()
+    age_last_status(1.5)
+    step(9001)  # the last status is 1.5 s old: this step writes one at once
+    assert changes() == before + 1
+    age_last_status(0.5)
+    step(9002)  # the last one is half a second old: this step is held back
+    assert changes() == before + 1
+    age_last_status(1.5)  # the trailing catch-up sends the held step once that second has passed
+    with api.app.state.store.transaction() as c:
+        roots = thread_bot_status.trailing_roots(c)
+        assert roots == [root]
+        assert thread_bot_status.send_trailing(c, roots) == 1
+    assert changes() == before + 2
+
+
 def test_bot_status_goes_live_only_to_the_roots_readers(api):
     machine_for(api)
     thread = new_thread(api)

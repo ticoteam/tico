@@ -329,7 +329,7 @@ def test_subtree_unread_counts_a_delivery_in_any_state_once_and_leaves_out_bot_h
         v = threads.viewer(api.app.state.auth, who(api, "ben-test"))
         summary = threads.subtree_summaries(c, v, [root["id"]])[root["id"]]
         assert summary["unread"] == 3 and summary["new_at"] is None
-        assert thread_rail._readable_new(c, v, [root["id"]]) == {root["id"]: 3}
+        assert thread_rail._readable_new(c, v, [root["id"]], [100]) == {root["id"]: (3, True)}
         assert (
             c.execute(
                 "SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='human:ben'", (human["id"],)

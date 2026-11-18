@@ -331,5 +331,5 @@ def test_the_bookkeepers_own_tasks_land_in_finance_and_a_persons_do_not(c):
 
     task_calls.task_done(c, B.ACTOR, task_id, "Sorted.", seen_version=H.task(c, task_id)["version"])
     assert H.task(c, task_id)["status"] == "done"  # one "done" finishes it, as in General
-    ask = H.task_create(c, H.KEEPER, "Connect the bank", "Open Finance → Connections.", ANA, lint=False)["id"]
+    ask = H.task_create(c, H.TICO_ACTOR, "Connect the bank", "Open Finance → Connections.", ANA, lint=False)["id"]
     assert H.task(c, ask)["pipeline_id"] == "general"  # a person's task never goes to the Finance pipeline

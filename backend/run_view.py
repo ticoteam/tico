@@ -135,7 +135,7 @@ def decision_note(actor, detail):
     """A person's decision keeps its note. The hub's own shows the line it wrote for people, or else only the note's
     first paragraph: the rest of an automatic resume note is what the stopped run saved, the bot's text."""
     note = str(detail.get("note") or "")
-    if actor != H.KEEPER:
+    if actor != H.TICO_ACTOR:
         return clip(note, 400)
     return clip(detail.get("shown") or note.split("\n\n")[0], 400)
 
@@ -156,7 +156,7 @@ def decided_by(actor):
     """Who made a recovery decision: Tico's own auto-reconcile, BotOps, a person, or another bot (an operator)."""
     return (
         "tico"
-        if actor == H.KEEPER
+        if actor == H.TICO_ACTOR
         else "botops"
         if actor == "bot:" + H.FLEET_MAINTAINER
         else "person"
@@ -221,7 +221,7 @@ def next_step(attempt, tries, job, decisions, retries):
         by = next((r for r in retries if (attempt["finished_at"] or attempt["created_at"]) <= r["at"] <= nxt), None)
         if by:
             return {"kind": "retried", "by": by["by"], "at": by["at"], "note": "Run again by hand."}
-        return {"kind": "retried", "by": H.KEEPER, "at": nxt, "note": "Run again automatically."}
+        return {"kind": "retried", "by": H.TICO_ACTOR, "at": nxt, "note": "Run again automatically."}
     if attempt["state"] in LIVE:
         return None
     if job["state"] == "uncertain":

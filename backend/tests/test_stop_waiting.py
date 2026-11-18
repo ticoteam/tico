@@ -112,7 +112,7 @@ NOTICE_BODIES = [
     "status,body",
     [(status, NOTICE_BODIES[0]) for status in ("done", "closed", "open")] + [("done", NOTICE_BODIES[-1])],
 )
-def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, body):
+def test_all_tico_notices_are_obsolete_only_on_finished_tasks(api, status, body):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
         # Retire the initial reservation so only the particular notice is eligible.
@@ -121,7 +121,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
         end(c, task["id"], status)
         notice = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             body,
             kind="notice",
@@ -168,7 +168,7 @@ def test_obsolete_notice_is_canceled_even_when_idle_claim_finds_no_candidate(api
         end(c, task["id"], "done")
         notice = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "PR #7 checks passed",
             kind="notice",
@@ -192,7 +192,7 @@ def test_a_notice_a_person_caused_on_a_finished_task_is_canceled_once_and_idle_c
         end(c, task["id"], "done")
         notice = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "Task closed by human:ana",
             kind="notice",
@@ -251,7 +251,7 @@ def test_finished_task_notices_to_a_requester_are_also_obsolete(api):
         end(c, task["id"], "done")
         notice = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "Subtask result returned: Finished",
             kind="notice",

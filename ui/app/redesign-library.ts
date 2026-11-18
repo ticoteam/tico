@@ -391,7 +391,7 @@ async function lcSlackLinks(state: LcState): Promise<void> {
   };
   const toggle = (open: boolean): void => { form.hidden = !open; openBtn.setAttribute('aria-expanded', String(open)); };
   openBtn.onclick = () => {
-    toggle(form.hidden);
+    toggle(Boolean(form.hidden));
     if (form.hidden) return;
     if (!threadsRead) void loadThreads().catch(failed);
     chanInput.focus();

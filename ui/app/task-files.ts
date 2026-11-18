@@ -1,4 +1,4 @@
-/* ui/app/task-files.ts — A task's files and questions: the strip of tiles (one per file, at its newest version), the
+/* ui/app/task-files.ts — A task's files and questions: the file rows in the Files tab, the
    viewer that opens over the task, near full screen (versions, Compare, who added each and its question), file chips in comments,
    the question block (an ask on a comment or on a file version) and the board's covers.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -21,13 +21,15 @@ interface TfDialog extends TaskDialog {
   tfEl?: HTMLElement | null;
   tfOpen?: {id: string; n: number | null; cmp: number | null} | null;
   tfLoadSeq?: number;
+  tfFilesChanged?: (() => Promise<void>) | undefined;
   taskOpening?: unknown;
   liveTask?: (PropTask & {attachments?: TfAttachment[] | null}) | null;
   taskFiles?: TfFile[] | null;
+  tfListed?: Map<string, TfFile>;
   canComment?: boolean;
   tfJustClosed?: boolean;
   // Opens one of the task's files in its files section (tfOpen), for code outside this page part: set with tfEl.
-  tfOpenFile?: (id: string | undefined, n?: string | number | null, opts?: {scroll?: boolean; focus?: boolean}) => boolean;
+  tfOpenFile?: (id: string | undefined, n?: string | number | null) => boolean;
 }
 type TfCommentFile = {f: TfFile; v: TfVersion; title?: string; loose?: undefined} | {loose: TfAttachment; f?: undefined; v?: undefined; title?: undefined};
 // A comment or chat message as the thread shows it: its refs name the files and the questions it carries.
@@ -109,35 +111,42 @@ function tfNorm(f: TfFile): TfFile {
 const tfVersion = (f: TfFile, n?: number | string | null): TfVersion => f.versions.find(v => v.n === Number(n)) || f.versions.find(v => v.n === f.current_version) || f.versions[0]!;
 const tfAskOpen = (v: TfVersion | null | undefined): boolean => !!(v?.ask && !(v.answers || []).length);
 const tfFiles = (d: TfDialog | null | undefined): TfFile[] => (d?.taskFiles || []).filter(f => !f.archived && f.versions.length);
-const TF_CACHE = new Map<string, TfFile[]>();          // task id -> its files, so a task reopened draws its strip at once
+// A Files row can be clicked while the task's separate attachment read is still on its way.
+function tfFile(d: TfDialog, id: string | undefined): TfFile | undefined {
+  if (!id) return undefined;
+  const file = tfFiles(d).find(f => f.id === id), listed = d.tfListed?.get(id);
+  return file && (!listed || file.current_version >= listed.current_version) ? file : listed;
+}
+const TF_CACHE = new Map<string, TfFile[]>();          // task id -> its files, for a task reopened before the read lands
 
-// ---- the strip
-function tfTileHTML(f: TfFile, open: boolean): string {
+// ---- the Files tab row
+function tfFileRowHTML(f: TfFile): string {
   const v = tfVersion(f), kind = tfKind(f.name, v.mime || f.mime), pic = tfPicture(v, kind);
-  const ratio = v.width && v.height ? v.width / v.height : kind === 'video' ? 16 / 9 : 4 / 3;
-  const w = Math.round(Math.min(168, Math.max(88, 72 * ratio)));
   const age = ageShort(v.created_at);
   const dot = f.versions.some(tfAskOpen);
-  return `<button type="button" class="tf-tile${open ? ' on' : ''}" data-tf-file="${esc(f.id)}" aria-expanded="${open}" style="width:${w}px" title="${esc(f.name)}">
-    <span class="tf-thumb${pic ? ' tf-skel' : ''}"><span class="tf-glyph">${esc(tfGlyph(kind, f.name))}</span>${pic ? `<img alt="" data-tf-src="${esc(pic)}">` : ''}${kind === 'video' ? '<span class="tf-play" aria-hidden="true">▶</span>' : ''}</span>
-    <span class="tf-name">${esc(f.name)}</span>
-    <span class="tf-meta tnum">v${esc(v.n)}${age ? ` · ${esc(age)}` : ''}${dot ? '<span class="ask-dot" title="Open question"></span>' : ''}</span></button>`;
+  return `<button type="button" class="tft-row" data-tft-file="${esc(f.id)}" aria-expanded="false">
+    <span class="tft-ico${pic ? ' tf-skel' : ''}" aria-hidden="true">${pic ? `<img alt="" data-tf-src="${esc(pic)}">` : '<span class="nav-icon tft-ic">draft</span>'}</span>
+    <span class="tft-main"><span class="tft-t">${esc(f.name)}</span><span class="tft-m muted">v${esc(v.n)}${age ? ` · ${esc(age)}` : ''}</span></span>
+    ${dot ? '<span class="ask-dot" role="img" aria-label="Open question" title="Open question"></span>' : ''}</button>`;
 }
-// The dialog's files section survives the dialog's redraws (a save, a poll): the same element moves into the new
+// The dialog's file viewer survives the dialog's redraws (a save, a poll): the same element moves into the new
 // markup, so a playing video keeps playing and an open file stays open.
 function tfAdopt(d: TfDialog, task: {id: string | number; attachments?: unknown}): void {
   const slot = $('[data-task-files]', d);
   if (!slot) return;
   const id = String(task.id);
-  if (d.tfEl && d.tfEl.dataset.task === id) { slot.replaceWith(d.tfEl); tfViewModal($('[data-tf-view]', d.tfEl)); return; }
+  if (d.tfEl && d.tfEl.dataset.task === id) {
+    slot.replaceWith(d.tfEl); tfSelection(d); tfViewModal($('[data-tf-view]', d.tfEl)); return;
+  }
   d.tfEl = slot; slot.dataset.task = id; d.tfOpen = null;
-  d.tfOpenFile = (fid, n = null, opts = {}) => tfOpen(d, fid, n, opts);
+  d.tfListed = new Map();
+  d.tfOpenFile = (fid, n = null) => tfOpen(d, fid, n);
   d.taskFiles = TF_CACHE.get(id) || tfFromAttachments(task.attachments as TfAttachment[] | null | undefined);
   tfPaint(d);
 }
 async function tfLoad(d: TfDialog, id: string | number): Promise<void> {
   const opening = d.taskOpening, seq = d.tfLoadSeq = (d.tfLoadSeq || 0) + 1;
-  const data = await v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`);
+  const data = await v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`, {fresh: true});
   if (!d.open || String(d.dataset.task) !== String(id) || d.taskOpening !== opening || d.tfLoadSeq !== seq) return;
   if (!data && TF_CACHE.has(String(id))) return;          // a failed poll keeps what the last one found
   const files = Array.isArray(data?.files) ? data.files.map(tfNorm) : tfFromAttachments(d.liveTask?.attachments);
@@ -151,36 +160,32 @@ async function tfLoad(d: TfDialog, id: string | number): Promise<void> {
 function tfPaint(d: TfDialog): void {
   const el = d.tfEl;
   if (!el) return;
-  const files = tfFiles(d);
-  const open = d.tfOpen; if (open && !files.some(f => f.id === open.id)) d.tfOpen = null;
-  const can = d.canComment !== false;
-  el.hidden = !files.length && !can;
-  el.classList.toggle('tsec-empty', !files.length);       // folds into the row of small add buttons (task-list.css)
-  if (!$('.tf-strip', el)) {
-    el.innerHTML = `<h3 class="rail-h">Files<span class="muted tf-status" data-tf-status role="status"></span><button type="button" class="prop-add" data-tf-add aria-label="Add files" title="Add files, or drop them on this task, or paste a screenshot">${TL_ICON.plus}</button></h3>
-    <input type="file" multiple hidden data-tf-input aria-label="Add files to this task"><div class="tf-strip"></div><dialog class="tf-view" data-tf-view aria-label="File"></dialog>`;
+  const open = d.tfOpen; if (open && !tfFile(d, open.id)) d.tfOpen = null;
+  if (!$('[data-tf-view]', el)) {
+    el.innerHTML = '<span class="sr-only" data-tf-status role="status"></span>'
+      + '<input type="file" multiple hidden data-tf-input aria-label="Add files to this task">'
+      + '<dialog class="tf-view" data-tf-view aria-label="File"></dialog>';
     // the viewer's own Esc, a backdrop press or any other close folds the file (the keydown below usually gets Esc first)
     $('[data-tf-view]', el).addEventListener('close', () => { if (d.tfOpen && d.tfEl === el && !$('[data-tf-view]', el).open) tfClose(d); });
   }
-  $('[data-tf-add]', el).hidden = !can;
-  const strip = $('.tf-strip', el), html = files.map(f => tfTileHTML(f, d.tfOpen?.id === f.id)).join('')
-    || '<p class="muted tf-empty">Drop files here or paste a screenshot.</p>';
-  if (strip.dataset.html !== html) { strip.innerHTML = strip.dataset.html = html; tfLazy(strip); }
+  tfSelection(d);
   tfViewPaint(d);
 }
-function tfOpen(d: TfDialog, id: string | undefined, n: string | number | null = null, opts: {scroll?: boolean; focus?: boolean} = {}): boolean {
-  const f = tfFiles(d).find(x => x.id === id);
+function tfSelection(d: TfDialog) {
+  for (const row of d.querySelectorAll<HTMLElement>('[data-tft-file]'))
+    row.setAttribute('aria-expanded', String(row.dataset.tftFile === d.tfOpen?.id));
+}
+function tfOpen(d: TfDialog, id: string | undefined, n: string | number | null = null): boolean {
+  const f = tfFile(d, id);
   if (!f) return false;
   d.tfOpen = {id: f.id, n: n == null ? null : Number(n), cmp: null};
   tfPaint(d);
-  if (opts.scroll) { if (!d.tfEl) throw new Error('The task has no files section'); d.tfEl.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
-  if (opts.focus && d.tfEl) $(`.tf-tile[data-tf-file="${CSS.escape(f.id)}"]`, d.tfEl)?.focus({preventScroll: true});
   return true;
 }
 function tfClose(d: TfDialog): void {
   const id = d.tfOpen?.id;
   d.tfOpen = null; tfPaint(d);
-  if (id && d.tfEl) $(`.tf-tile[data-tf-file="${CSS.escape(id)}"]`, d.tfEl)?.focus({preventScroll: true});
+  if (id) d.querySelector<HTMLElement>(`[data-tft-file="${CSS.escape(id)}"]`)?.focus({preventScroll: true});
 }
 
 // ---- adding files: the + on Files, a drop anywhere on the task, or a pasted screenshot. One upload per file; a name
@@ -204,7 +209,10 @@ async function tfAdd(d: TfDialog, files: File[]): Promise<void> {
   } finally { status.textContent = ''; }
   if (!added) return;
   if (added === files.length) toast(`Added ${plural(added, 'file')}`);
-  if (d.open && d.taskOpening === opening && String(d.dataset.task) === id) await tfLoad(d, id);
+  if (d.open && d.taskOpening === opening && String(d.dataset.task) === id) {
+    await tfLoad(d, id);
+    await d.tfFilesChanged?.();
+  }
   if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Taking a file off a task: its owner, its requester, or someone who may move tasks (the server's rule).
@@ -214,7 +222,7 @@ function tfCanRemove(d: TfDialog): boolean {
 }
 async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Promise<void> {
   const id = String(d.dataset.task || ''), opening = d.taskOpening;
-  const f = tfFiles(d).find(x => x.id === fid);
+  const f = tfFile(d, fid);
   button.disabled = true;
   try {
     await patch(`/v2/files/${encodeURIComponent(fid)}`, {archived: true});
@@ -226,9 +234,11 @@ async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Pr
   toast(`Removed ${f?.name || 'the file'}`);
   if (!d.open || d.taskOpening !== opening || String(d.dataset.task) !== id) return;
   d.taskFiles = (d.taskFiles || []).filter(x => x.id !== fid);
+  d.tfListed?.delete(fid);
   TF_CACHE.delete(id);
   tfClose(d);
   await tfLoad(d, id);
+  await d.tfFilesChanged?.();
   if (TASK_CHAT?.dialog === d) { TASK_CHAT.rendered = ''; void taskChatRead(TASK_CHAT); }
   if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
@@ -245,7 +255,7 @@ function tfViewPaint(d: TfDialog, force = false): void {
   if (!el) throw new Error('The task has no files section');
   const box = $('[data-tf-view]', el);
   if (!box) return;
-  const open = d.tfOpen, f = open && tfFiles(d).find(x => x.id === open.id);
+  const open = d.tfOpen, f = open && tfFile(d, open.id);
   if (!f) { if (box.open || box.dataset.sig) { box.querySelector('video, audio')?.pause(); if (box.open) box.close(); box.innerHTML = ''; box.dataset.sig = ''; } return; }
   const v = tfVersion(f, open.n), sig = JSON.stringify([f, open, d.canComment !== false]);
   if (!force && box.dataset.sig === sig) { tfViewModal(box); return; }
@@ -354,17 +364,16 @@ function tfBodyWire(box: HTMLElement): void {
 // Clicks and keys inside a task dialog's files section (wired once per dialog by taskDialogWire).
 function tfWire(d: TfDialog): void {
   d.addEventListener('click', ev => {
+    const file = eventElement(ev)?.closest<HTMLElement>('[data-tft-file]');
+    if (file?.closest('dialog') === d) { tfOpen(d, file.dataset.tftFile); return; }
     if (!d.tfEl?.contains(eventElement(ev))) return;
-    const tile = eventElement(ev)?.closest<HTMLElement>('.tf-tile');
-    if (tile) { const id = tile.dataset.tfFile; d.tfOpen?.id === id ? tfClose(d) : tfOpen(d, id); return; }
     if (eventElement(ev)?.closest('[data-tf-close]')) { tfClose(d); return; }
     // The file full screen with the task's thread beside it (file-review.ts); the task's viewer stays under it.
     if (eventElement(ev)?.closest('[data-tf-review]') && d.tfOpen) {
-      const f = tfFiles(d).find(x => x.id === d.tfOpen?.id);
+      const f = tfFile(d, d.tfOpen.id);
       if (f) fileReviewOpen(f.id, {name: f.name, version: d.tfOpen.n, task: String(d.dataset.task || '') || undefined});
       return;
     }
-    if (eventElement(ev)?.closest('[data-tf-add]')) { $('[data-tf-input]', d.tfEl).click(); return; }
     const rm = eventElement(ev)?.closest<HTMLButtonElement>('[data-tf-remove]');
     if (rm && d.tfOpen) {
       // The first press asks; the second removes. Tico keeps no way back for a task's file.
@@ -372,16 +381,18 @@ function tfWire(d: TfDialog): void {
       void tfRemove(d, d.tfOpen.id, rm); return;
     }
     const ver = eventElement(ev)?.closest<HTMLElement>('[data-tf-v]');
-    if (ver && d.tfOpen) {
-      const open = d.tfOpen;
-      const n = Number(ver.dataset.tfV);
-      if (open.cmp === n) open.cmp = tfVersion(tfFiles(d).find(f => f.id === open.id)!, open.n).n;
-      open.n = n; tfViewPaint(d); return;
-    }
-    if (eventElement(ev)?.closest('[data-tf-cmp]') && d.tfOpen) {
-      const open = d.tfOpen;
-      const f = tfFiles(d).find(x => x.id === open.id)!, v = tfVersion(f, open.n);
-      open.cmp = open.cmp != null ? null : (f.versions.find(x => x.n < v.n) || f.versions.find(x => x.n !== v.n))!.n;
+    const compare = eventElement(ev)?.closest('[data-tf-cmp]');
+    if ((ver || compare) && d.tfOpen) {
+      const open = d.tfOpen, f = tfFile(d, open.id);
+      if (!f) return;
+      const v = tfVersion(f, open.n);
+      if (ver) {
+        const n = Number(ver.dataset.tfV);
+        if (open.cmp === n) open.cmp = v.n;
+        open.n = n;
+      } else {
+        open.cmp = open.cmp != null ? null : (f.versions.find(x => x.n < v.n) || f.versions.find(x => x.n !== v.n))!.n;
+      }
       tfViewPaint(d); return;
     }
     const step = eventElement(ev)?.closest<HTMLElement>('[data-tf-step]');
@@ -471,7 +482,7 @@ document.addEventListener('click', ev => {
   const jump = eventElement(ev)?.closest<HTMLElement>('[data-tf-jump]');
   if (!jump) return;
   const d = jump.closest('dialog');
-  if (d) tfOpen(d, jump.dataset.tfJump, jump.dataset.tfN, {scroll: true});
+  if (d) tfOpen(d, jump.dataset.tfJump, jump.dataset.tfN);
 });
 
 // ---- questions. An ask: {questions: [{id, header, question}], who}. On a comment it is that comment's (an 'ask'

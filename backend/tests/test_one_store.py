@@ -324,7 +324,7 @@ def test_a_subscription_saved_between_reads_never_pairs_its_new_value_with_the_r
             w.execute("UPDATE model_subscriptions SET revision=revision+1 WHERE id='sub1'")
 
     with store.read() as c:
-        reader = _SaveBetween(c, "FROM model_subscriptions WHERE id", save)
+        reader = _SaveBetween(c, f"FROM {MS.SUBS} WHERE id", save)  # `MS.row`'s read
         sub = MS.row(reader, "sub1")
         assert reader.saved and MS.value_of(reader, vault.cipher, sub) is None  # not the next save's value
         assert MS.value_of(c, vault.cipher, MS.row(c, "sub1")) == TOKEN[:-1] + "d"

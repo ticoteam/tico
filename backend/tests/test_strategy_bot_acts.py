@@ -297,7 +297,7 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     assert '"Write the onboarding email" was changed since by' in undone["undo"]["text"]
     with api.app.state.store.read() as c:
         told = c.execute(
-            "SELECT COUNT(*) FROM messages m WHERE m.sender_id=? AND m.body LIKE '%undid a decision%'", (H.KEEPER,)
+            "SELECT COUNT(*) FROM messages m WHERE m.sender_id=? AND m.body LIKE '%undid a decision%'", (H.TICO_ACTOR,)
         ).fetchone()[0]
     assert told >= 2
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, expected=422)  # once
@@ -472,7 +472,8 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         told = {
             r[0]
             for r in c.execute(
-                "SELECT recipient_id FROM messages WHERE sender_id=? AND body LIKE '%undid a decision%'", (H.KEEPER,)
+                "SELECT recipient_id FROM messages WHERE sender_id=? AND body LIKE '%undid a decision%'",
+                (H.TICO_ACTOR,),
             )
         }
     # Ops gets back what Undo restored; every task Finance still holds stayed as it was, so Finance hears nothing.

@@ -106,6 +106,17 @@
 .tp-make button{flex:none;font-size:var(--t-sm)}
 .tp-making{padding:20px 12px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:var(--t-sm)}
 .tp-error{margin:0;font-size:var(--t-sm)}
+/* New page (task-pages.ts): a title and a text, in a small dialog; not shown to a reader who may not comment. */
+dialog.tft-new{box-sizing:border-box;width:min(560px,calc(100vw - 32px));margin:auto;padding:var(--s4);border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog.tft-new::backdrop{background:rgba(0,0,0,.45)}
+.tft-new-form{display:flex;flex-direction:column;gap:var(--s3)}
+.tft-field{display:flex;flex-direction:column;gap:var(--s1);color:var(--muted);font-size:var(--t-sm)}
+.tft-field input,.tft-field textarea{width:100%;min-width:0;padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--bg);color:var(--ink);font:inherit;font-size:var(--t-base)}
+.tft-field textarea{min-height:200px;resize:vertical}
+.tft-new-err{margin:0;font-size:var(--t-sm)}
+.tft-new-err[hidden]{display:none}
+.tft-new-acts{display:flex;justify-content:flex-end;gap:var(--s2)}
+html.view-only [data-tft-new]{display:none!important}
 
 /* Library › Files: a table across the page on a computer (name, kind, made by, team, updated) and two lines a row on a
    phone. The search and the filter button share the top row; the filters sit in a popover (the Tasks popover's classes)
@@ -151,10 +162,16 @@
 .lf-ico{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
 .lf-text{flex:1;display:flex;align-items:center;gap:14px;min-width:0}
 .lf-line{display:flex;align-items:center;gap:8px;min-width:0;flex:0 1 auto}
-.lf-text:has(.lf-excerpt) .lf-line{max-width:55%}
+/* the name's link, then the meta line and the excerpt beside it (a link in the meta is a link of its own, not in the name's) */
+.lf-cell{display:flex;align-items:center;gap:14px;min-width:0}
+.lf-cell:has(:is(.lf-excerpt,.lf-has-links)) .lf-open{flex:0 1 auto;max-width:55%}
 .lf-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .lf-excerpt{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
-.lf-meta{display:none}
+.lf-meta{display:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
+.lf-meta.lf-has-links{display:block;flex:0 1 auto}
+.lf-meta-by{display:none}
+.lf-meta a{color:inherit;text-decoration:none}
+.lf-meta a:hover{color:var(--ink);text-decoration:underline}
 /* pinned and archived: a small muted mark after the name, never a pill */
 .lf-mark{flex:none;display:inline-grid;place-items:center;width:14px;height:14px;color:var(--muted)}
 .lf-mark.nav-icon{font-size:14px}
@@ -183,9 +200,11 @@
   .lf-open{align-items:start;gap:10px}
   .lf-ico{margin-top:1px}
   .lf-text{flex-direction:column;align-items:stretch;gap:2px}
-  .lf-text:has(.lf-excerpt) .lf-line{max-width:none}
-  .lf-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
-  .lf-excerpt{flex:none;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .lf-cell{flex-direction:column;align-items:stretch;gap:2px}
+  .lf-cell:has(:is(.lf-excerpt,.lf-has-links)) .lf-open{max-width:none}
+  .lf-meta{display:block;padding-left:28px}   /* past the icon and its gap */
+  .lf-meta-by{display:inline}
+  .lf-excerpt{flex:none;padding-left:28px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .lf-pad{padding:14px 6px}
 }
 
@@ -193,3 +212,35 @@
 .pg-pinned a{color:var(--link-quiet)}
 
 .pg-lock { font-size: 14px; vertical-align: middle; }
+/* Links under the title (pages.ts pageFullLinks): a chip per link, "+ Link" and the picker */
+.pg-links{display:flex;flex-direction:column;gap:8px;margin:6px 0 0}
+.pg-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pg-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;min-height:26px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm)}
+.pg-chip-link{display:inline-flex;align-items:center;gap:5px;min-width:0;padding:2px 8px;color:inherit;text-decoration:none}
+.pg-chip-link>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg-chip-link:hover{background:var(--hover);text-decoration:none}
+.pg-chip-link .nav-icon{flex:none;font-size:15px;width:15px;height:15px;color:var(--muted)}
+.pg-chip-ok{padding:0 6px;color:var(--muted);font-size:var(--t-xs);white-space:nowrap}
+.pg-chip-x{display:grid;place-items:center;flex:none;width:24px;height:24px;margin-right:2px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer;opacity:0}
+.pg-chip:hover .pg-chip-x,.pg-chip:focus-within .pg-chip-x{opacity:1}
+.pg-chip-x:hover{background:var(--hover);color:var(--ink)}
+@media (hover: none){.pg-chip-x{opacity:1}}
+.pg-chip-add{gap:5px;padding:2px 8px;border-style:dashed;color:var(--muted);cursor:pointer}
+.pg-chip-add:hover{background:var(--hover);color:var(--ink)}
+.pg-chip-add .nav-icon{font-size:15px;width:15px;height:15px}
+.pg-chip-link:focus-visible,.pg-chip-x:focus-visible,.pg-chip-add:focus-visible,.pg-link-opt:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-link-pick{display:flex;flex-direction:column;gap:6px;max-width:560px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.pg-link-pick[hidden]{display:none}
+.pg-link-row{display:flex;flex-wrap:wrap;gap:6px}
+.pg-link-role{flex:none;width:auto}
+.pg-link-q{flex:1 1 180px;min-width:0}
+.pg-link-results{display:flex;flex-direction:column}
+.pg-link-opt{display:flex;align-items:center;gap:8px;min-height:32px;padding:4px 6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.pg-link-opt:hover{background:var(--hover)}
+.pg-link-opt .nav-icon{flex:none;width:16px;height:16px;font-size:16px;color:var(--muted)}
+.pg-link-opt-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Edit (pages.ts pageEditDraw): the editable frame and its note bar */
+.pg-edit{display:flex;flex-direction:column;gap:8px}
+.pg-edit-frame{display:block;width:100%;height:calc(100dvh - 220px);min-height:320px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.pg-edit-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.pg-edit-note{flex:1 1 200px;min-width:0}

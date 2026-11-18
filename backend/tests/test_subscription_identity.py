@@ -51,7 +51,7 @@ def usage_turn(c, tid, computer=None, bot='ops'):
         'input_tokens': 100,
         'cached_tokens': 0,
         'output_tokens': 10,
-        'model': 'gpt-6.1-sol',
+        'model': 'gpt-6.2-sol',
         'provider': 'openai',
         'est_cost_usd': 0.01,
         'billing': 'subscription',
@@ -60,7 +60,7 @@ def usage_turn(c, tid, computer=None, bot='ops'):
         'effort': 'high',
         'profile': 'engineering',
     }
-    H.turn_finish(c, H.KEEPER, tid, usage={**part, 'segments': [part]})
+    H.turn_finish(c, H.TICO_ACTOR, tid, usage={**part, 'segments': [part]})
     if computer:
         c.execute(
             "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",

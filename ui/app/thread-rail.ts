@@ -158,9 +158,9 @@ function railUnreadFace(u: ThreadUnread) {
   return threadMarkHTML(railUnreadThread(u), 20);
 }
 function railUnreadRowHTML(u: ThreadUnread, cur: string) {
-  const here = u.id === cur, n = Number(u.new_count) || 0, name = railUnreadName(u);
+  const here = u.id === cur, n = Number(u.new_count) || 0, name = railUnreadName(u), plus = u.new_count_partial ? '+' : '';
   const count = here ? '' : u.mention ? '<span class="tr-count" aria-label="Mentions you">@</span>'
-    : n ? `<span class="tr-count" aria-label="${n} new">${esc(threadsCountText(n))}</span>` : '';
+    : n ? `<span class="tr-count" aria-label="${n}${plus} new">${esc(threadsCountText(n) + (plus && n <= 99 ? plus : ''))}</span>` : '';
   // No Mark read on a phone, on a mention (an open mention keeps the chat in Catch up, so the row would come back) or
   // where nothing hovers (the CSS hides it there: on a touch screen it would cover the count).
   const read = here || trPhone() || u.mention ? '' : `<button type="button" class="tr-arch" data-tr-read="${esc(u.id)}" aria-label="Mark read" title="Mark read"><span class="nav-icon" aria-hidden="true">check</span></button>`;

@@ -20,7 +20,7 @@ from backend import never_stuck as N
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend import task_requirements as R
-from backend.hubdb_core import KEEPER
+from backend.hubdb_core import TICO_ACTOR
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
@@ -132,7 +132,7 @@ def _follows(c):
     return [
         json.loads(r[0])
         for r in c.execute(
-            "SELECT detail FROM events WHERE action='pipeline.save' AND actor=? ORDER BY rowid", (KEEPER,)
+            "SELECT detail FROM events WHERE action='pipeline.save' AND actor=? ORDER BY rowid", (TICO_ACTOR,)
         )
         if "newer_preset_text" in json.loads(r[0])
     ]
@@ -141,19 +141,19 @@ def _follows(c):
 def test_an_rc3_company_gets_qa_and_the_newer_check_lines_and_purposes_and_nothing_else_changes(c):
     now = PS.read(c, "engineering")
     _as_rc3(c)
+    before = PS.read(c, "engineering")
+    for stage in ("engineering-review-1", "engineering-review-2"):
+        _page(now, stage)["settings"] = _page(before, stage)["settings"]
     PS.ensure_presets(c)
     new = PS.read(c, "engineering")
-    # ids, owners, people, settings and the version as a company made now has them: still an untouched preset
+    # The QA upgrade still runs. Both single-review stages keep their own rubric.
     assert _no_ids(new) == _no_ids(now)
     assert new["settings_version"] == 1 and PS._untouched(c, "engineering")
     (logged,) = _follows(c)
     assert sorted(logged["newer_preset_text"]) == [
-        "engineering-fixes-2/purpose",
         "engineering-merge/purpose",
         "engineering-qa/page/line",
         "engineering-qa/page/rubric",
-        "engineering-review-1/page/rubric",
-        "engineering-review-2/page/rubric",
     ]
     PS.ensure_presets(c)  # a second start changes nothing
     assert PS.read(c, "engineering") == new and len(_follows(c)) == 1
@@ -164,20 +164,20 @@ def test_an_edited_line_stays_and_a_changed_pipeline_moves_up_one_version(c):
     _page(record, "engineering-review-1")["settings"]["rubric"] = "Our own check: " + REVIEW_RC3
     _stage(record, "engineering-fixes-2")["purpose"] = FIXES_2_PURPOSE_RC3 + " Ask Ben first."
     PS.save(c, ANA, record)
-    _rubric(c, "engineering-review-2", REVIEW_RC3)
+    _purpose(c, "engineering-merge", MERGE_PURPOSE_RC3)
     version = PS.read(c, "engineering")["settings_version"]
     assert version > 1
     PS.ensure_presets(c)
     new = PS.read(c, "engineering")
     assert _page(new, "engineering-review-1")["settings"]["rubric"] == "Our own check: " + REVIEW_RC3
     assert _stage(new, "engineering-fixes-2")["purpose"] == FIXES_2_PURPOSE_RC3 + " Ask Ben first."
-    assert _page(new, "engineering-review-2")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    assert _stage(new, "engineering-merge")["purpose"] != MERGE_PURPOSE_RC3
     assert new["settings_version"] == version + 1
     PS.ensure_presets(c)
     assert PS.read(c, "engineering")["settings_version"] == version + 1 and len(_follows(c)) == 1
 
 
-def test_a_removed_stage_is_passed_over_and_a_purpose_follows_only_where_every_preset_stage_is(c):
+def test_the_qa_upgrade_does_not_recreate_a_removed_review_stage(c):
     record = PS.read(c, "engineering")
     record["stages"] = [s for s in record["stages"] if s["id"] != "engineering-review-2"]
     PS.save(c, ANA, record)
@@ -192,8 +192,7 @@ def test_a_removed_stage_is_passed_over_and_a_purpose_follows_only_where_every_p
         for r in c.execute("SELECT id, retired_at IS NULL FROM stages WHERE pipeline_id='engineering' ORDER BY id")
     ] == sorted([*(tuple(r) for r in stages), ("engineering-qa", 1)])
     assert "engineering-review-2" not in [s["id"] for s in new["stages"]]
-    # A check line is the page's own; a purpose names the stages around it, so it waits for the preset's shape.
-    assert _page(new, "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    assert _page(new, "engineering-review-1")["settings"]["rubric"] == REVIEW_RC3
     assert _page(new, "engineering-qa")["settings"]["rubric"] == PS.QA_RUBRIC
     assert _stage(new, "engineering-fixes-2")["purpose"] == FIXES_2_PURPOSE_RC3
 

@@ -742,7 +742,7 @@ def score(store, row, flow, now, primary=None, left=None):
             stop = False
             with store.transaction() as c:
                 for call in calls:
-                    H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, automation=aid))
+                    H.event(c, H.TICO_ACTOR, "judge.call", label, DG.audit_row(call, label, automation=aid))
                 # Turned off or deleted while the call ran: no result is written, the posts stay `new`.
                 still = on(c)
                 for n, reply in zip(run, replies, strict=True):

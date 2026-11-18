@@ -14,7 +14,7 @@ from clients.tico import APIError
 
 from clients.commands._registry import tool
 from clients.commands._schemas import ASK_WAIT_MAX, _key, _s
-from clients.commands._shared import audience
+from clients.commands._shared import ambiguous_page, audience
 from clients.commands._requester import _Requester, _as_person
 
 
@@ -498,7 +498,9 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Updat
 
 
 def _page_fields(args):
-    fields = {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    fields = {
+        k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope", "page", "as") if args.get(k)
+    }
     if args.get("spec"):
         fields["spec"] = True
     if "audience" in args and args["audience"] is not None:
@@ -508,8 +510,8 @@ def _page_fields(args):
 
 @tool(
     "tico_page_publish",
-    "Publish .html; scripts/external loads are removed. Lead with key facts for cards. "
-    "Reusing a name versions changes; task pins it.",
+    "Publish .html; scripts/external loads are removed. Lead with key facts for cards. Reusing a name, or page, "
+    "versions it. With task and as it is that task's document (Spec, QA report, ...), linked with that role.",
     {
         "name": _s("The file's name, ending .html"),
         "text": _s("The HTML"),
@@ -518,6 +520,11 @@ def _page_fields(args):
         "audience": _s("everyone clears; person,group:legal,bot:analyst narrows. Omit to keep."),
         "as_of": _s("YYYY-MM-DD"),
         "task": _s("The task it is for; it shows at the top of that task"),
+        "as": _s(
+            "With task: the role the page has on that task, e.g. Spec or QA report. Without page, the task's one "
+            "page with that role gets the version; none makes a page; several are refused and page says which"
+        ),
+        "page": _s("Write a new version of this page (file-<hex>) instead of making one; you must be able to write it"),
         "replaces": _s("The id of an older page this one takes the place of"),
         "scope": {"enum": ["task", "bot"], "description": "bot keeps it with the bot, not the turn's task"},
         "path": _s("The .html file's path in this checkout"),
@@ -528,7 +535,36 @@ def _page_fields(args):
 )
 def pages_publish(api, args):
     body = {**_page_fields(args), **{k: args[k] for k in ("name", "text", "path") if args.get(k)}}
-    return api.post("pages", body, key=_key(args))
+    return ambiguous_page(lambda: api.post("pages", body, key=_key(args)))
+
+
+_LINK_TARGET = _s("task:<id>, bot:<id>, human:<slug>, goal:<id> or page:<id>")
+_LINK_ROLE = _s("writer, related (the default) or a document name on a task: Spec, QA report, ...")
+
+
+@tool(
+    "tico_page_link",
+    "Link a page to a task, bot, person, goal or another page with a role: writer, related, or on a task a document "
+    "name. A page may have many links. A link never widens who can read the page.",
+    {"id": _s("Page id"), "target": _LINK_TARGET, "role": _LINK_ROLE},
+    required=("id", "target"),
+    writes=True,
+)
+def pages_link(api, args):
+    body = {"target": args["target"], "role": args.get("role") or "related"}
+    return _as_person(api).post(f"pages/{args['id']}/links", body, key=_key(args))
+
+
+@tool(
+    "tico_page_unlink",
+    "Remove one link from a page: the target and role that linked it. The page's last writer cannot be unlinked.",
+    {"id": _s("Page id"), "target": _LINK_TARGET, "role": _LINK_ROLE},
+    required=("id", "target"),
+    writes=True,
+)
+def pages_unlink(api, args):
+    query = {"target": args["target"], "role": args.get("role") or "related"}
+    return _as_person(api).call("DELETE", f"pages/{args['id']}/links", None, _key(args), query=query)
 
 
 @tool(
@@ -562,10 +598,15 @@ def pages_card(api, args):
 
 
 @tool("tico_page_list", "Readable pages, newest first. Follow next_cursor.",
-      {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
+      {"bot": _s("Only this bot's pages"),
+       "task": _s("Pages linked to this task in any role, or filed on or pinned to it"),
        "archived": {"type": "boolean", "description": "The archived pages instead"},
        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Pages in this page, 1-50"},
-       "cursor": _s("The page after this one: a page's next_cursor")})  # fmt: skip
+       "cursor": _s("The page after this one: a page's next_cursor"),
+       "linked": _s("Pages linked to this target in any role: task:<id>, bot:<id>, human:<slug>, "
+                    "goal:<id> or page:<id>"),
+       "role": _s("Only pages linked with this role: writer, related, or a document name such as Spec"),
+       "writer": _s("Only pages this actor wrote a version of: human:<slug> or bot:<id>")})  # fmt: skip
 def pages_list(api, args):
     return api.get(
         "pages",
@@ -574,12 +615,15 @@ def pages_list(api, args):
         archived=args.get("archived") or None,
         limit=args.get("limit"),
         cursor=args.get("cursor"),
+        linked=args.get("linked"),
+        role=args.get("role"),
+        writer=args.get("writer"),
     )
 
 
 @tool(
     "tico_page_show",
-    "Page status and pins. Read HTML with tico_file_read.",
+    "Page status, pins, links and writers. Read HTML with tico_file_read.",
     {"id": _s("Page id")},
     required=("id",),
 )
@@ -634,7 +678,33 @@ def pages_publish_path(client, args):
     query = {"name": name, "path": relative, **_page_fields(args)}
     if "audience" in query:
         query["audience"] = json.dumps(query["audience"], separators=(",", ":"))
-    return client.request("POST", "/api/v2/pages?" + BF.urlencode(query), raw=data, key=_key(args))
+    return ambiguous_page(
+        lambda: client.request("POST", "/api/v2/pages?" + BF.urlencode(query), raw=data, key=_key(args))
+    )
+
+
+# `tico page link|unlink ID --task ID|--bot ID|--person SLUG|--goal ID|--page ID`: one target flag, sent as the target.
+_TARGET_FLAGS = (
+    Arg("task", local=True, help="a task: its id, short id or D-number"),
+    Arg("bot", local=True, help="a bot: its id"),
+    Arg("person", local=True, help="a person: their slug"),
+    Arg("goal", local=True, help="a goal: its id"),
+    Arg("page", local=True, help="another page: its file id"),
+)
+
+
+def _link_run(tool_name):
+    """The `page link` and `page unlink` command: the one target flag given becomes `task:<id>` (or `human:<slug>` for a
+    person), and the tool runs with it."""
+
+    def run(client, fields, **targets):
+        from clients import hubtools
+
+        kind, value = next((k, v) for k, v in targets.items() if v is not None)
+        target = f"{'human' if kind == 'person' else kind}:{value}"
+        return hubtools.BY_NAME[tool_name]["fn"](client, {**fields, "target": target})
+
+    return run
 
 
 # ----------------------------------------------------------------------------- docs
@@ -954,11 +1024,29 @@ PAGE = (
     Group("page", "pages: HTML a bot keeps up to date, with Tico's updated line"),
     Command(
         "page publish",
-        "publish an .html file from this checkout; again adds a version",
+        "publish an .html file from this checkout; again adds a version. --task with --as is that task's document",
         args=(Arg("path", positional=True),),
         omit=("name", "text"),  # the file's own, read from `path`
         run=pages_publish_path,
         example="tico page publish reports/weekly.html --title 'Weekly review' --cadence weekly",
+    ),
+    Command(
+        "page link",
+        "link a page to a task, bot, person, goal or page; --as sets the role (default related)",
+        args=(Arg("role", "--as"), *_TARGET_FLAGS),
+        omit=("target",),
+        one_of=(("task", "bot", "person", "goal", "page"),),
+        run=_link_run("tico_page_link"),
+        example="tico page link file-1 --task T1 --as Spec",
+    ),
+    Command(
+        "page unlink",
+        "remove a link: the same target and --as role that linked the page",
+        args=(Arg("role", "--as"), *_TARGET_FLAGS),
+        omit=("target",),
+        one_of=(("task", "bot", "person", "goal", "page"),),
+        run=_link_run("tico_page_unlink"),
+        example="tico page unlink file-1 --task T1 --as Spec",
     ),
     Command(
         "page card",
@@ -970,8 +1058,12 @@ PAGE = (
         ),
         example="""tico page card --page goals --for human:ana --rows '[{"title": "NPS above 40"}]'""",
     ),
-    Command("page list", "pages you may read, newest first", example="tico page list --task T1"),
-    Command("page show", "one page's status", example="tico page show p1"),
+    Command(
+        "page list",
+        "pages you may read, newest first; --linked, --role and --writer narrow them",
+        example="tico page list --linked task:T1 --role Spec",
+    ),
+    Command("page show", "one page's status, pins, links and writers", example="tico page show p1"),
     Command("page access", "show or change who can see a page", example="tico page access p1 --audience everyone"),
     Command(
         "page archive",

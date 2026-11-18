@@ -6,6 +6,10 @@ it exports each week and types new customers by hand."""
 from backend import growth_sync as GS
 from backend.tests.helpers.api import headers, post, put
 from backend.tests.helpers.company import bot
+import pytest
+from backend.tests.helpers.growth_cards import classic_cards  # noqa: F401 (the fixture)
+
+pytestmark = pytest.mark.usefixtures("classic_cards")  # these test the Number and Channels cards
 
 M = GS._month(GS._index(GS.this_month()) - 1)
 

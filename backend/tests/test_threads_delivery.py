@@ -254,7 +254,7 @@ def test_the_run_a_digest_notice_starts_reads_only_the_threads_the_bot_is_still_
     notice = rows(
         api,
         "SELECT * FROM messages WHERE sender_id=? AND recipient_id='bot:ops' AND json_extract(refs,'$.wake')=?",
-        H.KEEPER,
+        H.TICO_ACTOR,
         thread_bot_digest.WAKE,
     )[0]
     with store.transaction() as c:
@@ -281,7 +281,7 @@ def test_an_import_a_replay_or_a_bots_own_message_never_starts_its_run_even_addr
         rows(
             api,
             "SELECT 1 FROM messages WHERE sender_id=? AND json_extract(refs,'$.carries')=?",
-            H.KEEPER,
+            H.TICO_ACTOR,
             message["id"],
         )
         == []

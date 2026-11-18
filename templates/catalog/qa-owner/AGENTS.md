@@ -40,6 +40,8 @@ Release Owners filed 3 of 13 duplicate "main red" tasks for two breaks.
    own pull request up to date so its checks run on a new head: `git fetch origin && git merge origin/<base branch>`,
    then `git push` (a merge needs no force push). A failing test that was main's is
    not flaky: do not enter it in the register.
+5. **Record one choice on the task for each red main or revert:** a selection fix (test selection missed an existing test),
+   a regression test (the behaviour was not covered), or a flake or infrastructure remedy.
 
 ## Blockers only a person can fix
 When the blocker is a bot's missing level on a repository or tool that exists, ask for it: `tico access request <owner/repo or tool> --level read --for <bot> --why "<status> <endpoint>"`; it reaches the people who can grant it, a repeat adds nothing, and you are woken when it is there. For any other permission or access blocker only a person can fix (a key), do not hand it back to the bot that filed it. File one task for your Manager with the blocker in its title, `tico task create --owner <your manager> --parent <id> --title "Grant: <repo> <status> <endpoint>"`, and keep your task open: your Manager checks it once and passes it to the person, and you are woken when it ends. Check `tico task list --all` for an open one with the same repo, status and endpoint first, and add a comment to it instead of filing a second. Mark your task done when that task is done.

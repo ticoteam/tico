@@ -3,7 +3,7 @@ deliveries wait (`mode='digest'`), and this sweep starts one run for all of them
 
 The sweep is plain code: no model is called unless a batch has something in it. Each delivery is checked again when the
 batch is made, as a carrier is when it is claimed: gone or no longer readable by the bot, it goes moot. The wake is one
-keeper notice in the bot's own conversation, naming the threads and how many messages each has, never their words, since
+Tico notice in the bot's own conversation, naming the threads and how many messages each has, never their words, since
 that conversation has other readers. A run started by it reads those threads, granted at the claim while the bot is
 still in their audience (`grant`). A bot that is paused or quarantined keeps its deliveries until it is back, and a batch
 waits while the last one's run has not started, so one bot never has two.
@@ -66,7 +66,7 @@ def wake_bot(c, bot):
     lines = "\n".join(f"- {thread_id}: {n}" for thread_id, n in counts.items())
     notice = H.say(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         bot,
         f"New messages in threads you follow on digest (thread: messages):\n{lines}\n"
         "Catch up with tico_thread_catchup if they need you.",
@@ -100,7 +100,7 @@ def grant(c, attempt_id, message):
     from . import threads  # local: keeps threads out of the selector's fan-in
 
     refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {})
-    if (refs or {}).get("wake") != WAKE or message.get("sender_id") != H.KEEPER:
+    if (refs or {}).get("wake") != WAKE or message.get("sender_id") != H.TICO_ACTOR:
         return
     bot = message.get("recipient_id")
     for thread_id in (refs.get("threads") or [])[:MAX_THREADS]:

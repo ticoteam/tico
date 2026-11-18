@@ -196,7 +196,7 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
 
 def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_session():
     # Nov 14 (one Product pipeline): the Product Owner and the Builder are one bot, so the code and the reasons are in
-    # context when it builds. It writes the Spec, owns Build and both Fixes, and never passes a person's approval.
+    # context when it builds. It writes the Spec, owns Build and Fixes, and never passes a person's approval.
     text = agent("feature-owner")
     assert card("feature-owner")["session"] == "task"
     assert yaml.safe_load((CATALOG / "feature-owner" / "bot.yaml").read_text())["session"] == "task"
@@ -205,7 +205,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         "Related input",
         "OK spec",
         "Build",
-        "Fixes 1 and Fixes 2",
+        "Fixes",
         "QA",
         "OK release",
         "Validate",
@@ -213,7 +213,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         assert f"**{stage}" in text, stage
     assert "Pitch" not in text  # a feature starts as a chat; its first approval is the Spec (Nov 16)
     assert "A person approves the Spec and the Release report: you never pass those yourself." in text
-    assert '--doc "Release report"' in text
+    assert '--task <id> --as "Release report"' in text
     for playbook in ("write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
@@ -382,3 +382,29 @@ def test_the_release_label_flow_stays_off_stages_that_wait_for_a_published_relea
     routing = agent("release-owner")
     assert 'no automatic "in a release" requirement' in routing
     assert routing.index("labels nothing") < routing.index("release:YYYY-MM-DD.N")
+
+
+# A change that adds or changes SQL: its author runs the quick perf check, and its reviewer reads the numbers it posts.
+PERF_SKILL = ".claude/skills/quick-perf-check"
+
+
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer"])
+def test_a_sql_change_gets_the_quick_perf_check_from_its_author_and_its_reviewer(template):
+    assert PERF_SKILL in card(template)["shared_files"], template
+    skill = catalog.files(template)[f"{PERF_SKILL}/SKILL.md"].read_text()
+    assert len(skill.splitlines()) <= 25
+    for words in ("EXPLAIN QUERY PLAN", "N+1", "copy of the data", "before the change merges"):
+        assert words in skill, words
+    assert f"{PERF_SKILL}/SKILL.md" in agent(template), template
+    playbook = " ".join((CATALOG / "reviewer" / "playbooks" / "review-a-pull-request.md").read_text().split())
+    assert f"{PERF_SKILL}/SKILL.md" in playbook
+
+
+def test_the_qa_owner_records_one_choice_for_each_red_main_or_revert():
+    text = agent("qa-owner")
+    choice = "Record one choice on the task for each red main or revert"
+    assert choice in text
+    assert "a selection fix (test selection missed an existing test)" in text
+    assert "a regression test (the behaviour was not covered)" in text
+    assert "a flake or infrastructure remedy" in text
+    assert text.index("## When main is red") < text.index(choice) < text.index("## Blockers only a person can fix")

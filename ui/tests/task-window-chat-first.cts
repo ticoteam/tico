@@ -1,7 +1,7 @@
 import type * as Tasks from './tasks-page.cts';
-import type {Page} from 'playwright';
-// The task window, chat first (the style guide's Task window: the chat, Details from its icon, and tabs only for a task
-// with documents, ui/tests/task-documents.cts), on the v3 fixture
+import type {Locator, Page} from 'playwright';
+// The task window, chat first (the style guide's Task window: the chat, Details from its icon, and the Files tab beside
+// Chat, with a tab for each document, ui/tests/task-documents.cts), on the v3 fixture
 // (ui/tests/tasks-page.cts); every request is intercepted.
 // - 1280 × 800: a task with messages opens on Chat; the newest line and the message box are in view without scrolling.
 // - 60 lines: the newest show, and scrolling up draws older ones until the first message.
@@ -9,9 +9,9 @@ import type {Page} from 'playwright';
 //   dividers in order; no line reads "changed <field>".
 // - Two or more other updates in a row are one "N updates" line that opens.
 // - One Visible to row (Team, Public roadmap or Private · names); no Private or Public box, no Size, no Who can see.
-// - A page row is its icon and name and opens the page; + opens the page search (recent pages, "or drop a file to
+// - On the Files tab a page row is its icon and name and opens the page; "Link a page or file" opens the page search (recent pages, "or drop a file to
 //   upload"); ⋯ › Make a page… opens the Describe box.
-// - A phone at 390 px: no tabs, open on the chat, the box at the foot of the window.
+// - A phone at 390 px: Chat and Files only, open on the chat, the box at the foot of the window.
 // - No links, runs or meetings: none of those sections show; ⋯ › Activity and links opens them.
 declare function liveEmit(topic: string, data: unknown): void;
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -37,6 +37,11 @@ const PAGE = {file_id: 'file-spec', title: 'Task window spec', version: 3, repla
 const tasks = () => [task('t-1', 'Chat first in the task window', 'spec', {owner_id: 'bot:writer'}), task('t-2', 'A task the reader cannot add pages to', 'spec', {owner_id: 'bot:writer'})];
 // Each task's pages (GET /api/v2/places/task:<id>) and its Make page request (GET and POST /api/v2/tasks/<id>/make-page).
 const PIN = {id: 'pin-1', size: 'medium', can_unpin: true, page: PAGE};
+// The page is linked to the task as related: the Files tab lists it (GET /api/v2/tasks/{id}/files?all=1).
+const LINKED = {id: 'file-spec', title: 'Task window spec', name: 'task-window-spec.html', current_version: 3, updated_at: at(600),
+  links: [{target: 'task:t-1', role: 'related', name: null}], writers: [{actor: 'bot:writer', name: null}], versions: [{n: 3, by: 'bot:writer', created_at: at(600)}]};
+// The tab keys on the tab row: Chat and Files, then one per document (none here).
+const tabKeys = (win: Locator) => win.locator('.tw-tabs [data-task-tab]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.taskTab));
 const PLACES: Record<string, {can_link: boolean; pins: unknown[]}> = {};
 let making: string | null = null;
 const pages = async (page: Page) => {
@@ -48,6 +53,10 @@ const pages = async (page: Page) => {
   await page.route(url => url.pathname.endsWith('/make-page'), route => {
     if (route.request().method() === 'POST') { making = 'made'; return route.fulfill({contentType: 'application/json', body: JSON.stringify({message: {conversation_id: 'c-make'}})}); }
     return route.fulfill({contentType: 'application/json', body: JSON.stringify({make_page: making ? {state: making, conversation_id: 'c-make'} : null})});
+  });
+  await page.route(url => /^\/api\/v2\/tasks\/[^/]+\/files$/.test(url.pathname), route => {
+    const all = new URL(route.request().url()).searchParams.get('all') === '1';
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify({files: all ? [LINKED] : []})});
   });
 };
 
@@ -70,8 +79,8 @@ const pages = async (page: Page) => {
       assert.ok(await inView('#task-modal .task-chat textarea'), 'the message box is in view');
       // Opening lands on the window itself, not the title (a focused title would open in full) nor a control (no ring).
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'task-modal', 'the focus is on the window');
-      // No documents, no tabs: the chat, and Details behind its icon.
-      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs');
+      // No documents: Chat and Files, no document tab; the chat, and Details behind its icon.
+      assert.deepEqual(await tabKeys(win), ['chat', 'files'], 'Chat and Files, no document');
       assert.equal(await win.locator('[data-task-tab="details"]').getAttribute('aria-pressed'), 'false');
       assert.equal(await win.locator('.task-side').isVisible(), false, 'Details is behind its icon');
       // The title is top left, on the same row as the actions; the window's ✕ is last, after Archive and ⋯.
@@ -116,7 +125,7 @@ const pages = async (page: Page) => {
       assert.match(await group.locator('> summary').innerText(), /^4 updates/);
       assert.equal(await group.evaluate(g => (g as HTMLDetailsElement).open), false);
       await group.locator('> summary').click();
-      await group.getByText(/numbered it #409/i).waitFor();
+      await group.getByText(/numbered #409/i).waitFor();   // Tico gives the number: a quiet line, no "it" (task-session.cts)
 
       // 5. One Visible to row; no Private or Public box, no Size, no Who can see.
       const props = win.locator('[data-task-props]');
@@ -138,16 +147,18 @@ const pages = async (page: Page) => {
       await page.locator('.prop-pop:popover-open').getByText('Who can see it').waitFor();
       await page.keyboard.press('Escape');
 
-      // 6. A page row is its icon and name, and opens the page.
-      const row = win.locator('[data-task-pages] .tp-row');
+      // 6. The Files tab: a page row is its icon and name, its role as a chip, and opens the page.
+      await win.locator('.tw-tabs [data-task-tab="files"]').click();
+      const row = win.locator('.tft-list .tft-row');
       await row.waitFor();
-      assert.equal((await row.innerText()).replace(/\s+/g, ' ').trim(), 'description Task window spec');
+      assert.equal((await row.locator('.tft-t').innerText()).trim(), 'Task window spec');
+      assert.equal((await row.locator('.tft-chip').innerText()).trim(), 'related');
       assert.equal(await win.locator('[data-task-pages] .pg-card').count(), 0, 'no card, no Open, no Updated line');
       assert.equal(await row.getAttribute('href'), '#/page/file-spec');
-      // "+" opens the page search, focused, with "or drop a file to upload" under the results; Esc closes it.
+      // "Link a page or file" opens the page search, focused, with "or drop a file to upload" under the results; Esc closes it.
       const pagesBox = win.locator('[data-task-pages]');
       assert.equal(await pagesBox.getByRole('textbox', {name: 'Describe the page'}).isVisible(), false);
-      await pagesBox.getByRole('button', {name: 'Add a page'}).click();
+      await pagesBox.getByRole('button', {name: 'Link a page or file'}).click();
       const find = pagesBox.getByRole('searchbox', {name: 'Find a page'});
       await find.waitFor();
       assert.ok(await find.evaluate(e => e === document.activeElement), 'the search has the focus');
@@ -168,7 +179,7 @@ const pages = async (page: Page) => {
       assert.equal(making, 'made', 'the request was sent');
       // A file dropped on the page search uploads to the task (its Files, task-files.ts) and closes the search.
       const uploaded = page.waitForRequest(r => r.method() === 'POST' && new URL(r.url()).pathname === '/api/v2/tasks/t-1/files');
-      await pagesBox.getByRole('button', {name: 'Add a page'}).click();
+      await pagesBox.getByRole('button', {name: 'Link a page or file'}).click();
       await pagesBox.locator('.tp-picker').evaluate(zone => {
         const data = new DataTransfer();
         data.items.add(new File(['flow'], 'flow.png', {type: 'image/png'}));
@@ -187,7 +198,9 @@ const pages = async (page: Page) => {
       assert.equal(await menu8.locator('.tl-mi', {hasText: /^Close$/}).count(), 0, 'Archive is in the head, not here');
       await page.keyboard.press('Escape');
 
-      // 8. No links, runs or meetings: none of those sections show until ⋯ › Activity and links.
+      // 8. No links, runs or meetings: none of those sections show until ⋯ › Activity and links. They live in Details,
+      // which the Files tab above has covered.
+      await win.getByRole('button', {name: /^Details/}).click();
       for (const sel of ['.task-links', '[data-task-runs]', '[data-task-meetings]'])
         assert.equal(await win.locator(sel).isVisible(), false, `${sel} is hidden`);
       // ...and nor does the Activity and links heading: never a heading with nothing under it.
@@ -200,13 +213,13 @@ const pages = async (page: Page) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // ---- 7. a phone at 390 px: no tabs, the chat first, the box at the window's foot
+    // ---- 7. a phone at 390 px: Chat and Files only, the chat first, the box at the window's foot
     {
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/task/t-1', tasks: tasks(), needs: [],
         comments: {'t-1': comments}, events: {'t-1': events}, beforeGoto: pages});
       const win = page.locator('#task-modal[open]');
       await win.locator('.task-comments').getByText('The newest line').waitFor();
-      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs');
+      assert.deepEqual(await tabKeys(win), ['chat', 'files'], 'Chat and Files only');
       assert.equal(await win.locator('[data-task-props]').isVisible(), false, 'Details is behind its icon');
       // The head keeps Archive, Details, ⋯ and ✕, each a 44px target; the age goes into ⋯.
       for (const name of ['Archive', 'Details', 'More actions', 'Close window']) {
@@ -222,19 +235,20 @@ const pages = async (page: Page) => {
       assert.ok(up.y + up.height <= 500, `the box stays above the keyboard (bottom ${up.y + up.height})`);
       await page.evaluate(() => document.documentElement.style.removeProperty('--chat-viewport-height'));
       await win.getByRole('button', {name: /^Details/}).click();
-      await win.locator('[data-task-pages] .tp-row').waitFor({state: 'visible'});
+      await win.locator('[data-task-props]').waitFor({state: 'visible'});
       await win.locator('[data-prop-row="visible"]').waitFor({state: 'visible'});
       assert.equal(await win.locator('.task-chat').isVisible(), false);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'nothing scrolls sideways');
-      // A task whose reader cannot link pages: its last page goes, so its Pages section goes too (nothing to add).
+      // A reader without link permission still sees readable pages and can make a page if they can comment.
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       const other = page.locator('#task-modal[open][data-task="t-2"]');
-      await other.getByRole('button', {name: /^Details/}).click();
-      await other.locator('[data-task-pages] .tp-row').waitFor();
+      await other.locator('.tw-tabs [data-task-tab="files"]').click();
+      await other.locator('.tft-list .tft-row').waitFor();
       assert.equal(await other.locator('[data-tp-add]').isVisible(), false, 'no + for a reader who may not link pages');
       PLACES['t-2'] = {can_link: false, pins: []};
       await page.evaluate(() => liveEmit('tasks', {id: 't-2', kind: 'update', kinds: ['files']}));
-      await other.locator('[data-task-pages]').waitFor({state: 'hidden'});
+      assert.equal(await other.locator('[data-tp-add]').isVisible(), false);
+      assert.equal(await other.locator('[data-tft-new]').isVisible(), true);
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -806,7 +806,7 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     real_judge = task_trigger_rules.judge
     monkeypatch.setattr(task_trigger_rules, "judge", lambda *a, **k: (calls.append("rule"), real_judge(*a, **k))[1])
     with site.store.transaction() as c:  # the spies do hear an ordinary task
-        H.task_create(c, H.KEEPER, "Check the spies", "Body", "human:ana", lint=False, deduplicate=False)
+        H.task_create(c, H.TICO_ACTOR, "Check the spies", "Body", "human:ana", lint=False, deduplicate=False)
     assert {"webhook", "automation", "rule"} <= set(calls)
     calls.clear()
     made = with_edition(site)

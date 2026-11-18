@@ -22,7 +22,7 @@ from backend import (
 )
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
-from backend.harnesses import resolve_harness
+from backend.harnesses import output_style, resolve_harness, verbosity
 from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
 from backend import runner_online
 from backend.store import H, P, encode, repo_url
@@ -120,6 +120,8 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                 "shared_from": str(declared.get("shared_from") or ""),
                 "temp": bool(declared.get("temp")),
                 "compact_at": compact_at_of(declared),
+                "output_style": output_style(declared),
+                "verbosity": verbosity(declared),
                 "task_model": task_models.stored(declared),
                 "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                 "task_model_warning": task_models.warning(c, settings, bot["slug"], declared, task_models.of(declared)),

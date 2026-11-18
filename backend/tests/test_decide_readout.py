@@ -318,7 +318,7 @@ def test_a_tico_decide_answer_from_the_gateway_counts_as_a_decision_model(api):
         api,
         "judge.call",
         "learnings-route@1",
-        {"label": "learnings-route@1", "calls": 3, "models": {"tico-classify-1.0": 2, "gpt-6.1-sol": 1}},
+        {"label": "learnings-route@1", "calls": 3, "models": {"tico-classify-1.0": 2, "gpt-6.2-sol": 1}},
     )
     sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
     assert (sets["support-triage"]["decision_model"], sets["support-triage"]["fallback"]) == (2, 1)
@@ -351,7 +351,7 @@ def test_a_decide_medium_or_high_answer_is_counted_under_its_own_tier_and_never_
         {
             "label": "learnings-route@1",
             "calls": 4,
-            "models": {"tico-decide-high-1.0": 2, "tico-decide-1.0": 1, "gpt-6.1-sol": 1},
+            "models": {"tico-decide-high-1.0": 2, "tico-decide-1.0": 1, "gpt-6.2-sol": 1},
         },
     )
     out = get(api, "decisions/readout")

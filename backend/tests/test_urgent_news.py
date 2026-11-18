@@ -83,7 +83,9 @@ def test_creation_tags_incident_titles_and_preserves_existing_tags(api):
         assert 'incident' not in H.task_labels(ordinary)
         # Wake-time classification uses the tag, not the title.
         c.execute("UPDATE tasks SET title='Renamed outage' WHERE id=?", (task['id'],))
-        assert R.judge(c, H.KEEPER, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
+        assert (
+            R.judge(c, H.TICO_ACTOR, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
+        )
 
 
 def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
@@ -95,7 +97,7 @@ def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
     tid = first['tasks']['error:outage']
     with api.app.state.store.transaction() as c:
         assert 'incident' in H.task_labels(H.task(c, tid))
-        H.task_close(c, H.KEEPER, tid, 'Not an outage.')
+        H.task_close(c, H.TICO_ACTOR, tid, 'Not an outage.')
     second = report(api, r, dict(raw, op='comment', ref='new', text='Recurred'))
     with api.app.state.store.read() as c:
         assert 'incident' in H.task_labels(H.task(c, second['tasks']['error:outage']))
@@ -109,10 +111,10 @@ def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable
         c.execute('DELETE FROM jobs')
         msg, job = sent_job(c, plain, 'bot:cpo', 'A blocker needs it', {'wake': 'blocker'})
         assert msg['refs']['rule'] == 'profile_lead_blocker' and job['held'] == 0
-        said = H.task_comment(c, H.KEEPER, incident['id'], 'A note on the outage')
+        said = H.task_comment(c, H.TICO_ACTOR, incident['id'], 'A note on the outage')
         kept = H.message(c, said['id'])
         assert kept['refs']['rule'] == 'incident_news' and H.is_comment(kept)
-        H.task_comment_edit(c, H.KEEPER, incident['id'], said['id'], 'Clearer words')
+        H.task_comment_edit(c, H.TICO_ACTOR, incident['id'], said['id'], 'Clearer words')
 
 
 def test_incident_news_to_a_requester_bot_without_the_turn_starts_no_run(api):

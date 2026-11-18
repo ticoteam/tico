@@ -1211,7 +1211,7 @@ class Onboarding:
             ("seat_repositories", self.seat_repositories),
             ("pipelines", pipeline_settings.ensure_presets),
             ("task_sweep", routines.ensure_task_sweep),
-            ("plan_models", lambda c: plan_models.follow(c, self.settings, H.KEEPER)),
+            ("plan_models", lambda c: plan_models.follow(c, self.settings, H.TICO_ACTOR)),
         )
         for name, step in steps:
             c.execute("SAVEPOINT complete_company")
@@ -1669,7 +1669,7 @@ class Onboarding:
         no computer, left its bots unplaced and its bootstrap bots planned: they go on cloud machines now, the same way
         as had the sizes been known when it finished."""
         if load(c)["completed"]:
-            self._adopt_cloud(c, H.KEEPER)
+            self._adopt_cloud(c, H.TICO_ACTOR)
 
     def _activate_bootstrap(self, c, actor):
         """Activate the bootstrap bots (the assistant, BotOps) and the starters once a machine hosts

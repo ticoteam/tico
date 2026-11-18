@@ -79,7 +79,7 @@ jobs:
       # Every setup compiles the UI's TypeScript (scripts/ci_install.sh).
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
       - if: inputs.setup == 'browser' || inputs.setup == 'all'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

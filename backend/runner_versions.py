@@ -140,12 +140,12 @@ def nudge(c, runner_id, server=None):
     why = f" Its last update error: {row['update_error']}" if row["update_error"] else ""
     H.notice(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         H.human_actor(row["owner_id"]),
         f"Your computer {row['label']} runs {have}; this server runs Tico {server}. It updates itself between "
         f"turns; when it stays behind, Settings > Computers says why.{why}",
     )
-    H.event(c, H.KEEPER, "runner.outdated", "runner:" + runner_id, {"release": row["release"], "server": server})
+    H.event(c, H.TICO_ACTOR, "runner.outdated", "runner:" + runner_id, {"release": row["release"], "server": server})
     return True
 
 

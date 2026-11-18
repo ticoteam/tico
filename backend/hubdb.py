@@ -3,7 +3,7 @@
 
 The contract is `docs/history/hub-v2.md` §0-§5. This module is the whole database layer: the cloud
 service (`backend/store.py` and everything behind it) goes through it and nowhere else. Pure
-stdlib, one file. It grew up under the local keeper, which is the only host there is.
+stdlib, one file. It grew up under the local Tico, which is the only host there is.
 
 Shape of every write:
 
@@ -80,7 +80,7 @@ from . import bot_settings as BS
 from . import sources as SRC
 
 from .hubdb_core import (
-    KEEPER,
+    TICO_ACTOR,
     bot_actor,
     human_actor,
     actor_kind,
@@ -144,16 +144,16 @@ DEFAULT_DB = ROOT / "runtime" / "hub.db"
 
 
 def task_news(sender_id, refs):
-    """A keeper message about a task: started, finished. It is the task's own history,
+    """A Tico message about a task: started, finished. It is the task's own history,
     shown on the task, and it never reaches a person (no delivery, so no unread, Inbox row, digest or push): people are
     not chatted about their own tasks. Bots still get it, as before."""
-    return sender_id == KEEPER and isinstance(refs, dict) and bool(refs.get("task"))
+    return sender_id == TICO_ACTOR and isinstance(refs, dict) and bool(refs.get("task"))
 
 
 def task_news_sql(m="m"):
     """SQL: the messages row `m` is task news (`task_news`)."""
     refs = f"CASE WHEN json_valid({m}.refs) THEN {m}.refs END"
-    return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
+    return f"({m}.sender_id='{TICO_ACTOR}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
 
 
 # A bot's posts in a task's own thread reach a person only for these reasons: an @mention, a reply to them, or
@@ -329,14 +329,14 @@ def by_own_hand(actor) -> bool:
 
 def in_person_name(message):
     """Whether a message is in a person's name: one they typed, one the Assistant, BotOps or a token wrote for them
-    (they act with the person's rights), or the keeper's carrier of one (threads._carrier: refs.carries, refs.from).
+    (they act with the person's rights), or Tico's carrier of one (threads._carrier: refs.carries, refs.from).
     Enough for the claim's order, a snooze or done hold, fences and labels. in_person_name_sql is the row test."""
     message = message or {}
     sender = str(message.get("sender_id") or "")
     if is_human(sender):
         return True
     refs = _json(message.get("refs"), {}) or {}
-    return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
+    return sender == TICO_ACTOR and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
 def typed_by_person(message):
@@ -714,7 +714,7 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "via": VIA.get()}
         if VIA.get() in ("botops", "assistant", "tools-owner") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
-    detail = SRC.stamp_data(detail, actor)  # what a keeper event was for (backend/sources.py), when a scope names it
+    detail = SRC.stamp_data(detail, actor)  # what a Tico event was for (backend/sources.py), when a scope names it
     row = {
         "id": new_id(),
         "created_at": now(),
@@ -1141,7 +1141,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
 def _review_exists(conn, title, day):
     return (
         conn.execute(
-            "SELECT 1 FROM tasks WHERE title=? AND requester_id=? AND substr(created_at,1,10)=?", (title, KEEPER, day)
+            "SELECT 1 FROM tasks WHERE title=? AND requester_id=? AND substr(created_at,1,10)=?",
+            (title, TICO_ACTOR, day),
         ).fetchone()
         is not None
     )
@@ -1156,7 +1157,7 @@ def _review_task(conn, owner, title, body, origin=None, why=None):
 
             row = person_asks.ask(
                 conn,
-                KEEPER,
+                TICO_ACTOR,
                 owner,
                 title,
                 body,
@@ -1166,9 +1167,9 @@ def _review_task(conn, owner, title, body, origin=None, why=None):
             )
         else:
             # lint=False: a review reads as written; the shape rule is for asks bots write.
-            row = task_create(conn, KEEPER, title, body, owner, lint=False)
+            row = task_create(conn, TICO_ACTOR, title, body, owner, lint=False)
         if origin and is_bot(origin):
-            event(conn, KEEPER, "task.origin", row["id"], {"bot": origin})
+            event(conn, TICO_ACTOR, "task.origin", row["id"], {"bot": origin})
     except Refused:
         pass  # a live duplicate is the once-a-day guard doing its job
 
@@ -1200,7 +1201,7 @@ def quarantine_is_escape(conn, slug):
 
 def released_how(actor):
     """How a quarantine this actor lifted ended (holds.released_how): Tico's own cooldown, a person, or BotOps."""
-    return "expired" if actor == KEEPER else "person" if is_human(actor) else "botops"
+    return "expired" if actor == TICO_ACTOR else "person" if is_human(actor) else "botops"
 
 
 # A quarantine recorded before its refusal was kept: "escape: the task note reaches outside the hub: <words>".
@@ -1286,14 +1287,14 @@ def lift_cooled_quarantines(conn):
     from . import holds
     from . import task_quarantine
 
-    lifted = task_quarantine.release(conn, KEEPER, due=True)
+    lifted = task_quarantine.release(conn, TICO_ACTOR, due=True)
     for row in _rows(conn.execute(COOLED_BOTS_SQL, (now(),))):
         slug = row["holdable_id"]
         with isolated(conn, "lift_cooled_quarantines", slug):
             if row["state"] != "quarantined":  # archived meanwhile: its hold ends, and it stays as it is
-                holds.release(conn, holds.QUARANTINE, "bot", slug, actor=KEEPER, how="expired")
+                holds.release(conn, holds.QUARANTINE, "bot", slug, actor=TICO_ACTOR, how="expired")
                 continue
-            status_set(conn, KEEPER, slug, state="active", reason="Cooldown over: the refusal count starts again.")
+            status_set(conn, TICO_ACTOR, slug, state="active", reason="Cooldown over: the refusal count starts again.")
             if slug not in lifted:
                 lifted.append(slug)
     return lifted
@@ -1308,8 +1309,8 @@ def quarantine(conn, slug, reason, context=None, refusal=None):
     details = {**({"review": context} if context else {}), **({"refusal": refusal} if refusal else {})}
     cools = COUNT_QUARANTINE.fullmatch(reason)
     until = shift(now(), seconds=QUARANTINE_COOLDOWN_S) if cools else None
-    holds.put(conn, holds.QUARANTINE, "bot", slug, actor=KEEPER, reason=reason, details=details, until_at=until)
-    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **details})
+    holds.put(conn, holds.QUARANTINE, "bot", slug, actor=TICO_ACTOR, reason=reason, details=details, until_at=until)
+    event(conn, TICO_ACTOR, "quarantine", bot_actor(slug), {"reason": reason, **details})
     # The status line people read says what the check matched, not the rule's own words.
     focus = (
         f"Paused for review: the safety check stopped a {context['what']} naming {context['found']}"
@@ -1317,7 +1318,7 @@ def quarantine(conn, slug, reason, context=None, refusal=None):
         else reason
     )
     try:
-        status_set(conn, KEEPER, slug, state="quarantined", focus=focus, reason=reason)
+        status_set(conn, TICO_ACTOR, slug, state="quarantined", focus=focus, reason=reason)
     except Refused:
         pass
     return bot(conn, slug)
@@ -1345,15 +1346,15 @@ def quarantine_lifted_note(conn, slug):
     ident = new_id()
     conn.execute(
         "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-        (ident, KEEPER, bot_actor(slug), body[:NOTE_MAX], now()),
+        (ident, TICO_ACTOR, bot_actor(slug), body[:NOTE_MAX], now()),
     )
-    event(conn, KEEPER, "note.create", ident, {"to": bot_actor(slug), "quarantine": True})
+    event(conn, TICO_ACTOR, "note.create", ident, {"to": bot_actor(slug), "quarantine": True})
 
 
 # ----------------------------------------------------------------------------- identity
 def _actor_exists(conn, actor):
     kind = actor_kind(actor)
-    if kind == KEEPER:
+    if kind == TICO_ACTOR:
         return True
     if kind == "bot":
         return bot(conn, actor_id(actor)) is not None
@@ -1405,7 +1406,7 @@ def resolve_actor(conn: object, value: object) -> "str | None":
     A bare name no bot or person answers to is the one live bot built from that template (`growth-manager`), if there is
     exactly one and no open seat is set up from that template (`_template_owner`).
 
-    None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
+    None is what rule 2 refuses on: an address that is not a bot, a human or Tico.
     """
     raw = str(value or "").strip()
     if not raw:
@@ -1742,7 +1743,7 @@ def sync_registry(conn, employees, people):
                 "WHERE id=:id",
                 row,
             )
-    event(conn, KEEPER, "registry.sync", "", {"bots": len(employees or {}), "humans": len(doc.get("people") or [])})
+    event(conn, TICO_ACTOR, "registry.sync", "", {"bots": len(employees or {}), "humans": len(doc.get("people") or [])})
     return {"bots": bots(conn), "humans": humans(conn)}
 
 
@@ -1871,12 +1872,12 @@ def _opener(conn, conversation_id):
     """Who started this conversation: the first message's sender, else whoever opened it, which may be
     the person even when only notices are in the room.
 
-    The keeper's notices do not count: a "New task" notice can land first in a person's chat with a
+    Tico's notices do not count: a "New task" notice can land first in a person's chat with a
     bot, and the person's own message after it is what the bot answers."""
     first = _one(
         conn,
         "SELECT sender_id FROM messages WHERE conversation_id=? AND sender_id<>? ORDER BY created_at LIMIT 1",
-        (conversation_id, KEEPER),
+        (conversation_id, TICO_ACTOR),
     )
     if first:
         return first["sender_id"]
@@ -2171,7 +2172,7 @@ def _write_message(
         refs = {**(refs or {}), "via": VIA.get() or "token"}
     from . import wake_rules
 
-    if actor == KEEPER and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
+    if actor == TICO_ACTOR and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
         # Tico's notice of a person's own act keeps who acted: the request's cause ends with it, and the reply
         # rule at the turn's end (execution.quiet_recheck) must still see that a person is owed the answer.
         refs = {**(refs or {}), wake_rules.CAUSED_BY: wake_rules.CAUSE.get()}
@@ -2221,7 +2222,7 @@ def _write_message(
     if check_cap and is_bot(actor) and is_bot(target) and threads.POSTING.get() is None:
         since = shift(now(), hours=-1)
         # The cap stops two bots talking in circles, so it counts bot-to-bot messages only: the
-        # keeper's notices (a routine's "new task", "finished") and a person's messages are not a
+        # Tico's notices (a routine's "new task", "finished") and a person's messages are not a
         # loop. A bot's private room with its owner, with a sweep every 30 minutes, could hit
         # the cap on messages of which many were notices or the owner's.
         n = conn.execute(
@@ -2269,13 +2270,13 @@ def _write_message(
 def feed(conn, target, body, conv, refs=None):
     """Context the system hands a bot to read: a Slack channel digest (backend/slack_gateway.py).
 
-    Written by the keeper, not by a bot or a person: nobody said it. It is a turn for the bot
+    Written by Tico, not by a bot or a person: nobody said it. It is a turn for the bot
     (enqueue queues its job, as for any message to a bot), but it is quoted Slack text, so the
     escape and lint rules a bot's own words go through do not apply; what it quotes was said
     in a channel the bot is in. Rule 2 still holds: the bot must be active.
     """
-    resolved = _reach(conn, KEEPER, target)
-    return _write_message(conn, KEEPER, resolved, body, conv, "say", {"wake": "feed", **(refs or {})}, None, None)
+    resolved = _reach(conn, TICO_ACTOR, target)
+    return _write_message(conn, TICO_ACTOR, resolved, body, conv, "say", {"wake": "feed", **(refs or {})}, None, None)
 
 
 def notice(conn, actor, to_actor, body, refs=None, expires_days=NOTICE_DAYS):
@@ -2296,7 +2297,7 @@ def _secondary_recipient(conn, message_id, recipient):
 
 
 def mark_delivered(conn, actor, message_id, recipient=None):
-    """The keeper sets this only once the runtime accepted the input (at-least-once delivery). The addressee's
+    """Tico sets this only once the runtime accepted the input (at-least-once delivery). The addressee's
     delivery row follows the message row (a trigger, backend/threads.py); another recipient's is set here."""
     if _secondary_recipient(conn, message_id, recipient):
         conn.execute(
@@ -2542,7 +2543,7 @@ def may_change_readers(conn, actor, row, mover=None):
     delegates, a party above it, or a task mover."""
     if mover is None:
         mover = is_human(actor) and can_move(conn, actor)
-    return actor == KEEPER or _task_party(conn, actor, row) or bool(task_mover(conn, actor, row, mover))
+    return actor == TICO_ACTOR or _task_party(conn, actor, row) or bool(task_mover(conn, actor, row, mover))
 
 
 def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, mover=None, check=None):
@@ -2676,8 +2677,8 @@ def task_reach(conn, actor, row, person):
 
 
 def _task_private_writer(conn, actor, row):
-    # The keeper performs internal maintenance; it is never an authenticated task reader.
-    if actor != KEEPER and not task_private_readable(conn, actor, row):
+    # Tico performs internal maintenance; it is never an authenticated task reader.
+    if actor != TICO_ACTOR and not task_private_readable(conn, actor, row):
         refuse(conn, actor, "not-found", "Task not found")
 
 
@@ -2886,7 +2887,7 @@ def _next_number(conn, actor, task_id, pipeline_id, note=""):
         number = _one(conn, "SELECT number FROM tasks WHERE id=?", (task_id,))["number"]
         # Tico gives the number, not whoever filed the task: its history line is the system's (a number a mover gives,
         # `_number_free`, stays theirs).
-        _task_event(conn, task_id, KEEPER, "number", None, number, note)
+        _task_event(conn, task_id, TICO_ACTOR, "number", None, number, note)
     elif numbered and _one(conn, "SELECT 1 FROM tasks WHERE id=? AND number IS NULL", (task_id,)):
         refuse(conn, actor, "number", "The team's task numbers have reached 999999999")
 
@@ -2928,7 +2929,7 @@ def tags(conn, is_template=None):
 
 def tag_can_edit(conn, actor, row, mover=None):
     if mover is None:
-        mover = actor == KEEPER or can_move(conn, actor)
+        mover = actor == TICO_ACTOR or can_move(conn, actor)
     return bool(mover or row.get("owner") == actor)
 
 
@@ -3030,7 +3031,7 @@ def _tag_bot_writers(conn, actor, row, writers, mover=None):
     tasks a bot manages, so only a task mover sets it: the tag's owner, a bot among them, cannot grant itself. A label
     Tico acts on (WORKFLOW_LABELS) is never granted. An empty list revokes every grant."""
     if mover is None:
-        mover = actor == KEEPER or can_move(conn, actor)
+        mover = actor == TICO_ACTOR or can_move(conn, actor)
     if not mover:
         teams = ", ".join(MOVER_TEAMS)
         refuse(conn, actor, "identity", f"the bots that may set a tag are chosen by a person on the {teams} teams")
@@ -3611,7 +3612,7 @@ def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
         conn.execute(
             "INSERT INTO task_links (id, task_id, kind, url, title, added_by, created_at, detail, updated_at) "
             "VALUES (?,?,'session',?,?,?,?,?,?)",
-            (target["id"], task_id, url, bot, KEEPER, now(), detail, now()),
+            (target["id"], task_id, url, bot, TICO_ACTOR, now(), detail, now()),
         )
     # At most one primary: every other session on the task is an alternate now.
     for link in links:
@@ -3627,7 +3628,7 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
     if is_human(actor) and kind != "worktree":
         return
     if mover is None:
-        mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+        mover = actor == TICO_ACTOR or is_human(actor) and can_move(conn, actor)
     delegated = _one(
         conn,
         "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
@@ -3969,7 +3970,7 @@ def task_comment(
     to = to or (
         owner
         if (
-            (actor == KEEPER or not task_followers.thread_id(conn, row))
+            (actor == TICO_ACTOR or not task_followers.thread_id(conn, row))
             and is_bot(owner)
             and owner != actor
             and task_private_readable(conn, owner, row)
@@ -3994,7 +3995,7 @@ def task_comment(
         actor,
         revision=msg["id"],
     )
-    if actor != KEEPER:
+    if actor != TICO_ACTOR:
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     if is_human(actor) and (wake if delegate is None else delegate):
         delegate_woken(conn, task_id, actor, msg)
@@ -4565,7 +4566,7 @@ def task_create(
     A task is a title and a chat: it has no description. `body` is its first message, the request, posted in its chat
     as its author's (`first_message`), and none when it is empty or only repeats the title. `instructions` are a
     routine's or a setup's working instructions for the bot that owns it: they reach that bot through its run (the
-    wake it starts from, task_engine.enter), never the chat. What Tico itself (the keeper) files for a bot is the same:
+    wake it starts from, task_engine.enter), never the chat. What Tico itself files for a bot is the same:
     Tico tells a bot things in its run, so its words are the bot's instructions, not a chat message.
     """
     _writer(conn, actor)
@@ -4647,11 +4648,11 @@ def task_create(
             conn, actor, 'lint', 'Write a public title to publish this task; its internal title and body stay private'
         )
     if requester_actor is not None:
-        # The keeper may attribute server-filed work to a person; a bot may attribute only its own verified work, or
+        # Tico may attribute server-filed work to a person; a bot may attribute only its own verified work, or
         # a person's own ask, checked against the message they sent (`requester_said`: app.filed_for).
         if (
             not is_human(requester_actor)
-            or (actor != KEEPER and target != actor and not requester_said)
+            or (actor != TICO_ACTOR and target != actor and not requester_said)
             or not human(conn, requester_actor)
         ):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
@@ -4659,7 +4660,7 @@ def task_create(
     title = str(title or "").strip()
     body = str(body or "")
     instructions = str(instructions or "").strip()
-    if actor == KEEPER and is_bot(target) and body.strip():
+    if actor == TICO_ACTOR and is_bot(target) and body.strip():
         instructions = "\n\n".join(filter(None, (body.strip(), instructions)))
         body = ""
     severity = classify(f"{title}\n{body}\n{instructions}", to_actor=target, actor=actor, conn=conn)
@@ -4690,7 +4691,7 @@ def task_create(
     if str(title).lstrip().lower().startswith("incident:") and "incident" not in labels:
         labels.insert(0, "incident")
     if labels and is_bot(actor) and not mover:
-        _create_labels(conn, actor, labels)  # people, movers and the keeper as before
+        _create_labels(conn, actor, labels)  # people, movers and Tico as before
     # An automation's turn is the same work as another only when its wake names the same run, step and record: two
     # finds' items (or two runs) may share a title, and the title is never what makes a turn a duplicate.
     turn = _turn_identity(wake_refs)
@@ -4720,7 +4721,11 @@ def task_create(
             title,
             keep=same,
         )
-    if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
+    if (
+        dup
+        and task_private_readable(conn, actor, task(conn, dup["id"]))
+        and (turn or deduplicate or actor != TICO_ACTOR)
+    ):
         detail = (
             "An existing task already asks for this work"
             if VIA.get() and task_private(conn, task(conn, dup["id"]))
@@ -4728,7 +4733,7 @@ def task_create(
         )
         refuse(conn, actor, "duplicate", detail)
     if number is not None:
-        if not (actor == KEEPER or mover or mover is None and can_move(conn, actor)):
+        if not (actor == TICO_ACTOR or mover or mover is None and can_move(conn, actor)):
             refuse(
                 conn,
                 actor,
@@ -4857,7 +4862,7 @@ def task_create(
             _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
         if plain:
             # warn mode: the problem is on the record, the task still exists (the refuse week follows)
-            _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
+            _task_event(conn, row["id"], TICO_ACTOR, "lint", None, "; ".join(plain), "")
             event(conn, actor, "task.lint", row["id"], {"problems": plain})
         # Give a bot the rest of this relationship's active work with the new task. The runner puts current-message refs
         # in its prompt, so the bot can reuse or reconcile overlapping work without merging distinct deliverables.
@@ -5151,7 +5156,7 @@ def task_update(
                 f"The General Manager moves, notes and reassigns tasks only, not {', '.join(beyond or ['size'])}",
             )
     if mover is None:
-        mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+        mover = actor == TICO_ACTOR or is_human(actor) and can_move(conn, actor)
     mover = task_mover(conn, actor, row, mover)
     labels_only = (
         labels is not None
@@ -5188,7 +5193,7 @@ def task_update(
     if not mine and labels_only and is_bot(actor):
         changed = set(_labels(labels)) ^ set(task_labels(row))
         mine = bool(changed) and changed <= _granted_labels(conn, actor, row, changed)
-    if not mine and not mover and actor != KEEPER:
+    if not mine and not mover and actor != TICO_ACTOR:
         refuse(
             conn,
             actor,
@@ -5340,7 +5345,7 @@ def task_update(
             conn.execute('UPDATE tasks SET size=?,updated_at=? WHERE id=?', (size, now(), task_id))
             _task_event(conn, task_id, actor, 'size', row.get('size'), size, '')
         if plain:
-            _task_event(conn, task_id, KEEPER, "lint", None, "; ".join(plain), "")
+            _task_event(conn, task_id, TICO_ACTOR, "lint", None, "; ".join(plain), "")
             event(conn, actor, "task.lint", task_id, {"problems": plain})
         event(conn, actor, "task.update", task_id, {"note": note})
         after = isolate_private_task(conn, task(conn, task_id) or row)
@@ -5389,8 +5394,8 @@ def person_name(conn, person):
 def actor_name(conn, actor):
     """What a person reads for an actor: a bot's display name (else its slug), or a person's name. A bot made since ids
     has a UUID id, which means nothing to a person, so it is never written into text a person reads."""
-    if actor == KEEPER:
-        return "Tico"  # Tico itself (hubdb_core.KEEPER): never shown as the id it is stored under
+    if actor == TICO_ACTOR:
+        return "Tico"  # Tico itself (hubdb_core.TICO_ACTOR): never shown as the id it is stored under
     key = actor_id(actor)
     if not str(actor).startswith("human:"):
         row = bot(conn, key)
@@ -5618,7 +5623,7 @@ MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_
 
 def in_person_name_sql(alias="m"):
     """SQL (in_person_name over a row): the message `alias` is in a person's name, typed by them or written for them,
-    or the keeper's carrier of one."""
+    or Tico's carrier of one."""
     return (
         f"({alias}.sender_id LIKE 'human:%' OR ({alias}.sender_id='keeper' "
         f"AND json_extract({alias}.refs,'$.carries') IS NOT NULL AND json_extract({alias}.refs,'$.from') LIKE 'human:%'))"
@@ -5661,7 +5666,7 @@ def _mirror_task_note(conn, actor, task_row, note):
 
 # ----------------------------------------------------------------------------- task rooms
 # A bot's task has a room of its own (kind "task"), so its traffic stays out of the chat its main
-# session reads. The main chat gets a quiet keeper line about it, `refs.task_started`, when the task is filed from
+# session reads. The main chat gets a quiet Tico line about it, `refs.task_started`, when the task is filed from
 # that chat. It is written with `quiet`, so it queues no run; the main session reads it in its history the next time
 # something real wakes it (execution.lane_history).
 
@@ -5689,7 +5694,7 @@ def _task_started(conn, row, room):
         return None
     msg = _write_message(
         conn,
-        KEEPER,
+        TICO_ACTOR,
         _room_person(conn, room, row),
         f"Started task: {row['title']}",
         room,
@@ -5698,7 +5703,7 @@ def _task_started(conn, row, room):
         None,
         None,
     )
-    event(conn, KEEPER, "task.started_in", row["id"], {"conversation": room["id"], "message": msg["id"]})
+    event(conn, TICO_ACTOR, "task.started_in", row["id"], {"conversation": room["id"], "message": msg["id"]})
     return msg
 
 
@@ -5709,7 +5714,7 @@ def task_from_chat(conn, task_id):
         _one(
             conn,
             "SELECT 1 FROM events WHERE actor=? AND action IN ('task.started_in','task.room') AND target=? LIMIT 1",
-            (KEEPER, task_id),
+            (TICO_ACTOR, task_id),
         )
     )
 
@@ -5742,7 +5747,7 @@ def give_task_room(conn, row):
     name = (bot(conn, row["owner_id"]) or {}).get("display_name") or actor_id(row["owner_id"])
     _write_message(
         conn,
-        KEEPER,
+        TICO_ACTOR,
         row["owner_id"],
         f"Earlier messages are in {name} chat.",
         room,
@@ -5751,7 +5756,7 @@ def give_task_room(conn, row):
         None,
         None,
     )
-    event(conn, KEEPER, "task.room", row["id"], {"from": old["id"], "to": room["id"]})
+    event(conn, TICO_ACTOR, "task.room", row["id"], {"from": old["id"], "to": room["id"]})
     return task(conn, row["id"])
 
 
@@ -5857,7 +5862,7 @@ def setup_finished(conn, slug, archived=False):
         attempt(
             conn,
             task_done,
-            KEEPER,
+            TICO_ACTOR,
             found["id"],
             f"{name} was archived." if archived else f"{name} finished onboarding; its work starts now.",
         )
@@ -5869,7 +5874,7 @@ HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted run
 # The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
 # bot's slug too and the stall guard reads that first.
 HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
-# A keeper-filed task about one bot says which in its words (task_words) by the id, the one name a rename leaves as it is: its title is
+# A Tico-filed task about one bot says which in its words (task_words) by the id, the one name a rename leaves as it is: its title is
 # for people and carries a slug or a display name (bot_review_tasks).
 BOT_REVIEW_ID = "Bot id: {id}."
 _BOT_REVIEW_ID = re.compile(r"^Bot id: (\S+)\.$", re.M)
@@ -5883,7 +5888,7 @@ def bot_review_tasks(conn, bot_id, owner, title):
         "SELECT id,status FROM tasks WHERE owner_id=? AND "
         f"(title=? OR (requester_id=? AND {TASK_SAYS_SQL})) "
         "ORDER BY (status='open') DESC,created_at DESC",
-        (owner, title, KEEPER, BOT_REVIEW_ID.format(id=bot_id)),
+        (owner, title, TICO_ACTOR, BOT_REVIEW_ID.format(id=bot_id)),
     ).fetchall()
     found = [{**dict(row), "body": task_words(conn, row["id"])} for row in rows]
     named = ((row, _BOT_REVIEW_ID.search(row["body"])) for row in found)
@@ -6020,7 +6025,7 @@ def note_cancel(conn, actor, note_id, human=False):
 def notes_waiting(conn, bot, limit=50, *, unheld=False):
     """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
     (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too.
+    message (`message_id`) is the message, in the order messages arrived, whoever sent it, Tico too.
     `unheld` selects notes deliverable now; the full pending list and its counts keep quarantined sources."""
     from . import task_quarantine
 
@@ -6029,7 +6034,7 @@ def notes_waiting(conn, bot, limit=50, *, unheld=False):
         conn.execute(
             f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL}{available} "
             f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
-            ("bot:" + bot, KEEPER, limit),
+            ("bot:" + bot, TICO_ACTOR, limit),
         )
     )
 
@@ -6114,7 +6119,15 @@ def _wake(
         body, refs = reconnects_fold(conn, task_row, body, refs)
     message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     return _write_message(
-        conn, KEEPER, target, body, conversation(conn, task_row["conversation_id"]), "notice", message_refs, None, None
+        conn,
+        TICO_ACTOR,
+        target,
+        body,
+        conversation(conn, task_row["conversation_id"]),
+        "notice",
+        message_refs,
+        None,
+        None,
     )
 
 
@@ -6139,7 +6152,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if quarantined and state == "active" and not is_human(actor):
         # A quarantine for too many refusals lifts without a person (the cooldown,
         # or BotOps); only an escape (secrets, another bot's repo, reaching outside) waits for one.
-        lifter = actor in (KEEPER, bot_actor(FLEET_MAINTAINER)) and actor != bot_actor(slug)
+        lifter = actor in (TICO_ACTOR, bot_actor(FLEET_MAINTAINER)) and actor != bot_actor(slug)
         if not lifter or quarantine_is_escape(conn, slug):
             refuse(conn, actor, "quarantined", f"only a person takes {slug} out of this quarantine")
     if quarantined and state == "active":
@@ -6158,7 +6171,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         # Set by hand (the status API): a hold like any other quarantine, which waits for a person.
         holds.put(conn, holds.QUARANTINE, "bot", slug, actor=actor, reason=reason or focus or "")
     if quarantined and state not in ("active", "quarantined"):
-        # Lease expiry and completion are routine keeper updates. Neither can clear or mask
+        # Lease expiry and completion are routine Tico updates. Neither can clear or mask
         # the human review required by quarantine.
         state = "quarantined"
         focus = None
@@ -6216,7 +6229,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
 
 
 def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, next_due=None):
-    """The keeper's side of a status row: what came out of the last turn, and when the next is."""
+    """Tico's side of a status row: what came out of the last turn, and when the next is."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if not status(conn, slug):
@@ -6777,7 +6790,7 @@ def messages(conn, conversation_id, since=None, limit=200):
 
 
 def undelivered(conn, to_actor=None, limit=200):
-    """What the keeper's mailbox loop reads: messages no runtime has accepted yet. For one recipient, its pending
+    """What Tico's mailbox loop reads: messages no runtime has accepted yet. For one recipient, its pending
     deliveries (message_deliveries: the messages addressed to it and those that reach it otherwise)."""
     if to_actor:
         out = _rows(
@@ -7271,19 +7284,19 @@ def prime_task_origins(conn, ids):
         for row in conn.execute(
             "SELECT target,detail FROM events WHERE actor=? AND action='task.origin' "
             "AND target IN (%s) ORDER BY created_at DESC" % ",".join("?" * len(part)),
-            (KEEPER, *part),
+            (TICO_ACTOR, *part),
         ):
             found.setdefault(row["target"], {"detail": row["detail"]})
-        prime(conn, TASK_ORIGIN_SQL, {(KEEPER, tid): found.get(tid) for tid in part})
+        prime(conn, TASK_ORIGIN_SQL, {(TICO_ACTOR, tid): found.get(tid) for tid in part})
 
 
 def task_origin(conn, row):
-    """Trusted origin for a keeper review, including pre-metadata records; never parse titles."""
-    explicit = _one(conn, TASK_ORIGIN_SQL, (KEEPER, row["id"]))
+    """Trusted origin for a Tico review, including pre-metadata records; never parse titles."""
+    explicit = _one(conn, TASK_ORIGIN_SQL, (TICO_ACTOR, row["id"]))
     if explicit:
         origin = (_json(explicit["detail"], {}) or {}).get("bot")
         return origin if is_bot(origin) else None
-    if row.get("requester_id") != KEEPER or row.get("owner_id") != human_actor(default_human(conn)):
+    if row.get("requester_id") != TICO_ACTOR or row.get("owner_id") != human_actor(default_human(conn)):
         return None
     # Legacy _escalate wrote no foreign key. Require its exact canonical body and a
     # unique sensitive refusal immediately preceding creation. The actor comes from
