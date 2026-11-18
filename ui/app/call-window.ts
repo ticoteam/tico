@@ -251,8 +251,13 @@ function cwChatMount(st: CwState): void {
   // or its messages grow (a card that finishes loading): pinned to the end while it was at the end.
   const box = host.querySelector<HTMLElement>('.thv-scroll');
   if (!box || !window.ResizeObserver) return;
-  let end = true;
-  box.addEventListener('scroll', () => { end = box.scrollHeight - box.scrollTop - box.clientHeight < 8; }, {passive: true});
+  // Only scrolling up leaves the end: a scroll the layout causes (content growing under the view) keeps the pin.
+  let end = true, top = box.scrollTop;
+  box.addEventListener('scroll', () => {
+    const at = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+    if (at) end = true; else if (box.scrollTop < top - 1) end = false;
+    top = box.scrollTop;
+  }, {passive: true});
   st.pin = new ResizeObserver(() => { if (end) box.scrollTop = box.scrollHeight; });
   st.pin.observe(box);
   const list = box.querySelector<HTMLElement>('.thv-list');
