@@ -157,7 +157,7 @@ def save(c, actor, person, body):
 
 def gated(who, assistant_bot=""):
     """Gate a bot writing as itself or through BotOps. A person, their Assistant acting for them
-    (`via`), BotOps acting for a person and the keeper are not."""
+    (`via`), BotOps acting for a person and Tico are not."""
     return (
         who.role == "bot"
         and who.via in (None, "", "botops")
@@ -339,7 +339,7 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
     if error:
         detail["error"] = error
     with store.transaction() as c:
-        call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+        call = H.event(c, H.TICO_ACTOR, "judge.call", qset["label"], detail)
     return answers, call["id"], error
 
 
@@ -381,7 +381,7 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             if engine is None:
                 # No decision model at all is Decide off: nothing to record. The month's cap is a failure kept.
                 return {**verdict, "error": "spend_cap"} if over_spend_cap(c, store.settings) else None
-            if used_today(c, H.KEEPER) >= daily_cap(store.settings, "bot"):
+            if used_today(c, H.TICO_ACTOR) >= daily_cap(store.settings, "bot"):
                 return {**verdict, "error": "budget"}
             items = open_items(c, person, who.actor)
             asker = _bot_line(c, who.actor)
@@ -619,7 +619,7 @@ def record(c, verdict, decided, ref, message_id=None):
         # The open item names who else asked; quiet, so nobody wakes for it.
         H.task_comment(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             merged_into,
             f"{_bot_line(c, verdict['asker'])} asked the same thing; your answer here goes to them too.",
             wake=False,
@@ -627,7 +627,7 @@ def record(c, verdict, decided, ref, message_id=None):
     if verdict.get("call"):
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "decision.outcome",
             verdict["call"],
             {"label": QUESTION_SET, "verdict": decided["would"], "action": decided["outcome"]},
@@ -639,7 +639,7 @@ def skipped(c, verdict, why):
     """A judged item that lands no row (a repeat that joined an open ask, a write held or sent elsewhere): its judge call
     is named `why`, so the readout reconciles it. A verdict with no call judged nothing, so it needs no reason."""
     if verdict and verdict.get("call"):
-        H.event(c, H.KEEPER, UNRECORDED, verdict["call"], {"label": QUESTION_SET, "why": why})
+        H.event(c, H.TICO_ACTOR, UNRECORDED, verdict["call"], {"label": QUESTION_SET, "why": why})
 
 
 def judged(store, verdicts, run):
@@ -746,12 +746,12 @@ def on_reply(c, actor, task_id, text, *, text_sources=()):
         on = f' on \u201c{item.get("title") or ""}\u201d' if item.get("title") else ""
         said, refs = H.sourced_text(f'{name} answered this{on}: "{answer}"', text_sources)
         if row["kind"] == "loose":
-            H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={**refs, "ask_ingest": row["id"]})
+            H.say(c, H.TICO_ACTOR, row["asker"], said, kind="notice", refs={**refs, "ask_ingest": row["id"]})
         else:
             own = H.task(c, row["ref"])
             if not own or own["status"] != "open":
                 continue
-            H.task_comment(c, H.KEEPER, own["id"], said, wake=True, extra_refs=refs)
+            H.task_comment(c, H.TICO_ACTOR, own["id"], said, wake=True, extra_refs=refs)
         c.execute("UPDATE ask_ingest_items SET passed_at=? WHERE id=?", (H.now(), row["id"]))
 
 
@@ -948,7 +948,7 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         engine = server_engine(store, c, primary)
         if engine is None:
             raise LookupError("no decision model is on, or the month's spend cap is reached")
-        if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
+        if used_today(c, H.TICO_ACTOR) + len(page) > daily_cap(store.settings, "bot"):
             raise LookupError("today's decision calls would pass the daily cap")
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         prepared = [
@@ -1030,7 +1030,7 @@ def _replay_judge(store, engine, qset, own, person_name, prepared):
                 )
                 if call.error is not None:
                     detail["error"] = code if isinstance(code, str) and code else "error"
-                H.event(c, H.KEEPER, "judge.call", label, detail)
+                H.event(c, H.TICO_ACTOR, "judge.call", label, detail)
         for n, reply in zip(run, replies, strict=True):
             _it, items, _state, questions, criteria = asked[n]
             if isinstance(reply, BaseException):

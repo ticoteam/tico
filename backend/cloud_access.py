@@ -165,7 +165,11 @@ def apply(store, cloud):
         was, now = (before or {}).get("access"), (cloud or {}).get("access")
         if was != now:
             H.event(
-                c, H.KEEPER, "cloud.access", "company", {"from": was, "to": now, "reason": (cloud or {}).get("reason")}
+                c,
+                H.TICO_ACTOR,
+                "cloud.access",
+                "company",
+                {"from": was, "to": now, "reason": (cloud or {}).get("reason")},
             )
     store._cloud_access = {**cloud, "checked": H.now()} if cloud is not None else None
     return store._cloud_access

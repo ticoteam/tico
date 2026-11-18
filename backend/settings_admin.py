@@ -21,7 +21,15 @@ from . import company_pause
 from . import shared_bots
 from . import profiles, start_places, task_models, task_run_models, update_feeds, wake_presets
 from .execution import _reported, stranded
-from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
+from .harnesses import (
+    EXTERNAL_HARNESSES,
+    HARNESS_BY_ID,
+    normalize_fallback,
+    output_style,
+    resolve_harness,
+    runtime_of,
+    verbosity,
+)
 from .readiness import absolute, can_run
 from .statuses import PARKED_SQL
 from . import fast_json
@@ -325,6 +333,9 @@ class SettingsAdmin:
             "runtime": effective.get("runtime") or "",
             "effort": effective.get("reasoning_effort") or row["effort"],
             "compact_at": compact_at(effective, providers.bot_choice(c, self.settings, effective)[1]),
+            # Claude Code's output style and Codex's verbosity; null is the harness's own (backend/harnesses.py).
+            "output_style": output_style(effective),
+            "verbosity": verbosity(effective),
             # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
             "wake": wake_presets.waits(_json(config["config"], {}) or {}),
             "profile": profiles.effective(_json(config["config"], {}) or {}),
@@ -1267,6 +1278,10 @@ class SettingsAdmin:
         if field == "compact_at":
             declared = _json(config["config"], {}) or {}
             return compact_at(declared, providers.bot_choice(c, self.settings, declared)[1])
+        if field == "output_style":
+            return output_style(_json(config["config"], {}) or {})
+        if field == "verbosity":
+            return verbosity(_json(config["config"], {}) or {})
         if field == start_places.BOT_KEY:
             return start_places.bot_limit(_json(config["config"], {}) or {})
         if field == "profile":
@@ -2195,6 +2210,38 @@ class SettingsAdmin:
             "revision": config["revision"] + 1,
         }
 
+    def set_output_style(self, c, who, bot, body):
+        """Claude Code's output style for the bot's turns; null or Default takes it away. Kept on any harness, and only
+        a Claude Code turn uses it. The session is kept: the next turn simply starts with it."""
+        style = None if body.output_style in (None, "Default") else body.output_style
+        return self._set_turn_style(c, who, bot, "output_style", style, body.expected_revision)
+
+    def set_verbosity(self, c, who, bot, body):
+        """Codex's verbosity for the bot's turns; null takes it away. Kept on any harness, and only a Codex turn uses
+        it. The session is kept."""
+        return self._set_turn_style(c, who, bot, "verbosity", body.verbosity, body.expected_revision)
+
+    def _set_turn_style(self, c, who, bot, key, value, expected_revision):
+        """Save or clear (None) one of the bot's harness-only turn settings, `output_style` or `verbosity`."""
+        self._manager(c, who, bot)
+        shared_bots.refuse_copy(c, bot)
+        config = self._config(c, bot)
+        if config["revision"] != expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        before = self.snapshot(c, bot, key)
+        if before == value:
+            return {"bot": bot, key: value, "revision": config["revision"]}
+        declared = _json(config["config"], {}) or {}
+        if value is None:
+            declared.pop(key, None)
+        else:
+            declared[key] = value
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
+        self.record(c, who.actor, bot, key, before, value)
+        H.event(c, who.actor, f"bot.{key}_changed", bot, {"before": before, "after": value})
+        return {"bot": bot, key: value, "revision": config["revision"] + 1}
+
     def set_turns_at_once(self, c, who, bot, body, undo_change_id=None):
         """The most turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
         self._manager(c, who, bot)
@@ -2290,7 +2337,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     # Tico gives each open task it owns to the heir, as any reassign is made. One it cannot give stays where it is and
     # says Paused ("was removed") in the list of whoever can fix it.
     for task in c.execute("SELECT id FROM tasks WHERE owner_id=? AND status='open'", (gone,)).fetchall():
-        H.attempt(c, H.task_reassign, H.KEEPER, task["id"], heir, why)
+        H.attempt(c, H.task_reassign, H.TICO_ACTOR, task["id"], heir, why)
     # Who asked for a task is not the engine's: it changes here, with its line in the task's history.
     for task in c.execute("SELECT id FROM tasks WHERE requester_id=? AND status='open'", (gone,)).fetchall():
         H._task_event(c, task["id"], actor, "requester", gone, heir, why)

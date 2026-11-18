@@ -3218,10 +3218,10 @@ for _slug, _template, _parent in BOTS:
         USAGE[_slug] = ("claude-sonnet-5-5", "anthropic", "api")
 USAGE.update(
     {
-        "inbound-sales-owner": ("gpt-6.1-sol", "openai", "api"),
+        "inbound-sales-owner": ("gpt-6.2-sol", "openai", "api"),
         "sdr": ("gpt-6-luna", "openai", "api"),
-        "pricing-analyst": ("gpt-6.1-sol", "openai", "api"),
-        "librarian": ("gpt-6.1-sol", "openai", "subscription"),
+        "pricing-analyst": ("gpt-6.2-sol", "openai", "api"),
+        "librarian": ("gpt-6.2-sol", "openai", "subscription"),
     }
 )
 # The built-in helpers (not on the team chart) that still run turns: goal checks, task sorting and counsel reads.

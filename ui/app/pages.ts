@@ -7,6 +7,11 @@ const PAGE_ROUTE = '#/page/', RD_FILES = '#/library/files';
 // A card shows the top of the page at the card's width and its size's fixed height; full follows the page's own height.
 const PAGE_SIZES: Record<string, number> = {small: 180, medium: 320, large: 520};
 const PAGE_FULL_MIN = 240;
+// The link and writer fields of a page read (the contract's Page read). The generated Page type gains them from the
+// server's schema; until then they are read through these types.
+interface PageLink {target: string; role: string; name?: string | null; by?: string | null; at?: string | null; approval?: {version: number} | null;}
+interface PageWriter {actor: string; name?: string | null; versions?: number; last_at?: string | null;}
+type PageRead = import('../types/api').Page & {links?: PageLink[] | null; writers?: PageWriter[] | null; may_write?: boolean | null;};
 
 // ----------------------------------------------------------------- the status line
 // A day (YYYY-MM-DD) in the app's date words (ui/app/format.ts): "Nov 11", Today, Tomorrow. Read at noon, so a zone
@@ -21,15 +26,22 @@ const pageBotName = (x: {bot_id?: string | null | undefined; bot?: string | null
 };
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 const pageLockHTML = (p: {restricted?: boolean | null}) => p.restricted ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
-function pageStatusHTML(p: import('../types/api').Page, {link = true}: {link?: boolean} = {}) {
+// The last writer's name, as the page read names writers: the newest version's writer (a person or a bot). Without
+// writers, the page's own updated_by. Never the bot that stores the page under its name.
+function pageLastWriter(p: PageRead): string {
+  const newest = [...(p.writers || [])].sort((a, b) => String(b.last_at || '').localeCompare(String(a.last_at || '')))[0];
+  if (newest) return newest.name || actorLabel(newest.actor);
+  const by = String(p.updated_by || '');
+  return by.startsWith('bot:') ? pageBotName({bot: by.slice(4), bot_name: p.updated_by_name}) : p.updated_by_name || '';
+}
+function pageStatusHTML(p: PageRead, {link = true}: {link?: boolean} = {}) {
   const lock = pageLockHTML(p);
   if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
     return `<div class="pg-status pg-replaced">${lock}Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
   }
   const stale = Number.isInteger(p.stale_days);
-  const by = String(p.updated_by || '');
-  const who = by.startsWith('bot:') ? pageBotName({bot: by.slice(4), bot_name: p.updated_by_name}) : p.updated_by_name || pageBotName(p);
+  const who = pageLastWriter(p);
   const parts = [stale ? `Not updated in ${p.stale_days} day${p.stale_days === 1 ? '' : 's'}`
     : `Updated ${esc(agoSaid(p.updated_at))}${who ? ' by ' + esc(who) : ''}`];
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
@@ -158,13 +170,14 @@ interface PageVersion { version: number; created_at?: string | null; actor?: str
 // version What's changed? compares against (null when the page is shown).
 interface PageFullState {
   id: string;
-  page: import('../types/api').Page | null;
+  page: PageRead | null;
   versions: PageVersion[];
   shown: number;
   can: {manage?: boolean; del?: boolean};
   pinned?: {label: string; place: string}[];
   diff?: number | null;
   menu?: 'history' | null;
+  editing?: boolean;                             // Edit is open: the body is the editor (pageEditDraw), not the page
 }
 let PG: PageFullState | null = null;          // {id, page, versions, shown}
 async function pageFullView(id: string, at = 0) {
@@ -194,9 +207,14 @@ function pageFullDraw(state: PageFullState) {
   const root = $('#pg-view');
   if (!root || !state.page || !state.pinned) return;
   const pinned = state.pinned.map(x => `<a href="${esc(pagePlaceHref(x.place))}">${esc(x.label)}</a>`).join(' · ');
-  root.innerHTML = `<header class="pg-head"></header><div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
+  // The link row exists only for a page with links or a writer: a page with neither keeps its header and body as they were.
+  const row = state.page.may_write || state.page.links?.length ? '<div class="pg-links"></div>' : '';
+  root.innerHTML = `<header class="pg-head"></header>${row}<div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
   root.onkeydown = pageMenuKeys;
   pageFullHead(state);
+  const links = root.querySelector('.pg-links') as HTMLElement | null;
+  if (links) pageLinksWire(state, links);
+  pageFullLinks(state);
   pageFullBody(state);
 }
 const pagesAudienceText = (audience: import('../types/api').Page['audience']) => !audience || audience.everyone ? "Everyone who can see where it's filed" : accessLevelText(audience);
@@ -225,7 +243,7 @@ function pagesAccessRefresh() {
   if (LF) void lfLoad();
   if (TASK_CHAT) {
     const dialog: TaskPagesHost = TASK_CHAT.dialog;
-    if (dialog.tpEl) { dialog.tpEl.tpCards = new Map(); void taskPagesLoad(dialog); }
+    if (dialog.tpEl) void taskPagesLoad(dialog);
     taskChatLive(TASK_CHAT);
   }
   if (!PG && !LF && !TASK_CHAT) void route();
@@ -236,7 +254,8 @@ function pagePlaceHref(place: string) {
   return kind === 'dashboard' || kind === 'person' ? HOME : kind === 'growth' ? '#/growth' : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
 }
 // Who published a version, as the rest of the app names them.
-const pageVersionBy = (v: PageVersion) => v.actor ? actorLabel(v.actor) : '';
+// The writer's name as the page read gives it (a person's or a bot's), else as the app names the actor.
+const pageVersionBy = (v: PageVersion, p: PageRead | null) => p?.writers?.find(w => w.actor === v.actor)?.name || (v.actor ? actorLabel(v.actor) : '');
 // The status line, on the header line: the page's own, or the older version on screen with a way back to the latest.
 function pageFullStatusHTML(state: PageFullState) {
   const p = state.page;
@@ -250,12 +269,13 @@ function pageFullMenuHTML(state: PageFullState) {
   const item = (act: string, label: string, extra = '') => `<button type="button" role="menuitem" data-pg-act="${act}"${extra}>${label}</button>`;
   if (state.menu === 'history') return item('menu', '<span class="nav-icon" aria-hidden="true">chevron_left</span><span class="pg-mi-name">Version history</span>', ' class="pg-mi-back"')
     + state.versions.map(v => {
-      const by = pageVersionBy(v), day = v.created_at ? pageDay(v.created_at.slice(0, 10)) : '';
+      const by = pageVersionBy(v, p), day = v.created_at ? pageDay(v.created_at.slice(0, 10)) : '';
       return `<button type="button" role="menuitemradio" aria-checked="${v.version === state.shown}" data-pg-act="version" data-pg-v="${v.version}">`
         + `<span class="pg-mi-name">v${v.version}${v.version === p.version ? ' · latest' : ''}</span><span class="pg-mi-sub">${esc([day, by].filter(Boolean).join(' · '))}</span></button>`;
     }).join('');
   const many = state.versions.length > 1;
   return [
+    p.may_write ? item('edit', 'Edit') : '',
     state.can.manage ? item('access', `<span class="pg-mi-name">Who can see it</span><span class="pg-mi-sub">${esc(pagesAudienceText(p.audience))}</span>`) : '',
     // The oldest version has nothing before it to compare with.
     pageDiffBases(state).length ? item('diff', "What's changed?") : '',
@@ -309,6 +329,7 @@ document.addEventListener('keydown', ev => {
 async function pageFullBody(state: PageFullState) {
   const p = state.page, body = $('#pg-view .pg-body');
   if (!body || !p) return;
+  if (state.editing) { pageEditDraw(state); return; }
   if (state.diff != null) { void pageDiffDraw(state); return; }
   const current = state.shown === p.version;
   const card = window.pageCard(p, {size: 'full'});
@@ -328,6 +349,224 @@ async function pageFullBody(state: PageFullState) {
     if (PG !== state || !box.isConnected) return;
     box.replaceChildren(htmlPreviewFrame(text, p.title));
   } catch (e) { if (box.isConnected) box.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`; }
+}
+
+// ----------------------------------------------------------------- links under the title
+// The page's links (the Page read's links): a chip per link with its role and its target's name, each opening its
+// target. Writers are not chips (Version history names them). A writer also gets "+ Link" (a role, then a search for a
+// task, bot, person, goal or page) and each chip's ✕, shown on hover (always on a touch screen). Every change re-draws
+// the chips from the page read the server returns.
+const PAGE_LINK_ROLES: [string, string][] = [['related', 'Related'], ['Spec', 'Spec'], ['QA report', 'QA report'],
+  ['Release report', 'Release report'], ['Invoice', 'Invoice']];
+const PAGE_LINK_KIND_ICON: Record<string, string> = {task: 'task_alt', bot: 'smart_toy', human: 'person', goal: 'target', page: 'article'};
+interface PageLinkPick {target: string; label: string; kind: string;}
+let PG_LINK_SEQ = 0;                                       // the newest search; an older answer is dropped
+// A link's target as the app's address, or '' for a kind this view does not show.
+function pageLinkHref(target: string): string {
+  const [kind = '', ...rest] = String(target).split(':'), id = encodeURIComponent(rest.join(':'));
+  return kind === 'task' ? '#/task/' + id : kind === 'bot' ? '#/bot/' + id : kind === 'human' ? '#/person/' + id
+    : kind === 'goal' ? goalsBase() + '/' + id : kind === 'page' ? PAGE_ROUTE + id : '';
+}
+function pageChipsHTML(state: PageFullState): string {
+  const p = state.page;
+  if (!p) return '';
+  const chips = (p.links || []).filter(l => l.role !== 'writer' && pageLinkHref(l.target)).map(l => {
+    const name = l.name || l.target.slice(l.target.indexOf(':') + 1), related = l.role === 'related';
+    const ok = l.approval?.version;
+    const mark = related ? '<span class="nav-icon" aria-hidden="true">link</span>' : '';
+    const words = related ? esc(name) : `${esc(l.role)} of ${esc(name)}`;
+    return `<span class="pg-chip"><a class="pg-chip-link" href="${esc(pageLinkHref(l.target))}">${mark}<span>${words}</span></a>`
+      + (ok != null ? `<span class="pg-chip-ok">OK'd v${ok}</span>` : '')
+      + (p.may_write ? `<button type="button" class="pg-chip-x" data-pg-link-del="${esc(l.target)}" data-pg-link-role="${esc(l.role)}" aria-label="${esc('Remove ' + name)}" title="Remove">${TL_ICON.x}</button>` : '')
+      + '</span>';
+  });
+  if (p.may_write) chips.push('<button type="button" class="pg-chip pg-chip-add" data-pg-link-open aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span><span>Link</span></button>');
+  return chips.join('');
+}
+// The chips, and (for a writer) the picker, hidden until "+ Link" opens it. Re-drawn after each change.
+function pageFullLinks(state: PageFullState) {
+  const root = document.querySelector<HTMLElement>('#pg-view .pg-links'), p = state.page;
+  if (!root || !p) return;
+  const roles = PAGE_LINK_ROLES.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
+  root.innerHTML = `<div class="pg-chips">${pageChipsHTML(state)}</div>`
+    + (p.may_write ? `<div class="pg-link-pick" hidden><div class="pg-link-row"><select class="pg-link-role" aria-label="Role">${roles}</select>`
+      + '<input type="search" class="pg-link-q" placeholder="Find a task, bot, person, goal or page" aria-label="Find a task, bot, person, goal or page" autocomplete="off">'
+      + '</div><div class="pg-link-results" aria-live="polite"></div></div>' : '');
+}
+// The links' clicks and typing (delegated on the links box, which outlives each re-draw of its contents).
+function pageLinksWire(state: PageFullState, root: HTMLElement) {
+  let soon = 0;
+  root.onclick = (ev: MouseEvent) => {
+    if (PG !== state) return;
+    const at = eventElement(ev);
+    const del = at?.closest<HTMLElement>('[data-pg-link-del]');
+    if (del) { void pageLinkRemove(state, del.dataset.pgLinkDel || '', del.dataset.pgLinkRole || ''); return; }
+    if (at?.closest('[data-pg-link-open]')) { pageLinkPickOpen(root, !!root.querySelector<HTMLElement>('.pg-link-pick')?.hidden); return; }
+    const opt = at?.closest<HTMLElement>('[data-pg-link-target]');
+    if (opt) void pageLinkAdd(state, opt.dataset.pgLinkTarget || '', root.querySelector<HTMLSelectElement>('.pg-link-role')?.value || 'related');
+  };
+  root.oninput = (ev: Event) => {
+    const box = eventElement(ev)?.closest<HTMLInputElement>('.pg-link-q');
+    if (!box) return;
+    clearTimeout(soon);
+    soon = window.setTimeout(() => void pageLinkFind(state, box.value), 200);
+  };
+  root.onchange = (ev: Event) => {
+    if (!eventElement(ev)?.closest('.pg-link-role')) return;
+    void pageLinkFind(state, root.querySelector<HTMLInputElement>('.pg-link-q')?.value || '');
+  };
+  // Esc closes the picker (not the page): the focus goes back to "+ Link".
+  root.onkeydown = (ev: KeyboardEvent) => {
+    const pick = root.querySelector<HTMLElement>('.pg-link-pick');
+    if (ev.key !== 'Escape' || !pick || pick.hidden) return;
+    ev.preventDefault(); ev.stopPropagation();
+    pageLinkPickOpen(root, false);
+    root.querySelector<HTMLElement>('[data-pg-link-open]')?.focus();
+  };
+}
+function pageLinkPickOpen(root: HTMLElement, open: boolean) {
+  const pick = root.querySelector<HTMLElement>('.pg-link-pick');
+  if (!pick) return;
+  PG_LINK_SEQ++;                                            // a search still on its way is dropped
+  pick.hidden = !open;
+  root.querySelector<HTMLElement>('[data-pg-link-open]')?.setAttribute('aria-expanded', String(open));
+  const box = pick.querySelector<HTMLInputElement>('.pg-link-q');
+  if (open) { box?.focus(); return; }
+  if (box) box.value = '';
+  pick.querySelector('.pg-link-results')?.replaceChildren();
+}
+// What the picker offers for the text: tasks (any role); for a related link also bots, people, goals and pages. A
+// document role (Spec, QA report, ...) is only for a task, so only tasks are offered for it. Links already there are left out.
+async function pageLinkFind(state: PageFullState, raw: string) {
+  const seq = ++PG_LINK_SEQ, q = raw.trim();
+  const out = document.querySelector<HTMLElement>('#pg-view .pg-link-results');
+  if (!out) return;
+  if (!q) { out.replaceChildren(); return; }
+  const role = document.querySelector<HTMLSelectElement>('#pg-view .pg-link-role')?.value || 'related';
+  const low = q.toLowerCase(), docRole = role !== 'related';
+  const found: PageLinkPick[] = [];
+  try {
+    const tasks = await taskBriefsPage({q, limit: 6});
+    found.push(...tasks.tasks.map(t => ({target: 'task:' + t.id, label: `${t.number != null ? 'D-' + t.number + ' ' : ''}${t.title || 'Untitled'}`, kind: 'task'})));
+    if (!docRole) {
+      found.push(...shownEmps().filter(e => e.status !== 'archived' && botDisplayName(e.id).toLowerCase().includes(low))
+        .slice(0, 6).map(e => ({target: 'bot:' + e.id, label: botDisplayName(e.id), kind: 'bot'})));
+      found.push(...(S.people || []).filter(x => !x.hidden && String(x.name || x.id).toLowerCase().includes(low))
+        .slice(0, 6).map(x => ({target: 'human:' + x.id, label: x.name || x.id, kind: 'human'})));
+      found.push(...(await goalOptions()).filter(g => String(g.title || '').toLowerCase().includes(low))
+        .slice(0, 6).map(g => ({target: 'goal:' + g.id, label: g.title || 'Goal', kind: 'goal'})));
+      const files = await get<import('../types/api').FileSearch>('/v2/files/search?' + new URLSearchParams({q, kind: 'page'}), {fresh: true});
+      found.push(...(files.results || []).filter(x => x.id !== state.id).slice(0, 6).map(x => ({target: 'page:' + x.id, label: x.title || 'Untitled', kind: 'page'})));
+    }
+  } catch (e) {
+    if (seq === PG_LINK_SEQ && PG === state) out.innerHTML = `<p class="err">${esc(errorMessage(e, ''))}</p>`;
+    return;
+  }
+  if (seq !== PG_LINK_SEQ || PG !== state) return;
+  const have = new Set((state.page?.links || []).map(l => l.target + '\n' + l.role));
+  const rows = found.filter(r => !have.has(r.target + '\n' + role)).slice(0, 12);
+  out.innerHTML = rows.length ? rows.map(r => `<button type="button" class="pg-link-opt" data-pg-link-target="${esc(r.target)}">`
+    + `<span class="nav-icon" aria-hidden="true">${PAGE_LINK_KIND_ICON[r.kind] || 'article'}</span><span class="pg-link-opt-name">${esc(r.label)}</span></button>`).join('')
+    : '<p class="muted pg-pad">No matches</p>';
+}
+// POST /api/v2/pages/{id}/links answers with the page read: the chips are drawn from it.
+async function pageLinkAdd(state: PageFullState, target: string, role: string) {
+  try {
+    const r = await post('/v2/pages/' + encodeURIComponent(state.id) + '/links', {target, role});
+    if (PG !== state) return;
+    state.page = r.page;
+    pageFullLinks(state);
+  } catch (e) { toast(errorMessage(e, ''), true); }
+}
+// DELETE /api/v2/pages/{id}/links?target=&role= answers with the page read too.
+async function pageLinkRemove(state: PageFullState, target: string, role: string) {
+  try {
+    const r = await writeRequest('DELETE', '/v2/pages/' + encodeURIComponent(state.id) + '/links?' + new URLSearchParams({target, role}));
+    if (PG !== state) return;
+    state.page = r.page;
+    pageFullLinks(state);
+  } catch (e) { toast(errorMessage(e, ''), true); }
+}
+
+// ----------------------------------------------------------------- Edit
+// Edit (a person who may write): the current version in an editable frame, a note, Save or Cancel. The frame has no
+// script (its sandbox), so the page's markup never runs in Tico's own document, and Save posts the whole document as a
+// new version (POST /api/v2/pages with `page`). The frame keeps the page's own styles and the viewer's policy, marked
+// data-tico-edit, which Save takes out again.
+const PAGE_EDIT_STYLE = 'body[contenteditable]{min-height:70vh;outline:none}';
+function pageEditDoc(raw: string): string {
+  const doc = new DOMParser().parseFromString(raw, 'text/html');
+  for (const m of doc.querySelectorAll('meta[http-equiv]')) if (/^\s*refresh\s*$/i.test(m.getAttribute('http-equiv') ?? '')) m.remove();
+  const policy = doc.createElement('meta');
+  policy.httpEquiv = 'Content-Security-Policy'; policy.content = HTML_VIEW_POLICY; policy.setAttribute('data-tico-edit', '');
+  const base = doc.createElement('style');
+  base.textContent = HTML_VIEW_BASE + PAGE_EDIT_STYLE; base.setAttribute('data-tico-edit', '');
+  doc.head.prepend(policy, base);
+  doc.body.setAttribute('contenteditable', 'true');
+  return (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML;
+}
+function pageEditOpen(state: PageFullState) {
+  const p = state.page;
+  if (!p?.may_write) return;
+  state.editing = true; state.diff = null; state.shown = p.version;
+  pageFullHead(state);
+  pageFullBody(state);
+}
+// The editor in the body: the page loads into its frame (the current version's file, as the viewer reads it), then Save
+// is on. Cancel discards it and shows the page again.
+function pageEditDraw(state: PageFullState) {
+  const p = state.page, body = document.querySelector<HTMLElement>('#pg-view .pg-body');
+  if (!p || !body) return;
+  body.innerHTML = `<section class="pg-edit" aria-label="${esc('Edit ' + p.title)}"><div class="pg-edit-slot">${skelRows(4)}</div>`
+    + '<div class="pg-edit-bar"><input type="text" class="pg-edit-note" maxlength="500" placeholder="Note (optional)" aria-label="Note for this version" autocomplete="off">'
+    + '<span class="spacer"></span><button type="button" class="ghost" data-pg-edit-cancel>Cancel</button>'
+    + '<button type="button" class="primary" data-pg-edit-save disabled>Save</button></div></section>';
+  const cancel = body.querySelector<HTMLButtonElement>('[data-pg-edit-cancel]'), save = body.querySelector<HTMLButtonElement>('[data-pg-edit-save]');
+  if (cancel) cancel.onclick = () => { state.editing = false; pageFullBody(state); };
+  if (save) save.onclick = () => void pageEditSave(state);
+  void (async () => {
+    try {
+      const item = await viewFile(p.file_id, 'page.html', p.version);
+      const text = await item.blob.text();
+      const slot = body.querySelector<HTMLElement>('.pg-edit-slot');
+      if (PG !== state || !state.editing || !slot?.isConnected) return;
+      const frame = document.createElement('iframe');
+      frame.className = 'pg-edit-frame';
+      frame.setAttribute('sandbox', 'allow-same-origin');   // no allow-scripts: nothing in it runs; Save reads its document
+      frame.referrerPolicy = 'no-referrer';
+      frame.title = 'Edit ' + p.title;
+      frame.dataset.name = item.name || 'page.html';
+      frame.srcdoc = pageEditDoc(text);
+      // Save is on once the frame has loaded the page: until then its document is still the empty one it starts with.
+      frame.addEventListener('load', () => body.querySelector<HTMLButtonElement>('[data-pg-edit-save]')?.removeAttribute('disabled'), {once: true});
+      slot.replaceChildren(frame);
+    } catch (e) {
+      const slot = body.querySelector<HTMLElement>('.pg-edit-slot');
+      if (PG === state && slot?.isConnected) slot.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`;
+    }
+  })();
+}
+async function pageEditSave(state: PageFullState) {
+  const p = state.page, frame = document.querySelector<HTMLIFrameElement>('#pg-view .pg-edit-frame');
+  const save = document.querySelector<HTMLButtonElement>('#pg-view [data-pg-edit-save]');
+  const doc = frame?.contentDocument;
+  if (!p || !frame || !doc?.documentElement) return;
+  // The copy is what is saved: the editor's own markup comes out of a clone, so a failed save leaves the editor as it was.
+  const copy = doc.documentElement.cloneNode(true) as HTMLElement;
+  copy.querySelector('body')?.removeAttribute('contenteditable');
+  copy.querySelectorAll('[data-tico-edit]').forEach(el => { el.remove(); });
+  const text = (doc.doctype ? '<!DOCTYPE html>' : '') + copy.outerHTML;
+  const note = (document.querySelector<HTMLInputElement>('#pg-view .pg-edit-note')?.value || '').trim();
+  if (save) save.disabled = true;
+  try {
+    await post('/v2/pages', {page: state.id, text, name: frame.dataset.name || 'page.html', ...(note ? {note} : {})});
+    if (PG !== state) return;
+    toast('Saved');
+    await pageFullView(state.id);                           // the new version on screen, from the page read
+  } catch (e) {
+    if (save) save.disabled = false;
+    toast(errorMessage(e, ''), true);
+  }
 }
 
 // ----------------------------------------------------------------- What's changed?
@@ -433,13 +672,15 @@ async function pageFullAct(state: PageFullState, act: string | undefined, el?: H
   if (act === 'back') { if (history.length > 1) history.back(); else location.hash = RD_FILES; return; }
   if (!p) return;
   if (act === 'access') { void pagesEditAudience(state); return; }
+  if (act === 'edit') { pageEditOpen(state); return; }
   if (act === 'version' || act === 'latest') {
     state.shown = act === 'latest' ? p.version : Number(el?.dataset.pgV);
     state.diff = null;
+    state.editing = false;
     pageFullHead(state); pageFullBody(state);
     return;
   }
-  if (act === 'diff') { pageDiffOpen(state); return; }
+  if (act === 'diff') { state.editing = false; pageDiffOpen(state); return; }
   try {
     if (act === 'archive') {
       const r: import('../types/api').EditPageResponse = await patch('/v2/pages/' + encodeURIComponent(p.file_id), {archived: !p.archived});
@@ -457,8 +698,6 @@ async function pageFullAct(state: PageFullState, act: string | undefined, el?: H
 }
 
 // ----------------------------------------------------------------- a task's pages
-// A pinned page row of the task's section, kept across redraws while its key holds.
-interface TaskPagesRow { key: string; el: HTMLElement; }
 // POST and GET make-page's status (backend/tasks.py): a page being made in a chat, or the last try.
 interface MakePageStatus { state: 'making' | 'made' | 'failed' | 'update_required'; conversation_id?: string; }
 // The section's element, with the state this file keeps on it.
@@ -468,7 +707,6 @@ interface TaskPagesSlot extends HTMLDivElement {
   tpMaking?: MakePageStatus | null;
   tpMakeSeq?: number;
   tpSeq?: number;
-  tpCards?: Map<string | null, TaskPagesRow>;
   tpFollow?: (() => void) | null;
   tpFollowCid?: string | null | undefined;
   tpMakeOpen?: boolean;
@@ -479,9 +717,7 @@ interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null;
 const taskMakeDraftKey = (id: string) => 'tico.task.make-page.' + encodeURIComponent(String(S.me?.id || '')) + '.' + id;
 // A live event the task's pages react to: a files change on the task, or a run of the page being made.
 interface TaskPagesLiveEvent { kind?: string; kinds?: string[]; id?: unknown; conversation_id?: string; }
-// A pin on a task's place: its page is the page as GET /api/v2/places/{place} lists it, with the replaced and archived flags.
-interface TaskPlacePin { id: string | null; size?: string; can_unpin?: boolean; page?: import('../types/api').Page | null; }
-interface TaskPlaceRead { can_link?: boolean; pins?: TaskPlacePin[]; }
+interface TaskPlaceRead { can_link?: boolean; }
 function taskPageMakeDraw(d: TaskPagesHost, status: MakePageStatus | null) {
   const slot = d.tpEl;
   if (!slot) return;
@@ -524,28 +760,10 @@ async function taskPagesLoad(d: TaskPagesHost) {
   try {
     const r = await get<TaskPlaceRead>('/v2/places/' + encodeURIComponent('task:' + slot.dataset.task), {fresh: true});
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
-    const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
-    // Pages shows even with none, for its + (Details' one part that stays when empty); a reader who may not link any
-    // and has none to open gets no section.
-    slot.hidden = !r.can_link && !pins.length;
+    slot.hidden = !r.can_link && !!$('[data-tft-new]', slot).hidden;
     $('[data-tp-add]', slot).hidden = !r.can_link;
     slot.tpCanLink = !!r.can_link;
     taskPageMakeShow(slot);
-    const kept = slot.tpCards || new Map<string | null, TaskPagesRow>(), cards = new Map<string | null, TaskPagesRow>();
-    for (const pin of pins) {
-      const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
-      let row = kept.get(pin.id);
-      if (!row || row.key !== key) {
-        // One row: the page's icon and name, and the row opens the page. Its version is on the chat's chip, not here.
-        const el = document.createElement('div'); el.className = 'tp-page';
-        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}" title="${esc(pin.page.title)}"><span class="nav-icon" aria-hidden="true">description</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
-          ? `<button type="button" class="ghost tp-unlink" data-tp-unlink="${esc(pin.id)}" aria-label="${esc('Unlink ' + pin.page.title)}" title="Unlink">${TL_ICON.x}</button>` : ''}`;
-        row = {key, el};
-      }
-      cards.set(pin.id, row);
-    }
-    slot.tpCards = cards;
-    $('.tp-pages', slot).replaceChildren(...[...cards.values()].map(x => x.el));
     if (r.can_link) await taskPageMakeLoad(d);
   } catch (e) { if (d.tpEl === slot) toast(errorMessage(e, ''), true); }
 }

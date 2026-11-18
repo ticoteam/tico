@@ -2049,7 +2049,7 @@ def ensure_curator(conn):
             if not conn.execute(
                 "SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (librarian["id"], key)
             ).fetchone():
-                routines.create(conn, H.KEEPER, librarian["id"], dict(fields), key=key)
+                routines.create(conn, H.TICO_ACTOR, librarian["id"], dict(fields), key=key)
     old = H.bot(conn, RETIRED_CURATOR)
     if (
         old
@@ -2059,8 +2059,8 @@ def ensure_curator(conn):
         from . import settings_admin
 
         successor = librarian["id"] if librarian and librarian.get("state") != "archived" else ""
-        settings_admin.archive_bot(conn, H.KEEPER, RETIRED_CURATOR, successor=successor)
-        H.event(conn, H.KEEPER, "market.curator_retired", RETIRED_CURATOR, {"successor": successor})
+        settings_admin.archive_bot(conn, H.TICO_ACTOR, RETIRED_CURATOR, successor=successor)
+        H.event(conn, H.TICO_ACTOR, "market.curator_retired", RETIRED_CURATOR, {"successor": successor})
     return librarian
 
 

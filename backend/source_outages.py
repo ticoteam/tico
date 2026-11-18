@@ -77,7 +77,7 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             continue
         H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             target,
             text,
             kind='notice',
@@ -91,7 +91,11 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             },
         )
     H.event(
-        c, H.KEEPER, 'source_outage.' + transition, key, {k: record[k] for k in ('kind', 'since', 'waiting', 'until')}
+        c,
+        H.TICO_ACTOR,
+        'source_outage.' + transition,
+        key,
+        {k: record[k] for k in ('kind', 'since', 'waiting', 'until')},
     )
 
 
@@ -170,7 +174,7 @@ def batch_waiters(c, bot):
         "AND m.sender_id=? AND m.kind='notice' AND m.deleted_at IS NULL "
         "AND m.ref_quiet=0 AND m.ref_command=0 "
         "ORDER BY j.created_at,j.rowid",
-        (bot, H.KEEPER),
+        (bot, H.TICO_ACTOR),
     ).fetchall():
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):

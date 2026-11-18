@@ -44,7 +44,7 @@ jobs:
           python-version: '3.15'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
       - name: Install
         run: |

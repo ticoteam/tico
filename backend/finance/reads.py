@@ -3213,7 +3213,7 @@ is_set_up = _context.is_set_up
 
 def files_in_books(c: sqlite3.Connection, file_ids: Sequence[str]) -> set[str]:
     """Which of these Library files Finance holds: attached to a bill, invoice, row or entry, or kept as an unmatched
-    receipt. Keeper code uses it to close intake work whose file has since been filed."""
+    receipt. Tico code uses it to close intake work whose file has since been filed."""
     return SAP.held_files(c, [str(f) for f in file_ids if f][:500])
 
 

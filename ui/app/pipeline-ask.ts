@@ -43,7 +43,8 @@ function paBots(rec: PipelineRec, open = ''): PaBot[] {
 /** The stage the board shows and the tasks on its tab, as the view drew them (task-pipelines.ts). */
 function paOnScreen(state: PaState): {stage: PipelineStageRec | undefined; tasks: TaskAny[]} {
   const view = PV && PV.rec.id === state.rec.id ? PV : null;
-  const stage = state.rec.stages.find(s => s.id === (view?.stage || state.stage)) ?? state.rec.stages[0];
+  const drawn = view ? (view.opts.phone ? pvPhoneStage(view) : view.stage) : '';
+  const stage = state.rec.stages.find(s => s.id === (drawn || state.stage)) ?? state.rec.stages[0];
   return {stage, tasks: view && stage?.id ? pvInStage(view, stage.id) : []};
 }
 
@@ -123,7 +124,7 @@ function pipelineAskOpen(): void {
   if (!state) return;
   const pop = paPop(state);
   if (!pop) { const b = paBots(state.rec, state.stage)[0]; if (b) paSheetOpen(state, b.actor); return; }
-  paMenu(state, pop.hidden);
+  paMenu(state, Boolean(pop.hidden));
 }
 
 /** A tap outside the menu, or Escape, closes it. */

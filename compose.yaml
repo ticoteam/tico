@@ -265,7 +265,7 @@ services:
     <<: *hardening
     profiles: [caddy]
     cpu_shares: 4096
-    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     entrypoint: ["/bin/sh", "/generated/supervisor.sh"]
     command: []
     tmpfs: [/tmp]
@@ -300,7 +300,7 @@ services:
     <<: *hardening
     profiles: [cloudflared]
     cpu_shares: 4096
-    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    image: cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d
     command: tunnel --no-autoupdate --config /tunnel/ingress.yml run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
@@ -325,7 +325,7 @@ services:
     <<: *hardening
     profiles: [cloudflared]
     cpu_shares: 4096
-    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     entrypoint: ["/bin/sh", "-c", "printf '%s' \"$$TICO_HOLD_CADDYFILE\" > /tmp/Caddyfile && exec caddy run --config /tmp/Caddyfile --adapter caddyfile"]
     read_only: true
     tmpfs: [/tmp, /data, /config]

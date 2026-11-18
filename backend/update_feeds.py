@@ -132,7 +132,7 @@ def subscribe(c, bot, before, after):
         c.execute(
             "UPDATE notes SET canceled_at=?,canceled_by=? WHERE id IN (SELECT note_id FROM feed_deliveries WHERE bot=? AND "
             "category=?) AND id IN (SELECT n.id FROM notes n WHERE " + H.NOTE_WAITING_SQL + ")",
-            (H.now(), H.KEEPER, bot, category),
+            (H.now(), H.TICO_ACTOR, bot, category),
         )
 
 
@@ -544,7 +544,7 @@ def deliver(c):
                 "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                 (
                     note_id,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "bot:" + bot,
                     note_text({**dict(row), "action": bool(row["action"])}, running),
                     H.now(),
@@ -558,7 +558,7 @@ def deliver(c):
         if rows:
             c.execute("UPDATE feed_cursors SET cursor=? WHERE bot=? AND category=?", (rows[-1]["seq"], bot, category))
     for bot, ids in given.items():
-        H.event(c, H.KEEPER, "bot.updates_delivered", bot, {"updates": ids})
+        H.event(c, H.TICO_ACTOR, "bot.updates_delivered", bot, {"updates": ids})
     return given
 
 

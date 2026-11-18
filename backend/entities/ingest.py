@@ -35,7 +35,7 @@ from backend.entities import store as ES
 log = logging.getLogger("tico.entities.ingest")
 
 T = TypeVar("T")
-ACTOR = H.KEEPER  # the system writes these rows; they are not any person's edit
+ACTOR = H.TICO_ACTOR  # the system writes these rows; they are not any person's edit
 HARD_CONFIDENCE = 0.9  # a sender's domain, a meeting's invite, an owner's list: evidence the link can carry rules on
 NO_REPLY = ("noreply", "no-reply", "donotreply", "do-not-reply")
 MACHINE_LOCAL = ("mailer-daemon", "postmaster")

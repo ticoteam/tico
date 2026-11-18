@@ -404,9 +404,10 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script timings
-from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
-included), with collected test counts until timings exist. New files use the observed
+finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script
+timings averaged over the last three green queue groups (each group's **PR job timings** job saves them as its
+`queue-timings` artifact: the same hosted runners and pytest flags), over the committed table
+(`scripts/test-timings.json`), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
@@ -444,20 +445,21 @@ checks on that merge commit, and moves main only when they pass.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, and every other
   job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
   the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
-  The plan decides which of those the change reaches, so a job it does not reach starts no VM. Only the cosmetic timing
-  receipt is queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
-  request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
-  static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
+  The plan decides which of those the change reaches, so a job it does not reach starts no VM. The timing receipt,
+  flake artifact and merge commit checks are queue-only. A failed leg cancels the run, so `checks` fails within minutes.
+  A fork's pull request runs none of them.
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its merge commit checks job runs every
+  static check on that commit (`scripts/ci/merge_commit_checks.sh`) on its own VM, beside the plan and the tests. A job the change does
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
-- **Quarantined tests**: a test that failed and passed on the same commit (a rerun attempt, or two runs of one commit)
-  is flaky. Its entry in `ci/quarantine/` (one JSON file per test: test id, first seen, run urls, ticket) makes PR checks
-  and queue groups run it as a non-strict xfail (`scripts/pr_checks.py run --quarantine`), so it cannot fail them.
-  Release validation never passes the flag and still fails on it. `.github/workflows/flaky-tests.yml` reads PR-check runs
-  daily and proposes entries (`python3 scripts/flake_quarantine.py detect --write ci/quarantine` writes them), and its
-  weekly report fails when an entry is older than 14 days. The fix deletes the entry file.
+- **Quarantined tests**. PR checks and queue groups retry up to five failed tests per Python or browser leg once.
+  When all pass on retry, the leg passes and logs each flake. Queue groups save those flips in the `queue-flaky`
+  artifact. `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily. It reports Python
+  and browser flakes and proposes `ci/quarantine/` entries for pytest tests that failed and passed on the same
+  commit. Write proposals with `python3 scripts/flake_quarantine.py detect --write ci/quarantine`. A listed test
+  runs as a non-strict xfail in PR checks and the queue. Release validation runs without retries or quarantine.
+  The weekly report fails when an entry is older than 14 days. The fix deletes the entry.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents open pull requests as drafts and run `python3 scripts/pr_checks.py local --ready` once the change is done; the

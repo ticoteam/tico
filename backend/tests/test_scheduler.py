@@ -122,7 +122,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
     with store.transaction() as c:
         aid = routines.create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'assistant',
             {
                 'title': 'Review daily work',
@@ -350,7 +350,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
         for i in range(200):
             bot = ('ops', 'finance', 'cpo')[i % 3]
             kind = ('chat', 'task')[(i // 3) % 2]
-            sender = ('human:ana', H.KEEPER)[(i // 6) % 2]
+            sender = ('human:ana', H.TICO_ACTOR)[(i // 6) % 2]
             m = H.say(
                 c,
                 sender,
@@ -419,7 +419,7 @@ def _ops_runner(api):
 
 
 def _carrier_job(c, message_id):
-    """The queued job of the keeper carrier a thread wrote for this message (threads._carrier)."""
+    """The queued job of the Tico carrier a thread wrote for this message (threads._carrier)."""
     return c.execute(
         "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "
         "AND json_extract(m.refs,'$.carries')=?",
@@ -434,7 +434,7 @@ def test_a_persons_home_message_carried_by_a_notice_is_claimed_before_an_older_n
     who = _ops_runner(api)
     execution, store = api.app.state.execution, api.app.state.store
     with store.transaction() as c:
-        older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        older = H.say(c, H.TICO_ACTOR, 'bot:ops', 'Older keeper notice', kind='notice')
         older_job = _wake_by_hand(c, older['id'], 'ops')
         home = threads.home(c, 'bot:ops', create=True)
         mine = threads.post(c, 'human:ana', home['id'], 'Stop the April numbers')
@@ -451,11 +451,11 @@ def test_a_bots_message_carried_by_a_notice_keeps_its_place_behind_an_older_noti
     who = _ops_runner(api)
     execution, store = api.app.state.execution, api.app.state.store
     with store.transaction() as c:
-        older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        older = H.say(c, H.TICO_ACTOR, 'bot:ops', 'Older keeper notice', kind='notice')
         said = H.say(c, 'bot:finance', 'human:ana', 'Finance has the numbers')
         carrier = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'bot:ops',
             'bot:finance: Finance has the numbers',
             kind='notice',

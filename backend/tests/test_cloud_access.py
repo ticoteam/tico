@@ -169,7 +169,7 @@ def test_routines_pass_over_while_frozen_or_locked(api, access):  # noqa: F811
     store = api.app.state.store
     with store.transaction() as c:
         routines.create(
-            c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"}, key="morning"
+            c, H.TICO_ACTOR, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"}, key="morning"
         )
         aid = routines.row(c, "ops:morning")["automation"]
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-11-03T07:00:00.000000Z", aid))

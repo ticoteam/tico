@@ -48,7 +48,7 @@ LISTED_KEYS = ("who", "asked_by", "by", "manager_id")
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.
 SUPPORT_ACTOR, SUPPORT_NAME = "human:tico-support", "Tico support"
-KEEPER_FROM = re.compile(r"^New task from keeper: ")
+TICO_FROM = re.compile(r"^New task from keeper: ")
 
 
 def _title(slug):
@@ -131,7 +131,7 @@ def annotate(conn, payload, render_notices=False, actors=True):
     if render_notices:
         for message in notices:
             # A task the server filed has no "from" a person reads: "New task: <title>".
-            text = ID.sub(lambda m: names.get(m.group(0), m.group(0)), KEEPER_FROM.sub("New task: ", message["body"]))
+            text = ID.sub(lambda m: names.get(m.group(0), m.group(0)), TICO_FROM.sub("New task: ", message["body"]))
             if text != message["body"]:
                 message.setdefault("body_raw", message["body"])
                 message["body"] = text

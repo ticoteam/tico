@@ -58,6 +58,33 @@ const RID = 'spec-ok-ana';
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // The stage's owner and the developer both appear in Details, on desktop and phone.
+    for (const viewport of [{width: 1280, height: 800}, {width: 390, height: 844}]) {
+      const t = task('t-4', 'Fix checkout totals', 'review', {
+        stage: {id: 'review', name: 'Bot QA', kind: 'work', by_hand: false},
+        owner_id: 'bot:ops', assignee_id: 'bot:eng',
+      });
+      const {page, errors} = await open(browser, {viewport, hash: '#/task/t-4', tasks: [t], needs: []});
+      const win = page.locator('#task-modal[open]');
+      const details = win.getByRole('button', {name: /^Details/});
+      const owner = win.locator('[data-prop-row="owner"] .prop-v');
+      const developer = win.locator('[data-prop-row="developer"]');
+      await details.click();
+      await developer.waitFor({state: 'visible'});
+      assert.equal(await owner.getAttribute('aria-label'), 'Owner: Ops');
+      assert.equal(await developer.locator('.prop-v').getAttribute('aria-label'), 'Developer: Engineer');
+      const screenshots = process.env.TICO_TASK_DETAILS_SCREENSHOTS;
+      if (screenshots) await page.screenshot({path: `${screenshots}/developer-${viewport.width}.png`});
+
+      Object.assign(t, task(t.id, t.title, 'build', {owner_id: 'bot:eng', assignee_id: 'bot:eng', version: t.version + 1}));
+      await page.reload();
+      await details.click();
+      await owner.waitFor({state: 'visible'});
+      assert.equal(await owner.getAttribute('aria-label'), 'Owner: Engineer');
+      assert.equal(await developer.count(), 0);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
     // ---- the banner
     {
       // The ask is one of the stage's requirements, and says who asked (PM): the row names them.
@@ -79,9 +106,9 @@ const RID = 'spec-ok-ana';
       assert.match(head, /^PM waiting on you$/, `the asker, then "waiting on you": ${head}`);
       assert.equal(await banner.locator('.th-av').count(), 1, 'the asker\'s face');
       assert.doesNotMatch(await banner.innerText(), /You waiting on you/);
-      // The ask is the chat's last row, and the window opens on the chat; a task with no documents has no tabs, so no dot.
+      // The ask is the chat's last row, and the window opens on the chat; a task with no documents has Chat and Files, no document tab.
       assert.equal(await win.locator('.task-chat').isVisible(), true);
-      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs without documents');
+      assert.deepEqual(await win.locator('.tw-tabs [data-task-tab]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.taskTab)), ['chat', 'files'], 'Chat and Files, no document');
       const last = await page.evaluate(() => { const rows = [...document.querySelectorAll('#task-modal .task-comments > *')]; return rows.at(-1)?.matches('.task-need'); });
       assert.ok(last, 'the ask is the last row of the chat');
       await banner.getByRole('button', {name: 'Answer'}).click();
@@ -111,13 +138,13 @@ const RID = 'spec-ok-ana';
       assert.match((await win.locator('.task-need .th-head').innerText()).trim(), /^Waiting on you$/);
       assert.equal(await win.locator('.task-need .th-av').count(), 0);
       assert.equal(await win.locator('.task-need').getByRole('button', {name: 'Answer'}).count(), 1);
-      // No files: Files waits hidden, and ⋯ › Add a file… shows it and opens the file picker.
-      assert.equal(await win.locator('[data-task-files]').isVisible(), false, 'no files: no Files section');
+      // ⋯ › Add a file… opens Files and the file picker.
+      assert.equal(await win.locator('.task-side [data-task-files]').count(), 0);
       const chooser = page.waitForEvent('filechooser');
       await win.locator('[data-task-more]').click();
       await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Add a file…'}).click();
       await chooser;
-      await win.locator('[data-task-files]').waitFor({state: 'visible'});
+      assert.equal(await win.getByRole('tab', {name: 'Files', exact: true}).getAttribute('aria-selected'), 'true');
       // No tags: ⋯ › Add a tag… shows the row and opens its menu.
       await win.locator('[data-task-more]').click();
       await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Add a tag…'}).click();

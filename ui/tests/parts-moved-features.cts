@@ -119,7 +119,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.goto(hub.url + '/#/task/' + task);
       // The task's page is its dialog over Tasks; an own task with nothing asked is not in the You list under it.
       await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Moved code task'}).waitFor({timeout: t(20000)});
-      await page.waitForFunction(() => ['tfTileHTML', 'tfFromAttachments', 'decideGoThrough', 'bvMount']
+      await page.waitForFunction(() => ['tfFileRowHTML', 'tfFromAttachments', 'decideGoThrough', 'bvMount']
         .every(f => typeof (window as unknown as Record<string, unknown>)[f] === 'function'), null, {timeout: t(15000)});
       for (const part of ['task-files', 'decide', 'browser-view', 'stage-rules']) assert.ok(open.parts.includes(part), `${name}: a task's page downloaded ${part}`);
       // Its Owner, on the Details tab, opens the Give to… picker, whose code comes with that first click. Before Needs
@@ -133,21 +133,21 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.locator('.gv-pop').waitFor({state: 'detached', timeout: t(10000)});
       const ran = await page.evaluate(async () => {
         const w = window as unknown as {
-          tfTileHTML: (f: unknown, open: boolean) => string; tfFromAttachments: (list: unknown[]) => unknown[];
+          tfFileRowHTML: (f: unknown) => string; tfFromAttachments: (list: unknown[]) => unknown[];
           decideGoThrough: () => Promise<boolean>;
           bvMount: (host: HTMLElement, o: {toolId: string; accountId: string}) => {stop: () => void; root: HTMLElement};
         };
         const host = document.createElement('div');
         document.body.append(host);
-        host.innerHTML = w.tfTileHTML(w.tfFromAttachments([{id: 'f1', name: 'notes.txt', content_type: 'text/plain', size: 10}])[0], false);
-        const tile = !!host.querySelector('[data-tf-file="f1"]');
+        host.innerHTML = w.tfFileRowHTML(w.tfFromAttachments([{id: 'f1', name: 'notes.txt', content_type: 'text/plain', size: 10}])[0]);
+        const row = !!host.querySelector('[data-tft-file="f1"]');
         const through = typeof await w.decideGoThrough();
         const view = w.bvMount(host, {toolId: 'none', accountId: 'none'});
         const browserView = !!view.root.querySelector('[data-bv-stage]') || !!view.root.querySelector('[data-bv-launch]');
         view.stop(); host.remove();
-        return {tile, through, browserView};
+        return {row, through, browserView};
       });
-      assert.deepEqual(ran, {tile: true, through: 'boolean', browserView: true}, name + ': a task\'s files, Needs you and the browser view run');
+      assert.deepEqual(ran, {row: true, through: 'boolean', browserView: true}, name + ': a task\'s files, Needs you and the browser view run');
       assert.deepEqual(open.errors, [], name + ': errors on a task\'s page');
       await open.close();
     }

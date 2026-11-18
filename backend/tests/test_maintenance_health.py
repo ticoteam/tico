@@ -246,7 +246,7 @@ def limited(api, bot=SECRET_BOT, config=None):
         if config is not None:
             c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
             BS.write(c, bot, config)
-        H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
+        H.event(c, H.TICO_ACTOR, "attempt.limited", "a-" + bot, {"bot": bot})
 
 
 def login_findings(api, rid=""):
@@ -287,7 +287,7 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
     api, runner = built(environment)
     store = api.app.state.store
     with store.transaction() as c:
-        H.event(c, H.KEEPER, "attempt.limited", SECRET_BOT, {"bot": SECRET_BOT})
+        H.event(c, H.TICO_ACTOR, "attempt.limited", SECRET_BOT, {"bot": SECRET_BOT})
     runner_errors(api, runner, ["2026-10-14T10:00Z Tico runner: research has unpushed commits and push failed"])
     with store.transaction() as c:  # a computer silent 15 minutes with a request queued for its bot
         H.sync_registry(c, {SECRET_BOT: {"name": SECRET_BOT, "status": "active"}}, None)
@@ -462,7 +462,7 @@ def test_a_paused_bots_routines_are_not_a_finding(environment):
     with api.app.state.store.transaction() as c:  # a routine as a template seeds it: its automation, on
         made = routines.create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "assistant",
             {"cron": "30 16 * * 5", "title": "Weekly backlog", "text": "Review the backlog."},
             key="weekly",
@@ -767,7 +767,7 @@ def _part_reopens(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings[:] = []
     run(api)
     with api.app.state.store.transaction() as c:
-        TE.move(c, first["id"], TE.DONE, H.KEEPER, "fixed")
+        TE.move(c, first["id"], TE.DONE, H.TICO_ACTOR, "fixed")
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
     tasks = botops_tasks(api)
@@ -839,7 +839,7 @@ def _part_person_owned(api, runner, monkeypatch, hq=None, comments=None, clock=N
     with store.read() as c:
         person = api.app.state.auth.owner_identity(c).actor
     with store.transaction() as c:
-        TE.reassign(c, first["id"], person, H.KEEPER)
+        TE.reassign(c, first["id"], person, H.TICO_ACTOR)
     before = len(comments)  # the creation's wake is on the task already: count from here
     code_findings[:] = []
     cleared = run(api)
@@ -1494,7 +1494,7 @@ def _fresh(api, hq=None, comments=None):
     and closed), so the next section starts as on a new install. BotOps is active again, the team rule back to its default."""
     with api.app.state.store.transaction() as c:
         for (tid,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Health:%' AND status='open'").fetchall():
-            H.task_close(c, H.KEEPER, tid, "A new section of the story.")
+            H.task_close(c, H.TICO_ACTOR, tid, "A new section of the story.")
         c.execute("UPDATE tasks SET title='old: '||title WHERE title LIKE 'Health:%'")
         c.execute("UPDATE messages SET body='old '||body WHERE body LIKE 'Health wake: %'")
         for table in ("health_findings", "health_reports", "invariant_state", "support_tickets"):

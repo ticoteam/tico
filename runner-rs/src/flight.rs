@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,14 +28,18 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(60);
 pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 /// A git command at least this long is recorded (timeouts and commands that never ran always are).
 pub const GIT_SLOW_MS: u64 = 2000;
-/// The order a turn passes its marks in (`util::mark` names plus the flight-only ones).
-const PHASES: [&str; 13] = [
+/// The order a turn passes its marks in (`util::mark` names plus the flight-only ones). The `claude_*` marks are a
+/// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`.
+const PHASES: [&str; 16] = [
     "claimed",
     "placed",
     "harness_started",
+    "claude_spawned",
     "harness_spawned",
+    "claude_init",
     "first_output",
     "first_delta_posted",
+    "claude_result",
     "model_done",
     "scrubbed",
     "finished",
@@ -45,18 +49,28 @@ const PHASES: [&str; 13] = [
     "done",
 ];
 
+/// Marks the last of several wins (a steered turn has a `result` per reply); every other mark keeps its first.
+const LAST_WINS: [&str; 1] = ["claude_result"];
+
 static SENDER: OnceLock<SyncSender<Map<String, Value>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Turns are timed in the `run` command even with the file off: their timings also go to the server (`timings`).
+static TRACKING: AtomicBool = AtomicBool::new(false);
 
 struct Turn {
     at: Instant,
+    /// When it was claimed, Unix seconds on this computer's clock.
+    wall: f64,
     phases: Vec<(String, u64)>,
+    /// Numbers about the turn beside its marks (`transcript_bytes`).
+    facts: Map<String, Value>,
 }
 
 static TURNS: Mutex<Option<HashMap<String, Turn>>> = Mutex::new(None);
 
 /// Start the writer for `state_dir` (the `run` command only). Off when `TICO_FLIGHT_RECORDER=0`, as on the server.
 pub fn init(state_dir: &Path) {
+    TRACKING.store(true, Ordering::Relaxed);
     if std::env::var("TICO_FLIGHT_RECORDER").ok().as_deref() == Some("0") || SENDER.get().is_some()
     {
         return;
@@ -87,6 +101,11 @@ pub fn init(state_dir: &Path) {
         start.insert("pid".into(), json!(std::process::id()));
         emit("runner.start", start);
     }
+}
+
+#[cfg(test)]
+pub fn track() {
+    TRACKING.store(true, Ordering::Relaxed);
 }
 
 /// Queue one record; never blocks. Without a writer (other commands, tests) it does nothing.
@@ -126,7 +145,7 @@ fn record_ts(record: &Value) -> f64 {
 /// A turn reached `name` (`util::mark` calls this for every mark). `claimed` opens the turn; a later mark for a
 /// turn not open is ignored, so nothing builds up for turns this process never claimed.
 pub fn phase(name: &str, attempt: &str) {
-    if SENDER.get().is_none() || attempt == "-" {
+    if !TRACKING.load(Ordering::Relaxed) || attempt == "-" {
         return;
     }
     let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
@@ -146,15 +165,50 @@ pub fn phase(name: &str, attempt: &str) {
             attempt.to_string(),
             Turn {
                 at: Instant::now(),
+                wall: now_ts(),
                 phases: vec![("claimed".into(), 0)],
+                facts: Map::new(),
             },
         );
     } else if let Some(turn) = turns.get_mut(attempt) {
-        if !turn.phases.iter().any(|(n, _)| n == name) {
-            turn.phases
-                .push((name.to_string(), turn.at.elapsed().as_millis() as u64));
+        let ms = turn.at.elapsed().as_millis() as u64;
+        match turn.phases.iter_mut().find(|(n, _)| n == name) {
+            Some(seen) if LAST_WINS.contains(&name) => seen.1 = ms,
+            Some(_) => {}
+            None => turn.phases.push((name.to_string(), ms)),
         }
     }
+}
+
+/// A number about an open turn, kept beside its marks (`transcript_bytes`).
+pub fn fact(attempt: &str, key: &str, value: u64) {
+    if let Some(turn) = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.get_mut(attempt))
+    {
+        turn.facts.insert(key.into(), json!(value));
+    }
+}
+
+/// An open turn's timings so far, for its result (backend/models.py RunTimings): when it was claimed on this
+/// computer's clock, each mark's milliseconds since then, and its facts. None for a turn this process never claimed.
+pub fn timings(attempt: &str) -> Option<Value> {
+    let turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
+    let turn = turns.as_ref()?.get(attempt)?;
+    let mut out = turn.facts.clone();
+    out.insert("claimed_at".into(), json!(turn.wall));
+    out.insert(
+        "phases".into(),
+        Value::Object(
+            turn.phases
+                .iter()
+                .map(|(n, ms)| (n.clone(), json!(ms)))
+                .collect(),
+        ),
+    );
+    Some(Value::Object(out))
 }
 
 /// The turn's end: one `runner.turn` record with every phase's milliseconds since it was claimed.
@@ -182,6 +236,7 @@ pub fn turn_end(attempt: &str, bot: &str, runtime: &str, outcome: &str, settled:
         json!(turn.at.elapsed().as_millis() as u64),
     );
     f.insert("phases".into(), Value::Object(phases));
+    f.extend(turn.facts);
     emit("runner.turn", f);
 }
 
@@ -701,6 +756,30 @@ mod tests {
         assert!(text.contains("Dropped records: 3"), "{text}");
         assert!(!text.contains("stale-bot"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_turns_timings_carry_its_marks_and_facts_until_it_ends() {
+        track();
+        let aid = format!("timing-{}", uuid::Uuid::new_v4().simple());
+        assert!(timings(&aid).is_none(), "a turn never claimed has none");
+        phase("placed", &aid); // before its claim: ignored
+        phase("claimed", &aid);
+        phase("claude_spawned", &aid);
+        phase("claude_result", &aid);
+        std::thread::sleep(Duration::from_millis(30));
+        phase("claude_spawned", &aid); // a relaunch keeps the first spawn
+        phase("claude_result", &aid); // a steered turn's last result is the one that ends it
+        fact(&aid, "transcript_bytes", 4096);
+        let t = timings(&aid).unwrap();
+        assert!(t["claimed_at"].as_f64().unwrap() > 1.0e9, "{t}");
+        assert_eq!(t["transcript_bytes"], 4096, "{t}");
+        assert_eq!(t["phases"]["claimed"], 0, "{t}");
+        assert!(t["phases"]["claude_spawned"].as_u64().unwrap() < 30, "{t}");
+        assert!(t["phases"]["claude_result"].as_u64().unwrap() >= 30, "{t}");
+        assert!(t["phases"].get("placed").is_none(), "{t}");
+        turn_end(&aid, "acme-seo", "claude", "completed", true);
+        assert!(timings(&aid).is_none());
     }
 
     #[test]

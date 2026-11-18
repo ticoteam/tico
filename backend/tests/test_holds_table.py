@@ -119,25 +119,27 @@ def test_a_bot_named_like_another_bots_released_row_keeps_every_row(api):
 def test_put_keeps_one_open_hold_and_release_keeps_it_as_history(api):
     with api.app.state.store.transaction() as c:
         assert holds.release(c, holds.RUNAWAY, "bot", "ops", actor="human:ana", how="person") is None
-        first = holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.KEEPER, details={"runs": 300})
+        first = holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.TICO_ACTOR, details={"runs": 300})
         assert first["bot_id"] == "ops"  # a bot's own hold names it: every open hold of a bot is one read (holds_bot)
-        again = holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.KEEPER, reason="Again.", details={"runs": 301})
+        again = holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.TICO_ACTOR, reason="Again.", details={"runs": 301})
         assert again["id"] == first["id"] and again["reason"] == "Again." and again["details"] == '{"runs": 301}'
         # The same kind on one bot's task is another hold.
-        other = holds.put(c, holds.RUNAWAY, "task", "task-1", actor=H.KEEPER, bot_id="ops")
+        other = holds.put(c, holds.RUNAWAY, "task", "task-1", actor=H.TICO_ACTOR, bot_id="ops")
         assert other["id"] != first["id"]
         assert holds.get(c, holds.RUNAWAY, "task", "task-1", "ops")["id"] == other["id"]
         ended = holds.release(c, holds.RUNAWAY, "bot", "ops", actor="human:ana", how="person")
         assert ended and ended["id"] == first["id"] and ended["released_how"] == "person"
         assert holds.get(c, holds.RUNAWAY, "bot", "ops") is None
-        assert holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.KEEPER)["id"] != first["id"]  # a new hold
+        assert holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.TICO_ACTOR)["id"] != first["id"]  # a new hold
         kept = c.execute("SELECT count(*) FROM holds WHERE holdable_id='ops' AND released_at IS NOT NULL").fetchone()
         assert kept[0] == 1
 
 
 def test_a_budget_raised_above_the_count_releases_the_hold_as_raised(api):
     with api.app.state.store.transaction() as c:
-        holds.put(c, holds.RUNAWAY, "bot", "ops", actor=H.KEEPER, details={"window": "hour", "runs": 3, "budget": 3})
+        holds.put(
+            c, holds.RUNAWAY, "bot", "ops", actor=H.TICO_ACTOR, details={"window": "hour", "runs": 3, "budget": 3}
+        )
         assert turn_budgets._release_if_room(c, "human:ana", "ops", {"turns_per_hour": 50})
         how = c.execute("SELECT released_how, released_by_id FROM holds WHERE holdable_id='ops'").fetchone()
         assert tuple(how) == ("raised", "human:ana")
@@ -512,7 +514,7 @@ def test_the_one_backoff_doubles_to_its_cap_and_a_held_kind_probes_at_its_own_ga
 def test_a_probe_is_taken_once_and_never_while_a_run_of_the_bot_is_out(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: LATER)
     with api.app.state.store.transaction() as c:
-        hold = holds.put(c, holds.FAILING, "bot", "ops", actor=H.KEEPER, streak=5, probe_at=HELD)
+        hold = holds.put(c, holds.FAILING, "bot", "ops", actor=H.TICO_ACTOR, streak=5, probe_at=HELD)
         c.execute("INSERT INTO attempts(id,bot_id,state,created_at) VALUES('a-out','ops','running',?)", (HELD,))
         assert not holds.take_probe(c, hold, "job-1")  # a run of the bot is still out
         c.execute("DELETE FROM attempts WHERE id='a-out'")

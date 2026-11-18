@@ -79,7 +79,7 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
         assert H.task(c, task["id"])["status"] == "done"
         c.execute(
             "UPDATE messages SET sender_id=?,kind='notice',refs=? WHERE id=?",
-            (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]),
+            (H.TICO_ACTOR, json.dumps({"task": task["id"]}), message["id"]),
         )
         cursor = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     assert claim(api, machine) is None

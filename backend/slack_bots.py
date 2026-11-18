@@ -277,7 +277,7 @@ def queue_post(c: Any, bot: str, entry: dict[str, Any], thread_ts: str, text: st
     room: Row = _mod("rules")._bot_room(c, bot)
     refs = {"slack_post": {"channel": entry["id"], "name": entry["name"], "thread_ts": thread_ts}}
     message: dict[str, Any] = H._write_message(
-        c, H.bot_actor(bot), room.get("owner_id") or H.KEEPER, text, room, "say", refs, None, None
+        c, H.bot_actor(bot), room.get("owner_id") or H.TICO_ACTOR, text, room, "say", refs, None, None
     )
     now = H.now()
     c.execute(

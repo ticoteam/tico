@@ -51,7 +51,9 @@ def test_runs_waiting_out_a_claim_error_add_no_statements_to_an_idle_claim(api):
     store = api.app.state.store
     with store.transaction() as c:
         for job, bot in c.execute("SELECT id,bot_id FROM jobs WHERE state='queued'").fetchall():
-            holds.put(c, holds.CLAIM_ERROR, "job", job, actor=H.KEEPER, bot_id=bot, until_at=H.shift(H.now(), hours=1))
+            holds.put(
+                c, holds.CLAIM_ERROR, "job", job, actor=H.TICO_ACTOR, bot_id=bot, until_at=H.shift(H.now(), hours=1)
+            )
     claim(api, machine)  # the first claim may do the company's first-time reads
     answer, held = claim(api, machine)
     assert answer.get("attempt") is None, answer

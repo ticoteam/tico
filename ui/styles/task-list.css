@@ -366,7 +366,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h:hover{background:var(--surface2);color:var(--ink)}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add{order:-1;margin:0;width:16px;height:16px;background:none;color:inherit}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add::after{content:"";position:absolute;inset:0}
-.tsec-empty :is(.tf-strip,.tf-empty){display:none}
 @media (max-width:760px){.tsec-empty:not(:has(form:not([hidden]))) .rail-h{height:44px;padding:0 12px 0 8px}}
 .task-layout>.task-chat>h3{display:flex;align-items:center;min-height:22px;margin:0 0 4px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .task-layout .tcomment{background:none;padding:6px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);border-radius:0}

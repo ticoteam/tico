@@ -34,7 +34,7 @@ pub const STABLE_S: u64 = 30;
 pub const TURN_RECOVERY_S: f64 = 15.0;
 pub const TURN_RECOVERY_JITTER: f64 = 0.2;
 /// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
-pub const CHANNELS: [&str; 9] = [
+pub const CHANNELS: [&str; 10] = [
     "claim",
     "sync",
     "config",
@@ -44,6 +44,7 @@ pub const CHANNELS: [&str; 9] = [
     "imports",
     "refresh",
     "keys",
+    "claude_logins",
 ];
 /// What a catch-up pass reads: every channel but `keys`, which only a credential change asks for.
 pub const ALL: &[&str] = &[
@@ -55,6 +56,7 @@ pub const ALL: &[&str] = &[
     "harness",
     "imports",
     "refresh",
+    "claude_logins",
 ];
 
 /// A channel's index in `CHANNELS`, or None for a name the runner does not read.
@@ -80,7 +82,8 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         "logins" => &["logins"],
         "harness_actions" => &["harness"],
         "credential_imports" => &["imports"],
-        "subscription_refresh" => &["refresh"],
+        // A plan's usage read, or a full Claude login's new token or refresh (claude_login.rs).
+        "subscription_refresh" => &["refresh", "claude_logins"],
         "screen_open" => &[], // crate::screen polls its sessions at once
         _ => ALL,
     }

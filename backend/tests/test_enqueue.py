@@ -150,7 +150,7 @@ def test_a_thread_with_members_queues_the_mentioned_bot_through_its_carrier(api)
     post(api, f"threads/{thread['id']}/messages", {"text": "@ops take this one"})
     written = _written(api, at)
     assert ("human:ana", None, "say", False) in written or ("human:ana", "", "say", False) in written
-    assert (H.KEEPER, ops, "notice", True) in written
+    assert (H.TICO_ACTOR, ops, "notice", True) in written
     assert not [w for w in written if w[1] == coo and w[3]]
 
 
@@ -160,8 +160,8 @@ def test_a_group_room_queues_the_addressed_bot(api):
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "human:ana", ["human:ana", "human:ben", ops, coo], kind="chat")
         H._write_message(c, "human:ana", coo, "Can you two split this?", conv, "say", {}, None, None)
-    # The room's other bot hears it through a keeper carrier notice, which queues its own turn.
-    assert _written(api, at) == [("human:ana", coo, "say", True), (H.KEEPER, ops, "notice", True)]
+    # The room's other bot hears it through a Tico carrier notice, which queues its own turn.
+    assert _written(api, at) == [("human:ana", coo, "say", True), (H.TICO_ACTOR, ops, "notice", True)]
 
 
 def test_an_external_agents_bot_gets_no_job(api):

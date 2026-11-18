@@ -703,7 +703,7 @@ class GitHubApp:
         with self.store.transaction() as c:
             gone = c.execute("DELETE FROM github_user_token WHERE id='app' AND nonce=?", (stored["nonce"],)).rowcount
             if gone:
-                H.event(c, H.KEEPER, "github.user_authorization_lost", "", {"reason": reason})
+                H.event(c, H.TICO_ACTOR, "github.user_authorization_lost", "", {"reason": reason})
 
     def _forget_rejected(self, token):
         """GitHub rejected this access token (401): forget the authorization if it is still the stored one, compared by value,
@@ -2886,7 +2886,7 @@ def install_github_app(app, settings, store):
         if owner_id:
             H.notice(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 H.human_actor(owner_id),
                 f"{name} created private repo {repository.split('/')[1]} ({repository}). {said}",
                 refs={"repository": repository, "created_by": who.actor},

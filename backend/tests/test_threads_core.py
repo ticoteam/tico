@@ -851,7 +851,7 @@ def _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_wh
         }
         assert {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)} == {new["id"]} == sql
     with store.transaction() as c:
-        threads.open_earlier_messages(c, H.KEEPER, slug)
+        threads.open_earlier_messages(c, H.TICO_ACTOR, slug)
     with store.read_transaction() as c:
         python, sql, _legacy, opens = sees(c, home_reader)
         assert python == sql == {old["id"], new["id"]} and opens

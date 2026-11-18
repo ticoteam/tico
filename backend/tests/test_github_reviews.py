@@ -299,7 +299,8 @@ def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager
         filed = [
             dict(r)
             for r in c.execute(
-                "SELECT owner_id, title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'", (H.KEEPER,)
+                "SELECT owner_id, title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'",
+                (H.TICO_ACTOR,),
             )
         ]
     assert filed == [{"owner_id": "bot:devops-engineer", "title": f"GitHub refused cmo's review on {REPO} (403)"}]
@@ -326,7 +327,7 @@ def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monk
         filed = [
             r[0]
             for r in c.execute(
-                "SELECT title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'", (H.KEEPER,)
+                "SELECT title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'", (H.TICO_ACTOR,)
             )
         ]
     assert filed == [f"GitHub refused cmo's review on {REPO} (403)"]
@@ -339,7 +340,7 @@ def test_github_refusing_a_review_403_goes_to_the_tasks_pipeline_manager_without
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
         X.pipeline(c, "dev", "Dev work", [{"name": "In Progress"}], manager="bot:cpo")
-        ticket = X.new_task(c, H.KEEPER, "Build the thing", pipeline_id="dev", assignee="bot:cfo")
+        ticket = X.new_task(c, H.TICO_ACTOR, "Build the thing", pipeline_id="dev", assignee="bot:cfo")
         c.execute(
             "INSERT INTO task_links(id, task_id, kind, url, created_at) VALUES('l1', ?, 'pr', ?, ?)",
             (ticket["id"], f"https://github.com/{REPO}/pull/7", H.now()),
@@ -350,7 +351,7 @@ def test_github_refusing_a_review_403_goes_to_the_tasks_pipeline_manager_without
         owners = [
             r[0]
             for r in c.execute(
-                "SELECT owner_id FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'", (H.KEEPER,)
+                "SELECT owner_id FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'", (H.TICO_ACTOR,)
             )
         ]
     assert owners == ["bot:cpo"]

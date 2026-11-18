@@ -120,7 +120,7 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}): Att => (
       assert.ok(held.length > answered, 'the page follows the live event stream (and reconnects after each event)');
       const stream = held.at(-1)!;
       answered = held.length;
-      if (way === 'no moveBefore') await page.evaluate(() => { (window as unknown as PageWin).__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
+      if (way === 'no moveBefore') await page.evaluate(() => { (window as unknown as PageWin).__mb = Element.prototype.moveBefore; Reflect.deleteProperty(Element.prototype, "moveBefore"); });
       gen += 1;
       messages.push({id, sender_id: 'bot:editor', body: 'One more.', created_at: now, refs: {attachments: [A('f-more-' + id, 'audio')]}});
       const seq = 8 + gen;

@@ -564,7 +564,7 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
         },
         isolated=True,
     )
-    saved = set_task_model(api, {"harness": "codex", "model": "gpt-6.1-sol", "effort": "high"})
+    saved = set_task_model(api, {"harness": "codex", "model": "gpt-6.2-sol", "effort": "high"})
     assert saved["readiness"]["can_run"] is False and "gateway" not in saved["readiness"]
     assert saved["readiness"]["fix"].startswith("Sign in codex on Test Mac in Settings > Computers")
     task, turn = task_turn(api, machine)
@@ -596,7 +596,7 @@ def test_an_ordinary_fallback_usage_limit_is_not_a_task_model_limit(api):
             "usage": {
                 "runtime": "codex",
                 "harness": "codex",
-                "model": "gpt-6.1-sol",
+                "model": "gpt-6.2-sol",
                 "input_tokens": 10,
                 "output_tokens": 1,
                 "billing": "subscription",

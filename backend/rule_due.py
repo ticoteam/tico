@@ -390,7 +390,7 @@ def on_task_status(c, actor, task, old, new):
 def _completes(task, actor):
     """Completed (docs/dev/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
     and a close by Tico (cleanup, a task closed with the one above it) never are."""
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         return False
     if task.get("status") == "done":
         return actor == task.get("owner_id")
@@ -470,7 +470,7 @@ def on_due_task_completed(c, task, closed_by=None):
 def on_due_task_reopened(c, task, reopened_by=None):
     """A routine's task reopened: the occurrence it marked is no longer satisfied. Removes the routine's mark for this
     task, and writes an audit row on each rule. Returns the due date ids unmarked."""
-    actor = reopened_by or task.get("owner_id") or H.KEEPER
+    actor = reopened_by or task.get("owner_id") or H.TICO_ACTOR
     unmarked = []
     for mark in _rows(c, "SELECT * FROM rule_due_status WHERE task_id=? AND via='routine'", (task.get("id"),)):
         due = one(c, mark["due_date_id"])

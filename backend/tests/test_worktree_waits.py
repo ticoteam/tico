@@ -230,7 +230,7 @@ def test_one_broken_wait_ends_alone_and_the_heartbeat_still_frees_places(prepare
 
     def provision(c, who, task, *args, **kwargs):
         if task['id'] == tid:
-            H.event(c, H.KEEPER, 'half.done', tid, {})
+            H.event(c, H.TICO_ACTOR, 'half.done', tid, {})
             raise RuntimeError('synthetic fault')
         return real(c, who, task, *args, **kwargs)
 

@@ -8,6 +8,8 @@ import uuid
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put, setup_attempt  # noqa: F401
 from backend.tests.helpers.company import bot  # noqa: F401
+import pytest
+from backend.tests.helpers.growth_cards import classic_cards  # noqa: F401 (the fixture)
 
 GROWTH_NUMBERS = ["new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30"]
 
@@ -75,13 +77,9 @@ def marketing(api, title, channel, stage="idea:on-deck", owner="ops", **more):
 def test_the_growth_page_starts_with_its_cards_and_admins_and_bots_arrange_it(api):
     view = growth(api)
     assert view["saved"] is False and view["can_edit"] is True and view["kind"] == "growth"
-    assert [p["card"]["template"] for p in view["pins"]] == (
-        ["growth_funnel"] + ["growth_number"] * 6 + ["growth_channels", "growth_retention", "growth_board"]
-    )
-    assert [p["card"]["settings"]["metric"] for p in view["pins"][1:7]] == GROWTH_NUMBERS
-    assert view["months"] == [] and all(
-        p["card"]["hidden"] for p in view["pins"] if p["card"]["template"] == "growth_number"
-    )
+    # The month numbers and channels are the Growth line's (backend/growth_line.py), so not cards by default.
+    assert [p["card"]["template"] for p in view["pins"]] == ["growth_funnel", "growth_retention", "growth_board"]
+    assert view["months"] == []
     assert growth(api, token="cara-test")["can_edit"] is False  # a member reads it, arranges nothing
     put(api, "places/growth", {}, "cara-test", expected=403)
     fid = page(api, "ops")
@@ -96,10 +94,11 @@ def test_the_growth_page_starts_with_its_cards_and_admins_and_bots_arrange_it(ap
     # Everyone sees it, so an audience is refused; the first change saved the defaults as real pins.
     put(api, "places/growth", {"audience": {"everyone": False}}, expected=422)
     saved = growth(api)
-    assert saved["saved"] is True and all(p["id"] for p in saved["pins"]) and len(saved["pins"]) == 11
-    assert len(growth(api, token="cara-test")["pins"]) == 11
+    assert saved["saved"] is True and all(p["id"] for p in saved["pins"]) and len(saved["pins"]) == 4
+    assert len(growth(api, token="cara-test")["pins"]) == 4
 
 
+@pytest.mark.usefixtures("classic_cards")
 def test_growth_cards_read_the_month_picked_and_carry_a_figure_back_to_the_last_month_with_one(api):
     seed(api)
     view = growth(api)
@@ -123,6 +122,7 @@ def test_growth_cards_read_the_month_picked_and_carry_a_figure_back_to_the_last_
     assert cac_later["data"]["value"] is None and cac_later["data"]["from"] == ""
 
 
+@pytest.mark.usefixtures("classic_cards")
 def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_see(api):
     seed(api)
     shipped = marketing(api, "Google ads test", "google-search", stage="idea:live")

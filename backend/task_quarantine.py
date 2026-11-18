@@ -91,26 +91,26 @@ def hold(c, bot, scope, reason, refusal):
         holds.QUARANTINE,
         holdable,
         ident,
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         bot_id=bot,
         reason=reason,
         details={"refusal": refusal},
         until_at=until,
     )
-    H.event(c, H.KEEPER, "quarantine.held", H.bot_actor(bot), {"scope": scope, "reason": reason})
+    H.event(c, H.TICO_ACTOR, "quarantine.held", H.bot_actor(bot), {"scope": scope, "reason": reason})
     said = (
         f"Held for {H.actor_name(c, H.bot_actor(bot))}: {reason} ({refusal.get('rule')} rule). This task or chat resumes after "
         f"{until[:16].replace('T', ' ')} UTC, or when a person clears the bot's quarantine. Other tasks can continue."
     )
     if kind == "task":
-        H.task_comment(c, H.KEEPER, ident, said, wake=False)
+        H.task_comment(c, H.TICO_ACTOR, ident, said, wake=False)
     else:
         _notice(c, bot, ident, said)
 
 
 def _notice(c, bot, conversation_id, said):
     """A quiet notice in the held chat: it explains the wait without creating another run."""
-    H.say(c, H.KEEPER, H.bot_actor(bot), said, conversation_id=conversation_id, kind="notice", refs={"quiet": True})
+    H.say(c, H.TICO_ACTOR, H.bot_actor(bot), said, conversation_id=conversation_id, kind="notice", refs={"quiet": True})
 
 
 def notes_free_sql():
@@ -134,7 +134,7 @@ def _release_notice(c, row):
         f"({refusal.get('rule')} rule). {H.QUARANTINE_LIFTED}"
     )
     if row["holdable_type"] == "task":
-        H.task_comment(c, H.KEEPER, row["holdable_id"], said, wake=False)
+        H.task_comment(c, H.TICO_ACTOR, row["holdable_id"], said, wake=False)
     else:
         _notice(c, row["bot_id"], row["holdable_id"], said)
 

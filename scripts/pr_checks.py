@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Conservative PR selection, measured Python and browser groups, and read-only check receipts."""
+"""Select PR checks, run measured test groups with bounded retries, and write check receipts."""
 
 import argparse
 import ast
@@ -15,6 +15,11 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+
+if __package__:
+    from . import flake_quarantine
+else:
+    import flake_quarantine
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
@@ -37,6 +42,7 @@ PIPELINE_VIEW = [
     "pipeline-drop",
     "pipeline-move",
     "pipeline-rail",
+    "pipeline-side-stages",
     "pipeline-snoozed",
     "stage-column-menu",
     "stage-review",
@@ -60,6 +66,24 @@ UI_ALSO = {
     "ui/app/refresh.js": ["board-flood"],
     "ui/app/live.js": ["board-flood"],
 }
+# Checks whose inputs arrive through an HTTP request or catalog discovery.
+CHECK_ALSO = {
+    "backend/mail.py": ("ui/tests/e2e-tools.cts",),
+    "backend/mail_actions.py": ("ui/tests/redesign-e2e-automations.cts",),
+    "backend/model_subscriptions.py": ("ui/tests/computers-shared.cts",),
+    "backend/threads.py": ("backend/tests/test_sql_parity.py",),
+    "templates/catalog/*/card.yaml": ("backend/tests/test_recruiting.py",),
+}
+
+
+def additional_checks(names, root):
+    return {
+        test
+        for pattern, tests in CHECK_ALSO.items()
+        if any(fnmatch.fnmatchcase(name, pattern) for name in names)
+        for test in tests
+        if (root / test).is_file()
+    }
 
 
 def browser_script(root, stem):
@@ -961,12 +985,17 @@ class DependencyMap:
         found.discard(name)
         return found
 
-    def readers(self, name, added):
-        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
-        folder, or a listing (one that uses only names sees it only when it is new)."""
+    def path_readers(self, name):
+        """The files that read a changed path or a folder that contains it."""
         users = set(self.read_by.get(name, set()))
         for parent in list(Path(name).parents)[:-1]:
             users |= self.read_by.get(str(parent) + "/", set())
+        return users
+
+    def readers(self, name, added):
+        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
+        folder, or a listing (one that uses only names sees it only when it is new)."""
+        users = self.path_readers(name)
         users |= {
             p for p, patterns in self.globs.items() if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)
         }
@@ -1413,6 +1442,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
        runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC; a path that can move what a
        cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
+    10. Inputs in CHECK_ALSO run the tests and browser scripts that exercise them through HTTP or catalog discovery.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1573,7 +1603,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         direct |= linked_scripts
         if direct:
             notes.append("rule 6: browser scripts the release check runs")
-        browser |= direct
+    extra_checks = additional_checks(names, root)
+    if extra_checks:
+        notes.append("rule 10: HTTP and catalog checks")
+        python |= {p for p in extra_checks if is_test(p)}
+        direct |= {Path(p).stem for p in extra_checks if is_browser(p)}
+    browser |= direct
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1707,20 +1742,26 @@ def smoke_check(root=ROOT):
     return problems
 
 
-def collect(root=ROOT):
+def start_collect(root=ROOT):
+    """The default collection as a background process. On a hosted runner it takes about a minute, about as long as the
+    dependency map the plan builds meanwhile on another core, so a plan that builds the map starts this first."""
+    command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"]
+    return subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def collect(root=ROOT, started=None):
     # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
     # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
     if __package__:
         from .release_checks import validate_shard_coverage
     else:
         from release_checks import validate_shard_coverage
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"], cwd=root, capture_output=True, text=True
-    )
-    if result.returncode:
-        raise RuntimeError("Default collection failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
+    process = started or start_collect(root)
+    stdout, stderr = process.communicate()
+    if process.returncode:
+        raise RuntimeError("Default collection failed:\n" + stdout[-4000:] + stderr[-4000:])
     counts = Counter(
-        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+        line.split("::", 1)[0] for line in stdout.splitlines() if "::" in line and not line.startswith(" ")
     )
     if not counts:
         raise RuntimeError("Default suite collected no tests")
@@ -1860,8 +1901,9 @@ def queue_jobs(changed):
 #            what made every change select hundreds of tests.
 # When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the
 # Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
-# test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
-# job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
+# test files first, then the smoke set, then tests linked to a specific changed file (non-hub links first), then the
+# nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
+# (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
 # scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
 # them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
@@ -1870,6 +1912,12 @@ def queue_jobs(changed):
 NARROW = {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
 NARROW_SHARD_SECONDS = JOB_SECONDS
 HUB_TEST_USERS = 40
+# The queue follows these hubs to their direct tests for changes to the corresponding inputs, up to three hops.
+QUEUE_HUB_INPUTS = {
+    "backend/threads.py": "backend/thread_attention.py",
+    "backend/store.py": "backend/threads.py",
+    "backend/hubdb.py": "backend/waiting_on.py",
+}
 TIMINGS_FILE = "scripts/test-timings.json"
 
 
@@ -1892,6 +1940,10 @@ def shapes_the_api(name, root=ROOT):
         return "**api_v2(" in (root / name).read_text()
     except OSError:
         return False
+
+
+def is_hub(users):
+    return sum(is_test(user) for user in users) > HUB_TEST_USERS
 
 
 def reach_levels(names, depth, added=None, root=ROOT, graph=None):
@@ -1931,7 +1983,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         found = set()
         for name in frontier:
             users = set(graph.run_by.get(name, ()))
-            if is_browser(name) or sum(1 for user in users if is_test(user)) > HUB_TEST_USERS:
+            if is_browser(name) or is_hub(users):
                 continue
             found |= users
         frontier = found - set(level)
@@ -1943,7 +1995,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         if hop > 1 or not module.endswith("/__init__.py"):
             continue
         users = graph.run_by.get(module, ())
-        if sum(is_test(user) for user in users) > HUB_TEST_USERS:
+        if is_hub(users):
             continue
         for helper in users:
             if "/tests/helpers/" in helper:
@@ -1963,7 +2015,26 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         return picked
     mode = NARROW[event]
     names = [n for n in changed if not unread(n)]
-    level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
+    level, linked, hub_linked = {}, set(), set()
+    if names:
+        graph = graph or DependencyMap(root)
+        level = reach_levels(names, mode["depth"], added, root, graph)
+        if event == "merge_group":
+            for hub, source in QUEUE_HUB_INPUTS.items():
+                if source in names and (hop := level.get(hub)) in (1, 2):
+                    for test in graph.run_by.get(hub, ()):
+                        if is_test(test):
+                            level[test] = min(level.get(test, hop + 1), hop + 1)
+        linked = additional_checks(names, root)
+        for test in linked:
+            level.setdefault(test, 1)
+        for name in names:
+            users = graph.run_by.get(name, ())
+            (hub_linked if is_hub(users) else linked).update(users)
+            linked.update(graph.path_readers(name))
+            stem = Path(name).stem
+            linked.update(graph.by_base.get(f"test_{stem}.py", ()))
+            linked.update(graph.by_base.get(f"{stem}_test.py", ()))
     smoke_tests, smoke_scripts = smoke(root)
     full = set(picked["python"])
     # Schema and other guard checks run like changed tests; their repository-wide reads exceed the depth limit.
@@ -1976,8 +2047,12 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     extra = sorted(set(smoke_tests) - python - full) if full and not left else []
     if full:
         python |= set(smoke_tests)
-    # Changed tests 0, the smoke set 1, level 1 is 2, level 2 is 3.
-    tier = {p: 0 if level.get(p) == 0 else 1 if p in smoke_tests else 1 + level[p] for p in python}
+    # Changed tests and guards run first, then smoke. Concrete links outrank broad reads and downstream users.
+    tier = {p: 3 + level.get(p, 0) for p in python}
+    tier.update(dict.fromkeys(python & hub_linked, 3))
+    tier.update(dict.fromkeys(python & linked, 2))
+    tier.update(dict.fromkeys(python & set(smoke_tests), 1))
+    tier.update(dict.fromkeys((p for p in python if level.get(p) == 0), 0))
     out = {**picked, "python": sorted(python)}
     record = {
         "event": event,
@@ -2063,10 +2138,11 @@ def narrow_summary(record):
     return "\n".join(lines) + "\n"
 
 
-def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
+def prepare(event, base, output, timings_path=None, head="HEAD", light=False, prefetch=False):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
     merge_group. A group's base is its own base sha, so it needs no merge_parent. `light` narrows the
-    plan for an event in NARROW; any other event ignores it."""
+    plan for an event in NARROW; any other event ignores it. `prefetch` (the CLI's plan) starts the test collection
+    before the dependency map, so the two run side by side."""
     if event == "pull_request":
         base = merge_parent(base)
     changed = changed_files(base, head) if base else []
@@ -2075,13 +2151,21 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         changed = sorted(set(changed) | set(script_changes(base, head, changed)))
     light = light and event in NARROW
     # One map for the selection and the narrowing; selection builds none for a change it answers without one.
-    graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
+    mapped = light and any(not unread(n) for n in changed)
+    started = start_collect() if prefetch and mapped else None
+    graph = DependencyMap(ROOT) if mapped else None
     picked = selection(changed, event, base=base, added=added, graph=graph, head=head)
     if light:
         picked = narrow(picked, changed, event, added=added, graph=graph)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
-    counts = collect() if picked["python"] != [] else Counter()
+    if picked["python"] != []:
+        counts = collect(started=started) if started else collect()
+    else:
+        if started:
+            started.kill()
+            started.wait()
+        counts = Counter()
     if picked["python"] is not None:
         # A selected file with no default test (a changed test whose tests are all slow, which the release gate runs;
         # a test helper the map follows) has nothing to run here.
@@ -2091,8 +2175,13 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     if timings_path:
         source = Path(timings_path)
         paths = sorted(source.rglob("durations.json")) if source.is_dir() else ([source] if source.is_file() else [])
+        # Several measured runs (the last green queue groups) average per file: one run's seconds for a file swing by 2x.
+        measured = defaultdict(list)
         for path in paths:
-            timings.update(json.loads(path.read_text()))
+            for name, seconds in json.loads(path.read_text()).items():
+                if isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
+                    measured[name].append(float(seconds))
+        timings = {name: sum(values) / len(values) for name, values in measured.items()}
     record = picked.pop("narrow", None)
     if record is not None:
         # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
@@ -2219,11 +2308,39 @@ def coverage_config(suite, root=ROOT):
     return path
 
 
+def browser_attempt(command, root, env):
+    """Stream the browser log and collect the script names from its failure lines."""
+    failed = []
+    with subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE, text=True, errors="replace") as process:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            match = re.match(r"^FAIL  ([\w.-]+\.(?:cts|cjs))(?=\s|$)", line)
+            if match:
+                failed.append(match[1])
+        return process.wait(), failed
+
+
+def pytest_command(workers, report):
+    return [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        workers,
+        *PYTEST_FLAGS,
+        "-o",
+        "junit_family=xunit1",
+        f"--junitxml=ci-results/{report.name}",
+    ]
+
+
 def run(plan_path, suite, root=None, quarantine=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
     `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
     `quarantine` (PR checks and the merge queue only, never release validation) runs the tests in ci/quarantine/ as
-    non-strict xfail (scripts/flake_quarantine.py)."""
+    non-strict xfail. Python and browser legs retry up to five failures once and record them if all pass."""
     root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
@@ -2234,42 +2351,39 @@ def run(plan_path, suite, root=None, quarantine=False):
         from .diff_coverage import extract
     else:
         from diff_coverage import extract
-    lines = plan.get("coverage", {}).get("lines", {})
-    measured = bool(lines) and suite != "selection" and not suite.startswith("browser-")
-    data = root / "ci-results" / f"coverage-{suite}.data"
     if suite == "selection":
         if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
+    results = root / "ci-results"
+    results.mkdir(exist_ok=True)
+    report = results / f"{suite}.xml"
+    retry_report = results / f"{suite}-retry.xml"
+    flaky_report = results / f"flaky-{suite}.json"
+    browser_failures = results / f"failed-{suite}.txt"
+    browser = suite.startswith("browser-")
+    slow = suite == "conformance" or suite.split("-")[0] == "contracts"
+    measured = bool(plan.get("coverage", {}).get("lines")) and not browser
+    data = results / f"coverage-{suite}.data"
     env = None
-    if suite.startswith("browser-"):
+    if browser:
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
-        command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS), *files]
+        browser_command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS)]
+        command = [*browser_command, *files]
         # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cts); this interpreter has the
         # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
         env = {
             **os.environ,
-            "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json"),
+            "TICO_UI_TIMINGS": str(results / f"{suite}.json"),
             "TICO_PYTHON": sys.executable,
         }
     else:
         if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "-n",
-            os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)),
-            *PYTEST_FLAGS,
-            "-o",
-            "junit_family=xunit1",
-            f"--junitxml=ci-results/{suite}.xml",
-        ]
-        if suite == "conformance" or suite.split("-")[0] == "contracts":
+        command = pytest_command(os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)), report)
+        if slow:
             command += ["-m", "slow"]
             # A content sweep runs as the release gate runs it (CONTENT_SWEEPS): the job names its environment, or, in an
             # incremental release plan, the plan's `sweeps` do.
@@ -2291,19 +2405,64 @@ def run(plan_path, suite, root=None, quarantine=False):
             env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
         command += files
         print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
-    (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
-    result = subprocess.run(command, cwd=root, env=env)
+    failed = []
+    if quarantine:
+        for path in (report, retry_report, flaky_report, browser_failures):
+            path.unlink(missing_ok=True)
+    if browser and quarantine:
+        status, failed = browser_attempt(command, root, env)
+        if status and failed:
+            browser_failures.write_text("\n".join(failed) + "\n")
+    else:
+        status = subprocess.run(command, cwd=root, env=env).returncode
     if measured:
-        extract(plan, data, root / "ci-results" / f"coverage-{suite}.json")
+        extract(plan, data, results / f"coverage-{suite}.json")
         data.unlink(missing_ok=True)
-    if result.returncode == 0 and not suite.startswith("browser-"):
-        cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
+    if status == 0 and not browser:
+        cases = list(ET.parse(report).iter("testcase"))
         # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
         ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
         if not ran:
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
-    return result.returncode or rust
+    if not quarantine or slow or rust or status != 1:
+        return status or rust
+    if not browser:
+        failed = list(
+            dict.fromkeys(
+                flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+                for case in junit_failures(report)
+            )
+        )
+        # Collection errors can have JUnit cases without a test node id.
+        if any("::" not in test for test in failed):
+            return status
+    if not 0 < len(failed) <= flake_quarantine.MAX_FAILURES_PER_JOB:
+        return status
+    if browser:
+        retry_env = {**env, "TICO_UI_TIMINGS": str(results / f"{suite}-retry.json")}
+        retry_status, remaining = browser_attempt([*browser_command, *failed], root, retry_env)
+        if retry_status:
+            if remaining:
+                browser_failures.write_text("\n".join(remaining) + "\n")
+            return retry_status
+        browser_failures.unlink(missing_ok=True)
+    else:
+        retry = [*pytest_command("0", retry_report), "--quarantine", *failed]
+        retry_status = subprocess.run(retry, cwd=root, env=None, check=False).returncode
+        if retry_status:
+            return retry_status
+        try:
+            passed = flake_quarantine.passed_tests(retry_report.read_bytes())
+        except (ET.ParseError, OSError):
+            return status
+        if not passed.issuperset(failed):
+            return status
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    flaky_report.write_text(json.dumps({"suite": suite, "tests": failed, "commit": commit}) + "\n")
+    for test in failed:
+        print(f"Flaky (failed, then passed on retry): {test}", flush=True)
+    return 0
 
 
 def cargo_tests(crates):
@@ -2429,18 +2588,21 @@ def junit_ran(path):
     return path.is_file() and any(case.find("skipped") is None for case in ET.parse(path).iter("testcase"))
 
 
+def junit_failures(path):
+    try:
+        cases = ET.parse(path).iter("testcase")
+    except (ET.ParseError, OSError):
+        return
+    yield from (case for case in cases if case.find("failure") is not None or case.find("error") is not None)
+
+
 def junit_failed(paths, limit=3):
     """The first failing tests in pytest JUnit reports, as "file.py::test", for the error a fail-fast cancel prints."""
     names = []
     for path in paths:
-        try:
-            cases = ET.parse(path).iter("testcase")
-        except (ET.ParseError, OSError):
-            continue
-        for case in cases:
-            if case.find("failure") is not None or case.find("error") is not None:
-                module = case.get("classname", "").rsplit(".", 1)[-1]
-                names.append(f"{module}.py::{case.get('name', '')}" if module else case.get("name", ""))
+        for case in junit_failures(path):
+            module = case.get("classname", "").rsplit(".", 1)[-1]
+            names.append(f"{module}.py::{case.get('name', '')}" if module else case.get("name", ""))
     return names[:limit] + ([f"and {len(names) - limit} more"] if len(names) > limit else [])
 
 
@@ -2596,7 +2758,7 @@ def main():
     execute.add_argument(
         "--quarantine",
         action="store_true",
-        help="run ci/quarantine/ tests as non-strict xfail (PR checks and the queue)",
+        help="run ci/quarantine/ tests as non-strict xfail and retry small failures once",
     )
     mine = sub.add_parser(
         "local", help="run the tests a pull request's checks would select, here, and print a receipt for its head"
@@ -2606,9 +2768,10 @@ def main():
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
     ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
     ran.add_argument("report")
-    failed = sub.add_parser("failed", help="print the first failing tests in the JUnit reports in a folder")
+    failed = sub.add_parser("failed", help="print the first failing tests or browser scripts reported in a folder")
     failed.add_argument("folder")
     sub.add_parser("durations")
+    sub.add_parser("flaky", help="combine the legs' successful retries into flaky.json")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
     cancel = sub.add_parser("cancel-superseded")
@@ -2628,7 +2791,7 @@ def main():
         )
         return 2
     if args.action == "plan":
-        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light)
+        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light, prefetch=True)
     elif args.action == "run":
         return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
     elif args.action == "junit-ran":
@@ -2636,14 +2799,31 @@ def main():
             print(f"{args.report}: every test skipped or none ran", file=sys.stderr)
             return 1
     elif args.action == "failed":
-        print(", ".join(junit_failed(sorted(Path(args.folder).glob("*.xml")))))
+        folder = Path(args.folder)
+        failed = junit_failed(sorted(folder.glob("*-retry.xml"))) or junit_failed(sorted(folder.glob("*.xml")))
+        if not failed:
+            failed = [
+                name for path in sorted(folder.glob("failed-browser-*.txt")) for name in path.read_text().splitlines()
+            ]
+        print(", ".join(failed))
     elif args.action == "local":
         return local(base=args.base, jobs=args.jobs, ready=args.ready)
     elif args.action == "durations":
-        measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
+        results = Path("ci-results")
+        measured = durations(
+            (path for path in results.glob("python-*.xml") if not path.stem.endswith("-retry")),
+            (path for path in results.glob("browser-*.json") if not path.stem.endswith("-retry")),
+        )
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
+    elif args.action == "flaky":
+        records = [json.loads(path.read_text()) for path in sorted(Path("ci-results").glob("flaky-*.json"))]
+        output = Path("flaky.json")
+        if records:
+            output.write_text(json.dumps(records, indent=2) + "\n")
+        else:
+            output.unlink(missing_ok=True)
     elif args.action == "cancel-superseded":
         # Never this run: it is numbered below its own run number and its id is excluded here as well.
         runs = [

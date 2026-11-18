@@ -206,7 +206,7 @@ def record_system(c, trigger_id: str, relay_id: str) -> bool:
     c.execute(
         "INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
         "VALUES(?,?,?,?,?,NULL,0)",
-        (relay_id, trigger_id, "", H.KEEPER, H.now()),
+        (relay_id, trigger_id, "", H.TICO_ACTOR, H.now()),
     )
     return True
 

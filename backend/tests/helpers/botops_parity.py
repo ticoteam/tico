@@ -53,11 +53,11 @@ def everything(api):
 
 # ------------------------------------------------------------------ following through on a person's request later
 def _wake(api, machine):
-    """A run the keeper starts with no task (a daily-update request): nobody's request is attached."""
+    """A run Tico starts with no task (a daily-update request): nobody's request is attached."""
     with api.app.state.store.transaction() as c:
         H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:botops",
             "Time for your daily update.",
             kind="notice",

@@ -273,7 +273,7 @@ def _review_role(c, task, payload, role):
         return False
     return TRo.set_roles(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         task["id"],
         {role: want},
         mover=True,
@@ -308,10 +308,10 @@ def _settle_branch_prs(c, task_id, repo, branch, number, state, have):
     if state == "open" and (not have or have["state"] in LIVE_PR_STATES):
         if any(o["number"] < number for o in live):
             if have:
-                H.task_unlink(c, H.KEEPER, task_id, have["id"])
+                H.task_unlink(c, H.TICO_ACTOR, task_id, have["id"])
             return False
         for o in live:
-            H.task_unlink(c, H.KEEPER, task_id, o["id"])
+            H.task_unlink(c, H.TICO_ACTOR, task_id, o["id"])
     return True
 
 
@@ -355,9 +355,9 @@ def register_worktree_pr(c, pr):
             and _settle_branch_prs(c, row["task_id"], repo, branch, number, state, have)
             and not have
         ):
-            link = H.task_link(c, H.KEEPER, row["task_id"], url)
+            link = H.task_link(c, H.TICO_ACTOR, row["task_id"], url)
             made.add(link["id"])
-            H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
+            H.event(c, H.TICO_ACTOR, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
         # The branch has its pull request now, however it was found, so an earlier failure to open one is over.
         detail = H._json(row["detail"], {}) or {}
         if detail.pop("pr_error", None):
@@ -684,7 +684,7 @@ def _settle_removal(c, link_id, pr):
     if moved:
         return
     task = H.task(c, link["task_id"])
-    H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
+    H._task_event(c, task["id"], H.TICO_ACTOR, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
     if _engine_speaks(c, link["task_id"]):
         return
     queue_wake(
@@ -840,7 +840,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             H._task_event(
                 c,
                 task["id"],
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "github",
                 f"{link['title']} {link.get('state') or 'unknown'}",
                 item,
@@ -870,7 +870,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
         if not read_refresh:
             _review_role(c, task, payload, review_role)
-        H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
+        H.event(c, H.TICO_ACTOR, "github.pull_request", task["id"], {"action": action, "url": url})
     _merge_wakes(c, merged, url)
     pr_match = PR_LINK.match(url)
     if action == "closed" and pr_match:
@@ -937,7 +937,7 @@ def release(c, payload, release_repo=""):
         if not metadata(c, key):
             save_metadata(c, key, {"at": H.now()})
             facts = {"release": tag, "repository": repo, "url": str(rel.get("html_url") or "")}
-            H.hook(c, "release.published", target, lambda: facts, H.KEEPER, revision=0)
+            H.hook(c, "release.published", target, lambda: facts, H.TICO_ACTOR, revision=0)
     return {"release": tag, "action": action, "woken": []}
 
 
@@ -1413,7 +1413,7 @@ def apply_checks(c, link_id, head, checks, since=None):
     )
     if changed:
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
-        H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
+        H.event(c, H.TICO_ACTOR, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     return state
 
 
@@ -1828,7 +1828,7 @@ def _one_draft(service, repo, branch, mine, token):
                 (repo.lower(), *later),
             )
         ):
-            H.task_unlink(c, H.KEEPER, row["task_id"], row["id"])
+            H.task_unlink(c, H.TICO_ACTOR, row["task_id"], row["id"])
     for n in later:
         try:
             service._call(
@@ -2378,7 +2378,7 @@ def ship_deployed(c, settings, *, ancestry=None):
                     "deployed": commit,
                     "comparison": f"https://github.com/{repo}/compare/{link['pr_sha']}...{commit}",
                 }
-            H.event(c, H.KEEPER, "github.shipped", link["task_id"], evidence)
+            H.event(c, H.TICO_ACTOR, "github.shipped", link["task_id"], evidence)
             if link["task_id"] not in shipped:
                 shipped.append(link["task_id"])
     return shipped

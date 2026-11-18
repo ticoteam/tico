@@ -1,9 +1,9 @@
 """Who wrote a line: the one rule every surface draws its label from (docs/threads.md, "Who wrote it").
 
-`keeper` (hubdb.KEEPER) is the author Tico's server writes as when no person or bot did. It is not a process or a bot,
-so a line written as keeper says what made it through `refs.source` (on a message) or `data.source` (on a task's
-history row): a built-in's key, `automation:<id>`, or `system:*`. A keeper line with a task in its refs is a task
-update. Anything else keeper wrote is a plain system line.
+`keeper` (hubdb.TICO_ACTOR) is the author Tico's server writes as when no person or bot did. It is not a process or a bot,
+so a line written as Tico says what made it through `refs.source` (on a message) or `data.source` (on a task's
+history row): a built-in's key, `automation:<id>`, or `system:*`. A Tico line with a task in its refs is a task
+update. Anything else Tico wrote is a plain system line.
 
 This module changes what people see only. Who wakes a bot, what is delivered and the stored actor stay as they are.
 """
@@ -15,12 +15,12 @@ import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-KEEPER = "keeper"
-ASSISTANT_FOR = "assistant-for"  # refs.source of a keeper message the Assistant wrote for a person
+TICO_ACTOR = "keeper"
+ASSISTANT_FOR = "assistant-for"  # refs.source of a Tico message the Assistant wrote for a person
 TASK_UPDATE = "Task update"
 ASSISTANT_DEFAULT = "Assistant"
 
-# The built-in automations a keeper line can name: key -> display name. A write names its key in refs.source.
+# The built-in automations a Tico line can name: key -> display name. A write names its key in refs.source.
 BUILTINS = {
     "follow-up-timer": "Follow-up timer",
     "earlier-messages": "Earlier messages",
@@ -51,7 +51,7 @@ def assistant_name():
 
 @contextmanager
 def writing_as(key):
-    """Every keeper write inside this block says `key` is what made it (`stamp`, `stamp_data`). A block inside a block
+    """Every Tico write inside this block says `key` is what made it (`stamp`, `stamp_data`). A block inside a block
     names its own key. The key is a BUILTINS key, `automation:<id>` or `system:*`."""
     token = _scope.set(key)
     try:
@@ -61,12 +61,12 @@ def writing_as(key):
 
 
 def scope():
-    """The key the current keeper writes name, or None."""
+    """The key the current Tico writes name, or None."""
     return _scope.get()
 
 
 def scoped(key):
-    """A decorator: every keeper write the function makes says `key` (see writing_as)."""
+    """A decorator: every Tico write the function makes says `key` (see writing_as)."""
 
     def wrap(fn):
         @functools.wraps(fn)
@@ -84,10 +84,10 @@ def automation_key(automation_id):
 
 
 def stamp(refs, actor):
-    """A message's refs with `source` set to the scope's key, when keeper writes it inside a scope and it names none.
+    """A message's refs with `source` set to the scope's key, when Tico writes it inside a scope and it names none.
     Refs are returned as they were otherwise."""
     key = _scope.get()
-    if actor != KEEPER or not key:
+    if actor != TICO_ACTOR or not key:
         return refs
     refs = refs if isinstance(refs, dict) else {}
     return refs if "source" in refs else {**refs, "source": key}
@@ -96,7 +96,7 @@ def stamp(refs, actor):
 def stamp_data(data, actor):
     """A task history row's `data` with `source` set the same way. Data that is not a dict or None stays as it is."""
     key = _scope.get()
-    if actor != KEEPER or not key or (data is not None and not isinstance(data, dict)):
+    if actor != TICO_ACTOR or not key or (data is not None and not isinstance(data, dict)):
         return data
     data = data or {}
     return data if "source" in data else {**data, "source": key}
@@ -134,7 +134,7 @@ def _source(names, sender, refs, assistant, *, message):
         return _assistant_for(names, refs, assistant)
     if sender.startswith("bot:"):
         return _named("bot", names.get(sender) or sender.split(":", 1)[1])
-    if sender == KEEPER:
+    if sender == TICO_ACTOR:
         if key.startswith("automation:"):
             aid = key.split(":", 1)[1]
             return _named("automation", names.get(key) or "Automation", f"#/automations/{aid}")
@@ -162,7 +162,7 @@ def message_source(names, message, assistant=None):
 
 def actor_source(names, actor, data=None, assistant=None):
     """The `source` of a row that has an actor and no message: a task's history entry (its `data`) or an event (its
-    `detail`). A keeper row is a system line unless it names a built-in, an automation or a system key."""
+    `detail`). A Tico row is a system line unless it names a built-in, an automation or a system key."""
     return _source(names, actor, data, assistant_name() if assistant is None else assistant, message=False)
 
 
@@ -240,6 +240,6 @@ def filers(c, ids):
             via, key = detail.get("via"), detail.get("source")
             if isinstance(via, str) and via in FILED_VIA:
                 found[row[0]] = FILED_VIA[via]
-            elif row[1] == KEEPER and isinstance(key, str) and key in BUILTINS:
+            elif row[1] == TICO_ACTOR and isinstance(key, str) and key in BUILTINS:
                 found[row[0]] = key
     return found

@@ -130,7 +130,8 @@ p:empty{display:none}
 .tl-pop.sb-choice-pop{width:min(360px,calc(100vw - 16px));max-height:min(80vh,620px);padding:12px 14px 14px;overflow-x:hidden}
 @media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;max-height:86vh;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
 .sb-choice-head{margin:0 0 10px;font-size:var(--t-sm);font-weight:600;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* The model picker's panel: Harness, Model, Effort and Compact read top to bottom, each with a short visible label. */
+/* The model picker's panel: Harness, Model and Effort read top to bottom, each with a short visible label; More folds
+   Compact, Output style and Verbosity under them. */
 .mp-panel{display:grid;gap:10px;min-width:0}
 .mp-row{display:grid;gap:4px;min-width:0;margin:0;padding:0;border:0}
 .mp-row[hidden]{display:none}
@@ -154,6 +155,11 @@ p:empty{display:none}
 .mp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mp-mark{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:400}
 .mp-compact select{width:100%;min-width:0;padding:6px 8px;font-size:var(--t-sm);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.mp-more{min-width:0}
+.mp-more[hidden]{display:none}
+.mp-more>summary{width:max-content;font-size:var(--t-xs);font-weight:600;color:var(--muted);cursor:pointer}
+.mp-more>summary:hover{color:var(--ink)}
+.mp-more-rows{display:grid;gap:10px;min-width:0;margin-top:8px}
 .mp-note{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .mp-note:empty{display:none}
 .mp-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}

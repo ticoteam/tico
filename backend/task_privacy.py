@@ -465,7 +465,7 @@ def record_moved_input(c, from_attempt, to_attempt, message):
     """Before an input row moves to another run, keep its tasks against the run that read it."""
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         INPUT_MOVED,
         from_attempt,
         {
@@ -540,7 +540,7 @@ def message_readable(c, actor, message, current=False):
         or not run_pages_readable(c, actor, carried)
     ):
         return False
-    if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
+    if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.TICO_ACTOR:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
         source = H.message(c, carried["carries"], include_deleted=True)
         source_refs = (source or {}).get("refs") or {}
@@ -1398,21 +1398,37 @@ REPLY_CHAIN_LIMIT = 100
 def reply_chain_rows(c, messages):
     """The stored messages on the in_reply_to chains of `messages`, keyed by id, one query per level of the chains.
     The bound is the level: each chain is read as far as its own walk reads (REPLY_CHAIN_LIMIT), however many chains
-    the batch holds, so no chain is cut short by another's rows."""
+    the batch holds, so no chain is cut short by another's rows. A message read on an earlier call in this snapshot is
+    not read again (`prime_reply_chains` reads many runs' chains together, then each run's check reads none)."""
+    values = read_cache.cache(c)
+    known = values.setdefault(("reply_chain_rows",), {}) if values is not None else {}
     found, frontier = {}, {m["in_reply_to"] for m in messages if m.get("in_reply_to")}
     for _ in range(REPLY_CHAIN_LIMIT):
         if not frontier:
             break
-        marks = ",".join("?" * len(frontier))
-        rows = {
-            row["id"]: dict(row)
-            for row in c.execute(f"SELECT id,refs,in_reply_to FROM messages WHERE id IN ({marks})", sorted(frontier))
-        }
+        missing = sorted(frontier - known.keys())
+        if missing:
+            marks = ",".join("?" * len(missing))
+            rows = {
+                row["id"]: dict(row)
+                for row in c.execute(f"SELECT id,refs,in_reply_to FROM messages WHERE id IN ({marks})", missing)
+            }
+            known.update({mid: rows.get(mid) for mid in missing})
+        rows = {mid: known[mid] for mid in frontier if known[mid] is not None}
         found.update(rows)
         frontier = {
             row["in_reply_to"] for row in rows.values() if row["in_reply_to"] and row["in_reply_to"] not in found
         }
     return found
+
+
+def prime_reply_chains(c, aids):
+    """Read the reply chains of these runs' messages (primed by prime_attempts or prime_attempt_messages) together, so
+    each run's attempt_pages_readable that follows in this snapshot reads none of them."""
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    reply_chain_rows(c, [m for aid in aids for m in values.get(("attempt_messages", aid)) or []])
 
 
 def reply_pages_readable(c, actor, message, lookup=None):

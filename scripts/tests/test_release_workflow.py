@@ -552,3 +552,29 @@ def _loads(path):
         if sibling.exists():
             needed.add(str(sibling.relative_to(ROOT)))
     return needed
+
+
+def test_each_main_validation_hands_its_run_to_main_red_which_waits_for_it_to_finish():
+    # The train dispatches validations with GITHUB_TOKEN, which starts no workflow_run: main-red.yml fired for none of
+    # them from Nov 16 to Nov 18. ci.yml dispatches main-red itself, and a GITHUB_TOKEN dispatch does start a run.
+    ci, _ = _workflow("ci.yml")
+    job = ci["jobs"]["main-red"]
+    assert job["needs"] == "release-check" and job["if"] == "always() && github.ref == 'refs/heads/main'"
+    assert job["permissions"] == {"actions": "write"}
+    (step,) = job["steps"]
+    assert step["continue-on-error"] is True  # a failed hand-off never turns the validation red
+    assert (
+        'gh workflow run main-red.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"' == step["run"]
+    )
+    red, on = _workflow("main-red.yml")
+    assert set(on) == {"workflow_dispatch"} and on["workflow_dispatch"]["inputs"]["run_id"]["required"] is True
+    assert "workflow_run" not in str(red)
+    alarm = red["jobs"]["alarm"]
+    assert alarm["if"] == "github.ref == 'refs/heads/main'"
+    names = [step.get("name", "") for step in alarm["steps"]]
+    wait = names.index("Wait for the validation run to finish")
+    assert wait < names.index("Tell the owners of the run")
+    assert "status --jq .status)\" = completed" in alarm["steps"][wait]["run"]
+    for name in ("alarm", "bisect"):
+        runs = [step for step in red["jobs"][name]["steps"] if "main_red.py" in str(step.get("run", ""))]
+        assert runs and all(step["env"]["RUN_ID"] == "${{ inputs.run_id }}" for step in runs), name

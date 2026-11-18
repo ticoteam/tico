@@ -1,5 +1,5 @@
-"""A ticket's whole journey on the default company, in one Product task held by its feature owner (docs/dev/pipelines-v3.md
-"Product"): a person types a request, the owner writes the Spec, the bots it touches comment, and the person approves
+"""A ticket's whole journey on a company with separate review stages, in one Product task held by its feature owner.
+A person types a request, the owner writes the Spec, the bots it touches comment, and the person approves
 the Spec; the owner builds it, two reviewers review it and the owner fixes what they found; the QA Owner writes the QA
 report and the person approves it; the owner writes the Release report and the person approves it, the Release Owner
 merges it, and the owner checks it in production. Each approval is of the version the bot wrote in that stage.
@@ -10,9 +10,11 @@ GitHub and the model behind Jev are doubles (helpers/ticket_journey.py). One jou
 
 import pytest
 
+from backend import pipeline_settings as PS
 from backend.tests.helpers import ticket_journey as J
 from backend.tests.helpers.fake_github import FakeGitHub
 from backend.tests.helpers.fresh_install import booted, environment  # noqa: F401
+from backend.tests.helpers.product_engineering_presets import legacy_review_stages
 from backend.tests.live import live  # noqa: F401
 from evals.never_stuck.fake_jev import FakeJev
 
@@ -22,7 +24,10 @@ PR = f"https://github.com/{REPO}/pull/1"
 
 @pytest.fixture
 def made(environment):
-    return J.default_company(environment)
+    api, computer = J.default_company(environment)
+    with api.app.state.store.transaction() as c:
+        PS.save(c, PS.SYSTEM, legacy_review_stages(c, PS.read(c, "product")))
+    return api, computer
 
 
 @pytest.fixture

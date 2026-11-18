@@ -37,11 +37,11 @@ MAX_TEXT = 4000  # the question and the summary, as the panel shows them
 DOING_TEXT = 200  # the one line the bot keeps in the task note while it dreams
 ENDED = "('done','closed')"  # a finished dream's status, as SQL
 MARK = "dream.start"  # the event dream_start writes on the task; its actor is the task's requester
-AUTO_MARK = "dream.auto"  # the event an auto dream's start writes; its actor is the system (H.KEEPER)
+AUTO_MARK = "dream.auto"  # the event an auto dream's start writes; its actor is the system (H.TICO_ACTOR)
 # The marker as SQL over `tasks`: an index probe on events_task_origin (actor, action, target) per candidate row.
 MARKED = (
     f"EXISTS(SELECT 1 FROM events e WHERE e.target=tasks.id AND ((e.actor=tasks.requester_id AND e.action='{MARK}') "
-    f"OR (e.actor='{H.KEEPER}' AND e.action='{AUTO_MARK}')))"
+    f"OR (e.actor='{H.TICO_ACTOR}' AND e.action='{AUTO_MARK}')))"
 )
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {waiting}
@@ -141,7 +141,8 @@ def started_here(c, row):
 def auto_event(c, row):
     """The `dream.auto` event that started this task, as its detail (the reason line), or None for a person's dream."""
     found = c.execute(
-        "SELECT detail FROM events WHERE actor=? AND action=? AND target=? LIMIT 1", (H.KEEPER, AUTO_MARK, row["id"])
+        "SELECT detail FROM events WHERE actor=? AND action=? AND target=? LIMIT 1",
+        (H.TICO_ACTOR, AUTO_MARK, row["id"]),
     ).fetchone()
     if not found:
         return None
@@ -339,7 +340,7 @@ def start(c, who, owner, task_create, reason=None, wake_refs=None):
     if reason is None:
         H.event(c, row["requester_id"], MARK, row["id"], {"bot": row["owner_id"]})
     else:
-        H.event(c, H.KEEPER, AUTO_MARK, row["id"], {"bot": row["owner_id"], "reason": reason})
+        H.event(c, H.TICO_ACTOR, AUTO_MARK, row["id"], {"bot": row["owner_id"], "reason": reason})
     return row, None
 
 

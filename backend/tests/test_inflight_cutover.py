@@ -37,7 +37,7 @@ def test_a_rule_condition_saved_under_the_old_owner_and_requester_names_still_ma
         renames.COLUMNS + (("tasks", "owner", "owner_id", "3"), ("tasks", "requester", "requester_id", "3")),
     )
     row = {"id": "task-1", "status": "open", "owner_id": "bot:cmo", "requester_id": "human:ana", "type_id": "general"}
-    ctx = R._Context(None, H.KEEPER, CMO, {}, None, row)
+    ctx = R._Context(None, H.TICO_ACTOR, CMO, {}, None, row)
     assert ctx.matches({"owner": ["bot:cmo"]})
     assert ctx.matches({"requester": "human:ana"})
     assert ctx.matches({"role": "owner"})

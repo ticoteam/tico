@@ -1008,6 +1008,10 @@ impl CodexHost {
         // No memory under this computer's CODEX_HOME, even where the operator's config.toml turns it on: a bot
         // remembers in its repository's memory/ (Dev 301).
         cfg.insert("features.memories".into(), json!(false));
+        // The bot's verbosity; none keeps the model's own.
+        if let Some(level) = settings.verbosity.as_deref() {
+            cfg.insert("model_verbosity".into(), json!(level));
+        }
         let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never",
             "sandbox": "danger-full-access"});
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
@@ -1553,6 +1557,28 @@ mod tests {
             host.thread_params(&Settings::default())["config"]["features.memories"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn a_thread_gets_the_bots_verbosity_and_none_on_default() {
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
+        let settings = Settings {
+            verbosity: Some("low".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            host.thread_params(&settings)["config"]["model_verbosity"],
+            json!("low")
+        );
+        assert!(host.thread_params(&Settings::default())["config"]
+            .get("model_verbosity")
+            .is_none());
+        // A Claude output style is not Codex's.
+        let styled = Settings {
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        assert!(!host.thread_params(&styled).to_string().contains("Concise"));
     }
 
     #[tokio::test]

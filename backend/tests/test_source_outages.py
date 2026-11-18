@@ -281,7 +281,7 @@ def test_a_hundred_queued_notices_restore_as_one_carrier_with_their_history(api,
 
             sent = H._write_message(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 'bot:ops',
                 f'Waiting update {n}',
                 H.conversation(c, task['conversation_id']),
@@ -533,7 +533,7 @@ def test_same_timestamp_backlog_keeps_the_newest_notice_when_ids_sort_backwards(
         for n in range(3):
             message = H._write_message(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 'bot:ops',
                 f'Update {n}',
                 H.conversation(c, task['conversation_id']),

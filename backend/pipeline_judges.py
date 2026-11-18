@@ -231,7 +231,8 @@ def check_of(rubric: object) -> str | None:
         return None
     known: dict[str, tuple[str, ...]] = {
         "spec": (S.SPEC_RUBRIC, *S.EARLIER.get("product-spec/page/rubric", ())),
-        "review": (S.REVIEW_RUBRIC, *S.EARLIER.get("engineering-review-1/page/rubric", ())),
+        # The combined Review uses the whole rubric. These parts only check a single review.
+        "review": S.EARLIER.get("engineering-review-1/page/rubric", ()),
         "qa": (S.QA_RUBRIC, *S.EARLIER.get("engineering-qa/page/rubric", ())),
         "validate": (S.VALIDATE_RUBRIC, *S.EARLIER.get("product-validate/page/rubric", ())),
     }

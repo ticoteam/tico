@@ -182,7 +182,7 @@ def _mail_or_slack(do):
         if do == "send_reply" and not send_on(c, _inbox(message)):
             H.event(
                 c,
-                acts_as(c, auto) or H.KEEPER,
+                acts_as(c, auto) or H.TICO_ACTOR,
                 "automation.send_off",
                 auto["id"],
                 {"run": run_id, "mailbox": message.get("mailbox"), "msg_id": message.get("id")},
@@ -256,7 +256,7 @@ def _slack(c, auto, run_id, do, args, message):
         msg = H._write_message(
             c,
             H.bot_actor(bot),
-            conv.get("owner_id") or H.KEEPER,
+            conv.get("owner_id") or H.TICO_ACTOR,
             text,
             conv,
             "say",
@@ -287,7 +287,7 @@ def _slack(c, auto, run_id, do, args, message):
         return {"ok": True, "detail": "posted", "message": msg["id"]}
     if do in ("send_reply", "draft_reply"):
         if do == "send_reply":
-            H.event(c, acts_as(c, auto) or H.KEEPER, "automation.send_off", auto["id"], {"run": run_id})
+            H.event(c, acts_as(c, auto) or H.TICO_ACTOR, "automation.send_off", auto["id"], {"run": run_id})
         title = f"Draft reply: {str(message.get('text') or '')[:80]}".strip()
         return _create_task(c, auto, run_id, {"title": title, "body": text}, {})
     return {"ok": True, "detail": "nothing to do in Slack"}

@@ -11,14 +11,16 @@
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
 # a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
-# no VM, on a pull request and in a group alike. Only the cosmetic timing receipt is queue-only.
+# no VM, on a pull request and in a group alike. The timing receipt, flake artifact and merge commit checks are
+# queue-only (a pull request's own static checks and types jobs run the same list on its own head).
 # A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
 # the group's merged change reaches within two levels (release validation runs the rest), and the same Rust lint,
 # desktop, recorder and Caddy jobs. The group's base is the head of the group
 # queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
-# ahead of it. The static checks and types jobs run on the pull request only; the group's plan job runs every static check again
-# on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), since a change queued ahead can break one
-# (a migration timestamp, a route, a lint rule).
+# ahead of it. The static checks and types jobs run on the pull request only; the group's merge commit checks job runs every
+# static check again on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), beside the plan and the
+# tests, since a change queued ahead can break one (a migration timestamp, a route, a lint rule).
+# Python and browser legs retry up to five failures once. Queue groups save successful retries as queue-flaky.
 # A failed `tests` leg cancels its whole run (its last step), in a queue group or a pull request. The
 # `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute. The failing
 # leg ends "cancelled" too (its own cancel stops it), so `checks` names the leg and step that failed.
@@ -29,6 +31,8 @@
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
 # A pull request's own push runs the cheap checks whether or not it comes from a fork. A fork's tests run only once a
 # maintainer queues it.
+# Each checkout (normally 6-19 s) gets three minutes and one retry: a fetch that stalls on a hosted runner fails in
+# minutes, not at its job's timeout, and does not drop the group (a stalled queue head blocks every group behind it).
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
 name: PR checks
 
@@ -67,10 +71,19 @@ jobs:
       desktop: ${{ steps.plan.outputs.desktop }}
       recorder: ${{ steps.plan.outputs.recorder }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -85,32 +98,37 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python
-      - name: Restore measured timings from a recent successful Release validation run
+      - name: Restore measured timings from recent green queue groups
         # Optional: missing/expired artifacts stop immediately; transient errors get only 90s of retry backoff.
-        # Release validation runs the same pytest flags these jobs pass (pr_checks.PYTEST_FLAGS), slow tests included.
+        # Each green queue group's timings job saves its legs' per-file seconds (queue-timings): the same hosted runners
+        # and pytest flags as these legs. The plan averages up to three groups (one group's seconds swing by 2x), over the
+        # committed table (scripts/test-timings.json), which covers about a quarter of a group's files.
         timeout-minutes: 2
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p previous-timings
-          # The newest of the last five successful runs that has the artifact: one without it (older than the timings
-          # job, or expired) is skipped at once; a transient error spends the short retry budget once and ends the walk.
-          runs=$(gh run list --workflow ci.yml --branch main --event workflow_dispatch --status success --limit 5 --json databaseId --jq '.[].databaseId') || runs=''
+          # A run without the artifact (older than the timings job, or expired) is skipped at once; a transient error
+          # spends the short retry budget once and ends the walk.
+          runs=$(gh run list --workflow pr-checks.yml --event merge_group --status success --limit 6 --json databaseId --jq '.[].databaseId') || runs=''
+          found=0
           for run in $runs; do
-            if log=$(bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name test-timings --dir previous-timings); then
-              printf '%s\n' "$log"; echo "Timings from Release validation run $run"; break
+            if log=$(bash scripts/ci/retry.sh --max-attempts 3 --clear "previous-timings/$run" --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name queue-timings --dir "previous-timings/$run"); then
+              printf '%s\n' "$log"; echo "Timings from queue group run $run"
+              found=$((found + 1)); [ "$found" -lt 3 ] || break
+              continue
             fi
             printf '%s\n' "$log"
             case $log in *'failed permanently'*) ;; *) break ;; esac
           done
-          [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
+          [ "$found" -gt 0 ] || echo "No measured timings yet; use collected counts this run"
       # A merge queue group supersedes the older groups of its pull request: a rebuilt queue entry has a new head. The
       # concurrency group cannot key on the number (an expression cannot read it from head_ref), so this step cancels
       # those older queued and running runs. It runs for merge_group only, so a pull request's own runs are never listed,
@@ -128,26 +146,6 @@ jobs:
             gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/pr-checks.yml/runs?event=merge_group&status=$status&per_page=100" > "$RUNNER_TEMP/runs-$status.json"
           done
           "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py cancel-superseded --head-ref "$HEAD_REF" --run-number "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json"
-      # A queue group's merge commit is what lands on main, and a change queued ahead can break this one's static checks
-      # (a migration timestamp, a route one removes and the other calls, a lint rule one turns on). The group runs every
-      # static check on it here (scripts/ci/merge_commit_checks.sh), beside the test selection (which uses one core),
-      # rather than on a static checks VM. The step after the selection reports the result.
-      # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
-      # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
-      - name: Cache pinned tools
-        if: github.event_name == 'merge_group'
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.cache/tico/tools
-          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
-      - name: Start the merge commit checks
-        if: github.event_name == 'merge_group'
-        env:
-          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
-        run: |
-          # set +e: the step's shell runs with -e, and a failed check must still write its status.
-          ( set +e; PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"
-            echo "$?" > "$RUNNER_TEMP/merge-checks.status" ) > "$RUNNER_TEMP/merge-checks.log" 2>&1 &
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         # Both tiers plan light (scripts/pr_checks.py NARROW): a pull request the tests its change reaches directly, at
@@ -156,14 +154,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           CHECK_HEAD: ${{ github.event.merge_group.head_sha || 'HEAD' }}
-        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json --light'
-      - name: Merge commit checks
-        if: github.event_name == 'merge_group'
-        timeout-minutes: 8
-        run: |
-          until [ -f "$RUNNER_TEMP/merge-checks.status" ]; do sleep 2; done
-          cat "$RUNNER_TEMP/merge-checks.log"
-          exit "$(cat "$RUNNER_TEMP/merge-checks.status")"
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings --light'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-check-plan
@@ -192,10 +183,19 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: Free disk only when under 30 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 30
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -216,7 +216,7 @@ jobs:
       # Every suite compiles the UI's TypeScript (scripts/ci_install.sh); only browser suites install Playwright.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - if: startsWith(matrix.suite, 'browser-')
@@ -252,8 +252,8 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        # --quarantine: a test listed in ci/quarantine/ (it failed and passed on one commit) runs but cannot fail the
-        # suite. Release validation never passes it (scripts/flake_quarantine.py).
+        # --quarantine runs listed pytest tests as non-strict xfail. Python and browser legs retry up to five failures
+        # once and record the flakes when all pass. Release validation runs without this flag.
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run --quarantine "$SUITE"
       - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts' || matrix.suite == 'conformance')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -277,8 +277,8 @@ jobs:
           gh run cancel "$GITHUB_RUN_ID"
 
   static:
-    # Every push to a pull request that is not a draft (a queue group runs the same list on its merge commit in its plan
-    # job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
+    # Every push to a pull request that is not a draft (a queue group runs the same list on its merge commit in its merge
+    # commit checks job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
     # suppressions), migration names (basedpyright runs beside it in the types job), the UI's generated API types, the
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck), workflows (actionlint), and shared gates
     # (scripts/gates.sh: gate scripts and ast-grep rules with fixtures). Seconds each
@@ -289,10 +289,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: New migrations have unique UTC timestamps; merged ones are unchanged
         env:
           BASE_BRANCH: ${{ github.base_ref }}
@@ -315,10 +324,10 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
-        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.9
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
       - name: Verification gates (scripts and ast-grep rules with fixtures)
@@ -361,17 +370,26 @@ jobs:
 
   types:
     # basedpyright on the backend against its baseline (strict for new modules), the static checks' longest step
-    # (about a minute), on its own VM so it runs beside them. Pull requests only, like static; a queue group's plan runs
-    # it on the merge commit (scripts/ci/merge_commit_checks.sh). The install is the venv alone (no npm or UI build).
+    # (about a minute), on its own VM so it runs beside them. Pull requests only, like static; a queue group's merge commit
+    # checks job runs it on the merge commit (scripts/ci/merge_commit_checks.sh). The install is the venv alone (no npm or UI build).
     name: types
     if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -384,11 +402,64 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
-        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.9
       - name: Types (basedpyright baseline, strict new modules)
         env:
           PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
+
+  merge-checks:
+    # Merge queue groups only: every static check again on the group's merge commit, which is what lands on main
+    # (scripts/ci/merge_commit_checks.sh). A change queued ahead can break this one's (a migration timestamp, a route one
+    # removes and the other calls, a lint rule one turns on). Its own VM, beside the plan and the tests: run inside the
+    # plan job it held every test VM back by about 30 seconds and slowed the selection it shared a VM with.
+    name: merge commit checks
+    if: ${{ github.event_name == 'merge_group' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.3'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh python
+      # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
+      # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
+      - name: Cache pinned tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
+      - name: Merge commit checks
+        env:
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"
 
   rust-lint:
     # Merge queue groups, and a ready pull request from this repository: rustfmt and clippy -D warnings
@@ -400,10 +471,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: Free disk only when under 30 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 30
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -426,10 +506,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 40
       - name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
@@ -473,9 +562,17 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: stable
@@ -488,7 +585,7 @@ jobs:
         run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: The window's scripts (TypeScript, stripped into recorder/dist, which the desktop build embeds)
@@ -524,9 +621,17 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 40
       - id: python
@@ -543,7 +648,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build this source's server image locally; never publish
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -589,15 +694,23 @@ jobs:
     # Merge queue groups only. A failed tests leg cancels the run, and a canceled run ends here: a final job
     # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    needs: [plan, tests, caddy-linux, static, types, rust-lint, desktop-app, recorder]
+    needs: [plan, tests, caddy-linux, static, types, merge-checks, rust-lint, desktop-app, recorder]
     runs-on: ubuntu-24.04
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         continue-on-error: true
         with:
@@ -613,6 +726,30 @@ jobs:
         run: |
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" | python3 scripts/pr_checks.py receipt >> "$GITHUB_STEP_SUMMARY"
           echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+      # The legs' per-file seconds, which the next groups' plans pack their VMs by (the plan's "Restore measured
+      # timings" step reads the newest green groups'). Optional like the receipt: a group with no Python leg has none.
+      - name: Per-file seconds for the next plans
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 scripts/pr_checks.py durations
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        continue-on-error: true
+        with:
+          name: queue-timings
+          path: durations.json
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Collect flakes from leg retries
+        continue-on-error: true
+        run: python3 scripts/pr_checks.py flaky
+      - name: Upload queue flakes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        continue-on-error: true
+        with:
+          name: queue-flaky
+          path: flaky.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   checks:
     # The one required check, on every pull request to main and on the merge queue. It fails when a job it needs failed or
@@ -620,7 +757,7 @@ jobs:
     # tests and the Rust, desktop, recorder and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, types, tests, rust-lint, desktop-app, recorder, caddy-linux]
+    needs: [plan, static, types, merge-checks, tests, rust-lint, desktop-app, recorder, caddy-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -629,6 +766,7 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           STATIC: ${{ needs.static.result }}
           TYPES: ${{ needs.types.result }}
+          MERGE_CHECKS: ${{ needs.merge-checks.result }}
           TESTS: ${{ needs.tests.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
@@ -648,6 +786,7 @@ jobs:
           check plan "$PLAN"
           check static "$STATIC"
           check types "$TYPES"
+          check merge-checks "$MERGE_CHECKS"
           check tests "$TESTS"
           check rust-lint "$RUST_LINT"
           check desktop-app "$DESKTOP_APP"
@@ -671,10 +810,18 @@ jobs:
       # run under the tests above, on a queue group and on a ready pull request from this repository (the runs that have
       # the tests job; this job skips drafts). It runs after the last job, so it costs a checkout and two artifact
       # downloads. Its own step fails the check and lists each statement no test ran.
-      - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+      - id: checkout_first
+        if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

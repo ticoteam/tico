@@ -129,7 +129,7 @@ def names(c):
     bots = {
         "bot:" + r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id,slug,display_name FROM bots")
     }
-    return {**people, **bots, H.KEEPER: "Tico"}
+    return {**people, **bots, H.TICO_ACTOR: "Tico"}
 
 
 # ----------------------------------------------------------------------------- collect
@@ -867,7 +867,7 @@ def run(store, run_id):
                 # One audit row for the night's calls, as POST /api/v2/decisions keeps one per call: counts, never text.
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "judge.call",
                     f"{QUESTION_SET}@run",
                     {

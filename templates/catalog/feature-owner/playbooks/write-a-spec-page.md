@@ -82,14 +82,13 @@ on another team or another repository? Is every rabbit hole fixed, cut or time-b
 ## 6. Build the page and write it on the task
 
 Follow `.claude/skills/build-the-page/SKILL.md`: screenshots at phone (390 px) and desktop (1280 px) width, arrows, then
-build and check it with the skill's `page.py` (`--kind bug-spec`, `screen-spec` or `change-spec`), then publish it:
+build and check it with the skill's `page.py` (`--kind bug-spec`, `screen-spec` or `change-spec`), then publish it as
+the task's Spec, in one step. Publishing it as the Spec submits it, so the check comes first:
 
-    tico page publish specs/<slug>.html --spec --task <id>
+    tico page publish specs/<slug>.html --task <id> --as Spec
 
-It prints the file id. Render the published page with `page.py render` and look at it at both widths before you
-write it: a broken page is never sent. Then write it as the task's Spec; writing it in Spec or OK spec submits it:
-
-    tico task attach <id> specs/<slug>.html --doc Spec --note "<what changed>"
+It prints the file id. Render that page with `page.py render <file id>` and look at it at both widths. If it is broken,
+fix the file and publish it again with `--page <file id>`: that writes the next version of the same page.
 
 Put the open questions and who owes them in a note on the task. In Related input, one or two bots the decision model
 picks comment on the Spec once: change it where they are right, write the next version, and answer the rest in one line

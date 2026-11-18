@@ -680,7 +680,7 @@ def readers(auth):
         for event in c.execute(
             f"SELECT target,detail FROM events WHERE actor=? AND action='task.origin' "
             f"AND target IN ({marks}) ORDER BY target,created_at DESC",
-            (H.KEEPER, *ids),
+            (H.TICO_ACTOR, *ids),
         ):
             if event["target"] in origins:
                 continue

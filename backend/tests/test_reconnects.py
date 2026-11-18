@@ -103,7 +103,7 @@ def drain(api):
     """Finish the tasks an earlier step left and drop its queued runs, so the next claim is this step's."""
     with api.app.state.store.transaction() as c:
         for row in c.execute("SELECT id FROM tasks WHERE status NOT IN ('done','closed')").fetchall():
-            H.task_close(c, H.KEEPER, row["id"], "Done with this step")
+            H.task_close(c, H.TICO_ACTOR, row["id"], "Done with this step")
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")  # a failed run's retry is still queued
         c.execute("UPDATE attempts SET state='completed' WHERE state NOT IN ('completed','failed','canceled')")
         c.execute("DELETE FROM holds WHERE kind='failing' AND holdable_id='ops'")
@@ -268,7 +268,7 @@ def test_only_a_standing_login_card_stands_for_the_sign_in_hold_item(api):
     from backend import run_failures
 
     with api.app.state.store.transaction() as c:
-        run_failures.release(c, H.KEEPER, "ops")
+        run_failures.release(c, H.TICO_ACTOR, "ops")
     second = task(api, "Book the Acme call")
     assert login_card(api, second)
     assert hold_item(api) is None  # its card is the item
@@ -423,7 +423,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     )
     box = "Ana@acme.example"
     with api.app.state.store.transaction() as c:
-        H.turn_start(c, H.KEEPER, "ops", task_id=t["id"])
+        H.turn_start(c, H.TICO_ACTOR, "ops", task_id=t["id"])
         assert R.google_report(c, "mail", [box]) == [t["id"]]
         R.google_report(c, "calendar", [box])
         # Mail works again (a clean report, a synced mailbox) while the calendar has not said so: still open.
@@ -446,11 +446,11 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
         lambda c, roster=None: [{"address": "ana@acme.example", "person_id": "ana", "bot": "ops", "declared": False}],
     )
     with api.app.state.store.transaction() as c:
-        H.turn_start(c, H.KEEPER, "ops", task_id=first["id"])
+        H.turn_start(c, H.TICO_ACTOR, "ops", task_id=first["id"])
         R.google_report(c, "mail", ["ana@acme.example"])
         # No calendar report at all: mail working again is enough.
         assert R.google_good(c, "mail", ["ana@acme.example"]) == [first["id"]]
-        H.turn_start(c, H.KEEPER, "ops", task_id=second["id"])
+        H.turn_start(c, H.TICO_ACTOR, "ops", task_id=second["id"])
         R.google_report(c, "mail", ["ana@acme.example"])
         R.google_report(c, "calendar", ["ana@acme.example"])
         # A clean mail report while the calendar stays silent: the calendar refused, so it must say so first.

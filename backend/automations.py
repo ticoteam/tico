@@ -335,7 +335,7 @@ def follow(c, owner, old, new):
     ).fetchall():
         before = flow_of(row)
         flow = {k: v for k, v in before.items() if k != "group"} | ({"group": "group:" + new} if new else {})
-        _save(c, H.KEEPER, row["id"], flow, before, via="group:" + (new or old))
+        _save(c, H.TICO_ACTOR, row["id"], flow, before, via="group:" + (new or old))
 
 
 def regroup(c, old, new):
@@ -353,8 +353,8 @@ def regroup(c, old, new):
         elif new:
             flow["group"] = "group:" + new
         if before["owner"] == gone:
-            flow["owner"] = "group:" + new if new else "person:" + top if top else H.KEEPER
-        _save(c, H.KEEPER, row["id"], flow, before, via="group:" + (new or old))
+            flow["owner"] = "group:" + new if new else "person:" + top if top else H.TICO_ACTOR
+        _save(c, H.TICO_ACTOR, row["id"], flow, before, via="group:" + (new or old))
 
 
 def _propose(c, actor, aid, flow, before, summary):
@@ -963,7 +963,11 @@ def ensure_listening(c):
         return None
     aid = "auto_" + H.new_id()
     _save(
-        c, H.KEEPER, aid, F.check(listening_flow("bot:" + LIBRARIAN if librarian else "person:" + top, librarian)), None
+        c,
+        H.TICO_ACTOR,
+        aid,
+        F.check(listening_flow("bot:" + LIBRARIAN if librarian else "person:" + top, librarian)),
+        None,
     )
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (LISTENING_MADE, json.dumps({"automation": aid})))
     return aid
@@ -1028,7 +1032,7 @@ def ensure_builtins(c, catalog=None, settings=None):
         flow = F.check(
             {**{k: v for k, v in spec.items() if k != "key"}, "builtin": True, "enabled": spec.get("enabled", True)}
         )
-        _save(c, H.KEEPER, aid, flow, None)
+        _save(c, H.TICO_ACTOR, aid, flow, None)
         made.append(aid)
     if catalog is None and (aid := ensure_listening(c)):
         made.append(aid)
@@ -1142,12 +1146,12 @@ def sync_system_mirrors(c):
             return False
 
     def retire_one(row):
-        remove(c, H.KEEPER, row, via=MIRROR_VIA)
+        remove(c, H.TICO_ACTOR, row, via=MIRROR_VIA)
         if row["id"] in twins and H._has_table(c, "redesign_migrated"):
             c.execute("UPDATE redesign_migrated SET automation=? WHERE automation=?", (twins[row["id"]], row["id"]))
 
     def update(row, flow, changed):
-        if step("update:" + row["id"], lambda: _save(c, H.KEEPER, row["id"], changed, flow, via=MIRROR_VIA)):
+        if step("update:" + row["id"], lambda: _save(c, H.TICO_ACTOR, row["id"], changed, flow, via=MIRROR_VIA)):
             done["renamed"].append(row["id"])
 
     for row in retire:
@@ -1317,7 +1321,13 @@ def hold_of(c, aid):
 def _hold(c, row, rule):
     """Put the automation on hold: what it has queued is held now, so a loop stops spending at once."""
     holds.put(
-        c, holds.RUNAWAY, "automation", row["id"], actor=H.KEEPER, reason=rule, details={"arrivals": 0, "dropped": 0}
+        c,
+        holds.RUNAWAY,
+        "automation",
+        row["id"],
+        actor=H.TICO_ACTOR,
+        reason=rule,
+        details={"arrivals": 0, "dropped": 0},
     )
     c.execute("UPDATE automation_runs SET status='held' WHERE automation_id=? AND status='queued'", (row["id"],))
 
@@ -1334,7 +1344,7 @@ def _hold_told(c, row, rule, counted, held):
         "Release them if this was real work, or drop them, after fixing what starts it."
     )
     refs = {"kind": "run_guard", "automation": row["id"]}
-    H.event(c, H.KEEPER, "automation.run_guard", row["id"], {"rule": rule, **counted, "held": held})
+    H.event(c, H.TICO_ACTOR, "automation.run_guard", row["id"], {"rule": rule, **counted, "held": held})
     lead = A.acts_as(c, {"flow": flow})
     person = owner_person(c, flow["owner"]) or (lead[6:] if lead.startswith("human:") else "")
     if person:
@@ -1342,7 +1352,7 @@ def _hold_told(c, row, rule, counted, held):
 
         task = person_asks.task_for(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             f"Automation {flow['name']} on hold"[:300],
             words,
             "human:" + person,
@@ -1386,7 +1396,7 @@ def _unhold(c, aid, actor, how, via=None, moot=False):
         ).rowcount
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
     if task and task["status"] == "open":
-        H.attempt(c, H.task_close, H.KEEPER, task["id"], "Released." if how == "release" else "Dropped.")
+        H.attempt(c, H.task_close, H.TICO_ACTOR, task["id"], "Released." if how == "release" else "Dropped.")
     before = {"hold": {"rule": hold["rule"], "held_at": hold["held_at"], "dropped": hold["dropped"]}}
     H.event(
         c,
@@ -1425,7 +1435,7 @@ def _absorbed(c, row):
     if owner.startswith("bot:"):
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             owner,
             f"Scheduled occurrence {H.now()[:16].replace('T', ' ')}Z of {flow.get('name')} "
             "absorbed into this open task; continue it or mark it done.",
@@ -1475,7 +1485,7 @@ def _stored_ref(ref):
 
 
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
-    with SRC.writing_as(SRC.automation_key(row["id"])):  # the keeper lines this run's guard and runs write
+    with SRC.writing_as(SRC.automation_key(row["id"])):  # Tico lines this run's guard and runs write
         return _queue(c, row, payload, ref, manual=manual, chain=chain)
 
 
@@ -2355,7 +2365,7 @@ class HubServices:
         self._write(
             lambda c: H.event(
                 c,
-                A.acts_as(c, self.auto) or H.KEEPER,
+                A.acts_as(c, self.auto) or H.TICO_ACTOR,
                 "judge.call",
                 label,
                 {
@@ -2388,7 +2398,7 @@ class HubServices:
             self.dirty = True
 
             def audit(c):
-                who = A.acts_as(c, self.auto) or H.KEEPER
+                who = A.acts_as(c, self.auto) or H.TICO_ACTOR
                 for call in sent:
                     H.event(
                         c,
@@ -2813,7 +2823,7 @@ class Hub:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
             flow = {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
             services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")), token)
-            with SRC.writing_as(SRC.automation_key(row["id"])):  # the keeper lines its steps write name it
+            with SRC.writing_as(SRC.automation_key(row["id"])):  # Tico lines its steps write name it
                 state = E.advance(flow, state, services)
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
@@ -3025,7 +3035,7 @@ def _mail_report(c, row, state, result):
         try:
             H.event(
                 c,
-                A.acts_as(c, {"flow": flow_of(auto)}) if auto else H.KEEPER,
+                A.acts_as(c, {"flow": flow_of(auto)}) if auto else H.TICO_ACTOR,
                 "mail.organize",
                 row["mailbox"],
                 {"mailbox": row["mailbox"], "action": row["action"], "count": 1, "ids": [row["msg_id"]]},
@@ -3143,7 +3153,7 @@ def _workspace_mail(store, row):
             return None
         if not row["msg_id"]:
             raise Refused(f"the {row['action']} action names no message.")
-        actor = A.acts_as(c, {"flow": flow_of(auto)}) if auto else H.KEEPER
+        actor = A.acts_as(c, {"flow": flow_of(auto)}) if auto else H.TICO_ACTOR
         if row["action"] == "archive":
             gmail_live.organize(c, row["mailbox"], [row["msg_id"]], remove=("INBOX",))
             return {"ok": True, "detail": "archived"}
@@ -3273,7 +3283,7 @@ def tick(store, at=None, drain=True):
             ):
                 # A converted built-in routine with nothing to work on is passed over, as the routine was.
                 _count(c, row["id"], "dropped")
-                H.event(c, H.KEEPER, "automation.skipped", row["id"], {"at": row["next_due_at"], "reason": why})
+                H.event(c, H.TICO_ACTOR, "automation.skipped", row["id"], {"at": row["next_due_at"], "reason": why})
             else:
                 # Through `fire`, so the trigger's filters hold the schedule's run as they hold any other.
                 fire(
@@ -3357,7 +3367,7 @@ def tick(store, at=None, drain=True):
             c.execute("DELETE FROM automation_holds WHERE ref=?", (hold["ref"],))
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "automation.hold_swept",
                 hold["automation_id"],
                 {
@@ -3524,7 +3534,9 @@ def _due_fire(c, row, trigger, day, ref):
                     "[]",
                 ),
             )
-            H.event(c, H.KEEPER, "automation.skipped", row["id"], {"due_on": day.isoformat(), "reason": "satisfied"})
+            H.event(
+                c, H.TICO_ACTOR, "automation.skipped", row["id"], {"due_on": day.isoformat(), "reason": "satisfied"}
+            )
         return
     fire(c, "due", due_input(trigger, day), ref, only=row["id"])
 
@@ -3538,7 +3550,7 @@ def _deferred(c, row, day, why):
     detail = {"due_on": day, "reason": why}
     if last and json.loads(last[0] or "{}") == detail:
         return
-    H.event(c, H.KEEPER, "automation.deferred", row["id"], detail)
+    H.event(c, H.TICO_ACTOR, "automation.deferred", row["id"], detail)
 
 
 def _run_error(state):
@@ -3576,7 +3588,7 @@ def _due_failed(c, rid, error=""):
     ).fetchone()[0]
     if failed == DUE_TRIES:
         H.event(
-            c, H.KEEPER, "automation.due_gave_up", aid, {"due_on": day.isoformat(), "error": str(error or "")[:300]}
+            c, H.TICO_ACTOR, "automation.due_gave_up", aid, {"due_on": day.isoformat(), "error": str(error or "")[:300]}
         )
 
 

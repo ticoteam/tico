@@ -1073,7 +1073,7 @@ def test_a_read_only_link_carries_other_apps_posts_but_never_ticos_own(world):
     alert = {**chan_event(ts(1), "CPU high on web-1", user="B0ALERTS"), "author": "bot", "author_name": "alerts"}
     assert world.bridge.receive(alert) == "posted"
     carried = one(world, "SELECT sender_id, refs FROM messages WHERE body='*alerts*: CPU high on web-1'")
-    assert carried["sender_id"] == H.KEEPER and json.loads(carried["refs"])["slack"]["name"] == "alerts"
+    assert carried["sender_id"] == H.TICO_ACTOR and json.loads(carried["refs"])["slack"]["name"] == "alerts"
     assert pending_digests(world, "bot:legal") == [link_row(world, link_id)["thread_id"]]
     own = {**chan_event(ts(2), "Tico said this", user=BOT_USER), "author": "bot"}
     assert world.bridge.receive(own) == "bot"
@@ -1144,7 +1144,7 @@ def test_a_read_only_link_catches_up_on_what_the_socket_missed(world, monkeypatc
     assert bodies == {
         "Live one": "human:ana",
         "Missed one": "human:ben",
-        "*alerts*: Disk full": H.KEEPER,
+        "*alerts*: Disk full": H.TICO_ACTOR,
         "Root": "human:ana",
         "A reply": "human:ben",
     }

@@ -31,7 +31,7 @@ from . import pipeline_presets_more as more
 from . import pipeline_seats as S
 from . import task_requirements as R
 from .item_sources import github_release as GR
-from .hubdb_core import KEEPER as SYSTEM
+from .hubdb_core import TICO_ACTOR as SYSTEM
 
 if TYPE_CHECKING:
     import sqlite3
@@ -157,10 +157,16 @@ def _people_only(requirement: Row) -> Row:
     return {**requirement, "who_oks": "people_only"}
 
 
+REVIEW_RUBRIC = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
+    "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters. "
+    "Skip style nits and diff summaries. Say when there are no findings."
+)
+# The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
 # correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
 # "not a summary" read against the summary every review page opens with (Acme, Nov 11: two good Review pages unsure).
-REVIEW_RUBRIC = (
+LEGACY_REVIEW_RUBRIC = (
     "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what "
     "to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
 )
@@ -216,6 +222,20 @@ RELEASE_RUBRIC = (
     "person should know before it merges (a migration, a setting, what is left out)."
 )
 QA_STAGE = "engineering-qa"  # where a person approves the change before it ships (`_add_qa` brings it to a company)
+
+
+def _review(sid: str) -> Row:
+    return _stage(
+        sid,
+        "Review",
+        "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
+        "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
+        "Choose a different model and attach both reviews in one Review page.",
+        120,
+        [_page("Review page", REVIEW_RUBRIC, at_head=True), {"kind": "linked_done"}],
+    )
+
+
 # The Product and Engineering presets (docs/dev/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
 PRESETS["engineering"] = {
@@ -238,32 +258,11 @@ PRESETS["engineering"] = {
             [github("pr_open"), github("checks_pass")],
             task_limit=3,
         ),
-        _stage(
-            "engineering-review-1",
-            "Review 1",
-            "Review the newest commit and attach a Review page.",
-            120,
-            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
-        ),
+        _review("engineering-review-1"),
         _stage(
             "engineering-fixes-1",
-            "Fixes 1",
+            "Fixes",
             "Fix what the review found, push, and say done once the checks are green.",
-            240,
-            [{"kind": "owner_done"}, github("checks_pass")],
-        ),
-        _stage(
-            "engineering-review-2",
-            "Review 2",
-            "Review the newest commit again and attach a Review page.",
-            120,
-            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
-        ),
-        _stage(
-            "engineering-fixes-2",
-            "Fixes 2",
-            "Fix what the second review found, push, and say done once the checks are green. When it found nothing, "
-            "say done at once.",
             240,
             [{"kind": "owner_done"}, github("checks_pass")],
         ),
@@ -406,33 +405,11 @@ PRESETS[PRODUCT] = {
             [github("pr_open"), github("checks_pass")],
             owner=ASSIGNEE,
         ),
-        _stage(
-            "product-review-1",
-            "Review 1",
-            "Review the newest commit and attach a Review page.",
-            120,
-            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
-        ),
+        _review("product-review-1"),
         _stage(
             "product-fixes-1",
-            "Fixes 1",
+            "Fixes",
             "Fix what the review found, push, and say done once the checks are green (skill fix-review-findings).",
-            240,
-            [{"kind": "owner_done"}, github("checks_pass")],
-            owner=ASSIGNEE,
-        ),
-        _stage(
-            "product-review-2",
-            "Review 2",
-            "Review the newest commit again and attach a Review page.",
-            120,
-            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
-        ),
-        _stage(
-            "product-fixes-2",
-            "Fixes 2",
-            "Fix what the second review found, push, and say done once the checks are green (skill "
-            "fix-review-findings). When it found nothing, say done at once.",
             240,
             [{"kind": "owner_done"}, github("checks_pass")],
             owner=ASSIGNEE,
@@ -491,6 +468,10 @@ _FIXES_2_PURPOSE_QA = (
     "commit and what both reviewers found. A person OKs that page: to change it, attach the new version; Tico asks the "
     "person. Never ask your own OK of it."
 )
+_FIXES_2_PURPOSE = (
+    "Fix what the second review found, push, and say done once the checks are green. When it found nothing, "
+    "say done at once."
+)
 _FIXES_2_RUBRIC_QA = (
     "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR "
     "is enough); output from how it was checked (test counts or command output; a line that only says it passed is "
@@ -516,10 +497,17 @@ _FIXES_2_RUBRICS = (
     "to OK it without opening the code.",
     _FIXES_2_RUBRIC_QA,
 )
+_REVIEW_PURPOSE_BEFORE_BODY = (
+    "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
+    "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in its message. "
+    "Choose a different model and attach both reviews in one Review page."
+)
 EARLIER: dict[str, tuple[str, ...]] = {
     "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
-    "engineering-review-1/page/rubric": (_REVIEW_RC3,),
-    "engineering-review-2/page/rubric": (_REVIEW_RC3,),
+    "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3),
+    "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC,),
+    "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
+    "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "engineering-fixes-2/purpose": (
         "Fix what the second review found and attach a Review page that shows what was built.",
         "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
@@ -575,7 +563,7 @@ EARLIER: dict[str, tuple[str, ...]] = {
 LEGACY = ("engineering", "product")
 SOFTWARE = (*LEGACY, PRODUCT)  # the presets only a company that builds software gets
 FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to something checked in production."}
-# Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
+# Who fills each preset's manager, its stage owners (including older stages), and which pages a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
     "engineering": {
         "manager": S.ENGINEERING_MANAGER,
@@ -1724,13 +1712,24 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
             "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND (manager_id IS NULL OR manager_id=?)",
             (record["manager_id"], ts, pipeline_id, stand_ins[1]),
         )
-    for stage in record["stages"] if key in ROLES else ():
-        if stage.get("owner"):
+    roles = ROLES.get(key)
+    if not roles:
+        return
+    owners = {stage["id"]: stage.get("owner") for stage in record["stages"]}
+    legacy = roles["stages"].keys() - owners.keys()
+    if legacy:
+        legacy &= {s["id"] for s in task_engine.stages(conn, pipeline_id)}
+    if legacy:
+        who = S.resolve(conn)
+        owners.update({sid: who.get(roles["stages"][sid]) or record["manager_id"] for sid in legacy})
+    for sid, owner in owners.items():
+        if owner:
             conn.execute(
                 "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
                 "AND (owner IS NULL OR owner=? OR owner=?)",
-                (stage["owner"], ts, stage["id"], pipeline_id, *stand_ins),
+                (owner, ts, sid, pipeline_id, *stand_ins),
             )
+    for stage in record["stages"]:
         for req in stage["requirements"]:
             if req.get("person_id"):
                 conn.execute(
@@ -1803,6 +1802,7 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
         return []
     record = PRESETS[key]
     work = {str(s["id"]): s for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"}
+    second_review = {"engineering-review-1": "engineering-review-2", "product-review-1": "product-review-2"}
     whole = all(s["id"] in work for s in record["stages"])
     ts = _h().now()
     paths: list[str] = []
@@ -1818,6 +1818,11 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
         reqs = R.on_stage(conn, stage["id"])
         keys = [requirement_key(r) for r in reqs]
         wanted = [requirement_key(r) for r in stage["requirements"]]
+        # The combined Review rubric goes with the subtask gate in a pipeline with one review stage.
+        if stage["id"] in second_review and (
+            second_review[stage["id"]] in work or have["name"] != stage["name"] or "linked_done" not in keys
+        ):
+            continue
         purpose = f"{stage['id']}/purpose"
         if whole and sorted(keys) == sorted(wanted) and _behind(purpose, have.get("purpose"), texts[purpose]):
             paths.append(purpose)
@@ -1856,8 +1861,9 @@ def _add_qa(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
     """An Engineering pipeline made before QA had a stage of its own gets it, once: QA goes in after Fixes 2, owned by
     Fixes 2's owner, with Checks pass and the page a person OKs, which leaves Fixes 2 as it was set (its person, its
     switches, its line and check: `_follow` then moves an unedited line and check to QA's). Fixes 2 gets Owner says done,
-    as Fixes 1 has. A task in Fixes 2 now waits on its owner's done, so the never-stuck check wakes the Builder, which
-    says done and the task moves on to QA. Passed over when the company ever had a QA stage (one it removed stays
+    as Fixes 1 has, and its shipped purpose stops asking for the page that moved. A task in Fixes 2 now waits on its
+    owner's done, so the never-stuck check wakes the Builder, which says done and the task moves on to QA.
+    Passed over when the company ever had a QA stage (one it removed stays
     removed), has no Fixes 2 or no page a person OKs on it, or already has a live stage named QA. The settings version
     goes up as a save's does, except on a preset still at version 1 (`_follow`). Returns whether it added QA."""
     row = task_engine.pipeline(conn, pipeline_id)
@@ -1876,6 +1882,12 @@ def _add_qa(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
     fixes["requirements"] = [r for r in fixes["requirements"] if r is not page]
     if not any(r["kind"] == "owner_done" for r in fixes["requirements"]):
         fixes["requirements"].insert(0, _requirement_in({"kind": "owner_done"}, "Fixes 2", []))
+    if (
+        any(s["id"] == "engineering-review-2" for s in stages)
+        and sorted(requirement_key(r) for r in fixes["requirements"]) == ["item:github.checks_pass", "owner_done"]
+        and _behind("engineering-fixes-2/purpose", fixes["purpose"], _FIXES_2_PURPOSE)
+    ):
+        fixes["purpose"] = _FIXES_2_PURPOSE
     shipped = next(s for s in PRESETS["engineering"]["stages"] if s["id"] == QA_STAGE)
     stages.insert(
         at + 1,

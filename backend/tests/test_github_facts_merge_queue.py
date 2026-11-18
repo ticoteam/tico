@@ -1421,7 +1421,7 @@ def test_in_merge_only_a_person_links_another_pr(company):
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
         gh.open_pr(REPO, 2)
-        for bot in (RM, B, H.KEEPER):
+        for bot in (RM, B, H.TICO_ACTOR):
             url = f"https://github.com/{REPO}/pull/2"
             with pytest.raises(H.Refused) as raised:
                 H.task_link(c, bot, task_id, url, mover=True)

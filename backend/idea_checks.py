@@ -236,7 +236,7 @@ def run(store: Any, now: str | None = None) -> int:
         if why:
             detail["error"] = why
         with store.transaction() as c:
-            call_id = str(H.event(c, H.KEEPER, "judge.call", qset["label"], detail)["id"])
+            call_id = str(H.event(c, H.TICO_ACTOR, "judge.call", qset["label"], detail)["id"])
     with store.transaction() as c:
         for task_id in skipped:
             _mark(c, task_id, SKIPPED, at)
@@ -306,7 +306,7 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
 
     H = _h()
     number = f"#{original['number']}" if original.get("number") is not None else "another task"
-    TR.relate(conn, H.KEEPER, dup["id"], original["id"], "duplicate_of")  # pyright: ignore[reportUnknownMemberType]
+    TR.relate(conn, H.TICO_ACTOR, dup["id"], original["id"], "duplicate_of")  # pyright: ignore[reportUnknownMemberType]
     E.move(conn, dup["id"], E.CLOSED, E.SYSTEM, f"Duplicate of {number}: Decision model found the same idea")
     asker = dup.get("requester_id")
     if H.is_human(asker):
@@ -320,7 +320,7 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
     filed = f"#{dup['number']}" if dup.get("number") is not None else "a duplicate"
     H.task_comment(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         original["id"],
         f"Also asked by {name}: {filed}, \"{' '.join(str(dup.get('title') or '').split())[:TITLE]}\", closed as the same idea.",
         wake=False,

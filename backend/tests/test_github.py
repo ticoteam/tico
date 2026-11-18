@@ -365,7 +365,7 @@ def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
 
     def broken(c, task_id, *args, **kwargs):
         if task_id == tasks[0]["id"]:
-            H.event(c, H.KEEPER, "wake.partial", task_id)
+            H.event(c, H.TICO_ACTOR, "wake.partial", task_id)
             raise RuntimeError("bad conversation")
         return tell(c, task_id, *args, **kwargs)
 

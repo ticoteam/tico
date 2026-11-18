@@ -14,17 +14,20 @@ const at = (page: Page, hash: string) => go(page, hash).then(() => page.waitForF
 
 run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/docs'});
-  for (const [hash, button] of [['#/docs', '#ask-row'], ['#/meetings', 'body > .pgc-edge:not([hidden]) .pgc-tab']] as const) {
+  for (const [hash, title, button] of [
+    ['#/docs', 'Docs', '#ask-row'],
+    ['#/meetings', 'Meetings', 'body > .pgc-edge:not([hidden]) .pgc-tab'],
+  ] as const) {
     await at(page, hash);
     const ask = page.locator(button), panel = page.locator('#ask-panel');
-    await page.locator('#main header.ph').waitFor({timeout: t(10000)});
+    await page.locator('#main').getByRole('heading', {level: 1, name: title, exact: true}).waitFor({timeout: t(10000)});
     assert.equal(await page.locator('#docs-ask, #meet-ask, #main [data-ask-open]').count(), 0, `${tag} ${hash}: no Ask button`);
     await ask.waitFor({timeout: t(10000)});
     await ask.click();
     await panel.waitFor({timeout: t(5000)});
     // It sees the page whether or not this person's Assistant is on yet (the hub's may still be off).
     await panel.locator('[data-ask-sees-name]').waitFor({timeout: t(10000)});
-    assert.equal(await panel.locator('[data-ask-sees-name]').innerText(), await page.locator('#main h1').first().innerText(), `${tag} ${hash}: it sees the page`);
+    assert.equal(await panel.locator('[data-ask-sees-name]').innerText(), title, `${tag} ${hash}: it sees the page`);
     assert.equal(await sideways(page), false);
     await shot(page, `library-ask-${tag}-${hash.split('/').pop()}`);
     await panel.locator('[data-ask-close]').first().click();

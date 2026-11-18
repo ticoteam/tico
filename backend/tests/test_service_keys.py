@@ -166,8 +166,8 @@ def test_a_later_call_reopens_reassigns_edits_and_closes_through_the_task_calls(
         return SimpleNamespace(**{**base, **fields})
 
     with company.transaction() as c:
-        task_id = H.task_create(c, H.KEEPER, "Review the report", "Please review.", "human:ben", lint=False)["id"]
-        H.task_close(c, H.KEEPER, task_id, "Approved in billing.")
+        task_id = H.task_create(c, H.TICO_ACTOR, "Review the report", "Please review.", "human:ben", lint=False)["id"]
+        H.task_close(c, H.TICO_ACTOR, task_id, "Approved in billing.")
         assert SK._apply(c, call(owner="human:cara", body="Two charts moved."), H.task(c, task_id), "", "Billing")
         row = H.task(c, task_id)
         assert (row["status"], row["owner_id"]) == ("open", "human:cara")

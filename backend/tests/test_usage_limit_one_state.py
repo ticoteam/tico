@@ -343,7 +343,7 @@ def test_an_older_servers_gateway_waits_become_the_gateways_hold(api, monkeypatc
             "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'error',?,?)",
             (aid, json.dumps({"error": GATEWAY_CAP, "limit": True}), HIT),
         )
-        H.status_set(c, H.KEEPER, "ops", state="limited", focus="Gateway cap reached")
+        H.status_set(c, H.TICO_ACTOR, "ops", state="limited", focus="Gateway cap reached")
         c.execute(
             "INSERT INTO registry_metadata VALUES('gateway-unavailable:finance',?)",
             (json.dumps({"since": HIT, "until": H.shift(HIT, seconds=60)}),),

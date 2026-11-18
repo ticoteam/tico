@@ -105,7 +105,7 @@ Rules for callers:
   - A bot's own command carries the version the bot was shown. Without one it is refused (`task_changed`).
   - Code that acts for a bot inside one transaction passes the version it just read.
   - A person may leave it out of everything but a field edit.
-- Code that acts for nobody uses `hubdb_core.KEEPER` as the actor (import it as `SYSTEM`; never write the word keeper
+- Code that acts for nobody uses `hubdb_core.TICO_ACTOR` as the actor (import it as `SYSTEM`; never write the word keeper
   in new code or copy) and always gives a why. When it moves a task because of what someone did (the owner said done),
   the effects below are attributed to that someone, not to SYSTEM.
 - A refusal is `H.Refused` with a `task_*` rule and `extra` (`missing`, `next`, `version`). There is no `strict=`.
