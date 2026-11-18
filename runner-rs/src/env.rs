@@ -358,17 +358,8 @@ fn task_repository(attempt: &Value) -> Option<String> {
         .and_then(crate::gitcred::repository_name)
 }
 
-/// The turn's environment, and the vault values it carries.
-pub async fn environment(
-    ctx: &EnvContext<'_>,
-    attempt: &Value,
-    vault: &mut Vault,
-) -> Result<Env, String> {
-    environment_with(ctx, attempt, vault, None).await
-}
-
-/// `environment` for a turn the runner runs: its credentials are read over `hub`'s connections, with the turn's own
-/// token, so a turn opens no new connection of its own to the hub.
+/// The turn's environment, and the vault values it carries. Its credentials are read over `hub`'s connections, with
+/// the turn's own token, so a turn opens no new connection of its own to the hub.
 pub async fn turn_environment(
     ctx: &EnvContext<'_>,
     attempt: &Value,
@@ -378,7 +369,7 @@ pub async fn turn_environment(
     environment_from(ctx, attempt, vault, None, Some(hub)).await
 }
 
-/// `environment` with the grants already read (a watcher's, from `runner-watcher-credentials`).
+/// `turn_environment` with the grants already read (a watcher's, from `runner-watcher-credentials`).
 pub async fn environment_with(
     ctx: &EnvContext<'_>,
     attempt: &Value,
