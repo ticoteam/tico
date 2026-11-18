@@ -115,4 +115,9 @@ def test_since_at_the_entrys_second_keeps_it(api):
     bot = bot_token(api)
     assert [r["version"] for r in history(api, bot, "?since=2026-11-17T08:03:11Z")] == ["0.6.20"]
     assert history(api, bot, "?since=2026-11-17T08:03:12Z") == []
+    # A fractional cutoff before the stored start in the same second keeps it; one after it drops it.
+    assert history(api, bot, "?since=2026-11-17T08:03:11.100000Z") == [
+        {"version": "0.6.20", "since": "2026-11-17T08:03:11Z"}
+    ]
+    assert history(api, bot, "?since=2026-11-17T08:03:11.200000Z") == []
     assert api.get("/api/v2/health?since=2026-13-01", headers=headers()).status_code == 400

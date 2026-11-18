@@ -4118,16 +4118,15 @@ def release_history(c, since=None):
     first, as Health shows them to bots and people: only version and since, whatever else an entry may carry. Each
     since is given to the whole second in UTC ("2026-11-17T08:03:11Z") so 500 entries stay within Health's 30 KB
     guard; the stored record keeps its microseconds. Versions are never shortened. `since` (an ISO time) keeps the
-    entries that started at or after it, to the second as listed; a malformed one is refused with a 400."""
-    entries = [
-        {"version": str(r.get("version") or ""), "since": _whole_second(r.get("since"))} for r in releases.history(c)
-    ]
-    if since is None:
-        return entries
-    start = _instant(since)
-    if start is None:
-        raise Problem("invalid_since", "since must be an ISO time, like 2026-11-17T00:00:00Z", 400)
-    return [r for r in entries if (at := _instant(r["since"])) is not None and at >= start]
+    entries that started at or after it, compared at the stored precision so a fractional cutoff never hides a later
+    start in the same second; a malformed one is refused with a 400."""
+    stored = releases.history(c)
+    if since is not None:
+        start = _instant(since)
+        if start is None:
+            raise Problem("invalid_since", "since must be an ISO time, like 2026-11-17T00:00:00Z", 400)
+        stored = [r for r in stored if (at := _instant(r.get("since"))) is not None and at >= start]
+    return [{"version": str(r.get("version") or ""), "since": _whole_second(r.get("since"))} for r in stored]
 
 
 def install(app, store, auth, settings):
