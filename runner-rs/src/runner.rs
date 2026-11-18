@@ -703,15 +703,13 @@ impl Runner {
         let (agent_instructions, versions) =
             readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
-        let mut capabilities = crate::lanes::capabilities();
-        // Reads a Claude plan's week on request (subscription_refresh.rs `read_claude_plan`; backend/subscription_refresh.py `request_plan_read`).
-        capabilities.push("plan_usage_v1");
+        // Every advertised capability, less what an older server refused in the last ten minutes (lanes.rs).
+        let capabilities = crate::lanes::capabilities(computer_logins);
         if computer_logins {
             readiness_doc["computer_profile"] =
                 json!(crate::profiles::computer_login(&config.data)
                     .map(|p| p.name)
                     .unwrap_or_default());
-            capabilities.push("computer_logins_v1");
         }
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
