@@ -137,11 +137,6 @@ def seed_files(store, task_ids):
     """FILES files of FILE_BOT: most its own, a third on its tasks, one in ten with a second version."""
     now = H.now()
     with store.transaction() as c:
-        c.execute(
-            "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
-            "VALUES('bench','bot:" + FILE_BOT + "',?,1,'spec.html','text/html',?)",
-            ("0" * 64, now),
-        )
         rows = []
         for i in range(FILES):
             task = task_ids[i % len(task_ids)] if task_ids and i % 3 == 0 else None
@@ -166,13 +161,29 @@ def seed_files(store, task_ids):
             "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
+        # Each version its own blob, as uploads are: one shared blob made every visibility check walk all versions.
+        versions = [
+            (r[0], v, f"blob-{i:06d}-{v}", f"{i:060d}{v:04d}") for i, r in enumerate(rows) for v in range(1, r[9] + 1)
+        ]
+        c.executemany(
+            "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,1,'spec.html','text/html',?)",
+            [(blob, "bot:" + FILE_BOT, digest, now) for _, _, blob, digest in versions],
+        )
         c.executemany(
             "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at,repo_path) "
-            "VALUES(?,?,'bench',?,1,?,'text/html',?,?,?)",
+            "VALUES(?,?,?,?,1,?,'text/html',?,?,?)",
             [
-                (r[0], v, "0" * 64, f"page-{i}.html", "bot:" + FILE_BOT, now, f"docs/page-{i}.html")
-                for i, r in enumerate(rows)
-                for v in range(1, r[9] + 1)
+                (
+                    file_id,
+                    v,
+                    blob,
+                    digest,
+                    f"page-{file_id[-6:]}.html",
+                    "bot:" + FILE_BOT,
+                    now,
+                    f"docs/page-{file_id[-6:]}.html",
+                )
+                for file_id, v, blob, digest in versions
             ],
         )
 
