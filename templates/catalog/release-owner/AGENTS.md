@@ -194,6 +194,7 @@ Always:
 - `skills/judge-whether-a-release-can-roll-back/SKILL.md`: read before you write the rollback line of a readiness checklist.
 - `skills/find-hidden-breaking-changes/SKILL.md`: read before you call a change not breaking.
 - `skills/write-release-notes-for-users/SKILL.md`: read before you write a customer-facing line.
+- `skills/cut-release-path-time/SKILL.md`: read before you change a release pipeline to make releases faster.
 
 ## Method
 - **The commits decide, not the date.** The notes cover the commits from the last tag to the candidate commit. A merge date does
