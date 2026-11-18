@@ -56,6 +56,11 @@ interface TasksPageState {
   menuAnchor?: HTMLElement | null | undefined;
   menuField?: string | undefined;
   searchTimer?: ReturnType<typeof setTimeout>;
+  /** The task a search that is only a number names (tasksJumpNumber), from any pipeline and status the reader may read,
+   * shown first over the view; `jumpFor` is the number it was read for (0: none), so a late answer for an older
+   * number is dropped. */
+  jump?: TaskBriefV3 | null;
+  jumpFor?: number;
 }
 let TASKS_ST: TasksPageState | null = null;
 const TASKS_KEPT = 'tico.tasks.view';
@@ -76,8 +81,13 @@ function tasksPipelinesKept(): PipelineRec[] {
 function tasksPipelinesForget() {
   try { localStorage.removeItem(TASK_PIPELINES_KEPT); } catch { /* nothing was kept */ }
 }
+/** Every pipeline as last read, retired ones too: a finished task stays in its retired pipeline, and a search by its
+ * number names that pipeline and takes its prefix (tasksJumpPipelines). The views and the view menu keep the rest. */
+let TASKS_EVERY_PIPELINE: PipelineRec[] = [];
 async function tasksPipelinesRead(): Promise<PipelineRec[]> {
-  const list = (await pipelinesAll()).filter(p => !p.retired_at);
+  const every = await pipelinesAll();
+  TASKS_EVERY_PIPELINE = every;
+  const list = every.filter(p => !p.retired_at);
   TASK_PIPELINES = list;
   try {
     const kept = JSON.stringify({who: S.me?.id || '', list});
@@ -153,6 +163,7 @@ function pageTasks(openId = '') {
           `<button type="button" data-archive="${k}">${label}</button>`).join('')}</div>
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span></div>
       </div>
+      <div id="task-jump" class="tk-jump" role="region" aria-label="Task by number" hidden></div>
       <div id="task-body" role="region" aria-label="Tasks"></div>
       <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
       <div class="pa-host" id="task-ask" hidden></div>
@@ -198,6 +209,9 @@ function pageTasks(openId = '') {
     state.searchTimer = setTimeout(() => tasksRender(state), 150);
   };
   search.onkeydown = (ev: KeyboardEvent) => {
+    // Enter opens the task a number names, as a click on its row does.
+    const jump = tasksJumpShown(state);
+    if (ev.key === 'Enter' && jump) { ev.preventDefault(); void taskModalOpen(jump.id); return; }
     if (ev.key !== 'Escape') return;
     if (search.value) ev.stopPropagation(); else search.blur();
     search.value = state.q = '';
@@ -219,6 +233,15 @@ function pageTasks(openId = '') {
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
+  const jumpEl = $('#task-jump');
+  jumpEl.addEventListener('click', (ev: MouseEvent) => {
+    const id = eventElement(ev)?.closest<HTMLElement>('[data-task]')?.dataset.task;
+    if (id) void taskModalOpen(id);
+  }, {signal});
+  jumpEl.addEventListener('keydown', (ev: KeyboardEvent) => {
+    const row = eventElement(ev)?.closest<HTMLElement>('[data-task]');
+    if ((ev.key === 'Enter' || ev.key === ' ') && row && row === eventElement(ev)) { ev.preventDefault(); row.click(); }
+  }, {signal});
   const body = $('#task-body');
   body.addEventListener('click', (ev: MouseEvent) => void tasksBodyClick(state, ev), {signal});
   body.addEventListener('keydown', (ev: KeyboardEvent) => {
@@ -576,6 +599,7 @@ function tasksRender(state: TasksPageState | null) {
   if (!body || !state || TASKS_ST !== state) return;
   tasksHeadPaint(state);
   needsBadgePaint();
+  tasksJumpRead(state);
   // A search or a filter is the server's: a change of either reads its first page of matches (held rows, matched here,
   // show meanwhile); More reads the next page.
   if (tasksQuery(state) && tasksNarrowKey(tasksNarrow(state)) !== state.readKey) {
@@ -600,6 +624,7 @@ function tasksRender(state: TasksPageState | null) {
     else body.innerHTML = hooks.html(p, state.tasks, opts);
     hooks.bind?.(body, p);
     hooks.ask?.($('#task-ask'), p, matchMedia(PHONE).matches);
+    tasksJumpPaint(state);
     return;
   }
   tasksAskOff();
@@ -612,6 +637,69 @@ function tasksRender(state: TasksPageState | null) {
     : tasksViewOnly() ? tasksOwnHTML(state)
     : tasksYouHTML(state);
   if (TASKS_DRAWN.get(body) !== html) { TASKS_DRAWN.set(body, html); body.innerHTML = html; }
+  tasksJumpPaint(state);
+}
+
+// ---- a task by its number (spec "Task search finds a task by its number")
+/** The task number a search is, when the whole search is one: 556, #556, or a pipeline's prefix and it (P556, p-556).
+ * 0 when it is not, so words, or letters that are no pipeline's prefix ("v2"), search as before. */
+/** The pipelines a number search knows: every one, retired too, once read; the view's until then. */
+const tasksJumpPipelines = (state: Pick<TasksPageState, 'pipelines'>): PipelineRec[] =>
+  TASKS_EVERY_PIPELINE.length ? TASKS_EVERY_PIPELINE : state.pipelines;
+function tasksJumpNumber(state: Pick<TasksPageState, 'q' | 'pipelines'>): number {
+  const m = /^#?(?:([a-z]{1,4})-?)?(\d{1,9})$/i.exec(state.q.trim());
+  if (!m) return 0;
+  const prefix = (m[1] || '').toLowerCase();
+  if (prefix && !tasksJumpPipelines(state).some(p => (p.prefix || '').toLowerCase() === prefix)) return 0;
+  return Number(m[2]) || 0;
+}
+/** Reads the task the search's number names, once per number: the server's number read ignores the view, the status
+ * and the snooze, and answers only a task the reader may read. */
+function tasksJumpRead(state: TasksPageState) {
+  const n = tasksJumpNumber(state);
+  if (n === (state.jumpFor || 0)) return;
+  state.jumpFor = n; state.jump = null;
+  if (!n) return;
+  void taskBriefsPage({number: n, limit: 1}).then(page => {
+    if (TASKS_ST !== state || state.jumpFor !== n) return;  // a newer search, or the page left
+    state.jump = page.tasks.find(t => t.number === n) || null;
+    tasksRender(state);
+  }, () => {
+    if (TASKS_ST === state && state.jumpFor === n) state.jump = null;
+  });
+}
+/** The task shown first, when the search still names it. */
+const tasksJumpShown = (state: TasksPageState): TaskBriefV3 | null =>
+  state.jump && state.jumpFor && state.jump.number === tasksJumpNumber(state) ? state.jump : null;
+/** Its label as the task's page shows it: its pipeline's prefix and number ("P556"), else "#556". */
+function tasksJumpLabel(state: TasksPageState, t: TaskBriefV3): string {
+  const prefix = tasksJumpPipelines(state).find(p => p.id === t.pipeline_id)?.prefix || '';
+  return `${prefix || '#'}${t.number}`;
+}
+/** Where it is: its stage while open, else Snoozed, Done or Closed. */
+function tasksJumpWhere(state: TasksPageState, t: TaskBriefV3): string {
+  if (t.status === 'done') return 'Done';
+  if (t.status === 'closed') return 'Closed';
+  if (t.snoozed) return 'Snoozed';
+  return tasksStageName(state, t.stage_id) || 'Open';
+}
+function tasksJumpHTML(state: TasksPageState, t: TaskBriefV3): string {
+  const pipeline = tasksJumpPipelines(state).find(p => p.id === t.pipeline_id)?.name || '';
+  const line = [pipeline, t.owner_id ? actorLabel(t.owner_id) : ''].filter(Boolean).join(' · ');
+  return `<div class="tk-row" data-task="${esc(t.id)}" role="button" tabindex="0">`
+    + `<span class="tk-ref tnum">${esc(tasksJumpLabel(state, t))}</span>`
+    + `<span class="tk-two"><span class="tk-title">${esc(t.title || '')}</span>${line ? `<span class="tk-ask">${esc(line)}</span>` : ''}</span>`
+    + `<span class="pill">${esc(tasksJumpWhere(state, t))}</span><kbd aria-hidden="true">↵</kbd></div>`;
+}
+/** Draws the task first, over the view, and takes its own row out of the view's so it shows once. */
+function tasksJumpPaint(state: TasksPageState) {
+  const el = $('#task-jump'), body = $('#task-body'), t = tasksJumpShown(state);
+  if (!el || !body) return;
+  const html = t ? tasksJumpHTML(state, t) : '';
+  if (el.dataset.drawn !== html) { el.dataset.drawn = html; el.innerHTML = html; }
+  el.hidden = !t;
+  const rows = body.querySelectorAll('[data-task]') as NodeListOf<HTMLElement>;
+  for (const row of rows) row.hidden = !!t && row.dataset.task === t.id;
 }
 /** No Ask bar away from a pipeline's board (pipeline-ask.ts). */
 function tasksAskOff() {

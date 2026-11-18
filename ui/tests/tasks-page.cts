@@ -10,7 +10,8 @@
 //  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
 //    pipeline's archive reads and keeps that pipeline's tasks only, a live task of another pipeline left out;
 //  - a pipeline over one page (500 open tasks) or an archive over 200: More reads the next page from where the rows held
-//    end (a task taken out live moves it back by one); a search or a filter reads the rest first, so it finds them all.
+//    end (a task taken out live moves it back by one); a search or a filter reads the rest first, so it finds them all;
+//  - a search that is only a task number (556, #556, P556) puts that task first, from any pipeline and status.
 // Pipelines themselves (list and columns, the rail, the editor) are pipeline-view-unit.cts and pipeline-drag.cts; the
 // ask screen is ask-screen.cts.
 import type {Browser, Page, Route} from 'playwright';
@@ -301,8 +302,11 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       // `search` and `owners` as backend/task_match.py reads them: each word in the title, the number or a label.
       const said = (q.get('search') || '').toLowerCase().split(/\s+/).filter(Boolean).map(w => w.replace(/^#/, ''));
       const owners = q.get('owners')?.split(',');
+      // `number`: one task by its number, in any status and pipeline, snoozed or not (backend/task_list_routes.py).
+      const number = q.get('number');
       const rows = tasks.filter(x => (!status || status === 'all' || x.status === status) && (!ids || ids.includes(x.id))
-        && (ids || snoozed === 'all' || (snoozed === 'only' ? !!x.snoozed : !x.snoozed)) && (!q.get('pipeline') || x.pipeline_id === q.get('pipeline'))
+        && (!number || x.number === Number(number))
+        && (ids || number || snoozed === 'all' || (snoozed === 'only' ? !!x.snoozed : !x.snoozed)) && (!q.get('pipeline') || x.pipeline_id === q.get('pipeline'))
         && (!owner || x.owner_id === owner) && words.every(w => x.title.toLowerCase().includes(w))
         && (!owners || owners.includes(String(x.owner_id))) && said.every(w => `${x.title} ${x.number ?? ''}`.toLowerCase().includes(w)));
       // In the server's order (backend/hubdb.py visible_tasks), then a page as backend/task_list_routes.py cuts it:
@@ -824,6 +828,129 @@ async function pages(browser: Browser) {
   console.log('a list over one page: More reads the next after the last row; a search reads one bounded page: ok');
 }
 
+// Spec "Task search finds a task by its number": a search that is only a number puts that task first, from any pipeline
+// and status, with Enter opening it; words, an unknown number and an older number's late answer add nothing.
+async function byNumber(browser: Browser) {
+  // t-80: closed in the retired Old roadmap (prefix O), which no view or view menu offers.
+  // t-44: another Product task a search for 4 matches (its number holds a 4).
+  const tasks = [...fixtures(), task('t-55', 'Fifty-five', 'doing'), task('t-44', 'Order more chairs', 'spec'),
+    task('t-80', 'Roadmap import', 'closed', {pipeline_id: 'old', pipeline: {id: 'old', name: 'Old roadmap'}})];
+  // The rows a person sees, top to bottom: the task first, then the view's own matches.
+  const order = (page: Page) => page.locator('[data-task]:visible').evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.task));
+  const jump = (page: Page) => page.locator('#task-jump [data-task]');
+  const shows = async (page: Page, typed: string, id: string, where: string) => {
+    await page.locator('#task-q').fill(typed);
+    await page.locator(`#task-jump [data-task="${id}"]`).waitFor();
+    assert.equal(await jump(page).count(), 1, typed);
+    assert.equal((await page.locator('#task-jump .pill').textContent())!.trim(), where, typed);
+  };
+  // A number search waits for its number read's answer; words read no number. Then the search's own read settles.
+  const none = async (page: Page, typed: string, number?: string) => {
+    const answered = number ? page.waitForResponse(r => new URL(r.url()).searchParams.get('number') === number) : null;
+    const searched = page.waitForResponse(r => new URL(r.url()).searchParams.get('search') === typed.trim());
+    await page.locator('#task-q').fill(typed);
+    await Promise.all([answered, searched]);
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await page.locator('#task-jump').isHidden(), true, typed);
+  };
+  {
+    // You: a closed task of the Product pipeline, which no open view holds.
+    const {page, errors, reads} = await open(browser, {tasks});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    await shows(page, '7', 't-7', 'Closed');
+    assert.equal((await jump(page).locator('.tk-ref').textContent())!.trim(), 'P7');
+    assert.equal((await jump(page).locator('.tk-title').textContent())!.trim(), 'Old pricing test');
+    assert.match((await jump(page).locator('.tk-ask').textContent())!, /^Product · /);
+    const read = reads.find(u => u.searchParams.get('number') === '7')!;
+    assert.equal(read.searchParams.get('status'), null, 'any status');
+    assert.equal(read.searchParams.get('pipeline'), null, 'any pipeline');
+    for (const typed of ['#7', 'p7', 'P-7', ' 7 ']) await shows(page, typed, 't-7', 'Closed');
+    // Enter in the search opens it.
+    await page.locator('#task-q').fill('7');
+    await jump(page).waitFor();
+    await page.locator('#task-q').press('Enter');
+    await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Old pricing test'}).waitFor();
+    await page.keyboard.press('Escape');
+    await page.locator('#task-modal[open]').waitFor({state: 'detached'});
+    // A snoozed one and a done one, from You.
+    await shows(page, '5', 't-5', 'Snoozed');
+    await shows(page, '#6', 't-6', 'Done');
+    // A finished task of a retired pipeline: found by its label too, and named with that pipeline.
+    for (const typed of ['80', 'O80', 'o-80']) await shows(page, typed, 't-80', 'Closed');
+    assert.equal((await jump(page).locator('.tk-ref').textContent())!.trim(), 'O80');
+    assert.match((await jump(page).locator('.tk-ask').textContent())!, /^Old roadmap · /);
+    // Words, letters no pipeline has, and a number no task has: the search as before, nothing first.
+    await none(page, '7 old');
+    await none(page, 'x7');
+    await none(page, '99', '99');
+    await page.locator('#task-body', {hasText: 'No matches'}).waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // Another pipeline's open task shows its stage; in its own pipeline it is also a match of the view, and shows once.
+    const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=ops'});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    await shows(page, '4', 't-4', 'Build');
+    await jump(page).click();
+    await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Rounding in the API'}).waitFor();
+    await page.close();
+    assert.deepEqual(errors, []);
+  }
+  {
+    const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=product'});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    await shows(page, '4', 't-4', 'Build');
+    await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.tasks.some(t => t.id === 't-4'));
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await page.locator('[data-task="t-4"]:visible').count(), 1, 'once');
+    // The view's other match (t-44) is still there, under the task the number names.
+    await page.locator('#task-body [data-task="t-44"]').waitFor();
+    assert.deepEqual(await order(page), ['t-4', 't-44'], 'the task first, then the view');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // 5 then 55, typed fast, 5's answer last: only 55 shows.
+    const {page, errors} = await open(browser, {tasks, needs: []});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    // 5's read is held until 55 shows, then let go: its answer lands after 55's.
+    let late = 0, letGo = () => {};
+    const held = new Promise<void>(res => { letGo = res; });
+    await page.route(u => u.pathname === '/api/v2/tasks' && u.searchParams.get('number') === '5', async r => {
+      late++; await held; await r.fallback();
+    });
+    await page.locator('#task-q').fill('5');
+    await page.waitForFunction(() => TASKS_ST.jumpFor === 5);
+    await page.locator('#task-q').fill('55');
+    await page.locator('#task-jump [data-task="t-55"]').waitFor();
+    const fiveAnswered = page.waitForResponse(r => new URL(r.url()).searchParams.get('number') === '5');
+    letGo();
+    await fiveAnswered;
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(late, 1);
+    assert.deepEqual(await jump(page).evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.task)), ['t-55']);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // A phone: the row fits, and a tap opens it.
+    const {page, errors} = await open(browser, {tasks, viewport: {width: 390, height: 844}});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    await page.evaluate(() => { const q = document.querySelector<HTMLInputElement>('#task-q')!; q.value = '7'; q.dispatchEvent(new Event('input')); });
+    await jump(page).waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
+    const row = await jump(page).boundingBox();
+    assert.ok(row && row.x >= 0 && row.x + row.width <= 390, 'the row fits');
+    await jump(page).tap();
+    await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Old pricing test'}).waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('a search that is a task number puts that task first, from any pipeline and status: ok');
+}
+
 const api = {open, fixtures, task, brief, needsOf, PIPELINES};
 export type Api = typeof api;
 export type Opened = Awaited<ReturnType<typeof open>>;
@@ -831,6 +958,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [slowOpen, you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
+    for (const run of [slowOpen, you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages, byNumber]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
