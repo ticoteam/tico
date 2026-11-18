@@ -809,12 +809,14 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
                 }
             }
         }
+        let began = Instant::now();
         if !g(path, &env, &["fetch", "--quiet", "--no-tags"], timeout)
             .await?
             .ok()
         {
             return Ok("fetch failed".into());
         }
+        crate::fetch_fresh::note(path, &env, began).await;
         if g(path, &env, &["rev-list", "@{u}..HEAD"], 15)
             .await?
             .stdout
@@ -1060,9 +1062,17 @@ pub async fn sync_shared(path: &Path, turn: &Env) -> String {
         if !dirty.stdout.trim().is_empty() {
             return Ok("it has uncommitted changes from an earlier turn".into());
         }
-        let fetched = g(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await?;
-        if !fetched.ok() {
-            return Ok(format!("fetch failed: {}", git_reason(&fetched)));
+        // A task's worktree shares the bot checkout's repository, fetched a moment ago by the same turn (crate::fetch_fresh).
+        let upstream = crate::fetch_fresh::upstream(path, &env).await;
+        if !upstream.as_ref().is_some_and(|u| u.fresh()) {
+            let began = Instant::now();
+            let fetched = g(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await?;
+            if !fetched.ok() {
+                return Ok(format!("fetch failed: {}", git_reason(&fetched)));
+            }
+            if let Some(u) = &upstream {
+                u.fetched(began);
+            }
         }
         let rebased = g(path, &env, &["rebase", "--quiet", "@{u}"], 45).await?;
         if rebased.ok() {
@@ -1146,10 +1156,13 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
         if !dirty.ok() {
             return Ok(format!("git status failed: {}", git_reason(&dirty)));
         }
+        // Always fetched: the push was refused because the remote has moved on.
+        let began = Instant::now();
         let fetched = g(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await?;
         if !fetched.ok() {
             return Ok(format!("the remote refused the push as behind, and fetching it failed: {}", git_reason(&fetched)));
         }
+        crate::fetch_fresh::note(path, &env, began).await;
         let up = Some(g(path, &env, &["rev-parse", "--abbrev-ref", "@{u}"], 15).await?.stdout.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| "its upstream".into());
         let behind = Some(g(path, &env, &["rev-list", "--count", "HEAD..@{u}"], 15).await?.stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "some".into());
         let missing = format!("{up} has {behind} commits this checkout doesn't");

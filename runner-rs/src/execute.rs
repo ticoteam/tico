@@ -472,10 +472,19 @@ pub async fn pull_repo(path: &Path, env: &Env) -> String {
         Some(_) => return String::new(),
         None => return "timed out".into(),
     }
-    match git(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await {
-        Some((true, _, _)) => {}
-        Some((false, _, err)) => return git_reason(&err, &env),
-        None => return "timed out".into(),
+    // A turn's second refresh of this repository and upstream merges what its first fetch brought (crate::fetch_fresh).
+    let upstream = crate::fetch_fresh::upstream(path, &env).await;
+    if !upstream.as_ref().is_some_and(|u| u.fresh()) {
+        let began = Instant::now();
+        match git(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await {
+            Some((true, _, _)) => {
+                if let Some(u) = &upstream {
+                    u.fetched(began);
+                }
+            }
+            Some((false, _, err)) => return git_reason(&err, &env),
+            None => return "timed out".into(),
+        }
     }
     match git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 45).await {
         Some((true, _, _)) => String::new(),
@@ -541,8 +550,12 @@ pub async fn push_repo(path: &Path, env: &Env) -> (i64, String) {
         args.push(&remote);
         args.push(&dest);
     }
+    let began = Instant::now();
     match git(path, &env, &args, 60).await {
-        Some((true, _, _)) => (ahead, String::new()),
+        Some((true, _, _)) => {
+            crate::fetch_fresh::note(path, &env, began).await;
+            (ahead, String::new())
+        }
         Some((false, _, err)) => {
             let err = err.trim();
             if !err.contains("[remote rejected]")
@@ -1075,6 +1088,21 @@ fn claude_cold_start() -> &'static tokio::sync::Mutex<()> {
 }
 const CLAUDE_COLD_START_HOLD_S: u64 = 45;
 
+/// How long pre-start work may run on a granted place before it gives the place back (`pre_start_lock`).
+#[cfg_attr(test, allow(dead_code))] // tests choose their own grace (tests::GRACE_OVERRIDE)
+const PRE_START_GRACE: Duration = Duration::from_millis(1500);
+
+fn pre_start_grace() -> Duration {
+    // Tests keep the immediate release unless they set a grace of their own.
+    #[cfg(test)]
+    let grace = tests::GRACE_OVERRIDE
+        .with(|v| v.get())
+        .unwrap_or(Duration::ZERO);
+    #[cfg(not(test))]
+    let grace = PRE_START_GRACE;
+    grace
+}
+
 impl Runner {
     /// A delivery lease keeps waiting work alive; only a short server reservation permits a new start.
     async fn wait_start_place(&self, attempt: &Value, flags: &Flags) -> Result<(), Fail> {
@@ -1377,7 +1405,9 @@ impl Runner {
         e
     }
 
-    /// Release capacity only if preparation really blocks; subsequent preparation needs a fresh grant.
+    /// Release capacity only if preparation really blocks: work still running after PRE_START_GRACE gives the place
+    /// back and needs a fresh grant once it is done. Ordinary git (a fetch, a push) finishes inside the grace and
+    /// keeps the place, with no `waiting` post and no second ask; the server holds a place for start_reservation_seconds.
     async fn pre_start_lock<T>(
         &self,
         attempt: &Value,
@@ -1387,6 +1417,16 @@ impl Runner {
         let mut waiting = std::pin::pin!(waiting);
         let first =
             std::future::poll_fn(|cx| std::task::Poll::Ready(waiting.as_mut().poll(cx))).await;
+        let grace = pre_start_grace();
+        let first = match first {
+            std::task::Poll::Pending if !grace.is_zero() => {
+                match tokio::time::timeout(grace, waiting.as_mut()).await {
+                    Ok(result) => std::task::Poll::Ready(result),
+                    Err(_) => std::task::Poll::Pending,
+                }
+            }
+            other => other,
+        };
         match first {
             std::task::Poll::Ready(result) => result,
             std::task::Poll::Pending => {
@@ -2046,6 +2086,10 @@ impl Runner {
             let p = place.insert(lanes);
             execution_path = p.main_path.clone();
             self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            // A turn that will run Claude or Codex reads its company skills while it is placed (company_skills::early);
+            // dropped unused if it runs on anything else.
+            let mut early_skills = (held.is_none() && session_runtime == runtime && matches!(runtime.as_str(), "claude" | "codex"))
+                .then(|| crate::company_skills::early(&self.client, &self.state.directory, &aid, &bot));
             segments.push(Segment {
                 meter: Meter::default(),
                 config: config.clone(),
@@ -2074,7 +2118,19 @@ impl Runner {
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
             }
-            env = crate::env::environment(&ctx, &attempt, &mut vault).await.map_err(Fail::runtime)?;
+            // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
+            let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
+            let own_tokens = crate::gitcred::TokenCache::new();
+            let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
+            let separation = crate::gateway_relay::separation();
+            // Three independent asks at once: the turn's credentials (over connections the runner keeps for them), its
+            // GitHub token and its Gateway key. Each is applied below in the order it always was.
+            let (built, granted, pinned) = tokio::join!(
+                crate::env::turn_environment(&ctx, &attempt, &mut vault, &self.credentials),
+                tokens.get(client, json!({"bot": bot})),
+                crate::gateway_relay::prefetch(&self.client, &attempt, separation),
+            );
+            env = built.map_err(Fail::runtime)?;
             if attempt["make_page"]["task"].is_object() {
                 // Captured in base_env too, so every fallback keeps the same disposable workspace.
                 for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
@@ -2086,8 +2142,6 @@ impl Runner {
             if let Some(p) = &selected {
                 env = p.environment(&runtime, &env);
             }
-            // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
-            let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py),
             // when it will run: a held login's turn goes to its fallback, which is signed in when it starts.
             if held.is_none() {
@@ -2111,9 +2165,7 @@ impl Runner {
             if let Some(p) = &socket_path {
                 env.insert(crate::gitcred::SOCKET_ENV.into(), p.display().to_string());
             }
-            let own_tokens = crate::gitcred::TokenCache::new();
-            let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
-            crate::gitcred::apply(&mut env, client, tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
+            crate::gitcred::apply_granted(&mut env, granted, &bot, socket_path.as_deref(), &self.state.directory);
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
                 if crate::model_subscriptions::for_runtime(&vault.subscriptions, keyed).is_some() {
@@ -2126,8 +2178,7 @@ impl Runner {
                 }
             }
             // The Gateway's key stays with this runner: the turn gets a relay and a token good for this turn only.
-            let separation = crate::gateway_relay::separation();
-            if let Err(why) = crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, separation).await {
+            if let Err(why) = crate::gateway_relay::hand_to_turn_with(&self.client, &attempt, &mut env, &mut vault, separation, pinned).await {
                 // A failed turn whose error carries its code: the server settles it unstarted (`not_isolated`), so it
                 // is said once and not retried.
                 let _ = self.state.append(&aid, "error", &json!({"error": why}));
@@ -2166,30 +2217,35 @@ impl Runner {
                 }
             }
             let start_attempt = attempt.clone();
-            if p.has_checkout() {
-                // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
-                crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
-                // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
-                // run no turn on a copy that shares no history with GitHub's.
-                let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, &env).await?;
-                if published == "failed" && detail.contains("unrelated history") {
-                    return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
+            // The turn's refreshes share their fetches (crate::fetch_fresh): a repository fetched a moment ago by this
+            // turn is not fetched again for its worktree.
+            let placed = crate::fetch_fresh::in_turn(&aid, async {
+                if p.has_checkout() {
+                    // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
+                    crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
+                    // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
+                    // run no turn on a copy that shares no history with GitHub's.
+                    let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, &env).await?;
+                    if published == "failed" && detail.contains("unrelated history") {
+                        return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
+                    }
+                    let refresh = async {
+                        self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
+                        Ok(())
+                    };
+                    if p.task.is_empty() {
+                        refresh.await?;
+                    } else {
+                        // A task refresh can wait on the shared git lock before pushing product files.
+                        self.pre_start_lock(&start_attempt, &flags, refresh).await?;
+                    }
                 }
-                let refresh = async {
-                    self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
-                    Ok(())
-                };
-                if p.task.is_empty() {
-                    refresh.await?;
-                } else {
-                    // A task refresh can wait on the shared git lock before pushing product files.
-                    self.pre_start_lock(&start_attempt, &flags, refresh).await?;
-                }
-            }
-            // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
-            // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
-            let placed = self.pre_start_lock(&start_attempt, &flags, async {
-                self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
+                mark("refreshed", &aid);
+                // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
+                // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
+                self.pre_start_lock(&start_attempt, &flags, async {
+                    self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
+                }).await
             }).await?;
             conv.push_str(placed);
             if let Some(old) = legacy_conv.as_mut() {
@@ -2210,7 +2266,11 @@ impl Runner {
                 Ok(false) => {}
                 Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
             }
-            memory_before = redact::head(&execution_path);
+            // git off the async threads: it can take a moment on a large checkout.
+            memory_before = {
+                let path = execution_path.clone();
+                tokio::task::spawn_blocking(move || redact::head(&path)).await.unwrap_or_default()
+            };
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
@@ -2324,10 +2384,12 @@ impl Runner {
             // The bot's company skills, in a folder of this turn's own that Claude is given with --add-dir and Codex as
             // its extra skill root. A failure runs the turn without them.
             let company_skills = if matches!(h, Host::Claude(_) | Host::Codex(_)) {
-                crate::company_skills::prepare(&self.client, &self.state.directory, &aid, &bot).await
+                crate::company_skills::prepare_with(&self.client, &self.state.directory, &aid, &bot, early_skills.take()).await
             } else {
                 None
             };
+            drop(early_skills.take());
+            mark("skills_ready", &aid);
             let settings = Settings {
                 identity: turn_identity,
                 cwd: execution_path.display().to_string(),
@@ -3937,6 +3999,7 @@ mod tests {
         pub(super) static MEMORY_OVERRIDE: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
         pub(super) static MEMORY_RISES_AFTER_ALLOCATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RENEW_EVERY: RefCell<Option<Duration>> = const { RefCell::new(None) };
+        pub(super) static GRACE_OVERRIDE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
         pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
@@ -3955,6 +4018,7 @@ mod tests {
         fn drop(&mut self) {
             crate::sessions::WORKTREE_WAIT.with(|v| v.set(None));
             RENEW_EVERY.with(|v| v.borrow_mut().take());
+            GRACE_OVERRIDE.with(|v| v.set(None));
             RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
@@ -5013,6 +5077,60 @@ mod tests {
         );
         assert_eq!(seen.lock().unwrap().len(), 3);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn preparation_inside_the_grace_keeps_its_place_and_longer_work_gives_it_back() {
+        let _controls = RunControls;
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":false}"#),
+            (200, r#"{"reserved":true}"#),
+        ])
+        .await;
+        let (runner, dir) = lease_runner(&url, "pre-start-grace");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = lease_flags();
+        runner.places.lock().unwrap().insert("a1".into());
+        // A fetch that takes a moment: the work waits, but ends inside the grace.
+        GRACE_OVERRIDE.with(|v| v.set(Some(Duration::from_secs(60))));
+        runner
+            .pre_start_lock(&turn, &flags, async {
+                tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "work inside the grace posted a wait or asked again"
+        );
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        // Work still running past the grace gives the place back, and goes on only after a new grant.
+        GRACE_OVERRIDE.with(|v| v.set(Some(Duration::from_millis(1))));
+        runner
+            .pre_start_lock(&turn, &flags, async {
+                while runner.places.lock().unwrap().contains("a1") {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(
+            seen[0].contains("/start-place") && seen[0].contains("waiting"),
+            "{}",
+            seen[0]
+        );
+        assert!(
+            seen[1].contains("/start-place") && !seen[1].contains("waiting"),
+            "{}",
+            seen[1]
+        );
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

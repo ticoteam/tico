@@ -210,6 +210,26 @@ impl Client {
         })
     }
 
+    /// The same hub over this client's connections, with another token: a turn's own asks reuse the runner's pool
+    /// instead of opening a connection each turn.
+    pub fn with_token(&self, token: &str, retries: u32) -> Client {
+        Client {
+            token: token.to_string(),
+            retries,
+            ..self.clone()
+        }
+    }
+
+    /// The same hub and token over a pool of its own whose every read may take `timeout_s`.
+    pub fn with_read_timeout(&self, timeout_s: u64) -> Client {
+        let timeout = Duration::from_secs(timeout_s);
+        Client {
+            http: http_client(Some(timeout)),
+            timeout,
+            ..self.clone()
+        }
+    }
+
     /// The same hub and token over connections of its own, for a client that lives on another runtime: a pooled
     /// connection belongs to the runtime that opened it.
     pub fn detached(&self) -> Client {

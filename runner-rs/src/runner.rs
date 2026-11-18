@@ -44,6 +44,9 @@ pub struct Runner {
     /// runner.json as last read well, for its profiles while the file can't be read.
     profiles_read: Mutex<Map<String, Value>>,
     pub client: Client,
+    /// The runner's hub over a pool kept for turns' `credential-runtime` reads, whose answers may each take 15 s
+    /// (env::turn_environment): every turn reuses its connections instead of opening one of its own.
+    pub(crate) credentials: Client,
     pub state: State,
     pub events: Arc<Events>,
     pub stop: AtomicBool,
@@ -183,6 +186,7 @@ impl Runner {
         Runner {
             profiles_read: Mutex::new(config.data.clone()),
             config,
+            credentials: client.with_read_timeout(15),
             client,
             events: Events::new(),
             stop: AtomicBool::new(false),
