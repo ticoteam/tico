@@ -678,8 +678,11 @@ def _listening(c, settings):
     return _check("listening", "Listening", "warn", summary, [_fix("Listening", "#/listening")])
 
 
-def repository_fix(c, bot, label, github_owner=""):
-    """The original repository and the clone command on the computer that is missing it."""
+def repository_fix(c, bot, label, github_owner="", why=""):
+    """The original repository and the clone command on the computer that is missing it. When the runner's `why`
+    says a checkout is there without its instructions file, a clone into it would fail: the fix says the runner
+    clones it again by itself (runner-rs fetchrepo.heal_or_replace) and, for an older runner, to set the folder
+    aside first."""
     from .shared_bots import declared, follow
     from .store import repo_url
 
@@ -700,6 +703,12 @@ def repository_fix(c, bot, label, github_owner=""):
     report = ((readiness_document(row[0]).get("bots") or {}).get(bot) or {}) if row else {}
     path = report.get("repository") or "<projects>/" + repo.rstrip("/").split("/")[-1].removesuffix(".git")
     command = f"gh repo clone {shlex.quote(repository)} {shlex.quote(path)}"
+    if "is checked out here but has no" in why:
+        aside = f"mv {shlex.quote(path)} {shlex.quote(path + '.set-aside')}"
+        return repository, (
+            f"An up-to-date runner clones it again by itself at its next check and keeps the old copy beside it; "
+            f"if this stays, update the runner on {label}, or run `{aside}` then `{command}` there (nothing is deleted)"
+        )
     return repository, f"Run `{command}` on {label}, or ask BotOps"
 
 
@@ -3340,7 +3349,7 @@ def view(c, who, settings, auth, github, config, filing=False):
                 "bad",
                 "Bots cannot run because their computer has no repository for them: "
                 + "; ".join(
-                    f"{_bot_name(c, bot)} on {label}: {why}. {repository_fix(c, bot, label, settings.github_owner)[1]}"
+                    f"{_bot_name(c, bot)} on {label}: {why}. {repository_fix(c, bot, label, settings.github_owner, why)[1]}"
                     for bot, label, why in lacking[:3]
                 )
                 + ("." if len(lacking) <= 3 else f"; and {len(lacking) - 3} more."),

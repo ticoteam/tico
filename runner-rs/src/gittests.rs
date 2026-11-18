@@ -1843,6 +1843,128 @@ async fn a_checkout_with_an_unpushed_commit_is_left_alone_and_still_reports_the_
     assert!(path.join(".git").is_dir(), "the folder stays");
 }
 
+fn test_lanes(root: &Path) -> crate::sessions::Lanes {
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    crate::sessions::Lanes::new(std::sync::Arc::new(crate::repositories::Repositories::new(
+        root, root, client,
+    )))
+}
+
+/// The folders beside `path` whose names start with its own, other than `path` itself.
+fn beside(path: &Path) -> Vec<PathBuf> {
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let mut out: Vec<PathBuf> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p != path && p.file_name().unwrap().to_string_lossy().contains(&name))
+        .collect();
+    out.sort();
+    out
+}
+
+/// A checkout that cannot fast-forward (a local commit deleted AGENT.md and was never pushed) is cloned again from
+/// GitHub; the old copy is kept beside it with its commit, so nothing is lost and the bot runs again.
+#[tokio::test]
+async fn a_checkout_that_cannot_fast_forward_is_cloned_again_and_the_old_copy_kept() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-reclone");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-reclone");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-reclone", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    std::fs::write(path.join("scratch.txt"), "untracked work\n").unwrap();
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-reclone",
+        &path,
+        &env,
+        "org/bot-reclone",
+        Some(&url),
+    )
+    .await;
+    assert_eq!(problem, "");
+    assert!(
+        path.join("AGENT.md").is_file(),
+        "the bot has its instructions again"
+    );
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        sh(&path, &["rev-parse", "@{u}"])
+    );
+    let kept = beside(&path);
+    assert_eq!(
+        kept.len(),
+        1,
+        "only the set-aside copy is left beside it: {kept:?}"
+    );
+    assert!(kept[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .contains(".set-aside-"));
+    assert_eq!(
+        sh(&kept[0], &["rev-parse", "HEAD"]),
+        head,
+        "the local commit is kept"
+    );
+    assert_eq!(
+        std::fs::read_to_string(kept[0].join("scratch.txt")).unwrap(),
+        "untracked work\n"
+    );
+}
+
+/// When GitHub's own copy has no instructions file either, nothing is moved and no fresh clone is left behind.
+#[tokio::test]
+async fn a_checkout_is_not_replaced_when_githubs_copy_has_no_instructions_either() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-nofile");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-nofile");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-nofile", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    sh(&seed, &["rm", "-q", "AGENT.md"]);
+    sh(&seed, &["commit", "-qm", "Wipe on GitHub"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-nofile",
+        &path,
+        &env,
+        "org/bot-nofile",
+        Some(&url),
+    )
+    .await;
+    assert!(problem.contains("no AGENTS.md either"), "{problem}");
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "the checkout is left as it is"
+    );
+    assert!(
+        beside(&path).is_empty(),
+        "no clone or copy is left beside it"
+    );
+}
+
 /// A clone whose own commit deleted AGENT.md and was pushed; then GitHub's copy is reverted from the seed.
 async fn wiped_clone(root: &Path, name: &str, env: &Env) -> (PathBuf, PathBuf) {
     let (bare, seed) = remote(root, name);
