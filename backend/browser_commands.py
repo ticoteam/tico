@@ -91,7 +91,8 @@ Verb = Literal[
     "upload",
     "close",
 ]
-LOGGED = ("open", "fill", "copy", "code", "download", "upload")
+# Typing is logged too (E-607): its row holds the verb and the page path, never the text typed.
+LOGGED = ("open", "type", "fill", "copy", "code", "download", "upload")
 FIELDS = ("username", "password", "code")
 REF = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 REQUEST_ERRORS = ("not_on_site", "not_a_password_field")

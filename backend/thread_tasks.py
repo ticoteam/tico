@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from . import hubdb as H
 from . import models as M
+from . import task_text_keys
 from . import threads
 from .names import lookup
 from .store import Problem
@@ -70,6 +71,9 @@ def install(app, store, auth, create_task, public_url=""):
             message, row, root = source(c, v, message_id)
             text, href = task_body(c, message, row, public_url)
             keep_private = private(message, root)
+        # The copied text is task text typed in Tico: a key in it is refused as the request guard refuses one in a
+        # task's body (backend/task_text_keys.py), before the task is made.
+        task_text_keys.refuse_text(store, str(request.state.identity.actor), "", {"body": text})
         links = [href] if public_url else []
         create = M.TaskCreate(
             title=body.title.strip(), body=text, owner=body.owner, private=True if keep_private else None, links=links

@@ -18,6 +18,7 @@ from pydantic import Field, ValidationError
 
 from . import meetings as MS
 from . import models as M
+from . import task_text_keys
 from . import note_outcomes
 from .blobs import Blobs, brief, register
 from .files import is_file_id
@@ -813,6 +814,10 @@ def install_media(
                 fields.setdefault("name", upload["filename"])
                 name = str(fields["name"])
                 body = TaskFile.model_validate(fields)
+                # A streamed form skips the request guard's body check: what is said with the file is checked here,
+                # before anything is stored (backend/task_text_keys.py).
+                if body.note:
+                    await asyncio.to_thread(task_text_keys.refuse_text, store, str(who.actor), tid, {"note": body.note})
                 supplied_type = upload["mime"].lower().split(";", 1)[0].strip()
                 content_type = guessed_type(name) or (
                     supplied_type

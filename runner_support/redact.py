@@ -19,6 +19,7 @@ from urllib.parse import quote, quote_plus
 MASK = "••••"
 ERROR = "[redacted: error]"
 MIN_LENGTH = 8
+TEXT_LIMIT = 2_000_000  # redact.rs TEXT_LIMIT: a changed file past it is left out
 # Words that are a setting, not a secret: replacing them would only damage the text.
 COMMON = {
     "localhost",
@@ -48,7 +49,53 @@ def _variants(value):
     for encode in (base64.b64encode, base64.urlsafe_b64encode):
         text = encode(raw).decode()
         forms.update({text, text.rstrip("=")})
+    forms |= json_forms(value)
+    forms |= utf16_forms(value)
     return forms
+
+
+_JSON_SHORT = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def json_forms(value):
+    """The value as a JSON string's inside: `/` as is or as `\\/`, non-ASCII as is or as `\\uXXXX` (lower or upper hex,
+    as encoders write it), and every character as `\\uXXXX`. A value only partly `\\u`-escaped is not one of them
+    (spec Out: a value split inside itself). Kept step for step with redact.rs json_forms."""
+    forms = set()
+    for slash in (False, True):
+        for ascii_only in (False, True):
+            for upper in (False, True):
+                out = []
+                for ch in value:
+                    if ch in _JSON_SHORT:
+                        out.append(_JSON_SHORT[ch])
+                    elif ch == "/" and slash:
+                        out.append("\\/")
+                    elif ord(ch) < 0x20 or (ascii_only and ord(ch) > 0x7F):
+                        out.append(_unicode_escape(ch, upper))
+                    else:
+                        out.append(ch)
+                forms.add("".join(out))
+    for upper in (False, True):
+        forms.add("".join(_unicode_escape(ch, upper) for ch in value))
+    return forms
+
+
+def _unicode_escape(ch, upper):
+    """`\\uXXXX` for one character: two for one past the Basic Multilingual Plane, as JSON writes it (UTF-16 units)."""
+    data = ch.encode("utf-16-be", "surrogatepass")
+    units = [int.from_bytes(data[i : i + 2], "big") for i in range(0, len(data), 2)]
+    return "".join(("\\u%04X" if upper else "\\u%04x") % u for u in units)
+
+
+def utf16_forms(value):
+    """The value's UTF-16 LE and BE bytes, each byte read as one latin-1 character, the way `holds` reads a file: a
+    UTF-16 file, or UTF-16 text in a log line or an event, holding the value matches it. Kept step for step with
+    redact.rs utf16_forms."""
+    return {
+        value.encode("utf-16-le", "surrogatepass").decode("latin-1"),
+        value.encode("utf-16-be", "surrogatepass").decode("latin-1"),
+    }
 
 
 def _worth(value):
@@ -83,6 +130,9 @@ class Redactor:
         self.pattern = (
             re.compile("|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))) if forms else None
         )
+        # The UTF-16 forms alone (redact.rs Built.wide): a file holding one is left out wherever it is.
+        wide = {f for value in self.values for f in utf16_forms(value)} - {""}
+        self.wide = re.compile("|".join(re.escape(f) for f in sorted(wide, key=len, reverse=True))) if wide else None
 
     def add(self, secrets):
         with self.update_lock:
@@ -90,7 +140,7 @@ class Redactor:
             if not added:
                 return
             updated = Redactor([*self.values, *added])
-            self.values, self.pattern = updated.values, updated.pattern
+            self.values, self.pattern, self.wide = updated.values, updated.pattern, updated.wide
 
     def scrub_text(self, text):
         if not isinstance(text, str) or self.pattern is None:
@@ -99,6 +149,38 @@ class Redactor:
             return self.pattern.sub(MASK, text)
         except Exception:
             return ERROR
+
+    def holds(self, data):
+        """Whether these bytes carry a secret in any of its forms, read as latin-1 and as UTF-8 (redact.rs holds)."""
+        if self.pattern is None:
+            return False
+        return bool(self.pattern.search(data.decode("latin-1")) or self.pattern.search(data.decode("utf-8", "replace")))
+
+    def scrub_bytes(self, data):
+        """Bytes scrubbed as they are: bytes that are not UTF-8 are kept (surrogateescape), as redact.rs scrub_bytes."""
+        if self.pattern is None:
+            return data
+        return self.pattern.sub(MASK, data.decode("utf-8", "surrogateescape")).encode("utf-8", "surrogateescape")
+
+    def file_outcome(self, data):
+        """What one changed file's bytes become (redact.rs file_outcome): ("clean", None) when no form of a secret is in
+        them; ("left_out", None) when a UTF-16 form of one is in them (wherever it is: a UTF-16 file whose first NUL
+        comes after 8000 bytes is not rewritten), git would treat them as binary (a NUL in the first 8000 bytes, which
+        every UTF-16 text with ASCII in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still
+        hold a form once masked; else ("masked", the masked bytes)."""
+        if not self.holds(data):
+            return "clean", None
+        if (
+            (self.wide is not None and self.wide.search(data.decode("latin-1")))
+            or b"\0" in data[:8000]
+            or data.startswith((b"\xff\xfe", b"\xfe\xff"))
+            or len(data) > TEXT_LIMIT
+        ):
+            return "left_out", None
+        masked = self.scrub_bytes(data)
+        if self.holds(masked):
+            return "left_out", None
+        return "masked", masked
 
 
 def for_turn(env, vault_values=(), names=("TOKEN", "SECRET", "PASSWORD", "API_KEY")):

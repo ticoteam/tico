@@ -660,3 +660,42 @@ def test_scrub_report_also_covers_a_short_current_fill_value():
         "account", bc.BrowserReport(ok=True, text=value, title=value, url=value, error=value), value
     )
     assert all(value not in str(getattr(report, field)) for field in ("text", "title", "url", "error"))
+
+
+def test_a_typed_secret_reaches_activity_as_the_verb_and_page_path_only(setup, tools, monkeypatch):
+    # E-607: a bot that types a secret into a website leaves the verb and page path in Activity, never the text. The
+    # real Activity logger writes the row (Review on c4b9a23: a fake logger hid that it refused the verb, after the
+    # site was already typed into).
+    s = setup
+
+    def real_log(conn, picked, who, verb, page, where, result="use"):
+        tools.logs.append((who.actor, verb, page, where, result))
+        real_tools.log(conn, picked, who, verb, page, where, result)
+
+    monkeypatch.setattr(tools, "log", real_log)
+    with s.api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO tools(id,name,kind,sites,created_by,created_at,updated_at) "
+            "VALUES('tool1','Acme','website','[\"acme.example\"]','human:ana',?,?)",
+            (real_tools.H.now(), real_tools.H.now()),
+        )
+    typed = "acme-typed-" + PASSWORD
+    thread, box = call(s, s.ops, "type", {"ref": "e3", "text": typed})
+    [cmd] = collect(s, s.host)
+    report(s, s.host, cmd)
+    assert done(thread, box).status_code == 200, box["r"].text
+    assert tools.logs == [("bot:ops", "type", "acme.example/home", "central", "use")]
+    with s.api.app.state.store.read() as c:
+        [row] = c.execute("SELECT method, path, detail FROM tool_calls WHERE tool_id='tool1'").fetchall()
+        assert tuple(row) == ("type", "acme.example/home", "central")
+        for table in ("events", "tool_calls"):
+            rows = c.execute(f"SELECT * FROM {table}").fetchall()
+            assert typed not in repr([tuple(r) for r in rows]), table
+
+
+def test_every_logged_browser_verb_is_one_activity_knows():
+    # Each verb the browser commands log is one the Activity logger, its API schema and its page take.
+    from backend.api_schemas.tools import WEBSITE_ACTIVITY_ROW
+
+    enum = WEBSITE_ACTIVITY_ROW["properties"]["verb"]["enum"]
+    assert set(bc.LOGGED) <= set(real_tools.VERBS) and set(real_tools.VERBS) == set(enum)

@@ -33,7 +33,9 @@ WEBSITE_ACTIVITY_ROW = obj(
         'id': 's',
         'at': 's',
         'who': WEBSITE_WHO,
-        'verb': {'enum': ['open', 'fill', 'copy', 'code', 'needs_you', 'control', 'sign_in', 'download', 'upload']},
+        'verb': {
+            'enum': ['open', 'type', 'fill', 'copy', 'code', 'needs_you', 'control', 'sign_in', 'download', 'upload']
+        },
         'page': 's',
         'account': {'enum': ['shared', 'own']},
         'where': {'enum': ['central', 'own']},
