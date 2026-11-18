@@ -32,7 +32,8 @@ Every idea has all of these, or you do not file it:
 - **A source**: where the signal came from, as a link or an id in the first message. No source, no idea.
 - **A first message** that says what changes, in one or two lines.
 
-No score, prediction or bet is needed, and an idea does not link to a bet.
+No score, prediction or bet is needed, and an idea does not link to a bet. The prediction comes later, as a number, on
+the test's Go-live page in Building.
 
     tico task create --owner growth-manager --label growth:ideas --label channel:<slug> \
       --title "Price calculator on the pricing page" \
