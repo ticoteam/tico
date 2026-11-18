@@ -380,6 +380,17 @@ def running_in_docker():
     )
 
 
+def client_features(app):
+    """What this server can do that a client draws differently: in GET /api/me's config and GET /api/v2/config alike,
+    so a page drawn at start already knows. tico_meet: whether this server runs Tico Meet (backend/calls.py), the only
+    calls a bot can join."""
+    return {
+        "task_files_multipart": True,
+        "file_media_stream": True,
+        "tico_meet": getattr(app.state, "call_media", None) is not None,
+    }
+
+
 def config_view(c, settings, who=None):
     """What every client needs to name this environment: the env settings, the names
     onboarding saved over them, and whether the owner still owes us the first-run wizard."""

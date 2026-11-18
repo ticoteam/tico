@@ -2653,7 +2653,7 @@ def install_views(app, store, auth, mutate, task_view):
                 and access.get(row["id"], auth.FULL)["write"]
             ]
             from .credentials import administrator, can_open, has_removable_loose_key
-            from .onboarding import config_view
+            from .onboarding import client_features, config_view
             from .mail import can_access
 
             admins = store.settings.credential_admins
@@ -2675,7 +2675,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "developer": P.is_developer(H.actor_id(who.actor), r),
                 "bot_admin": auth.bot_admin(who),
                 "owner_id": auth.owner_id(c),
-                "config": config_view(c, store.settings, who),
+                "config": {**config_view(c, store.settings, who), "features": client_features(request.app)},
                 "credential_admin": administrator(c, who, admins),
                 # The SQL page: the owner's, and the Admins' unless the owner's rule says otherwise.
                 "can_see_sql": who.role == "owner" or (auth.bot_admin(who) and team_rules.load(c)["admin_sql"]),

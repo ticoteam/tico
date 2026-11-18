@@ -1767,18 +1767,10 @@ def _register_environment(app, settings, store):
     @app.get("/api/v2/config", **api_v2("Team", "getConfig", "Team and app names, version, setup state", "Config"))
     def environment(request: Request):
         """Everything a client needs to name this environment and reach its runner."""
-        from .onboarding import config_view
+        from .onboarding import client_features, config_view
 
         with store.read_transaction() as c:
-            return {
-                **config_view(c, settings, request.state.identity),
-                # tico_meet: whether this server runs Tico Meet (backend/calls.py), the only calls a bot can join.
-                "features": {
-                    "task_files_multipart": True,
-                    "file_media_stream": True,
-                    "tico_meet": getattr(request.app.state, "call_media", None) is not None,
-                },
-            }
+            return {**config_view(c, settings, request.state.identity), "features": client_features(request.app)}
 
 
 def _register_updates(app, census, mutate, owner_only, person_only, settings, store):
