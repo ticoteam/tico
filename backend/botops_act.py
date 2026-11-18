@@ -735,6 +735,80 @@ SUMMARIES = [
 ]
 
 
+# Why a BotOps card waits for the person, by the rule that made it a card: the first pattern the path matches. A path
+# none names gets the plain line. Every one is a server fact about the route, never BotOps' words.
+WHY_CARD = [
+    (re.compile(API + rf"automations/{_S}(/delete)?"), "Deleting an automation always needs your own OK."),
+    (re.compile(API + rf"credentials/{_S}/grants(/{_S}/revoke)?"), "Who holds a stored credential is yours to OK."),
+    (
+        re.compile(API + r"(providers/gateway|webhooks/.+)"),
+        "It can send a saved key to a new address, so it waits for your own OK.",
+    ),
+    (
+        re.compile(API + r"(providers|usage/limits(/.+)?|usage/pools/.+)"),
+        "Your team's rules make changes to AI providers and spending limits wait for your own OK.",
+    ),
+    (re.compile(API + rf"bots/{_S}/repositories"), "Which repositories a bot can reach is yours to OK."),
+    (
+        re.compile(API + rf"bots/{_S}/(assignment|placement)"),
+        "Placing a member's bot on a computer that does not take members' bots needs your own OK.",
+    ),
+    (re.compile(API + r"access/owner"), "Handing over the team always needs your own OK."),
+    (re.compile(API + r"system/update"), "Updating Tico restarts the server, so it always needs your own OK."),
+    (re.compile(API + r"(enrollments|computers/.+)"), "Adding or changing a computer always needs your own OK."),
+    (re.compile(API + r"access/rules"), "A change to BotOps' own powers is always your own OK."),
+    (
+        re.compile(API + r"(people|humans)/.+|" + API + r"access/(limits|allow|people|humans)(/.+)?"),
+        "Who is on the team and what members may do is yours to OK.",
+    ),
+    (re.compile(API + r"files/.+"), "A file's listing, or deleting it for good, is yours to OK."),
+    (re.compile(API + r"(letters|postal)/.+"), "Mail in the company's name is yours to OK."),
+    (
+        re.compile(API + r"(company-page|audiences/.+|readers(/.+)?)"),
+        "What the Company page shows, and to whom, is yours to OK.",
+    ),
+    (re.compile(API + r"support/tickets"), "A message to Tico support goes out in your name, so it is yours to OK."),
+    (re.compile(API + r"seats/.+"), "Hiring a bot is yours to OK."),
+    (
+        re.compile(API + r"(directory(/.+)?|slack/disconnect|github/app/disconnect)"),
+        "Connecting the team's tools is yours to OK.",
+    ),
+    (re.compile(API + r"(goal-proposals|proposals)/.+"), "Deciding a goal proposal is yours to OK."),
+]
+
+
+def card_why(c, auth, person, attempt_id, method, path, body=None):
+    """The line after a BotOps card's title, from server facts only (never BotOps' words): the work its run was on, by
+    the task and who asked for it, and why the change waits for this person (WHY_CARD). A task the person may not read
+    is named only by who asked for it; a run on no task was asked in the person's chat; a run whose task is gone says
+    so, by its id."""
+    row = (
+        c.execute("SELECT task_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+        if attempt_id and H._has_table(c, "attempts")
+        else None
+    )
+    tid = row["task_id"] if row else None
+    task = H.task(c, tid) if tid else None
+    if not tid:
+        work = "BotOps asked in your chat with it."
+    elif not task:
+        work = f"BotOps asked while working on task {tid}, which is no longer there."
+    else:
+        asker = task.get("requester_id") or ""
+        by = "you" if asker == person.actor else H.actor_name(c, asker) if asker else ""
+        try:
+            auth.task(c, person, task["id"])
+            work = f"BotOps asked while working on “{task['title']}”" + (f", which {by} asked for." if by else ".")
+        except Problem:
+            work = f"BotOps asked while working for {by}." if by else "BotOps asked while working on a task."
+    where = normalize(path) or ""
+    need = next(
+        (text for pattern, text in WHY_CARD if pattern.fullmatch(where)),
+        "This change needs your own OK, so nothing has changed yet.",
+    )
+    return work + " " + need
+
+
 def card_summary(method, path, body=None):
     path, method = normalize(path) or "", str(method or "").upper()
     found = next((text for m, p, text in SUMMARIES if m == method and p.fullmatch(path)), None)
@@ -1768,7 +1842,17 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
 
             automations.deletable(c, acting, aid)  # refused at once (404, 403, a built-in 409)
         with store.transaction() as w:
-            card = propose_card(w, acting, method, path, body, card_summary(method, path, body), what=what, shown=shown)
+            card = propose_card(
+                w,
+                acting,
+                method,
+                path,
+                body,
+                card_summary(method, path, body),
+                what=what,
+                shown=shown,
+                run=getattr(request.state.identity, "attempt_id", ""),
+            )
         return JSONResponse(card)
 
     def destination_card(c, acting, method, path, body):
@@ -1872,13 +1956,27 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
 
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary, what=None, shown=None):
+    def propose_card(c, acting, method, path, body, summary, what=None, shown=None, run=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
         and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
-        route that asks already said in plain words what confirming does (never a bot's words)."""
+        route that asks already said in plain words what confirming does (never a bot's words). `run`: BotOps' attempt,
+        where the request's own run (H.RUN) is not set, as on act_for_requester's executor thread."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
+        why = card_why(c, auth, acting, run or H.RUN.get(), method, path, body)
         card = create_proposal(
-            c, settings, acting, room, BOTOPS, summary, method, path, body, what=what, routes=app.routes, shown=shown
+            c,
+            settings,
+            acting,
+            room,
+            BOTOPS,
+            summary,
+            method,
+            path,
+            body,
+            what=what,
+            routes=app.routes,
+            shown=shown,
+            why=why,
         )
         return {
             "proposed": True,
