@@ -2443,7 +2443,7 @@ def credit_refused(c):
     )
 
 
-def credit_stopped(c):
+def any_credit_stop(c):
     """Whether anything in the company is stopped for credit (a machine HQ refused, or the company frozen), read once
     per snapshot: a page of status lines asks for every bot, and nearly always the answer is no."""
     from .read_cache import value
@@ -2453,7 +2453,7 @@ def credit_stopped(c):
 
 def out_of_credit(c, bot):
     """Whether a cloud-mode bot's machine is stopped for credit: HQ refused it (402), or the company is frozen."""
-    if not credit_stopped(c):
+    if not any_credit_stop(c):
         return False
     current = row(c, bot)
     if not current or current["mode"] != "cloud":
