@@ -58,6 +58,7 @@ from datetime import datetime, timedelta, timezone
 from . import people as P
 from . import read_cache
 from . import secret_drop
+from . import task_text_keys
 from .store import H, Problem
 
 AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting")
@@ -2656,6 +2657,9 @@ def _post(
         raise Problem("empty", "Write the message", 422)
     # A key in a person's message to the Tools owner is refused before it is stored, delivered or mirrored.
     secret_drop.refuse(c, thread, actor, text, via, unmarked)
+    # A key in text from Slack or mail on a task is stored as a mark (backend/task_text_keys.py): typed in Tico, the
+    # request guard refused it already.
+    text = task_text_keys.mask_outside(c, thread, actor, text, via)
     given_refs, refs = refs, dict(refs or {})
     if via:
         refs["via"] = via
