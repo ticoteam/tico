@@ -214,12 +214,13 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
 3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
-   runner once with `tico-runner enroll`, moves the checkout to the server's release (the `release` its public
-   `/healthz` names, through `python -m runner_support.release_update` with no runner yet: forward only, nothing
-   restarted), and runs `scripts/tico-computer install`, which starts the runner and its helper jobs as systemd user
-   units. A disk still restoring from the snapshot can show checkout files as changed for a few minutes, so a refusal
-   over changed files is looked at again every 30 seconds for up to ten minutes; any other refusal, or one that
-   outlasts that, is left to the runner, which follows the server by itself.
+   moves the checkout to the server's release (the `release` its public `/healthz` names, through
+   `python -m runner_support.release_update` with no runner yet: forward only, nothing restarted), so nothing below
+   the server's release enrolls. Then it enrolls the runner once with `tico-runner enroll` and runs
+   `scripts/tico-computer install`, which starts the runner and its helper jobs as systemd user units. A disk still
+   restoring from the snapshot can show checkout files as changed for a few minutes, so a refused update is tried
+   again every 30 seconds, 12 times (six minutes, inside the code's 15). A refusal that outlasts that, or any other
+   failure, is left to the runner, which follows the server by itself.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
    the bot to it. For the shared machine it names it "Shared cloud machine", opens it to member bots and assigns

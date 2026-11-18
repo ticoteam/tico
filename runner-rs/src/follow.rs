@@ -7,7 +7,8 @@
 //!
 //! A failed update is tried again after six hours, on the server's next release, or as soon as disk space frees
 //! after one that ran out of it. A refused (`blocked`) one changed nothing, so it is also tried once on every start of
-//! this runner, and a refusal over changed checkout files as soon as the checkout is clean (#648). Deferrals release claims until the status file's not_before time, with growing
+//! this runner, a refusal over changed checkout files as soon as the checkout is clean, and any refusal every ten
+//! minutes while this runner has no work running (#648). Deferrals release claims until the status file's not_before time, with growing
 //! waits capped at an hour. On a server that names no release (a development server) a supervised checkout
 //! follows origin/main instead (service.py checkout_status, self_update), restarting only once the new runner binary
 //! is prepared, and the heartbeat's `checkout` says how it stands against main (backend/models.py Checkout).
@@ -37,6 +38,9 @@ const STALE_UPDATING_S: f64 = 15.0 * 60.0;
 /// How often a refusal over changed checkout files looks at the checkout again: the change can be momentary (a disk
 /// still restoring from its snapshot shows files as changed for a few minutes after boot), so it is retried once clean.
 const CLEAN_CHECK_EVERY: Duration = Duration::from_secs(120);
+/// Any other refusal is tried again this often while the runner is behind and has no work running (a retry drains
+/// claims first, so it waits for a quiet moment rather than holding new work every few minutes).
+const BLOCKED_RETRY_S: f64 = 10.0 * 60.0;
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
 const PREPARE_RETRY: Duration = Duration::from_secs(3600);
@@ -775,6 +779,8 @@ struct Inner {
     docker_hold: Option<String>,
     /// When a blocked update's changed checkout files were last looked at (CLEAN_CHECK_EVERY).
     clean_checked_at: Option<Instant>,
+    /// Whether work was running at the last claim check (Follower::blocks_claims): a refusal is retried only while idle.
+    active: bool,
 }
 
 pub struct Follower {
@@ -1015,6 +1021,12 @@ impl Follower {
                     .then(|| (text_of(&status["state"]), text_of(&status["error"])));
             }
         }
+        if status["state"] == "blocked"
+            && age >= BLOCKED_RETRY_S
+            && !self.inner.lock().unwrap().active
+        {
+            return None;
+        }
         match status["state"].as_str().unwrap_or_default() {
             "updating" if age < STALE_UPDATING_S => Some(("updating".into(), String::new())),
             "updating" => {
@@ -1238,7 +1250,8 @@ impl Follower {
     /// True while an update is due or under way; starts it once every claim has settled.
     pub async fn blocks_claims(&self, active: bool) -> bool {
         let (pending, since, drain) = {
-            let s = self.inner.lock().unwrap();
+            let mut s = self.inner.lock().unwrap();
+            s.active = active;
             let drain = s.features["runner_drain"] == true;
             if s.running || (drain && s.restart_due) {
                 return true;
@@ -2023,6 +2036,15 @@ scope['main'](sys.argv[1:])
         assert_eq!(f.outcome("0.3.45").await.unwrap().0, "blocked");
         f.born = epoch_s() + 1.0;
         assert!(f.outcome("0.3.45").await.is_none());
+        // Any refusal is tried again every BLOCKED_RETRY_S while no work runs, never while it does.
+        f.born = 0.0;
+        let race = json!({"state": "blocked", "target": "0.3.45", "at": epoch_s() - BLOCKED_RETRY_S - 1.0,
+            "error": "the checkout changed during the update; retry"});
+        write_status(&f.directory, race);
+        f.inner.lock().unwrap().active = true;
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "blocked");
+        f.inner.lock().unwrap().active = false;
+        assert!(f.outcome("0.3.45").await.is_none());
         // A failed or rolled-back update did restart the runner, so a start alone never retries it (no loop).
         write_status(
             &f.directory,
@@ -2319,6 +2341,7 @@ scope['main'](sys.argv[1:])
                 s.desired = Some("0.3.45".into());
                 s.pending_since = Some(Instant::now());
                 s.features = json!({"runner_drain": true});
+                s.active = false; // a refusal is retried only on a quiet computer (BLOCKED_RETRY_S)
             }
             f.decide().await;
             assert_eq!(f.inner.lock().unwrap().pending.is_some(), due, "{case}");

@@ -21,8 +21,8 @@ bot needs it installs itself with sudo, and that stays on the machine's disk acr
 member bot).
 
 `boot` is that service, at every boot. Without the marker it does nothing, so it can never act on another computer.
-Not enrolled and both variables found: it enrolls once to that hub, moves the checkout to the hub's release (`catch_up`:
-a saved image ships the release it was built on, which the hub may refuse) and runs `scripts/tico-computer install` (the
+Not enrolled and both variables found: it moves the checkout to the hub's release (`catch_up`: a saved image ships the
+release it was built on, which the hub may refuse), enrolls once to that hub and runs `scripts/tico-computer install` (the
 systemd user units, which then start at every boot by themselves). Enrolled: it starts those units. Not enrolled and no code (the
 base sandbox itself): nothing. A failed enroll exits 1, and systemd tries again in 30 seconds; a retry with the same
 code gets the same runner back (the server derives the runner token from the code), so an answer lost on the way
@@ -76,8 +76,9 @@ CODE_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 ATTEMPTS, BACKOFF_S = 5, 5
 # A restored disk can show checkout files as changed for a few minutes after boot (#648): the first-boot catch-up
-# looks again this many times, this far apart, before it leaves the update to the runner.
-CATCH_UP_TRIES, CATCH_UP_WAIT_S = 20, 30
+# tries a refused update this many times, this far apart (six minutes, inside the enroll code's 15), before it enrolls
+# and leaves the update to the runner.
+CATCH_UP_TRIES, CATCH_UP_WAIT_S = 12, 30
 
 
 class Refused(Exception):
@@ -308,36 +309,23 @@ def hub_release(hub: str, opener=None) -> str:
     return release if re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", release) else ""
 
 
-def runner_config(m: Machine) -> tuple[str, Path | None]:
-    """The hub the runner enrolled with and its state directory (runner-rs config.rs state_dir), where its update
-    status lives; ("", None) when the runner's config cannot be read."""
-    try:
-        data = json.loads(m.config.read_text())
-        hub, runner = str(data.get("url") or ""), str(data.get("runner_id") or "")
-    except (OSError, ValueError, AttributeError):
-        return "", None
-    if not URL_RE.match(hub) or not re.fullmatch(r"[A-Za-z0-9_-]+", runner):
-        return "", None
-    return hub, m.config.parent / f"state-{runner}"
-
-
-def catch_up(m: Machine, opener=None) -> None:
-    """Before the runner first starts, move the image's checkout to the hub's release (#648): a saved image ships the
-    release it was built on, and a server refuses runners older than its minimum. The same updater the runner uses
-    does the move (`release_update --pid 0`: forward only, nothing restarted). A refusal over changed files is looked
-    at again for up to ten minutes; anything else is left to the runner, which follows the hub by itself."""
-    hub, state = runner_config(m)
-    want = hub_release(hub, opener) if state else ""
-    if not want or state is None:
+def catch_up(m: Machine, hub: str, opener=None) -> None:
+    """Before the runner enrolls, move the image's checkout to the hub's release (#648): a saved image ships the release
+    it was built on, and a hub refuses runners older than its minimum, so nothing below it ever enrolls. The same updater
+    the runner uses does the move (`release_update --pid 0`: forward only, nothing restarted). A refusal (changed files
+    while a restored disk settles, a checkout that moved under it) is tried again every CATCH_UP_WAIT_S for
+    CATCH_UP_TRIES tries, well inside the enroll code's 15 minutes; after that the runner, which follows the hub by
+    itself, keeps trying."""
+    want = hub_release(hub, opener)
+    if not want:
         m.say("could not read the hub's release: the runner will update itself once it starts")
         return
-    state.mkdir(parents=True, exist_ok=True)
-    if os.geteuid() == 0:
-        os.chown(state, m.uid, m.gid)
-    m.say(f"moving this computer to release {want}, the hub's, before the runner starts")
+    state = m.config.parent / "first-boot-update"
+    m.as_user("mkdir", "-p", str(state), timeout=30)  # as the user, so ~/.config stays theirs
+    m.say(f"moving this computer to release {want}, the hub's, before it enrolls")
     command = (str(m.python), "-m", "runner_support.release_update", "--version", want, "--state-dir", str(state))
     for attempt in range(1, CATCH_UP_TRIES + 1):
-        done = m.as_user(*command, timeout=1800)
+        done = m.as_user(*command, timeout=600)
         lines = (done.stdout or "").strip().splitlines()
         try:
             result = json.loads(lines[-1]) if lines else {}
@@ -347,11 +335,11 @@ def catch_up(m: Machine, opener=None) -> None:
         if not done.returncode and result.get("state") == "healthy":
             m.say(f"on release {want}")
             return
-        if not str(result.get("error") or "").startswith("the checkout has ") or attempt == CATCH_UP_TRIES:
+        if result.get("state") != "blocked" or attempt == CATCH_UP_TRIES:
             break
-        m.say(f"the checkout still shows changed files (try {attempt} of {CATCH_UP_TRIES}); looking again shortly")
+        m.say(f"the update was refused (try {attempt} of {CATCH_UP_TRIES}); trying again shortly")
         m.sleep(CATCH_UP_WAIT_S)
-    m.say("could not move to the hub's release now: the runner will try again once it starts")
+    m.say("could not move to the hub's release now: the runner will keep trying once it starts")
 
 
 def installed(m: Machine) -> bool:
@@ -372,6 +360,7 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
         if not CODE_RE.match(code) or not URL_RE.match(hub):
             m.say(f"the enroll code or hub URL from {where} is not well formed: nothing to do")
             return 0
+        catch_up(m, hub)
         m.say(f"enrolling with {hub} (the code from {where})")
         if not enroll(m, code, hub):
             return 1
@@ -385,7 +374,6 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
     if environ.get(TOKEN):
         m.system("systemctl", "unset-environment", TOKEN)
     if not installed(m):
-        catch_up(m)
         done = m.as_user(str(m.root / "scripts" / "tico-computer"), "install")
         if done.returncode:
             m.say("scripts/tico-computer install failed; trying again")
