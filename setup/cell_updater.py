@@ -666,12 +666,19 @@ class Service:
         """Tico Meet's renewed TURN certificate: LiveKit is restarted once no room is open (setup/cell.py
         `Cell.meet_renew`). A failure is logged and asked again next time; it never stops the updater."""
         try:
-            done = self.make_cell().meet_renew()
+            cell = self.make_cell()
+            done = cell.meet_renew()
         except Exception as e:  # noqa: BLE001  the companies' updates go on whatever this does
             log(f"tico meet: the certificate check failed: {type(e).__name__}")
             return
         if done == "restarted":
             log("tico meet: restarted LiveKit with its renewed certificate")
+        days = cell.meet_days_left
+        if days is not None and days < C.MEET_EXPIRY_WARN_DAYS:
+            log(
+                f"tico meet: warning: cert_expiring: LiveKit's TURN certificate runs out in {max(days, 0):.1f} days "
+                f"({done}); calls over TURN/TLS fail after that"
+            )
 
     def run(self) -> None:
         signal.signal(signal.SIGTERM, lambda *_: self.stopping.set())

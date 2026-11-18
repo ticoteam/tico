@@ -240,7 +240,7 @@ The `meet` compose profile runs LiveKit (Apache-2.0) on the cell host. It adds n
 - `TICO_MEET_API_KEY` and `TICO_MEET_API_SECRET`: LiveKit's key pair. They go to the LiveKit service and the server only.
 - `TICO_MEET_CERT_DIR`: a folder holding `fullchain.pem` and `privkey.pem` for `TICO_MEET_DOMAIN`. TURN over TLS needs
   them, and the service does not start without them.
-- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.8.4@sha256:621fd87b...c532af`, the tag and
+- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.13.11@sha256:25cd902d...1d3e20`, the tag and
   its digest, both checked on Docker Hub. A new LiveKit version means a new digest in `compose.yaml`.
 
 `TICO_MEET_INTERNAL_URL` defaults to `http://livekit:7880`, the server's own address for LiveKit's server API and for
