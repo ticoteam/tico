@@ -564,7 +564,7 @@ def test_a_start_or_stall_the_lock_kept_out_keeps_the_time_it_happened(store, mo
     """A start or stall event written minutes later, once the lock frees, is dated when it happened, not when it got
     in."""
     clock = [MINUTE + 5.0]
-    monkeypatch.setattr(flight.time, "time", lambda: clock[0])
+    monkeypatch.setattr(flight, "_now", lambda: clock[0])
     monkeypatch.setattr(flight, "start_event", lambda settings, check=True: {"version": "test"})
     rec = store.recorder
     sampler = flight.Flight(

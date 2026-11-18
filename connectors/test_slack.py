@@ -210,7 +210,7 @@ class Calls(unittest.TestCase):
                 ("GET", "slack/posts/m1"): [{"state": "ready"}, {"state": "sent", "permalink": "https://x/p1"}],
             }
         )
-        with mock.patch.object(slack, "hub", tico), mock.patch.object(slack.time, "sleep"):
+        with mock.patch.object(slack, "hub", tico), mock.patch.object(slack, "_sleep"):
             code, out, _ = run("post", "--channel", "#general", "--text", "Shipped", "--thread", "1.2")
         self.assertEqual((code, out.strip()), (0, "posted to #general: https://x/p1"))
         self.assertEqual(tico.calls[0][2], {"channel": "#general", "text": "Shipped", "thread_ts": "1.2"})
@@ -244,7 +244,7 @@ class Calls(unittest.TestCase):
         )
         with (
             mock.patch.object(slack, "hub", tico),
-            mock.patch.object(slack.time, "sleep"),
+            mock.patch.object(slack, "_sleep"),
             mock.patch.object(sys, "stdin", io.StringIO("from stdin")),
         ):
             code, out, _ = run("dm", "--to", "ana@acme.example", "--text", "-")

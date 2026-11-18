@@ -382,7 +382,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
 
 
 def test_a_ring_after_a_quiet_window_is_read_at_once_and_a_burst_still_once_a_window(monkeypatch):
-    monkeypatch.setattr(E.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(E, "_monotonic", lambda: 100.0)
     assert E.gathered(0.25, read_at=0.0) == E.LEAD_SECONDS  # quiet: read almost at once
     assert abs(E.gathered(0.25, read_at=99.9) - 0.15) < 1e-9  # just read: only the rest of the window
 

@@ -113,7 +113,7 @@ def test_aws_runner_reuses_its_exact_name_boundary_and_private_join(monkeypatch,
     ec2, iam, ssm, clients = fakes.aws_clients()
     clock, polls, sends = [0.0], [], []
     phase = ['launch']
-    monkeypatch.setattr(remote.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(remote, '_monotonic', lambda: clock[0])
     original_send = ssm.send_command
 
     class NotRegistered(Exception):

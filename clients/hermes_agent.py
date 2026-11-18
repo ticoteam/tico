@@ -53,6 +53,17 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 VERSION = "0.3.0"
 CONFIG_DIR = Path(os.environ.get("TICO_AGENT_CONFIG_DIR") or Path.home() / ".config" / "tico" / "agents")
 EVERY_SECONDS = 60
@@ -1026,7 +1037,7 @@ def blocked_message(failure, bot):
 def cmd_heartbeat(args):
     config = load_config(args.key)
     hold = config.get("backoff") or {}
-    if hold.get("until", 0) > time.time():
+    if hold.get("until", 0) > _now():
         return 0
     directory = Path(config.get("profile_dir") or agent_dir(args.harness, args.profile))
     try:
@@ -1042,8 +1053,8 @@ def cmd_heartbeat(args):
         if not message:
             raise
         config["backoff"] = {
-            "until": time.time() + BACKOFF_SECONDS,
-            "since": hold.get("since") or time.time(),
+            "until": _now() + BACKOFF_SECONDS,
+            "since": hold.get("since") or _now(),
             "reason": exc.code or str(exc.status),
             "message": message,
         }
@@ -1051,7 +1062,7 @@ def cmd_heartbeat(args):
         print(message, file=sys.stderr)
         return 1
     config["last_reply"] = reply
-    config["last_ok"] = time.time()
+    config["last_ok"] = _now()
     if config.pop("backoff", None):
         print(
             f"Bot {config.get('slug') or config.get('bot', '')} answers again: heartbeat back to every {EVERY_SECONDS} s"
@@ -1232,7 +1243,7 @@ def cmd_pair(args):
                 raise Failure(f"The pairing is {state}; run pair again")
             if time.monotonic() >= deadline:
                 raise Failure(f"The code {code} expired before anyone approved it; run pair again")
-            time.sleep(every)
+            _sleep(every)
     except KeyboardInterrupt:
         print("\nStopped. The code stays valid until it expires but nothing was changed here.", file=sys.stderr)
         return 130
