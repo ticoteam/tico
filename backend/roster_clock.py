@@ -27,7 +27,15 @@ def ensure(c):
 
 
 def _clock(c):
-    return c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    # One snapshot sees one count, and its own writes discard read_cache: the count is read once per snapshot.
+    from . import read_cache
+
+    values = read_cache.cache(c)
+    if values is None:
+        return c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    if ("roster_clock",) not in values:
+        values[("roster_clock",)] = c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    return values[("roster_clock",)]
 
 
 def rows(c, statement):

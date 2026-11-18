@@ -195,6 +195,39 @@ def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> Non
         values.setdefault(("stages", pipeline_id), found)
 
 
+_PLACES = (
+    (
+        "stage_id",
+        "SELECT * FROM stages WHERE id=?",
+        "SELECT * FROM stages WHERE id IN (SELECT value FROM json_each(?))",
+    ),
+    (
+        "pipeline_id",
+        "SELECT * FROM pipelines WHERE id=?",
+        "SELECT * FROM pipelines WHERE id IN (SELECT value FROM json_each(?))",
+    ),
+)
+
+
+def prime_places(conn: "sqlite3.Connection", rows: Iterable[Row]) -> None:
+    """Read the stages and pipelines of many tasks together, for the `stage` and `pipeline` reads that follow in this
+    snapshot: a list of tasks reads them in two statements, not one for each stage and pipeline it shows."""
+    import sqlite3
+
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None or conn.row_factory is not sqlite3.Row:
+        return
+    rows = list(rows)
+    for column, one_sql, many_sql in _PLACES:
+        ids = sorted({str(r[column]) for r in rows if r.get(column)})
+        unread = [i for i in ids if ("one", one_sql, (i,)) not in values]
+        if unread:
+            found = {str(r["id"]): r for r in conn.execute(many_sql, (json.dumps(unread),)).fetchall()}
+            read_cache.prime(conn, one_sql, {(i,): found.get(i) for i in unread})
+
+
 def stage(conn: "sqlite3.Connection", stage_id: str) -> Row | None:
     return _h()._one(conn, "SELECT * FROM stages WHERE id=?", (stage_id,))
 

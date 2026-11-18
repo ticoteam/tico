@@ -2,6 +2,7 @@
 
 import json
 from . import views
+from . import read_cache
 from . import person_asks
 from . import teammate_access
 from . import task_documents, task_followers
@@ -203,14 +204,14 @@ def register_core(
         ),
     )
     def task(request: Request, tid: str):
-        with store.read() as c:
-            tid = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, tid)
         from .github import refresh_task_prs
 
-        refresh_task_prs(app.state.github_app, tid)
+        # One snapshot finds the task, checks the reader and reads it. The PR refresh runs apart and this answer serves
+        # the stored PR state either way, so it is scheduled once the reader is known to read the task.
         with store.read_transaction() as c:
+            tid = auth.resolve_task(c, request.state.identity, tid)
             row = auth.task(c, request.state.identity, tid)
+            refresh_task_prs(app.state.github_app, tid)
             # A bot task now lives in the bot's chat room. Only this task's messages
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
@@ -260,20 +261,16 @@ def register_core(
             # An event that names a ticket the reader may not open (a hidden child, say) is no detail of this one: it goes.
             named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
             if named:
-                known = {
+                # The named tasks that exist and that the reader may not read, in one statement.
+                hidden_refs = {
                     r[0]
                     for r in c.execute(
-                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(named),)
-                    )
-                }
-                readable = {
-                    r[0]
-                    for r in c.execute(
-                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND (" + related_sql + ")",
+                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
+                        + related_sql
+                        + "),0)",
                         (json.dumps(named),),
                     )
                 }
-                hidden_refs = known - readable
                 history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden_refs)]
             # A subtask summary's text names its subtasks only where the reader may open them (task_reads.children_text).
             from . import task_reads
@@ -418,7 +415,7 @@ def register_core(
                 "goal": False,
             }
         way, defer_for = comment_way_for(c, who, row)
-        config = c.execute(BS.ONE_SQL, (H.actor_id(bot),)).fetchone()
+        config = read_cache.one(c, BS.ONE_SQL, (H.actor_id(bot),))
         config = json.loads(config[0] or "{}") if config else {}
         from .harnesses import steers
         from .chat_goals import may_direct, may_set, own_room
