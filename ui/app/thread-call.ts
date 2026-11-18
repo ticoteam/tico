@@ -146,8 +146,13 @@ function callHeadHTML(view: ThvView): string {
     const n = callCount(CALL_VIEWS.get(info.call.id) || info.call);
     return `<button type="button" class="thv-call on" data-call="join" aria-label="Join call" title="Join">${CALL_SVG}${n ? `<span class="tnum">${n}</span>` : ''}</button>`;
   }
+  // A DM with one bot calls that bot, which only Tico Meet can do: no phone where the server has no Tico Meet.
+  if (!callTicoMeet(info.providers) && callDmBot(t)) return '';
   return t.me?.can_post ? `<button type="button" class="thv-call" data-call="start" aria-label="Start call" title="Call">${CALL_SVG}</button>` : '';
 }
+// Whether a bot can be called here: only Tico Meet calls take bots. `providers` is a thread's list answer (what the viewer
+// could start); without one, the server's config says whether it runs Tico Meet.
+const callTicoMeet = (providers?: string[]): boolean => providers ? providers.includes('tico') : S.config.features?.tico_meet === true;
 async function callAction(view: ThvView, kind: string | undefined): Promise<void> {
   const id = view.id, info: CallThreadInfo = CALL_THREADS.get(id) || {};
   // Google Meet goes to a tab of its own, opened now while the click still allows it.

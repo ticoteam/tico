@@ -24,6 +24,8 @@ declare var RING_SOUND: {timer: number};
 declare var callCount: (c: unknown) => number;
 declare var callFaces: (c: unknown) => string[];
 declare var callDmBot: (t: unknown) => string;
+declare var callTicoMeet: (providers?: string[]) => boolean;
+declare var CALL_THREADS: Map<string, {providers?: string[]}>;
 declare var callVoiceDraw: (box: HTMLElement, voice: unknown) => void;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -32,6 +34,9 @@ const MEET = 'https://meet.google.com/abc-defg-hij';
 const me = () => ({member: true, following: true, notify: 'live', last_read_seq: 99, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false});
 const plan = {id: 't-plan', title: 'launch-plan', audience: 'team', audience_group_id: 'ops', last_seq: 2, last_message_at: at(60), me: me(), members: [], live_call: null};
 const alerts = {id: 't-alerts', title: 'aws-alerts', audience: 'team', audience_group_id: 'ops', last_seq: 1, last_message_at: at(60), me: me(), members: [], live_call: null};
+// Ana's DM with the Ops bot: its phone calls the bot, which only Tico Meet can do.
+const dm = {id: 't-dm', title: 'Ops', audience: 'personal', audience_group_id: null, dm_with: [{actor: 'bot:ops'}], dm_with_count: 1, last_seq: 1,
+  last_message_at: at(60), me: me(), members: [], live_call: null};
 const msg = (id: string, seq: number, from: string, body: string, thread = 't-plan', extra: Record<string, unknown> = {}) =>
   ({id, seq, thread_id: thread, sender_id: from, body, created_at: at(600 - seq), reply_to: null, routed: null, ...extra});
 // A Google Meet call as Ana's view of it says.
@@ -40,15 +45,17 @@ const meetCall = (id: string, thread: string, connector: string, extra: Record<s
   seen_at: null, started_at: at(30), ended_at: null, duration_s: null, ring: false, card_message_id: 'card-' + id, transcript_message_id: null,
   participants: [{actor: connector, joined_at: at(30), left_at: null, removed_at: null, in_call: 0}], ...extra});
 
-// `mode`: what the stand-in server says: the providers it lists (null: none), what Start makes, and a Join that fails.
-type Mode = {providers: string[] | null; start: 'google_meet' | 'tico' | 'fail'; joinFails: boolean};
+// `mode`: what the stand-in server says: the providers it lists (null: none), what Start makes, a Join that fails, and
+// whether its config says it runs Tico Meet.
+type Mode = {providers: string[] | null; start: 'google_meet' | 'tico' | 'fail'; joinFails: boolean; ticoMeet: boolean};
 async function open(browser: import('playwright').Browser, {phone = false}: {phone?: boolean} = {}) {
-  const mode: Mode = {providers: ['google_meet', 'tico'], start: 'google_meet', joinFails: false};
+  const mode: Mode = {providers: ['google_meet', 'tico'], start: 'google_meet', joinFails: false, ticoMeet: true};
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const page = await context.newPage();
   const calls = new Map<string, Call>();
-  const timeline: Record<string, ReturnType<typeof msg>[]> = {'t-plan': [msg('m1', 1, 'human:bea', 'Pricing page is ready for a look.')], 't-alerts': [msg('a1', 1, 'human:bea', 'All quiet.', 't-alerts')]};
+  const timeline: Record<string, ReturnType<typeof msg>[]> = {'t-plan': [msg('m1', 1, 'human:bea', 'Pricing page is ready for a look.')], 't-alerts': [msg('a1', 1, 'human:bea', 'All quiet.', 't-alerts')],
+    't-dm': [msg('d1', 1, 'bot:ops', 'Deploy is done.', 't-dm')]};
   const seen = {errors: [] as string[], starts: [] as unknown[], joins: [] as string[], ringing: 0};
   const sse: {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean} = {queue: [], seq: 0, latest: null, done: false};
   page.on('pageerror', e => seen.errors.push(e.message));
@@ -83,6 +90,7 @@ async function open(browser: import('playwright').Browser, {phone = false}: {pho
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
+    if (p === '/api/v2/config') return json({features: {tico_meet: mode.ticoMeet}});
     if (p === '/api/employees') return json([]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
       {id: 'cy', name: 'Cy', email: 'cy@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}]});
@@ -97,16 +105,17 @@ async function open(browser: import('playwright').Browser, {phone = false}: {pho
       const body = 'event: ready\ndata: {"seq":1}\n\n' + sse.queue.splice(0).map(d => `event: threads\nid: ${++sse.seq}\ndata: ${JSON.stringify(d)}\n\n`).join('');
       return route.fulfill({status: 200, contentType: 'text/event-stream', body}).catch(() => {});
     }
-    const row = (t: typeof plan) => {
+    const row = (t: typeof plan | typeof dm) => {
       const live = [...calls.values()].find(c => c.thread_id === t.id && c.state === 'live');
       return {...t, live_call: live ? {id: live.id, live_count: 1} : null};
     };
     if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [row(alerts), row(plan)], catch_up: 0, next_cursor: null, dms: {}});
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: [row(alerts), row(plan)], dms: [], next_cursor: null});
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
-    if (tl && timeline[tl[1]!]) return json({thread: tl[1] === 't-plan' ? plan : alerts, breadcrumb: [], next_cursor: null, messages: timeline[tl[1]!], bot_status: []});
-    const one = p.match(/^\/api\/v2\/threads\/(t-plan|t-alerts)$/);
-    if (one) return json(one[1] === 't-plan' ? row(plan) : row(alerts));
+    const byId = {'t-plan': plan, 't-alerts': alerts, 't-dm': dm} as Record<string, typeof plan | typeof dm>;
+    if (tl && timeline[tl[1]!]) return json({thread: byId[tl[1]!], breadcrumb: [], next_cursor: null, messages: timeline[tl[1]!], bot_status: []});
+    const one = p.match(/^\/api\/v2\/threads\/(t-plan|t-alerts|t-dm)$/);
+    if (one) return json(row(byId[one[1]!]!));
     if (/^\/api\/v2\/threads\/[^/]+\/members$/.test(p))
       return json({members: [{actor: 'human:ana'}, {actor: 'human:bea'}, {actor: 'human:cy'}], next_cursor: null});
     const list = p.match(/^\/api\/v2\/threads\/([^/]+)\/calls$/);
@@ -431,6 +440,36 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await card.locator('.call-card-ic.missed').count(), 0);
     assert.equal(await card.locator('.call-card-n, .call-card-join, .call-card-end').count(), 0);
     await themed(page, 'card-ended-blind');
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+  // ---- a server without Tico Meet (a hosted cloud company today): no bot calls; a people call still makes a Google Meet
+  {
+    const {context, page, seen, mode} = await open(browser);
+    Object.assign(mode, {providers: ['google_meet'], ticoMeet: false});
+    // Ana's DM with the Ops bot: no phone, since calling a bot needs Tico Meet.
+    await page.goto('https://tico-ui.test/#/thread/t-dm');
+    await page.locator('.th-msg[data-mid="d1"]').waitFor();
+    await page.waitForFunction(() => CALL_THREADS.get('t-dm')?.providers?.length === 1);
+    assert.equal(await page.locator('.thv-head .thv-call').count(), 0, 'no phone in a DM with a bot');
+    // The org chart's Call on a bot follows the server's config (it has no thread to ask).
+    assert.equal(await page.evaluate(() => callTicoMeet()), false, 'no Call on a bot card');
+    // launch-plan, with people: the phone is there and starts a Google Meet.
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    const start = page.locator('.thv-head .thv-call[data-call="start"]');
+    await start.waitFor();
+    const tabOpened = context.waitForEvent('page');
+    await start.click();
+    const tab = await tabOpened;
+    await tab.waitForURL(u => u.href.startsWith(MEET));
+    assert.deepEqual(seen.starts, [{provider: 'auto'}]);
+    await tab.close();
+    // With Tico Meet, the same DM has its phone and the bot card its Call.
+    Object.assign(mode, {providers: ['google_meet', 'tico'], ticoMeet: true});
+    await page.reload();
+    await page.goto('https://tico-ui.test/#/thread/t-dm');
+    await page.locator('.thv-head .thv-call[data-call="start"]').waitFor();
+    await page.waitForFunction(() => callTicoMeet());
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

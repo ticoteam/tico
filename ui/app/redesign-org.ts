@@ -490,7 +490,7 @@ function rdoSheet(ref: string): void {
   const body = `<div class="bd-fields rdo-sheet">
       <div class="bd-field"><span>Group</span><span data-rdo-home>${esc(rdoGroupName(from))}${led.length ? ` · lead of ${esc(led.map(rdoGroupName).join(', '))}` : ''}</span></div>
       ${may ? `<label class="bd-field"><span>Move to…</span><select name="to">${rdoGroupOptions(from, targets)}</select></label>` : ''}
-      <span class="rdo-acts"><a class="rdo-open" href="${href}">Open ${esc(name)}</a>${ref.startsWith('bot:') ? `<button type="button" class="ghost small rdo-call" aria-label="Call ${esc(name)}" title="Call">${CALL_SVG}</button>` : ''}</span></div>`;
+      <span class="rdo-acts"><a class="rdo-open" href="${href}">Open ${esc(name)}</a>${ref.startsWith('bot:') && callTicoMeet() ? `<button type="button" class="ghost small rdo-call" aria-label="Call ${esc(name)}" title="Call">${CALL_SVG}</button>` : ''}</span></div>`;
   const dlg = useDialog(name, body, async (form: HTMLFormElement) => {
     const to = form.to.value;
     if (to === from) throw new Error('Already in ' + rdoGroupName(to) + '.');

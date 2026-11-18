@@ -1763,7 +1763,12 @@ def _register_environment(app, settings, store):
         with store.read_transaction() as c:
             return {
                 **config_view(c, settings, request.state.identity),
-                "features": {"task_files_multipart": True, "file_media_stream": True},
+                # tico_meet: whether this server runs Tico Meet (backend/calls.py), the only calls a bot can join.
+                "features": {
+                    "task_files_multipart": True,
+                    "file_media_stream": True,
+                    "tico_meet": getattr(request.app.state, "call_media", None) is not None,
+                },
             }
 
 
