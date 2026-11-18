@@ -647,6 +647,7 @@ KEEP = (
             "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
             "growth_line_uses",  # who used the Growth line on which day: the measure's counts, no content
             "growth_origins",
+            "growth_segments",  # who the team sells to and each one's rules: no customer keys
             "growth_settings",
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work

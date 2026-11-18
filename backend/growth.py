@@ -4,7 +4,8 @@ they add up to, and the sources each number's truth lives in.
 
 - Channels (`growth_channels`): a performance or brand track and a stage (idea, testing, scaling, paused), an owner, a
   monthly budget, the source its numbers come from, an optional guardrail (a KPI that must stay at or under a max) and
-  the optional input KPI it moves (backend/growth_line.py draws both).
+  the optional input KPI it moves (backend/growth_line.py draws both), and the one segment its spend is for, or none
+  for company-wide spend (backend/growth_segments.py).
   A channel's marketing work is the open tasks labelled `channel:<slug>` (backend/marketing_tasks.py).
 - Sources (`gtm_sources`): which system is the truth for what, and how a bot reaches it. Two live sources for the
   same thing are a conflict the page shows. A source with a sync kind fills numbers itself, and each number records
@@ -26,6 +27,7 @@ import secrets
 from fastapi import Request
 
 from . import growth_finance as GF
+from . import growth_segments as SEG
 from . import growth_sync as GS
 from . import hubdb as H
 from . import models as M
@@ -49,6 +51,7 @@ CHANNEL_FIELDS = (
     "guardrail_kpi_id",
     "guardrail_max",
     "input_kpi_id",
+    "segment",
     "sort",
     "retired_at",
 )
@@ -197,13 +200,19 @@ def channel_view(row):
     return {k: row.get(k) for k in CHANNEL_FIELDS}
 
 
+# A channel with the slug of the segment its spend is for (`segment`, null for company-wide spend).
+CHANNEL_SQL = (
+    "SELECT ch.*, sg.slug AS segment FROM growth_channels ch LEFT JOIN growth_segments sg ON sg.id=ch.segment_id"
+)
+
+
 def channels(c, include_retired=False):
-    sql = "SELECT * FROM growth_channels" + ("" if include_retired else " WHERE retired_at IS NULL")
-    return [channel_view(r) for r in H._rows(c.execute(sql + " ORDER BY sort, name COLLATE NOCASE"))]
+    sql = CHANNEL_SQL + ("" if include_retired else " WHERE ch.retired_at IS NULL")
+    return [channel_view(r) for r in H._rows(c.execute(sql + " ORDER BY ch.sort, ch.name COLLATE NOCASE"))]
 
 
 def channel(c, slug):
-    return H._one(c, "SELECT * FROM growth_channels WHERE slug=?", (slug,))
+    return H._one(c, CHANNEL_SQL + " WHERE ch.slug=?", (slug,))
 
 
 def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
@@ -785,6 +794,7 @@ def channel_create(c, actor, body):
         "guardrail_kpi_id": _kpi_ref(c, body.guardrail_kpi_id, "guardrail_kpi_id"),
         "guardrail_max": body.guardrail_max,
         "input_kpi_id": _kpi_ref(c, body.input_kpi_id, "input_kpi_id"),
+        "segment_id": SEG.ref(c, body.segment),
         "sort": body.sort,
         "created_at": H.now(),
     }
@@ -808,6 +818,8 @@ def channel_update(c, actor, slug, fields):
         fields["guardrail_kpi_id"] = _kpi_ref(c, fields["guardrail_kpi_id"], "guardrail_kpi_id")
     if "input_kpi_id" in fields:
         fields["input_kpi_id"] = _kpi_ref(c, fields["input_kpi_id"], "input_kpi_id")
+    if "segment" in fields:
+        fields["segment_id"] = SEG.ref(c, fields.pop("segment"))
     for required in ("name", "track", "stage", "why", "sort"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
@@ -1184,6 +1196,7 @@ def install(app, store, auth, mutate):
     from . import growth_computed, growth_customers, growth_proposals
 
     growth_customers.install(app, store, auth, mutate)  # customer facts in: load, delete
+    SEG.install(app, store, auth, mutate)  # who the team sells to
     growth_computed.install(app, store, auth)  # cohorts computed from them
 
     def reader(who):
@@ -1239,8 +1252,9 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/growth/segments/{label}")
     def growth_segment(request: Request, label: str):
-        """One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV, the change from
-        the month before, and that spend is not split by segment. A cohort under the minimum shows counts only."""
+        """One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change
+        from the month before; a cohort under the minimum shows counts only. With segments, by slug or name: its rules,
+        channels, direct and loaded CAC, observed LTV and health (backend/growth_brief.py segment)."""
         who = request.state.identity
         reader(who)
         with store.read() as c:

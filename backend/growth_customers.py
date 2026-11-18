@@ -13,11 +13,14 @@ The fields (and nothing else, refused by name):
     channel           required  a Growth channel slug; anything else counts as Unknown
     segment, plan     optional  short labels ("agency", "pro")
     churned           optional  date the customer stopped paying; blank while they pay
-    revenue per month optional  for this customer; blank uses the channel's month or the settings value
+    revenue per month optional  for this customer; blank uses the channel's month, the segment's or the settings value
+    net d90, net d180, net d365
+                      optional  the customer's cumulative net revenue by that age (refunds make it negative)
+    attribution       optional  which rung named the channel: utm, code, asked, unknown, or another short label
 
 Privacy rules (the Security Owner's review, 2026-11-13): columns outside the list are refused; a load whose customer key
-looks like an email address or a phone number is refused; a label is at most 40 characters, and a label column with more
-than 50 distinct values or more than one per two rows is refused (a name went into it). Dates are stored as dates in the
+looks like an email address or a phone number is refused; a label (segment, plan, attribution) is at most 40 characters, and a label
+column with more than 50 distinct values or more than one per two rows is refused (a name went into it). Dates are stored as dates in the
 team's time zone, with no time. Every refusal, error and event names the rule, the column and at most a row number,
 never a value. The key is stored as given: hashing guessable keys protects nothing and breaks the hand check.
 
@@ -78,7 +81,13 @@ FIELDS = (
     ("plan", "plan", False),
     ("churned", "churned", False),
     ("revenue_month", "revenue per month", False),
+    ("net_d90", "net d90", False),
+    ("net_d180", "net d180", False),
+    ("net_d365", "net d365", False),
+    ("attribution", "attribution", False),
 )
+NETS = ("net_d90", "net_d180", "net_d365")
+LABELS = ("segment", "plan", "attribution")
 NAMES = {field: name for field, name, _ in FIELDS}
 ALIASES = {
     **{field: field for field, _, _ in FIELDS},
@@ -106,6 +115,10 @@ class Spell:
     segment: str | None = None
     plan: str | None = None
     revenue_month: float | None = None
+    net_d90: float | None = None
+    net_d180: float | None = None
+    net_d365: float | None = None
+    attribution: str | None = None
 
 
 def refuse(rule: str, detail: str) -> NoReturn:
@@ -235,13 +248,11 @@ def check(headers: Sequence[Cell], rows: Sequence[Sequence[Cell]], tz: ZoneInfo)
             bad("churned_before", "churned", n)
         channel = str(cells.get("channel") or "").strip().lower()
         spell.channel = channel if SLUG.match(channel) else None
-        labels: dict[str, str | None] = {}
-        for field in ("segment", "plan"):
+        for field in LABELS:
             label = str(cells.get(field) or "").strip()
             if len(label) > LABEL_MAX:
                 bad("long_label", field, n)
-            labels[field] = label or None
-        spell.segment, spell.plan = labels["segment"], labels["plan"]
+            setattr(spell, field, label or None)
         revenue = cells.get("revenue_month")
         if revenue not in (None, ""):
             try:
@@ -251,12 +262,23 @@ def check(headers: Sequence[Cell], rows: Sequence[Sequence[Cell]], tz: ZoneInfo)
                 spell.revenue_month = amount
             except (TypeError, ValueError):
                 bad("number", "revenue_month", n)
+        for field in NETS:
+            net = cells.get(field)
+            if net in (None, ""):
+                continue
+            try:
+                amount = float(cast(str | float, net))
+                if not math.isfinite(amount):
+                    raise ValueError
+                setattr(spell, field, amount)
+            except (TypeError, ValueError):
+                bad("net", field, n)
         spells.append(spell)
 
     if problems:
         refuse(*_first_problem(problems))
-    for field, values in (("segment", [s.segment for s in spells]), ("plan", [s.plan for s in spells])):
-        distinct = {v for v in values if v}
+    for field in LABELS:
+        distinct = {getattr(s, field) for s in spells if getattr(s, field)}
         if len(distinct) > LABEL_DISTINCT_MAX or len(distinct) > len(spells) / 2:
             refuse(
                 "identifier_label",
@@ -276,7 +298,7 @@ def check(headers: Sequence[Cell], rows: Sequence[Sequence[Cell]], tz: ZoneInfo)
 
 def _first_problem(problems: dict[tuple[str, str], list[int]]) -> tuple[str, str]:
     """The first rule broken, as (rule, detail), in the order a person fixes them."""
-    order = ("personal_key", "long_key", "blank", "date", "churned_before", "long_label", "number")
+    order = ("personal_key", "long_key", "blank", "date", "churned_before", "long_label", "number", "net")
     (rule, field), rows = min(problems.items(), key=lambda item: (order.index(item[0][0]), item[1][0]))
     name = NAMES[field]
     where = _rows_said(rows)
@@ -289,6 +311,7 @@ def _first_problem(problems: dict[tuple[str, str], list[int]]) -> tuple[str, str
         "churned_before": f"Nothing loaded: churned is before became customer ({where}).",
         "long_label": f"Nothing loaded: a {name} label is at most {LABEL_MAX} characters ({where}).",
         "number": f"Nothing loaded: {name} is not a number of zero or more ({where}).",
+        "net": f"Nothing loaded: {name} is not a number ({where}).",
     }[rule]
     return rule, detail
 
@@ -354,11 +377,15 @@ def load(
                 s.churned.isoformat() if s.churned else None,
                 s.revenue_month,
                 at,
+                s.net_d90,
+                s.net_d180,
+                s.net_d365,
+                s.attribution,
             )
         )
     c.executemany(
         "INSERT INTO growth_customers (source, customer_key, became, signed_up, channel, segment, plan, churned, "
-        "revenue_month, loaded_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "revenue_month, loaded_at, net_d90, net_d180, net_d365, attribution) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         values,
     )
     keys = {s.customer_key for s in spells}

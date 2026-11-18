@@ -3571,6 +3571,7 @@ class GrowthChannelCreate(Contract):
     guardrail_max: float | None = None
     input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int = 0
+    segment: str | None = Field(default=None, max_length=80)  # a segment's slug or name; blank is company-wide
 
 
 class GrowthChannelUpdate(Contract):
@@ -3585,6 +3586,31 @@ class GrowthChannelUpdate(Contract):
     guardrail_max: float | None = None
     input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int | None = None
+    segment: str | None = Field(default=None, max_length=80)  # a segment's slug or name; "" or null is company-wide
+
+
+# A segment (backend/growth_segments.py): who the team sells to. Blank money and minimum fall back to the settings.
+class GrowthSegmentCreate(Contract):
+    slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")]
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    customer_rule: str = Field(default="", max_length=1000)
+    churn_days: int = Field(default=0, ge=0, le=730)
+    revenue_month: float | None = Field(default=None, ge=0)
+    margin_pct: float | None = Field(default=None, ge=0, le=100)
+    min_cohort: int | None = Field(default=None, ge=5, le=100000)
+    sort: int = 0
+    owner_ref: str | None = Field(default=None, max_length=200)
+
+
+class GrowthSegmentUpdate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    customer_rule: str | None = Field(default=None, max_length=1000)
+    churn_days: int | None = Field(default=None, ge=0, le=730)
+    revenue_month: float | None = Field(default=None, ge=0)
+    margin_pct: float | None = Field(default=None, ge=0, le=100)
+    min_cohort: int | None = Field(default=None, ge=5, le=100000)
+    sort: int | None = None
+    owner_ref: str | None = Field(default=None, max_length=200)
 
 
 class GrowthLineUse(Contract):

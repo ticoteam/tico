@@ -126,10 +126,12 @@ or `tico growth customers load customers.csv`. Growth keeps only these columns:
 | signed up | no | a date |
 | became customer | yes | the date the customer first paid |
 | channel | yes | a Growth channel slug; anything else counts as Unknown |
-| segment | no | a short label, such as `agency` |
+| segment | no | a short label, such as `agency`; with segments set, a segment's slug or name, any case |
 | plan | no | a short label, such as `pro` |
 | churned | no | the date the customer stopped paying; blank while they pay |
-| revenue per month | no | for this customer; blank uses the channel's month or the settings value |
+| revenue per month | no | for this customer; blank uses the channel's month, then the segment's, then the settings value |
+| net d90, net d180, net d365 | no | the customer's cumulative net revenue by that age, refunds taken off (it may be negative) |
+| attribution | no | which rung named the channel: `utm`, `code`, `asked`, `unknown` or another short label |
 
 Each load replaces the last one: a customer left out is deleted, which is how you remove someone who asks to be
 forgotten. A customer who left and came back is a second row with the same key and a new became customer date, after
@@ -145,8 +147,8 @@ its stored file at once.
 
 **What is refused.** Nothing loads when any of these hold, and the message names the rule and the column, never a value:
 a column outside the list; a customer key that looks like an email address or a phone number; a segment or plan longer
-than 40 characters; a segment or plan column with more than 50 different values or more than one per two rows (a name
-went into it); a date that is not a date; two rows of one customer that overlap. Keys are stored as you give them. You
+than 40 characters; a segment, plan or attribution column with more than 50 different values or more than one per two
+rows (a name went into it); a date that is not a date; a net value that is not a number; two rows of one customer that overlap. Keys are stored as you give them. You
 may replace them with tokens before loading, as long as the same customer always gets the same token.
 
 **The figures.** A cohort is the customers who became customers in the same month, or the same Monday-to-Sunday week.
@@ -157,8 +159,13 @@ For each cohort Growth computes:
   least that old; until then it says "not yet" and the date it fills. September's day 90 fills on 29 December. It is
   never shown as 0%.
 - **LTV and expected months**: the maths above, on the computed retention.
-- **CAC and payback**: by channel only, from the month's spend. Spend is not split by segment or plan, and typed spend
-  is monthly, so weekly cohorts and segment or plan cuts say so instead of a number.
+- **CAC and payback**: by channel, from the month's spend, and by segment once the team has segments (below). Spend is
+  not split by plan, nor by segment for a team without segments, and typed spend is monthly, so weekly cohorts and
+  those cuts say so instead of a number.
+- **Observed LTV at 90, 180 and 365 days**: once any customer has a net value, the mean of the net values of the
+  cohort's customers that old. Until its first customer is that old it says "not yet" and the date; with fewer values
+  than the minimum cohort it shows the count and too few.
+- **Attribution**: how many of the cohort's customers each rung named, when the column is loaded.
 
 A cohort under 30 customers shows counts only ("12 of 19") and too few for a rate, for retention, LTV and revenue. Change
 the minimum with `tico growth settings --set min_cohort=N` (never below 5). Dates are read in the Growth time zone
@@ -192,6 +199,34 @@ with no customer facts read exactly as before. Every figure says which it is.
 search-ads, still paying on day 30") and the customer keys, split into still customers and churned with the date. Anyone
 who reads Growth sees the counts and the rule; the keys and churn dates show only to the owner, admins and the people or
 bots they name (`--set key_readers=growth-product-owner`).
+
+### Segments
+
+A segment is a group of customers worth different money: Consumer and Rental, say. Each has a slug and a name, its
+customer rule in plain words (when someone becomes a customer and when they churn), `churn_days` (the inactivity window
+churn waits on; 0 when churn is a cancel date), and its own revenue per customer month, margin and minimum cohort, each
+falling back to the settings when blank. `tico growth segment set consumer --name Consumer --churn-days 90` adds or
+changes one; `tico growth segment list` names them with their channels.
+
+- **Who is in a segment.** The customer's `segment` label, matched to a segment's slug or name in any case. A label
+  that names none, or a blank one, is **No segment** (`none` in the cut), shown last.
+- **Which spend is whose.** A channel's spend is for one segment (`tico growth channel update brand --segment
+  consumer`) or company-wide (no segment). The customer's own segment decides counts, retention and LTV; the channel's
+  segment decides spend only.
+- **Direct CAC**: the spend and bot cost of the segment's own channels ÷ its new customers. Payback uses it.
+- **Loaded CAC**: direct plus company-wide spend times the segment's share of the period's new customers in a segment
+  (No segment takes no share, so company-wide spend is spread over the customers Growth can place). Filtering to one
+  segment keeps the share it has among all of them. The segments' loaded costs add up to their own channels' spend plus
+  all company-wide spend; No segment carries none of it, and `no_segment` says how many customers that leaves out.
+- **Churn windows.** Day 30, 90 and 180 of a segment's cohort wait `churn_days` more before they fill, since a customer
+  who stopped is not churned until the window runs out. A cohort holding several segments (the channel cut) waits the
+  longest of them.
+- **Health.** Every answer with segments carries `no_segment` (customers whose label names none) and `mismatch`
+  (customers in a segment other than the one their channel's spend is for; a company-wide channel matches every
+  segment), over every customer in the period, whatever the filter.
+
+Retiring a segment (`--retire`) stops channels being given it; customers whose label names it still count under it. A
+team with no segments reads its labels as before. The owner and admins add, change and retire segments.
 
 **KPI readings.** Each measurement a KPI tracks is a reading, logged with the period it covers. A correction supersedes
 the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goals tab; see
@@ -310,7 +345,9 @@ A growth agent starts each run with `tico growth channel show <slug>` (API `GET 
 
 `tico growth segment show <label>` (API `GET /api/v2/growth/segments/{label}`, MCP `tico_growth_segment_show`) is the
 same for a segment, from customer facts: new customers, kept at 30 and 90 days and LTV for the last 6 months, and the
-change from the month before. Spend is not split by segment. A month under the team's minimum cohort shows counts only.
+change from the month before. A month under the minimum cohort shows counts only. With segments set it takes the slug
+or name (`none` for No segment) and adds direct and loaded CAC and observed LTV by month, the segment's customer rule,
+`churn_days`, its channels and its health counts; without segments it says spend is not split by segment.
 `GET /api/v2/growth/view-reads` counts the channel and segment reads by caller and run.
 
 **Alerts.** Three lines the team already set are watched: the channel's KPI turning red against its goal, its guardrail
@@ -419,6 +456,10 @@ tico growth setup                         the four first-run steps, each done or
 tico growth channel list | show SLUG | add | propose SLUG | update SLUG | retire SLUG
 tico growth channel update SLUG --input-kpi KPI_ID the KPI the channel moves (its target stays on its goal)
 tico growth segment show LABEL            one segment's 6 months from customer facts
+tico growth segment list [--retired]
+tico growth segment set SLUG [--name TEXT] [--rule TEXT] [--churn-days N] [--revenue N] [--margin N]
+                 [--min-cohort N] [--owner WHO] [--retire]
+tico growth channel add|update SLUG --segment SLUG   the segment its spend is for ("" for company-wide)
 tico growth source list | add | propose | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
 tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN

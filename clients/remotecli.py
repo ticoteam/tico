@@ -1089,15 +1089,35 @@ def _growth_body(fn, result):
     if fn == "growth cohort list" and not result.get("cohorts"):
         return "No months yet."
     if fn in ("growth channel list",):
+        channels = result.get("channels") or []
+        segmented = (
+            [("segment", lambda r: r.get("segment") or "all")] if any(r.get("segment") for r in channels) else []
+        )
         return _table(
-            result.get("channels") or [],
+            channels,
             [
                 ("slug", "slug"),
                 ("name", "name"),
+                *segmented,
                 ("stage", "stage"),
                 ("track", "track"),
                 ("owner", "owner_ref"),
                 ("budget/mo", "budget_month"),
+            ],
+        )
+    if fn == "growth segment list":
+        if not result.get("segments"):
+            return "No segments yet: customers' segment labels read as they are."
+        return _table(
+            result["segments"],
+            [
+                ("slug", "slug"),
+                ("name", "name"),
+                ("churn days", "churn_days"),
+                ("revenue/mo", "revenue_month"),
+                ("margin %", "margin_pct"),
+                ("channels", lambda r: ", ".join(r.get("channels") or [])),
+                ("rule", "customer_rule"),
             ],
         )
     if fn == "growth source list":
@@ -1300,11 +1320,40 @@ def channel_brief_text(r):
 
 def segment_brief_text(r):
     """`tico growth segment show <label>`: 6 months from customer facts and the change from the month before."""
-    lines = [f"Segment {r.get('segment')} · {r.get('spend')}", ""]
+    lines = [f"Segment {r.get('name') or r.get('segment')} · {r.get('spend')}"]
+    if r.get("customer_rule"):
+        lines.append(f"Customer: {r['customer_rule']}")
+    if r.get("churn_days"):
+        lines.append(f"Churn waits {r['churn_days']} days, so each retention day fills that much later.")
+    if "channels" in r:
+        lines.append("Channels: " + (", ".join(r["channels"]) or "none; company-wide spend loads by share"))
+    health = r.get("health") or {}
+    if health.get("no_segment") or health.get("mismatch"):
+        lines.append(
+            f"Health: {health.get('no_segment', 0)} customers with no segment, "
+            f"{health.get('mismatch', 0)} in a segment their channel's spend is not for."
+        )
+    lines.append("")
     months = r.get("months") or []
+    money = [
+        (head, key)
+        for head, key in (
+            ("CAC", "cac"),
+            ("Loaded", "cac_loaded"),
+            ("Net90", "ltv_observed_d90"),
+            ("Net180", "ltv_observed_d180"),
+            ("Net365", "ltv_observed_d365"),
+        )
+        if any(key in m for m in months)
+    ]
     if r.get("counts_only"):
         lines.append(f"Under the minimum cohort ({r.get('min_cohort')}): counts only.")
-        lines.append(_table(months, [("Month", "month"), ("New", lambda m: _num(m.get("new_customers")))]))
+        lines.append(
+            _table(
+                months,
+                [("Month", "month"), ("New", lambda m: _num(m.get("new_customers"))), *_money_cols(money)],
+            )
+        )
     else:
         lines.append(
             _table(
@@ -1315,6 +1364,7 @@ def segment_brief_text(r):
                     ("Kept30", lambda m: "too few" if m.get("too_few") else _num(m.get("kept_d30"), pct=True)),
                     ("Kept90", lambda m: "too few" if m.get("too_few") else _num(m.get("kept_d90"), pct=True)),
                     ("LTV", lambda m: "too few" if m.get("too_few") else _num(m.get("ltv"), money=True)),
+                    *_money_cols(money),
                 ],
             )
         )
@@ -1322,6 +1372,20 @@ def segment_brief_text(r):
     if ch.get("figures"):
         lines += ["", f"Changed ({ch.get('month')} vs the month before)"] + _change_lines(ch["figures"])
     return "\n".join(lines)
+
+
+def _money_cols(cols):
+    """A segment's month: each CAC or observed LTV in dollars, or its status where it has no value."""
+
+    def cell(key):
+        def show(m):
+            if m.get(key) is not None:
+                return _num(m[key], money=True)
+            return (m.get("status") or {}).get(key, "").replace("_", " ")
+
+        return show
+
+    return [(head, cell(key)) for head, key in cols]
 
 
 def _retention_cell(figure):
@@ -1369,6 +1433,7 @@ def computed_text(result):
             ("day 180", lambda r: _retention_cell(r["kept_d180"])),
             ("LTV", lambda r: _value_cell(r["ltv"])),
             ("CAC", lambda r: _value_cell(r["cac"])),
+            *([("loaded CAC", lambda r: _value_cell(r["cac_loaded"]))] if any("cac_loaded" in r for r in rows) else []),
             ("payback", lambda r: _value_cell(r["payback_months"])),
             ("source", lambda r: "computed"),
         ],
@@ -1378,6 +1443,16 @@ def computed_text(result):
         notes.append(f"Under {result.get('min_cohort')} customers a cohort shows counts only: too few for a rate.")
     if result.get("cac_note"):
         notes.append(f"CAC and payback are per channel: {result['cac_note']}.")
+    if any("cac_loaded" in r for r in rows):
+        notes.append(
+            "CAC is the segment's channels' spend; loaded CAC adds company-wide spend by its share of new customers."
+        )
+    health = result.get("health") or {}
+    if health.get("no_segment") or health.get("mismatch"):
+        notes.append(
+            f"{health.get('no_segment', 0)} customers have no segment; "
+            f"{health.get('mismatch', 0)} are in a segment their channel's spend is not for."
+        )
     lines = [table, *notes]
     for r in rows:
         for window in (30, 90, 180):
