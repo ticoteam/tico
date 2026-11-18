@@ -358,6 +358,16 @@ mod tests {
         assert!(again.same(&host));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "attempt-token-2");
         warm.release(&again, true).await;
+        // On a computer with turn limits each attempt names its own scope (execute.rs): the process stays too.
+        for aid in ["attempt-3", "attempt-4"] {
+            env.insert(
+                crate::turn_limits::SCOPE_ENV.into(),
+                crate::turn_limits::scope_key(aid),
+            );
+            let (limited, _) = warm.acquire(&attempt, &env, make).await.unwrap();
+            assert!(limited.same(&host), "{aid} takes the kept process");
+            warm.release(&limited, true).await;
+        }
         env.insert("ACME".into(), "new".into());
         let (other, _) = warm.acquire(&attempt, &env, make).await.unwrap();
         assert!(!other.same(&host) && !host.alive());

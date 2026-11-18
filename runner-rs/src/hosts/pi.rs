@@ -2710,6 +2710,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_turn_limits_the_next_attempt_takes_the_kept_pi_and_a_real_change_still_restarts_it(
+    ) {
+        let (dir, host, mut rx) = rpc_host(&[REPLY], None);
+        let completed = json!({"kind": "turn_completed", "status": "completed"});
+        let scope = crate::turn_limits::SCOPE_ENV;
+        let first = crate::turn_limits::scope_key("attempt-1");
+        let thread = host.start_thread(&rpc_settings(
+            &dir,
+            &[("HUB_TOKEN", "synthetic-turn-1"), (scope, &first)],
+        ));
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&completed));
+        host.release(true, OWNER, Held::default()).await;
+        // The next attempt has its own scope stem (execute.rs), and still takes the kept process.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let next = PiHost::new("acme", host.0.cmd.clone(), tx, host.0.pool.clone());
+        next.start();
+        let second = crate::turn_limits::scope_key("attempt-2");
+        next.resume_thread(
+            &thread,
+            &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2"), (scope, &second)]),
+        );
+        next.start_turn(&thread, "again", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&completed));
+        assert_eq!(
+            logged(&dir, "starts.log").len(),
+            1,
+            "one pi for both attempts"
+        );
+        next.release(true, OWNER, Held::default()).await;
+        // A real change to the environment still starts a new one.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let third = PiHost::new("acme", host.0.cmd.clone(), tx, host.0.pool.clone());
+        third.start();
+        let stem = crate::turn_limits::scope_key("attempt-3");
+        third.resume_thread(
+            &thread,
+            &rpc_settings(
+                &dir,
+                &[
+                    ("HUB_TOKEN", "synthetic-turn-3"),
+                    (scope, &stem),
+                    ("LINEAR_API_KEY", "new"),
+                ],
+            ),
+        );
+        third.start_turn(&thread, "changed", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&completed));
+        assert_eq!(logged(&dir, "starts.log").len(), 2);
+        third.stop().await;
+        host.0.pool.prune(true).await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_turn_started_differently_restarts_pi_on_the_same_session_and_a_new_effort_is_set_in_place(
     ) {
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
