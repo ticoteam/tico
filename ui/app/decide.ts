@@ -1446,6 +1446,15 @@ async function decideFileHTML(v: AskOkView, content: unknown): Promise<string> {
   const type = (r.headers.get('content-type') || '').split(';')[0]!.trim().toLowerCase(), size = Number(r.headers.get('content-length') || 0);
   const text = /^text\/|\/(json|markdown|x-markdown|csv|xml|yaml)$/.test(type), image = type.startsWith('image/') && type !== 'image/svg+xml';
   const head = `<h3 class="dc-title">${esc(name)}</h3>`, link = `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(name)}</a>`;
+  // A Word file is drawn by the viewer's docxPreviewFrame (its sandboxed frame, kept as markup); one it cannot read is
+  // its link, as before.
+  if (size <= DEC_FILE_INLINE && frvKindOf(name, type) === 'docx') {
+    try {
+      const frame = await docxPreviewFrame(await r.blob(), name);
+      frame.classList.add('dc-proof');
+      return head + frame.outerHTML + link;
+    } catch { return head + link; }
+  }
   if (size > DEC_FILE_INLINE || !(text || image || type === 'application/pdf')) {
     void r.body?.cancel();
     const media = type.startsWith('video/') ? `<video class="dc-media" controls preload="metadata" src="${esc(src)}"></video>`

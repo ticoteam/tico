@@ -13,7 +13,6 @@
 'use strict';
 
 const FRV_PHONE = '(max-width:760px)';
-const FRV_DOCX_LIMIT = 25_000_000;
 const FRV_DIFF_KINDS = ['markdown', 'text', 'csv', 'docx'];
 
 // A cold link from a task draws the task under the view, and the task opens (later, once loaded) as a modal of its own:
@@ -286,7 +285,7 @@ async function frvBody(href: string, box: HTMLElement, file: ViewedFile, kind: s
   const size = file.blob.size;
   const done = (cls: string) => { box.removeAttribute('aria-busy'); box.classList.add('frv-' + cls); };
   const tooBig = (kind === 'markdown' || kind === 'text') && size > DOC_VIEW_LIMIT || kind === 'csv' && size > CSV_LIMIT
-    || kind === 'html' && size > HTML_VIEW_LIMIT || kind === 'docx' && size > FRV_DOCX_LIMIT;
+    || kind === 'html' && size > HTML_VIEW_LIMIT || kind === 'docx' && size > DOCX_VIEW_LIMIT;
   if (!kind || tooBig) { done('other'); box.innerHTML = frvCard(file.name, size, href); return; }
   if (kind === 'image') { done('image'); box.innerHTML = `<img class="frv-img" src="${esc(file.url)}" alt="${esc(file.name)}">`; return; }
   if (kind === 'video') { done('video'); box.innerHTML = `<video src="${esc(file.url)}" controls playsinline preload="metadata"></video>`; return; }
@@ -324,63 +323,8 @@ async function frvCompare(st: FrvState, box: HTMLElement, file: ViewedFile, kind
   }
 }
 
-// ---- Word files (.docx), drawn in the browser by the vendored docx-preview (ui/vendor, NOTICE): no server converter.
-// It draws into this page's document, so what it draws is copied out, stripped (no scripts, frames, forms, handlers,
-// only http(s), mailto and in-page links, only pictures from inside the file) and shown in the same sandboxed frame as
-// an HTML file (htmlPreviewFrame): no scripts, its own origin, nothing fetched from the network.
-let FRV_DOCX_LOAD: Promise<void> | null = null;
-function frvScript(src: string): Promise<void> {
-  return new Promise((ok, fail) => {
-    const s = document.createElement('script');
-    s.src = src; s.onload = () => ok(); s.onerror = () => { s.remove(); fail(new Error('Could not load the Word viewer')); };
-    document.head.append(s);
-  });
-}
-function docxLib(): Promise<void> {
-  if (window.docx && window.JSZip) return Promise.resolve();
-  FRV_DOCX_LOAD ||= (window.JSZip ? Promise.resolve() : frvScript('/vendor/jszip.min.js'))
-    .then(() => window.docx ? undefined : frvScript('/vendor/docx-preview.min.js'))
-    .catch(e => { FRV_DOCX_LOAD = null; throw e; });
-  return FRV_DOCX_LOAD;
-}
-const DOCX_DROP = 'script, noscript, iframe, frame, frameset, object, embed, applet, form, input, button, textarea, select, link, meta, base, portal, template, foreignObject';
-const DOCX_URL_ATTRS = new Set(['srcset', 'action', 'formaction', 'poster', 'background', 'data', 'ping', 'lowsrc', 'longdesc', 'srcdoc', 'xlink:href']);
-/** Strips what a drawn Word file must never carry into the preview (in place). */
-function docxSafe(root: ParentNode): void {
-  for (const el of root.querySelectorAll(DOCX_DROP)) el.remove();
-  for (const el of root.querySelectorAll('*')) {
-    for (const a of [...el.attributes]) {
-      const name = a.name.toLowerCase(), v = a.value.trim();
-      // A picture from inside the file: docx-preview gives it as a data: address (typed by the file's own name, or
-      // application/octet-stream), shown only as an image.
-      const picture = (el.localName === 'img' || el.localName === 'image')
-        && /^data:(image\/(png|jpe?g|gif|webp|bmp|svg\+xml|x-emf|x-wmf|tiff)|application\/octet-stream)[;,]/i.test(v);
-      if (name.startsWith('on') || DOCX_URL_ATTRS.has(name)) el.removeAttribute(a.name);
-      else if (name === 'src' && !picture) el.removeAttribute(a.name);
-      else if (name === 'href' && !(el.localName === 'image' ? picture : el.localName === 'a' && /^(https?:|mailto:|#)/i.test(v))) el.removeAttribute(a.name);
-    }
-  }
-}
-const DOCX_FRAME_CSS = 'html,body{margin:0}body{background:#f3f3f3}.docx-wrapper{min-height:100vh;box-sizing:border-box}'
-  + '@media (max-width:760px){.docx-wrapper{padding:8px!important;align-items:stretch!important}'
-  + '.docx-wrapper>section.docx{width:auto!important;min-width:0;min-height:0!important;padding:20px 16px!important;overflow-x:auto!important}}';
-async function docxPreviewFrame(blob: Blob, name: string): Promise<HTMLIFrameElement> {
-  await docxLib();
-  const lib = window.docx;
-  if (!lib) throw new Error('Could not load the Word viewer');
-  // Drawn detached, never in the page: its styles never reach the app, and it is copied out before anything shows.
-  const work = document.createElement('div'), body = document.createElement('div'), style = document.createElement('div');
-  work.append(style, body);
-  try {
-    await lib.renderAsync(blob, body, style, {useBase64URL: true, renderAltChunks: false, renderComments: false, renderChanges: false,
-      experimental: false, inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: true, renderHeaders: true, renderFooters: true,
-      renderFootnotes: true, renderEndnotes: true});
-    docxSafe(work);
-    const css = [...style.querySelectorAll('style')].map(s => s.textContent || '').join('\n').replace(/<\/style/gi, '<\\/style');
-    return htmlPreviewFrame(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>${DOCX_FRAME_CSS}</style><style>${css}</style></head><body>${body.innerHTML}</body></html>`, name);
-  } finally { work.replaceChildren(); }
-}
-/** A Word file's text, a line per paragraph (tabs and breaks kept, deletions left out), for Compare. */
+/** A Word file's text, a line per paragraph (tabs and breaks kept, deletions left out), for Compare. The Word viewer
+    itself (docxLib, docxPreviewFrame) is in viewer.ts, shared with the viewer, a task's Files and Flow. */
 async function docxText(blob: Blob): Promise<string> {
   await docxLib();
   const zip = window.JSZip;
