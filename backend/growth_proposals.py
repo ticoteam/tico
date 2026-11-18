@@ -1,3 +1,4 @@
+# pyright: strict
 """A bot's Growth proposal: a channel, a source or both that the bot will own, asked as an OK of the owner (or an admin
 it names) from its preview (backend/task_asks.py, subject `growth:<id>`). When the person OKs it, Tico adds what it
 names in that transaction, as that person, owned by the bot; the OK is used and the bot gets a notice. Nothing is added
@@ -12,7 +13,6 @@ Content: `{kind: "growth", owner, channel, source, for_channel}`. `channel` and 
 `for_channel` (a source alone) is a channel the bot owns, which names the new source. A Finance ad spend source reads
 stored ad keys, so a person connects it (POST /api/v2/growth/sources); a bot never proposes one.
 """
-# pyright: strict
 
 from typing import Any
 
