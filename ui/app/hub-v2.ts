@@ -459,6 +459,8 @@ document.addEventListener('click', async ev => {
 function pausedNotice(slug: string) {
   const s: Partial<V2BotState> = v2StatusOf(slug) || {};
   // Tico's own words for the stop, as the server sends them: what happened and what to check.
+  // Stopped for credit: adding credit starts its machine again; Release would not.
+  if (s.stopped === 'out_of_credit') return `${esc(s.focus || 'Out of credit')}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   if (s.stopped) return `${esc(s.focus || `Tico stopped ${empName(slug)}`)}${botReleaseButton(slug)}`;
   if (s.backoff) return esc(s.backoff);
   const when = (since: string | null | undefined) => since ? ` since ${clockTime(since)}` : '';
@@ -538,6 +540,8 @@ function v2StatePill(slug: string) {
   if (!s) return botStatePill(slug);
   // A back-off keeps the bot's state; its wait is the line beside it until the next try.
   const line = s.backoff || s.focus;
+  // A cloud machine stopped for credit (backend/events.py credit_overlay) says so, with Add credit, never Idle.
+  if (s.stopped === 'out_of_credit') return `<span class="pill fail">Out of credit</span>${line ? ` <span class="muted">${esc(line)}</span>` : ''}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   return `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(s.stopped ? 'Stopped' : V2_WORD[s.state] || s.state || 'Unknown')}</span>${
     line ? ` <span class="muted">${esc(line)}</span>` : ''}`;
 }

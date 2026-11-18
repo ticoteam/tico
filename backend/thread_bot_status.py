@@ -30,6 +30,9 @@ SIGN_IN_STATES = ("missing", "failed", "rejected", "unknown")
 OFFLINE = "Its computer is offline"
 PAUSED = "Paused"
 OUT_OF_BUDGET = "Out of budget"
+OUT_OF_CREDIT = "Out of credit: its cloud machine can't start until credit is added"
+OUT_OF_CREDIT_MODELS = "Out of credit: its Tico model waits until credit is added"
+BILLING = "#/settings/billing"
 CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
@@ -336,7 +339,7 @@ def _blocked(c, bot, location, refusal):
     """(detail, fix) when something stops the bot, else None; `refusal` is the claim's latest recorded refusal."""
     from .health import BOT_SETTINGS, COMPUTERS, HELD
     from .models_preset import LOGIN_NAMES
-    from .cloud_machines import resting
+    from .cloud_machines import OUT_OF_CREDIT_WAIT, resting
 
     row = H.bot(c, bot) or {}
     slug = row.get("slug") or bot
@@ -356,6 +359,9 @@ def _blocked(c, bot, location, refusal):
         from .views import cloud_machine_wait
 
         cloud = cloud_machine_wait(c, bot)
+        if cloud == OUT_OF_CREDIT_WAIT:
+            # Not "starting for this turn": nothing starts until credit lands, so the chat says so.
+            return OUT_OF_CREDIT, _fix(BILLING)
         if computer and cloud:
             if asleep:
                 return cloud[0].upper() + cloud[1:], None
@@ -368,6 +374,8 @@ def _blocked(c, bot, location, refusal):
         return None
     if reason == "draining":
         return PAUSED, _fix("#/bot/" + slug + "/more")
+    if reason == "out_of_credit":
+        return OUT_OF_CREDIT_MODELS, _fix(BILLING)
     if reason in BUDGET_REASONS:
         return OUT_OF_BUDGET, _fix("#/finance")
     label = machine.get("label") or "its computer"

@@ -2437,6 +2437,37 @@ def problem_words(problem):
     return PROBLEMS.get(problem, problem)
 
 
+OUT_OF_CREDIT_WAIT = "out of credit: its cloud machine can't start"
+
+
+def credit_refused(c):
+    """Whether HQ refused any of the company's cloud machines for credit (a 402 on a start or a create), whatever its
+    company-wide word says: HQ's billing can stop machines while its `cloud` answer still says open, and
+    then every page would show nothing while the machines cannot start."""
+    return bool(
+        c.execute("SELECT 1 FROM cloud_machines WHERE problem='out_of_credit' AND mode='cloud' LIMIT 1").fetchone()
+    )
+
+
+def any_credit_stop(c):
+    """Whether anything in the company is stopped for credit (a machine HQ refused, or the company frozen), read once
+    per snapshot: a page of status lines asks for every bot, and nearly always the answer is no."""
+    from .read_cache import value
+
+    return value(c, "cloud_credit_stopped", lambda: credit_refused(c) or cloud_access.frozen(c))
+
+
+def out_of_credit(c, bot):
+    """Whether a cloud-mode bot's machine is stopped for credit: HQ refused it (402), or the company is frozen."""
+    if not any_credit_stop(c):
+        return False
+    current = row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return False
+    machine = home(c, bot, current) or current
+    return machine["problem"] == "out_of_credit" or cloud_access.frozen(c)
+
+
 def waiting(c, bot):
     """What a cloud-mode bot's queued work waits for while its machine is not up (views.queued_label), or ''."""
     current = row(c, bot)
@@ -2444,7 +2475,7 @@ def waiting(c, bot):
         return ""
     machine = home(c, bot, current) or current
     if machine["problem"] == "out_of_credit" or cloud_access.frozen(c):
-        return "out of credit: its cloud machine can't start"
+        return OUT_OF_CREDIT_WAIT
     if machine["problem"].startswith("hq:"):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
     if machine["problem"].startswith("error:"):
