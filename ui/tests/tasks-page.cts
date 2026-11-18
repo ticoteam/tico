@@ -844,10 +844,14 @@ async function byNumber(browser: Browser) {
     assert.equal(await jump(page).count(), 1, typed);
     assert.equal((await page.locator('#task-jump .pill').textContent())!.trim(), where, typed);
   };
-  const none = async (page: Page, typed: string) => {
+  // A number search waits for its number read's answer; words read no number. Then the search's own read settles.
+  const none = async (page: Page, typed: string, number?: string) => {
+    const answered = number ? page.waitForResponse(r => new URL(r.url()).searchParams.get('number') === number) : null;
+    const searched = page.waitForResponse(r => new URL(r.url()).searchParams.get('search') === typed.trim());
     await page.locator('#task-q').fill(typed);
+    await Promise.all([answered, searched]);
     await page.waitForFunction(() => !TASKS_ST.loading);
-    await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
+    await page.evaluate(() => new Promise(requestAnimationFrame));
     assert.equal(await page.locator('#task-jump').isHidden(), true, typed);
   };
   {
@@ -879,7 +883,7 @@ async function byNumber(browser: Browser) {
     // Words, letters no pipeline has, and a number no task has: the search as before, nothing first.
     await none(page, '7 old');
     await none(page, 'x7');
-    await none(page, '99');
+    await none(page, '99', '99');
     await page.locator('#task-body', {hasText: 'No matches'}).waitFor();
     assert.deepEqual(errors, []);
     await page.close();
@@ -911,15 +915,20 @@ async function byNumber(browser: Browser) {
     // 5 then 55, typed fast, 5's answer last: only 55 shows.
     const {page, errors} = await open(browser, {tasks, needs: []});
     await page.waitForFunction(() => !TASKS_ST.loading);
-    let late = 0;
+    // 5's read is held until 55 shows, then let go: its answer lands after 55's.
+    let late = 0, letGo = () => {};
+    const held = new Promise<void>(res => { letGo = res; });
     await page.route(u => u.pathname === '/api/v2/tasks' && u.searchParams.get('number') === '5', async r => {
-      late++; await new Promise(res => setTimeout(res, 600)); await r.fallback();
+      late++; await held; await r.fallback();
     });
     await page.locator('#task-q').fill('5');
     await page.waitForFunction(() => TASKS_ST.jumpFor === 5);
     await page.locator('#task-q').fill('55');
     await page.locator('#task-jump [data-task="t-55"]').waitFor();
-    await page.evaluate(() => new Promise(r => setTimeout(r, 900)));
+    const fiveAnswered = page.waitForResponse(r => new URL(r.url()).searchParams.get('number') === '5');
+    letGo();
+    await fiveAnswered;
+    await page.evaluate(() => new Promise(requestAnimationFrame));
     assert.equal(late, 1);
     assert.deepEqual(await jump(page).evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.task)), ['t-55']);
     assert.deepEqual(errors, []);
