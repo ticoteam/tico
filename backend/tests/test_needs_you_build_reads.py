@@ -381,10 +381,13 @@ def preset_company(api, count):
     return store
 
 
-# A standing's reads of each task that a snapshot reads once for the whole list (waiting_on.prime): its stage and
+# A standing's reads of each task that a snapshot reads together for the whole list (waiting_on.prime): its stage and
 # pipeline, the company person's address, a document's live pages, the tasks filed on its visit, its Review gate.
-def shapes(api, person, how):
+def shapes(api, person, monkeypatch, primed=True):
+    """{read: how many times it ran} in one snapshot build of the person's Needs you; `primed` False reads each task's
+    rows as it comes to it (the snapshot still keeps a row read by id), as before these were read together."""
     from backend import task_requirements as R
+    from backend import waiting_on as W
 
     once = {
         "stage": E.STAGE_SQL,
@@ -395,11 +398,17 @@ def shapes(api, person, how):
         "review gate": R.AT_HEAD_SQL,
     }
     store, seen = api.app.state.store, []
-    with store.read_transaction() if how == "snapshot" else store.read() as c:
-        c.set_trace_callback(seen.append)
-        V.needs_items(c, api.app.state.auth, WHO[person])
-        c.set_trace_callback(None)
-    return {name: sum(1 for s in seen if _same(s, sql)) for name, sql in once.items()}
+    with monkeypatch.context() as patched:
+        if not primed:
+            patched.setattr(W, "company_person", W._company_person)
+            patched.setattr(E, "prime_parts", lambda *a: None)
+            patched.setattr(P, "prime_live_documents", lambda *a: None)
+            patched.setattr(R, "_prime_linked_done", lambda *a: None)
+        with store.read_transaction() as c:
+            c.set_trace_callback(seen.append)
+            items = V.needs_items(c, api.app.state.auth, WHO[person])
+            c.set_trace_callback(None)
+    return {name: sum(1 for s in seen if _same(s, sql)) for name, sql in once.items()}, items
 
 
 def _same(traced, sql):
@@ -428,12 +437,13 @@ def test_a_preset_companys_build_is_the_row_by_row_build_byte_for_byte(api):
     assert json.dumps(plates, sort_keys=True, default=str) == json.dumps(alone, sort_keys=True, default=str)
 
 
-def test_a_preset_companys_build_reads_each_tasks_stage_pipeline_pages_and_filed_work_once(api):
+def test_a_preset_companys_build_reads_each_tasks_stage_pipeline_pages_and_filed_work_once(api, monkeypatch):
     store = preset_company(api, 40)
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM page_links WHERE target LIKE 'task:%'").fetchone()[0] > 0
-    alone = shapes(api, ANA, "rows")
-    # Read one task at a time, each runs for many tasks: the company exercises every one.
-    assert all(n >= 3 for n in alone.values()), alone
-    batched = shapes(api, ANA, "snapshot")
-    assert all(n <= 1 for n in batched.values()), batched
+    alone, before = shapes(api, ANA, monkeypatch, primed=False)
+    # Read as each task comes, each of these runs for several tasks (or stages): the company exercises every one.
+    assert all(n >= 2 for n in alone.values()), str(alone)
+    together, after = shapes(api, ANA, monkeypatch)
+    assert all(n <= 1 for n in together.values()), str((alone, together))
+    assert json.dumps(after, sort_keys=True, default=str) == json.dumps(before, sort_keys=True, default=str)
