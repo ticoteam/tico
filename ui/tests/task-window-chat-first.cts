@@ -128,7 +128,7 @@ const pages = async (page: Page) => {
       // Tico gives the number, whoever's move set it off: a quiet line with no name (task-session.cts covers the label, 'Numbered O561').
       const numbered = group.locator('.tcomment.tmark[data-event="number"]');
       await numbered.waitFor();
-      assert.match((await numbered.innerText()).replace(/\s+/g, ' ').trim(), /^Numbered #409\b/);
+      assert.equal((await numbered.locator('> span.muted').innerText()).trim(), 'Numbered #409');
       assert.equal(await numbered.locator('.tcomment-who').count(), 0, 'the number names nobody');
 
       // 5. One Visible to row; no Private or Public box, no Size, no Who can see.
