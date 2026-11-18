@@ -8,7 +8,7 @@
 //! One command, on any machine with both CLIs: `scripts/cli_contract.sh` (docs/harnesses.md, Contract check).
 //! They are `#[ignore]`d so no ordinary test run starts a real CLI or reaches a provider.
 //!
-//! No sign-in is ever finished: `claude setup-token` gets a made-up code, `codex login --device-auth` is stopped
+//! No sign-in is ever finished: `claude setup-token` and `claude auth login` get a made-up code, `codex login --device-auth` is stopped
 //! as soon as it has shown its link and code. A failure never prints a link, a code or a token: only `parse`'s
 //! scrubbed lines.
 //!
@@ -546,6 +546,57 @@ fn claude_connect_shows_a_link_and_a_code_prompt_and_a_wrong_code_gives_the_retr
     assert!(
         !lines.iter().any(|l| l.contains("https://")),
         "a line of `claude setup-token` still carries a link after scrubbing"
+    );
+}
+
+#[test]
+#[ignore = "runs the real claude and codex CLIs: scripts/cli_contract.sh"]
+fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_prompt() {
+    // A full login's Connect (backend/claude_login.py) runs the CLI's own sign-in on the side, not `setup-token`.
+    let home = Home::new();
+    let login = manifest("claude-code").login.unwrap();
+    assert!(
+        login.files.iter().any(|f| f.ends_with(".credentials.json")),
+        "Claude Code's login files no longer name .credentials.json, which a full login's Connect reads"
+    );
+    let mut screen = Screen::start(&home, "claude", &login.command, true);
+    let ready = screen.wait(60, |raw| {
+        let (url, _, _, prompt) = parse(raw, "");
+        !url.is_empty() && prompt
+    });
+    let (url, _, _, prompt) = parse(&screen.raw(), "");
+    assert!(
+        ready,
+        "`claude auth login --claudeai` showed {} within 60 s, so Connect never gets to ask for the code. It shows: {}",
+        match (url.is_empty(), prompt) {
+            (true, true) => "a prompt for the code but no link the runner can read",
+            (false, false) => "a link but no prompt for a code the runner knows",
+            _ => "neither a link nor a prompt for a code",
+        },
+        screen.shown("")
+    );
+    // The page the link opens must show the person a code to paste back, not send it to a local port.
+    let plain = url.replace("%2F", "/").replace("%3A", ":");
+    assert!(
+        url.starts_with("https://") && !url.contains(char::is_whitespace) && plain.contains("code/callback"),
+        "the link `claude auth login --claudeai` shows no longer returns to the manual-code page ({} characters)",
+        url.len()
+    );
+    let before = screen.raw().len();
+    screen.type_in(MADE_UP_CODE);
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        !screen.raw().contains(MADE_UP_CODE),
+        "`claude auth login` now shows the pasted code in the clear: it would reach the runner's log"
+    );
+    assert!(
+        screen.raw().len() > before,
+        "`claude auth login` drew nothing when the code was typed: it may no longer be reading the terminal"
+    );
+    let (_, _, lines, _) = parse(&screen.raw(), MADE_UP_CODE);
+    assert!(
+        !lines.iter().any(|l| l.contains("https://")),
+        "a line of `claude auth login` still carries a link after scrubbing"
     );
 }
 

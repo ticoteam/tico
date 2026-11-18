@@ -132,6 +132,9 @@ EMPTY = (
     "compact_first",
     "model_logins",
     "model_login_cleared",
+    "claude_logins",
+    "claude_login_leases",
+    "claude_login_parks",  # full Claude logins' refresh leases and parked turns: the copy refreshes nothing
     # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
     "cloud_machine_deletions",
     "cloud_machine_enrollment_failures",

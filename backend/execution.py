@@ -16,6 +16,7 @@ from . import (
     start_places,
     org_turns,
     check_models,
+    claude_login,
     learned,
     rooms,
     rules as wake_rule_engine,
@@ -3198,6 +3199,8 @@ def queued_jobs_sql(bots=None):
         "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
         "AND j.state='queued' AND j.held=0 "
+        # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
+        f"AND NOT {claude_login.PARKED_SQL} "
         f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,j.id"
     )
 
@@ -4545,6 +4548,8 @@ class Execution:
             f"WHERE j.state='queued' AND j.held=0 AND j.bot_id IN ({marks}) AND a.runner_id=? "
             f"AND {lifecycle.claim_message_sql()} "
             f"AND {unfenced_sql()} AND {scoped_sql()} "
+            # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
+            f"AND NOT {claude_login.PARKED_SQL} "
             + ("AND j.id=? " if job_id is not None else "")
             + ("AND " + H.in_person_name_sql() + " " if people_only else "")
             +
@@ -7050,6 +7055,17 @@ class Execution:
                     body = body.model_copy(
                         update={'outcome': 'interrupted' if worked else body.outcome, 'retryable': True}
                     )
+        # A turn on a full Claude login refused its sign-in because the login rotated under it (another computer's
+        # refresh revoked its access token before its file was rewritten): no failure and no Reconnect. It goes back in
+        # the queue and its next turn continues its session on the new token (backend/claude_login.py `gap`).
+        token_gap = (
+            body.outcome == "failed"
+            and body.auth_rejected is not None
+            and not row["stop_requested_at"]
+            and claude_login.gap(c, aid, body.auth_rejected.runtime)
+        )
+        if token_gap:
+            body = body.model_copy(update={"outcome": "interrupted", "auth_rejected": None, "retryable": True})
         c.execute(
             "UPDATE attempts SET state=?,finished_at=?,final_text=?,result=? WHERE id=?",
             (
@@ -7060,6 +7076,7 @@ class Execution:
                     {
                         **body.model_dump(exclude={"load_snapshot"}),
                         **({'source_pause': 'quota'} if source_pause else {}),
+                        **({"token_gap": True, "lease_continue": True} if token_gap and row["thread_id"] else {}),
                         **({"check": check["runtime"]} if check else {}),
                         # A held reply's marker: its capture is never taken again (attempt_capture).
                         **({"held_reply": True} if held else {}),
