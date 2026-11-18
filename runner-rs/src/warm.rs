@@ -1,7 +1,7 @@
 //! Warm sessions (`runner/warm.py`): a bounded cache of persistent Antigravity processes, one per conversation
 //! scope, each with a revocable credential. The process reads `HUB_TOKEN=tico-file:<home>/lease-token`, a file
 //! rewritten with each turn's attempt token and blanked when the turn ends, so a process kept between turns holds
-//! no live token. A process is replaced when its environment (HUB_TOKEN aside) changes or it has died, and is
+//! no live token. A process is replaced when its environment (`PER_ATTEMPT` aside) changes or it has died, and is
 //! stopped after a failed turn, after 15 idle minutes, when the cache is full, and before its harness is swapped.
 
 use std::collections::HashMap;
@@ -72,11 +72,16 @@ pub fn scope(attempt: &Value) -> String {
     ])))
 }
 
-/// The environment without HUB_TOKEN, hashed: a change means the process must start again.
+/// What each attempt's environment gives a kept process that is not compared for its reuse: the hub token (read from
+/// the token file) and the attempt's scope stem (crate::turn_limits, set for every attempt where turns are limited: the
+/// process stays in the scope it was started in, `turn_limits::launch_unit`).
+pub const PER_ATTEMPT: [&str; 2] = ["HUB_TOKEN", crate::turn_limits::SCOPE_ENV];
+
+/// The environment without `PER_ATTEMPT`, hashed: a change means the process must start again.
 pub fn fingerprint(env: &Env) -> String {
     let rest: serde_json::Map<String, Value> = env
         .iter()
-        .filter(|(k, _)| *k != "HUB_TOKEN")
+        .filter(|(k, _)| !PER_ATTEMPT.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), json!(v)))
         .collect();
     sha256_hex(&ascii_dumps(&Value::Object(rest)))
@@ -358,6 +363,16 @@ mod tests {
         assert!(again.same(&host));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "attempt-token-2");
         warm.release(&again, true).await;
+        // On a computer with turn limits each attempt names its own scope (execute.rs): the process stays too.
+        for aid in ["attempt-3", "attempt-4"] {
+            env.insert(
+                crate::turn_limits::SCOPE_ENV.into(),
+                crate::turn_limits::scope_key(aid),
+            );
+            let (limited, _) = warm.acquire(&attempt, &env, make).await.unwrap();
+            assert!(limited.same(&host), "{aid} takes the kept process");
+            warm.release(&limited, true).await;
+        }
         env.insert("ACME".into(), "new".into());
         let (other, _) = warm.acquire(&attempt, &env, make).await.unwrap();
         assert!(!other.same(&host) && !host.alive());

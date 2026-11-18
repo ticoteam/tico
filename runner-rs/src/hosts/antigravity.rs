@@ -86,6 +86,8 @@ fn count(v: &Value) -> i64 {
 
 /// The running `agy`: its stdin, and the task that owns, signals and reaps it.
 struct Proc {
+    /// The scope it was started in where turns are limited (crate::turn_limits::launch_unit).
+    unit: Option<String>,
     stdin: mpsc::UnboundedSender<String>,
     kill: mpsc::UnboundedSender<i32>,
     exited: watch::Receiver<bool>,
@@ -104,6 +106,14 @@ struct Inner {
     new_message: bool,
     tx: Events,
     reader: Option<tokio::task::JoinHandle<()>>,
+    /// Counts the processes started: one replaced (`retire`) says nothing more to the turns after it.
+    generation: u64,
+    /// The thread and folder the process was started for: a turn on another one gets a new process (a kept host
+    /// serves the next attempt, crate::warm).
+    spawned_for: Option<(String, String)>,
+    /// The attempt this host's turns belong to (`set_attempt`), and the one that started its process.
+    attempt: String,
+    spawned_by: String,
 }
 
 struct Shared {
@@ -134,6 +144,10 @@ impl AntigravityHost {
                 new_message: false,
                 tx,
                 reader: None,
+                generation: 0,
+                spawned_for: None,
+                attempt: String::new(),
+                spawned_by: String::new(),
             }),
         }))
     }
@@ -183,6 +197,22 @@ impl AntigravityHost {
         inner.up && inner.proc.as_ref().is_none_or(|p| !*p.exited.borrow())
     }
 
+    /// The run this host's turns belong to: a turn on a process an earlier attempt started marks `harness_reused`.
+    pub fn set_attempt(&self, aid: &str) {
+        self.inner().attempt = aid.to_string();
+    }
+
+    /// The scope its process was started in (crate::turn_limits::launch_unit), which an attempt that reuses it asks
+    /// by: it may be an earlier attempt's.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner()
+            .proc
+            .as_ref()
+            .and_then(|p| p.unit.clone())
+            .into_iter()
+            .collect()
+    }
+
     fn path(&self, thread: &str) -> Option<PathBuf> {
         canonical(thread).map(|t| self.0.home.join(format!("{t}.json")))
     }
@@ -198,6 +228,7 @@ impl AntigravityHost {
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
         if self.inner().thread.as_deref() == Some(thread_id) && self.alive() {
+            self.inner().settings = Some(settings.clone());
             return Ok(thread_id.into());
         }
         let unavailable = || failed("Antigravity conversation is unavailable");
@@ -279,18 +310,20 @@ impl AntigravityHost {
         settings: &Settings,
         effort: Option<&str>,
         provider: Option<&str>,
+        generation: u64,
     ) -> Result<(Proc, tokio::process::ChildStdout), HostError> {
         let mut command = self.command(settings, effort, provider)?;
         let mut child = command
             .spawn()
             .map_err(|e| failed(format!("could not start agy: {e}")))?;
         self.0.allocation.mark();
+        let unit = crate::turn_limits::launch_unit(&settings.env, child.id());
         let host = self.clone();
         let _stderr = crate::run_diagnostics::Stderr::capture_with(
             &mut child,
             move |value| {
                 let inner = host.inner();
-                if inner.turn.is_some() {
+                if inner.turn.is_some() && inner.generation == generation {
                     let _ = inner.tx.send(value);
                 }
             },
@@ -324,6 +357,9 @@ impl AntigravityHost {
                     status = child.wait() => {
                         let code = super::return_code(&status);
                         let inner = host.inner();
+                        if inner.generation != generation {
+                            break; // replaced (`retire`): the turns after it are not its
+                        }
                         let _ = inner.tx.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
                         break;
                     },
@@ -340,6 +376,7 @@ impl AntigravityHost {
         });
         Ok((
             Proc {
+                unit,
                 stdin: lines,
                 kill,
                 exited,
@@ -362,12 +399,30 @@ impl AntigravityHost {
                 "Antigravity is unavailable or already running a turn",
             ));
         }
+        let settings = inner.settings.clone().unwrap_or_default();
+        let place = (thread_id.to_string(), settings.cwd.clone());
+        if inner.proc.is_some() && inner.spawned_for.as_ref() != Some(&place) {
+            // A new thread (a fresh session, a resume that failed) or another folder on a kept process: agy holds
+            // one conversation in one folder, so it is replaced, never handed this turn's prompt.
+            Self::retire(&mut inner);
+        }
         if inner.proc.is_none() {
-            let settings = inner.settings.clone().unwrap_or_default();
-            let (proc, stdout) = self.spawn(&settings, effort, inner.provider.as_deref())?;
+            inner.generation += 1;
+            let (proc, stdout) = self.spawn(
+                &settings,
+                effort,
+                inner.provider.as_deref(),
+                inner.generation,
+            )?;
             inner.proc = Some(proc);
-            let host = self.clone();
-            inner.reader = Some(tokio::spawn(async move { host.read(stdout).await }));
+            inner.spawned_for = Some(place);
+            inner.spawned_by = inner.attempt.clone();
+            let (host, generation) = (self.clone(), inner.generation);
+            inner.reader = Some(tokio::spawn(
+                async move { host.read(stdout, generation).await },
+            ));
+        } else if !inner.attempt.is_empty() && inner.spawned_by != inner.attempt {
+            crate::util::mark("harness_reused", &inner.attempt);
         }
         let line = py_dumps(&json!({"event": "user", "message": {"content": text}})) + "\n";
         if inner
@@ -390,7 +445,7 @@ impl AntigravityHost {
         Ok(turn)
     }
 
-    async fn read(&self, stdout: tokio::process::ChildStdout) {
+    async fn read(&self, stdout: tokio::process::ChildStdout, generation: u64) {
         let mut lines = BufReader::new(stdout).lines();
         let why = loop {
             let line = match lines.next_line().await {
@@ -406,6 +461,9 @@ impl AntigravityHost {
                 Err(_) => break Some("JSONDecodeError".into()),
             };
             let mut inner = self.inner();
+            if inner.generation != generation {
+                return; // replaced (`retire`)
+            }
             if !inner.up {
                 break None;
             }
@@ -418,6 +476,9 @@ impl AntigravityHost {
             log(&format!("Antigravity stream failed: {why}"));
         }
         let mut inner = self.inner();
+        if inner.generation != generation {
+            return;
+        }
         if inner.up {
             if let Some(turn) = inner.turn.take() {
                 let ev = event(
@@ -565,6 +626,28 @@ impl AntigravityHost {
     /// Interrupting a turn stops the process: the next turn starts a new one on the saved conversation.
     pub async fn interrupt(&self) {
         self.stop().await;
+    }
+
+    /// Stop the process without a word to the turns after it: its reader ends now, its exit is not reported, and its
+    /// group gets SIGTERM, then SIGKILL after STOP_GRACE.
+    fn retire(inner: &mut Inner) {
+        if let Some(reader) = inner.reader.take() {
+            reader.abort();
+        }
+        inner.spawned_for = None;
+        let Some(old) = inner.proc.take() else { return };
+        inner.generation += 1;
+        let (kill, mut exited) = (old.kill.clone(), old.exited.clone());
+        drop(old);
+        let _ = kill.send(libc::SIGTERM);
+        tokio::spawn(async move {
+            if tokio::time::timeout(STOP_GRACE, exited.wait_for(|e| *e))
+                .await
+                .is_err()
+            {
+                let _ = kill.send(libc::SIGKILL);
+            }
+        });
     }
 
     /// SIGTERM to the group, SIGKILL after 5 s, then up to 5 s more for it to go.
@@ -738,11 +821,33 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = AntigravityHost::new(&dir.join("home"), vec![cmd.clone()], tx);
         host.start().unwrap();
-        let s = settings(&dir, &[("CUMULATIVE", "1".into())]);
+        let stem = |aid: &str| crate::turn_limits::scope_key(aid);
+        let scoped = |aid: &str| {
+            settings(
+                &dir,
+                &[
+                    ("CUMULATIVE", "1".into()),
+                    (crate::turn_limits::SCOPE_ENV, stem(aid)),
+                ],
+            )
+        };
+        let s = scoped("attempt-1");
         let thread = host.start_thread(&s);
+        assert!(host.scopes().is_empty());
         host.start_turn(&thread, "one", Some("medium")).unwrap();
         let first = turn_events(&mut rx).await;
-        assert_eq!(host.resume_thread(&thread, &s).unwrap(), thread);
+        // The next attempt names its own scope; the process stays in the first one's, and says so.
+        assert_eq!(
+            host.resume_thread(&thread, &scoped("attempt-2")).unwrap(),
+            thread
+        );
+        let units = host.scopes();
+        assert!(
+            units.len() == 1
+                && units[0].starts_with(&format!("{}-", stem("attempt-1")))
+                && units[0].ends_with(".scope"),
+            "{units:?}"
+        );
         host.start_turn(&thread, "two", None).unwrap();
         let second = turn_events(&mut rx).await;
         for (events, text) in [(&first, "turn 1"), (&second, "turn 2")] {
@@ -773,6 +878,66 @@ mod tests {
         let runs: Vec<&str> = args.lines().collect();
         assert_eq!(runs[0], "--input-format stream-json --output-format stream-json --model gemini-3.8-flash-medium --effort medium --dangerously-skip-permissions");
         assert!(runs[1].ends_with("--effort low --dangerously-skip-permissions --conversation 6f9619ff-8b86-d011-b42d-00c04fc964ff"), "{}", runs[1]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_kept_process_takes_only_its_own_thread_in_its_own_folder() {
+        let dir = std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("worktree")).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = AntigravityHost::new(&dir.join("home"), vec![fake_agy(&dir)], tx);
+        host.start().unwrap();
+        let s = settings(&dir, &[("CUMULATIVE", "1".into())]);
+        let aids = [1, 2, 3, 4].map(|_| format!("agy-{}", uuid::Uuid::new_v4().simple()));
+        crate::flight::track();
+        for aid in &aids {
+            crate::flight::phase("claimed", aid);
+        }
+        let reply = |events: &[Value]| events[2]["text"].clone();
+        // One attempt starts the process; the next one on the same thread and folder writes to it.
+        host.set_attempt(&aids[0]);
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).unwrap();
+        assert_eq!(reply(&turn_events(&mut rx).await), "turn 1");
+        host.set_attempt(&aids[1]);
+        host.resume_thread(&thread, &s).unwrap();
+        host.start_turn(&thread, "two", None).unwrap();
+        assert_eq!(reply(&turn_events(&mut rx).await), "turn 2");
+        // A fresh session is a new thread: agy's conversation is the old one's, so a new process takes it.
+        host.set_attempt(&aids[2]);
+        let fresh = host.start_thread(&s);
+        host.start_turn(&fresh, "three", None).unwrap();
+        assert_eq!(reply(&turn_events(&mut rx).await), "turn 1");
+        // So does the same thread in another folder (a task that moved to its worktree).
+        host.set_attempt(&aids[3]);
+        let mut moved = s.clone();
+        moved.cwd = dir.join("worktree").display().to_string();
+        host.resume_thread(&fresh, &moved).unwrap();
+        host.start_turn(&fresh, "four", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        assert_eq!(reply(&events), "turn 1", "{events:?}");
+        // The replaced processes said nothing more to the turns after them.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(rx.try_recv().is_err());
+        assert!(host.alive());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("args.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            3
+        );
+        let reused =
+            |aid: &str| crate::flight::timings(aid).unwrap()["phases"]["harness_reused"].is_u64();
+        assert_eq!(
+            aids.iter().map(|a| reused(a.as_str())).collect::<Vec<_>>(),
+            vec![false, true, false, false]
+        );
+        for aid in &aids {
+            crate::flight::turn_end(aid, "acme", "gemini", "completed", true);
+        }
+        host.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 

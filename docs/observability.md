@@ -368,7 +368,8 @@ registration file, `~/.config/tico/` on a Mac, the runner user's home in Docker,
 files (`.1` to `.4`), in the server's record format (version 1): one JSON object per line with `v` (1), `ts` (Unix
 seconds, milliseconds as decimals) and `kind`, here always `runner.*`: `runner.start` (version, build,
 pid), `runner.turn` (attempt, bot, runtime, outcome, `total_ms`, and `phases`: milliseconds since the turn was claimed
-for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
+for `placed`, `harness_started`, `harness_reused` (a pi or Antigravity turn that took a process kept from an earlier
+attempt), `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
 `model_done`, `scrubbed` (the secret scrub of the changed files), `finished_at`, `saved` (the result in runner.sqlite),
 `flushed` (the last events sent), `complete_posted` and `done`; a Claude turn adds `claude_spawned` (its process
 started, before any cold sign-in hold), `claude_init` (its `system/init`) and `claude_result` (its last `result`), and
