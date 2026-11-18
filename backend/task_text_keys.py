@@ -82,7 +82,11 @@ PAIRS = frozenset(
 def wordlike(letters: str) -> bool:
     """Whether a run of letters reads as words: each camelCase hump of 6+ letters, and the humps together, mostly use
     common letter pairs. Short all-caps humps (XML, ID) are acronyms and left out of the pairs; changing case
-    (qZqZqZ, kQwerTyuIopz) does not make a key read as a word."""
+    (qZqZqZ, kQwerTyuIopz) does not make a key read as a word.
+
+    This is a likelihood, not a proof: no test of letters alone tells every random value from a word. The bar was
+    decided on the task at QA (2026-11-18): keep everyday notes, and refuse about 94% of random 12-letter mixed-case
+    values and over 99% at 16 letters; a value with a digit or symbol never reaches here. The test pins those rates."""
     humps = HUMPS.findall(letters)
     # Words in camelCase have long humps (GitHub, McDonald, XMLHttpRequest); random mixed case breaks into many tiny
     # ones (q, Zq, kQ) and runs of capitals. Two tiny mixed humps, or a third run of capitals, is not a word: measured,

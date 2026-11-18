@@ -6,6 +6,8 @@ mark. Ordinary text (ids, hashes, links, prose about keys) is stored unchanged.
 """
 
 import json
+import random
+import string
 from pathlib import Path
 
 from backend import task_text_keys as K
@@ -213,6 +215,15 @@ def test_an_alternating_case_key_from_slack_is_stored_as_a_mark(api):
         for value in (ALTERNATING, MIXED_12):
             posted = threads.post(c, "human:ana", task["conversation_id"], "token: " + value, kind="say", via="slack")
             assert value not in posted["body"] and K.MARK in posted["body"]
+
+
+def test_the_agreed_share_of_random_letters_only_keys_is_refused():
+    # The bar decided at QA: a letters-only value is judged by likelihood, so pin the measured rates on a fixed sample.
+    rng = random.Random(607)
+    for length, lower_bar, mixed_bar in ((12, 0.93, 0.90), (16, 0.97, 0.98)):
+        for letters, bar in ((string.ascii_lowercase, lower_bar), (string.ascii_letters, mixed_bar)):
+            sample = ["".join(rng.choice(letters) for _ in range(length)) for _ in range(2000)]
+            assert sum(not K.wordlike(v) for v in sample) >= bar * len(sample), (length, letters[:3])
 
 
 def test_this_team_s_own_ids_after_a_key_word_are_stored_unchanged(api):
