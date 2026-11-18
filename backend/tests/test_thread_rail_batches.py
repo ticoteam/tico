@@ -304,3 +304,33 @@ def test_revived_within_answers_as_revived_roots_does(api):
             assert threads.revived_within(c, v, "1") == whole, actor
             assert threads.revived_within(c, v, "1") == whole, actor
             assert threads.revived_within(c, v, "0") == frozenset()
+
+
+def test_revived_within_checks_each_root_once_a_snapshot_across_chunks(api, monkeypatch):
+    """The scoped revival check splits its roots into chunks (REVIVED_CHUNK) and keeps each root's answer for the
+    snapshot: 7 roots in chunks of 3 cost three revival queries the first time and none the second, and give each root
+    the whole-company answer, for a reader who may read the replies' runs and one who may not."""
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Private", "Secret", "human:ana", private=True, lint=False)
+    seed_finished_task_replies(api, 3, "ck", private_input=secret["id"])
+    seed_finished_task_replies(api, 4, "cl")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET restricted=1")
+    monkeypatch.setattr(threads, "REVIVED_CHUNK", 3)
+    real, calls = threads._revived_roots, []
+
+    def counted(c, v, roots):
+        calls.append(None if roots is None else len(roots))
+        return real(c, v, roots)
+
+    monkeypatch.setattr(threads, "_revived_roots", counted)
+    for actor in ("human:ben", "human:ana"):
+        with api.app.state.store.read_transaction() as c:
+            v = threads.actor_viewer(c, actor)
+            whole = threads.revived_roots(c, v)
+            calls.clear()
+            assert threads.revived_within(c, v, "1") == whole, actor
+            assert calls == [3, 3, 1], (actor, calls)
+            calls.clear()
+            assert threads.revived_within(c, v, "1") == whole, actor
+            assert calls == [], (actor, calls)
