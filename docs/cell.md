@@ -26,8 +26,12 @@ its `compose.yaml` come from that checkout). Before you run `init`, on the insta
 
 ```sh
 install -m 600 /dev/stdin /root/tunnel-token <<<"$TOKEN"     # the tunnel's token, readable by root only
-python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.team --json
+python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.team \
+  [--kms-key arn:aws:kms:<region>:<account>:key/<id>] --json
 ```
+
+`--kms-key` saves the cell's one KMS key in `cell.json`, for every `add` that gives none
+([Stored secrets and KMS](#stored-secrets-and-kms)). Left out, the saved key is kept; `--kms-key ""` clears it.
 
 `init` is idempotent. Re-run it after you change anything. It does the following:
 
@@ -71,6 +75,7 @@ already have their own DNS record, such as `hub` and `accounts`, are not affecte
 ```sh
 python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner-email owner@example.com \
   --auth oidc --issuer https://accounts.tico.team --client-id tc_... --client-secret-file /root/boatyard/client-secret \
+  --kms-key arn:aws:kms:us-west-2:<account>:key/<id> --kms-credentials-file /root/boatyard/kms-key \
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
@@ -83,7 +88,9 @@ python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
 python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
 python3 -m setup cell set-slack --company boatyard on|off --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
-python3 -m setup cell update --company boatyard --version vX.Y.Z --json
+python3 -m setup cell update --company boatyard --version vX.Y.Z [--kms-key ARN] [--kms-credentials-file F] --json
+python3 -m setup cell kms-policy --company boatyard [--kms-key ARN] --json
+python3 -m setup cell rewrap --company boatyard [--timeout 300] [--step-timeout 1800] --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
 ```
 
@@ -122,7 +129,11 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
 | `updater_failed` | `init` could not install or start the cell updater or the wake service |
 | `rollback_failed` | The new release did not come up, and putting the old one back failed too; the detail says how far it got (`version` is the release in `.env` now) |
-| `unsupported_host` | `init` was run somewhere other than the Linux host |
+| `kms_required` | `add` of a new company without `--kms-key` (and no key from `init`) or `--kms-credentials-file`; `update` with one of the two and neither saved; `rewrap` of a company without KMS settings. The detail names the missing flags. Nothing changed |
+| `public_access` | `rewrap`: the company's backup bucket does not block public access with all four settings. The detail names the bucket. Nothing changed |
+| `rewrap_failed` | `rewrap`: the backend step did not finish (`step`, `exit`, and `failed`: the kinds and counts of secrets that do not open under KMS). Nothing was deleted, and a running company was started again |
+| `s3_failed` | `rewrap`: an S3 call with the host's role failed (reading the public access block, or deleting the key copies) |
+| `unsupported_host` | `init` was run somewhere other than the Linux host, or `rewrap` on a host without boto3 |
 | `internal` | A bug. The detail has the cause, with secrets masked |
 
 `add`, `start`, `wake` and `update` answer like this:
@@ -131,6 +142,10 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 {"ok": true, "company": "boatyard", "url": "https://boatyard.tico.team", "port": 20000, "ready_ms": 8400,
  "version": "v0.5.1", "changed": true, "owner_link_file": "/srv/tico-cell/companies/boatyard/owner-link.txt"}
 ```
+
+`add` and `update` add `"kms": true` and `"kms_key"` when the company's stored secrets are on KMS. A company made
+before KMS gets `"kms": false` and a `"warning"` instead; it runs as before until `update --kms-key
+--kms-credentials-file` and `rewrap` ([Stored secrets and KMS](#stored-secrets-and-kms)).
 
 `add` adds `"ignored"` (the `--env-file` keys it did not keep, names only) and `"unused"` (kept keys the stock
 `compose.yaml` does not pass to the server, so they do nothing) when given `--env-file`, and `"imported": true` with
@@ -155,8 +170,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sl
 
 ### Rules
 
-- **Secrets come only from files.** These are the client secret, the Gateway invite, the backup key and the tunnel
-  token. Each file must be readable by its owner only (mode 0600 or stricter). Secrets never appear in argv, and never
+- **Secrets come only from files.** These are the client secret, the Gateway invite, the backup key, the KMS access
+  key and the tunnel token. Each file must be readable by its owner only (mode 0600 or stricter). Secrets never appear in argv, and never
   on stdout: every detail and log line is scrubbed. They are written only to the company's `.env` (0600).
 - **Every command is idempotent.** Running `add` again with the same settings changes nothing and gives the same answer
   (`changed: false`). Running it with new settings, such as a rotated client secret, applies them. An optional input
@@ -189,6 +204,66 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sl
   company stays marked `removed` with its slot, and running `remove` again finishes.
 - **Locks.** Commands on different companies run in parallel. Only allocating or freeing a slot and rewriting the
   router config share a lock. A command reads a company's record only once it holds that company's lock.
+
+## Stored secrets and KMS
+
+A company's stored secrets (API keys, model subscriptions, Slack tokens, GitHub App secrets) are sealed with a data
+key ([docs/credential-vault.md](credential-vault.md)). Without KMS that key is a file in `data/`, `credential.key`,
+and the backups carry a copy of it, so whoever reads a backup opens every secret. On a cell the data key is wrapped
+with the cell's one AWS KMS key instead, with the company's slug as its encryption context, and no key file is kept.
+
+**A person's step, once per cell and once per company** (bots cannot do it):
+
+1. Create the cell's KMS key: a symmetric encryption key in the cell's region, with a deletion waiting period (30
+   days). A deleted key, or a lost access key, loses every company's stored secrets: keep the waiting period on. Pass
+   its ARN to `init --kms-key` (or to each `add` and `update`).
+2. For each company, an IAM user of its own with one access key and exactly the policy that
+   `python3 -m setup cell kms-policy --company <slug> --kms-key <arn> --json` prints (`policy`): `kms:Encrypt`,
+   `kms:Decrypt` and `kms:GenerateDataKey` on the cell's key, only when the encryption context is
+   `company=<slug>` and `application=tico-credentials`. So one company's key can never unwrap another's data key.
+   Containers cannot use the host's role, so each company needs this key of its own.
+3. Save the access key in a 0600 file (`KEY=VALUE` lines with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, or the
+   JSON `aws iam create-access-key` prints) and pass it as `--kms-credentials-file`.
+
+**The flags.** `add` and `update` take `--kms-key ARN` (a key ARN, `arn:aws:kms:<region>:<account>:key/<id>`, not an
+alias) and `--kms-credentials-file F`. They write five lines to the company's `.env`: `TICO_CREDENTIAL_KMS_KEY` (the
+ARN), `TICO_CREDENTIAL_KMS_CONTEXT` (the slug), `TICO_CREDENTIAL_KMS_ACCESS_KEY_ID`,
+`TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY` and `TICO_CREDENTIAL_KMS_REGION` (the ARN's region). Either flag left out
+keeps the saved value. The secret is never printed. **A new company needs both** (`--kms-key` may come from `init`):
+without them `add` is refused with `kms_required`, naming the missing flag, so its first secret is never sealed by a
+key file. A company made before this keeps running as it did, with a warning in the answer.
+
+**Moving an existing company onto KMS:** `update --company <slug> --version <its release> --kms-key ARN
+--kms-credentials-file F` (the server restarts with the settings and wraps its data key on next use), then
+`python3 -m setup cell rewrap --company <slug> --json`, which does, in this order, each step stopping the run before
+the next:
+
+1. Reads the company's backup bucket's public access block with the host's role (read-only `GetPublicAccessBlock`).
+   A bucket that does not block public access with all four settings stops it (`public_access`, naming the bucket)
+   before anything else.
+2. Refuses (`kms_required`) a company without its KMS settings.
+3. Stops the server (and its Slack gateway; Docker must say they are stopped; a sleeping or stopped company already
+   is) and runs the backend step `python -m backend.manage vault-rotate --json` in a one-off container of the same
+   image, `.env` and `/data`. The step wraps the data key with KMS, re-seals what `github-app.key` seals, moves every
+   secret to a fresh data key, checks that every one opens under KMS, and only then deletes `credential.key` and
+   `github-app.key` from `data/`. A secret that does not open stops it with nothing deleted: the answer is
+   `rewrap_failed` with `failed`, the kinds and counts. A company that was running is started again, also when the
+   step failed; a sleeping one sleeps on.
+4. With the host's role, deletes every version and delete marker of the key copies under
+   `<backup prefix>/credential-key/` in the bucket.
+5. With the host's role, deletes every version of a bundle backup's key copy in the same bucket
+   (`backups/**.sqlite.keys/credential.key` or `github-app.key`, from a hand-run `manage.py backup`) whose SHA-256,
+   as S3 stored it, is one of this company's key files', and the copy's delete markers. Another company's copy in a
+   shared bucket, or one S3 holds no SHA-256 for, is left alone and counted in `kept_bundle_key_copies`. The key
+   files' SHA-256s are written to `.key-digests.json` (0600) beside `.env` before step 3, so a run after an
+   interruption still finds the copies. A bundle written to another bucket is not looked for.
+
+It answers `{"ok": true, "company", "public_access_blocked": true, "step": "done", "resealed", "deleted",
+"deleted_key_copies", "deleted_bundle_key_copies", "kept_bundle_key_copies", "state", "ready_ms"}` (`public_access_blocked` is null for a company without a backup bucket).
+It is idempotent: run it again after a failure or an interruption, and the step answers `already_done` and nothing is
+left to delete. It needs boto3 on the host (`pip install boto3`) and a host role that may read the bucket's public
+access block, list object versions, read object checksums (`HeadObject`) and delete object versions under the
+companies' prefixes and `backups/`.
 
 ## Sleep, wake and the hold
 
@@ -327,8 +402,9 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, and the page's `TICO_READER_ORIGIN` and
-  `TICO_COMPANY_PAGE_DIR`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN` and
+  `TICO_COMPANY_PAGE_DIR`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
+  `_SECRET_ACCESS_KEY`, `_REGION`: only `--kms-key` and `--kms-credentials-file` set them). So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
 - **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
@@ -529,7 +605,7 @@ No database migration or company data is involved.
 
 | Path | What it is |
 |---|---|
-| `/srv/tico-cell/cell.json` | The cell's domain, the router's address, and the page and Tico Meet domains when set |
+| `/srv/tico-cell/cell.json` | The cell's domain, the router's address, the page and Tico Meet domains when set, and the cell's KMS key (`init --kms-key`) |
 | `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |

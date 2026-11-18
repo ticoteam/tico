@@ -71,6 +71,13 @@ the company's own default network (the stock service is on no other). It never m
 updater token. It writes the database itself, so every stop that protects the database (`update`, `sleep`, `stop`, a
 rollback) stops it with the server, and Docker must say both are stopped.
 
+A company's stored secrets are on the cell's one KMS key, with its slug as the encryption context (docs/cell.md,
+Stored secrets and KMS): `add` and `update` write the key and the company's own KMS access key into its .env
+(`--kms-key`, `--kms-credentials-file`), and a new company is refused without them. `kms-policy` prints the IAM
+policy for that access key. `rewrap` moves an existing company off its key files: it checks its backup bucket blocks
+public access, runs the backend step (vault-rotate) on the stopped server, and deletes the key file copies in the
+bucket with the host's role.
+
 All Docker and system calls go through one `System`, so the tests run every command with a fake.
 """
 
@@ -187,6 +194,27 @@ MEET_ENV_KEYS = (
 # `add`), the ones below (the cell's own or read back from .env by the next `add`, so a carried one would feed back),
 # and what belongs to a single-company install only.
 ENV_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+# The company's credential vault on the cell's one KMS key (docs/cell.md, Credentials and KMS): the key, the company's
+# slug as its encryption context, and the company's own AWS access key for KMS (containers cannot use the host's role).
+# The cell writes them from `add`/`update --kms-key --kms-credentials-file`; an --env-file can never set them.
+KMS_KEY, KMS_CONTEXT, KMS_KEY_ID, KMS_SECRET, KMS_REGION = KMS_ENV = (
+    "TICO_CREDENTIAL_KMS_KEY",
+    "TICO_CREDENTIAL_KMS_CONTEXT",
+    "TICO_CREDENTIAL_KMS_ACCESS_KEY_ID",
+    "TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY",
+    "TICO_CREDENTIAL_KMS_REGION",
+)
+# A key ARN, not an alias or a bare id: the IAM policy (`kms-policy`) names it as its resource, and its region is the
+# client's.
+KMS_ARN_RE = re.compile(r"arn:aws(?:-[a-z]+)*:kms:([a-z]{2}(?:-[a-z]+)+-[0-9]):([0-9]{12}):key/[A-Za-z0-9-]{1,128}")
+KMS_APPLICATION = "tico-credentials"  # backend/credentials.py's encryption context, beside the company
+# What `cell` reads back from a company's .env and must keep out of every answer.
+SECRET_ENV_KEYS = contract.SECRET_KEYS | {KMS_SECRET}
+# `rewrap`'s backend step (backend/manage.py vault-rotate), in a one-off container of the company's server service: its
+# image, .env and /data, while the server is stopped. Exit 0 done or already done, 3 stopped with nothing deleted.
+REWRAP_STEP = ("-m", "backend.manage", "vault-rotate", "--json")
+REWRAP_DONE = ("done", "already_done")
+KEY_DIGESTS = ".key-digests.json"  # rewrap: the key files' SHA-256s, found in bundle backups after the files are gone
 CELL_ENV_KEYS = frozenset(
     {
         "TICO_TEAM_NAME",
@@ -236,6 +264,7 @@ CELL_ENV_KEYS = frozenset(
         "TICO_READER_ORIGIN",
         "TICO_COMPANY_PAGE_DIR",
         *MEET_ENV_KEYS,
+        *KMS_ENV,
     }
 )
 CELL_ENV_PREFIXES = ("TICO_CADDY", "TICO_TUNNEL")
@@ -462,6 +491,35 @@ class System:
     def monotonic(self) -> float:
         return time.monotonic()
 
+    def _s3(self, region: str):
+        """An S3 client with the host's own AWS role (the default chain: the instance profile), never a company's key.
+        boto3 is imported only here: `rewrap` is the one command that needs it."""
+        try:
+            import boto3
+        except ImportError:
+            raise CellError("unsupported_host", "rewrap needs boto3 on the host (pip install boto3)") from None
+        return boto3.client("s3", region_name=region or None)
+
+    def public_access_blocked(self, bucket: str, region: str) -> tuple[bool, str]:
+        """(True, "") when the bucket's public access block has all four flags on, else (False, why); read-only
+        (GetPublicAccessBlock). An error reading it is raised: unknown is not safe."""
+        from backend import replication
+
+        return replication.bucket_blocks_public_access(self._s3(region), bucket)
+
+    def delete_key_copies(self, bucket: str, prefix: str, region: str) -> int:
+        """Every version and delete marker under <prefix>/credential-key/ deleted with the host's role; how many."""
+        from backend import replication
+
+        return replication.delete_key_copies(self._s3(region), bucket, prefix)
+
+    def delete_bundle_key_copies(self, bucket: str, digests: list[str], region: str) -> tuple[int, int]:
+        """Every version of a bundle key copy under backups/ whose SHA-256 is one of `digests` deleted with the host's
+        role: (deleted, kept), kept being other companies' or unattributable copies left alone."""
+        from backend import replication
+
+        return replication.delete_bundle_key_copies(self._s3(region), bucket, set(digests))
+
 
 # --- inputs ----------------------------------------------------------------------------------------------------
 
@@ -593,9 +651,10 @@ def check_members(members: list) -> int:
     return total
 
 
-def backup_keys(text: str) -> tuple[str, str]:
-    """--backup-credentials-file: KEY=VALUE lines (LITESTREAM_ or AWS_ACCESS_KEY_ID and _SECRET_ACCESS_KEY), or the
-    JSON `aws iam create-access-key` prints ({"AccessKey": {"AccessKeyId", "SecretAccessKey"}}, or that object alone)."""
+def backup_keys(text: str, flag: str = "--backup-credentials-file") -> tuple[str, str]:
+    """--backup-credentials-file (and --kms-credentials-file, `flag`): KEY=VALUE lines (LITESTREAM_ or AWS_ACCESS_KEY_ID
+    and _SECRET_ACCESS_KEY), or the JSON `aws iam create-access-key` prints ({"AccessKey": {"AccessKeyId",
+    "SecretAccessKey"}}, or that object alone)."""
     key = secret = ""
     if text.startswith("{"):
         try:
@@ -609,8 +668,56 @@ def backup_keys(text: str) -> tuple[str, str]:
         key = e.get("LITESTREAM_ACCESS_KEY_ID") or e.get("AWS_ACCESS_KEY_ID", "")
         secret = e.get("LITESTREAM_SECRET_ACCESS_KEY") or e.get("AWS_SECRET_ACCESS_KEY", "")
     if not (re.fullmatch(r"[A-Z0-9]{16,128}", key) and re.fullmatch(r"[A-Za-z0-9/+=]{16,128}", secret)):
-        raise CellError("secret_file", "--backup-credentials-file: no access key id and secret access key in it")
+        raise CellError("secret_file", f"{flag}: no access key id and secret access key in it")
     return key, secret
+
+
+def check_kms_key(value: str, flag: str = "--kms-key") -> str:
+    """A KMS key's ARN (arn:aws:kms:<region>:<account>:key/<id>), refused (bad_args) otherwise."""
+    arn = (value or "").strip()
+    if not KMS_ARN_RE.fullmatch(arn):
+        raise CellError("bad_args", f"{flag} is a KMS key ARN such as arn:aws:kms:us-west-2:111122223333:key/<id>")
+    return arn
+
+
+def kms_env(slug: str, arn: str, keys: tuple[str, str]) -> dict[str, str]:
+    """The .env lines that put a company's credential vault on the cell's KMS key: the key, the company's slug as the
+    encryption context (so another company's access key cannot unwrap its data key, see `iam_policy`), its own access
+    key and the key's region."""
+    return {
+        KMS_KEY: arn,
+        KMS_CONTEXT: slug,
+        KMS_KEY_ID: keys[0],
+        KMS_SECRET: keys[1],
+        KMS_REGION: KMS_ARN_RE.fullmatch(arn).group(1),
+    }
+
+
+def kms_set(env: dict[str, str]) -> bool:
+    """The company's .env has a KMS key, its context and an access key pair: its server can wrap its data key."""
+    return all(env.get(k) for k in (KMS_KEY, KMS_CONTEXT, KMS_KEY_ID, KMS_SECRET))
+
+
+def iam_policy(slug: str, arn: str) -> dict:
+    """The IAM policy for one company's KMS access key: wrap, unwrap and make data keys with the cell's key, and only
+    with the company's own encryption context, so its key cannot open another company's data key."""
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "TicoCredentialsKms",
+                "Effect": "Allow",
+                "Action": ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"],
+                "Resource": arn,
+                "Condition": {
+                    "StringEquals": {
+                        "kms:EncryptionContext:company": slug,
+                        "kms:EncryptionContext:application": KMS_APPLICATION,
+                    }
+                },
+            }
+        ],
+    }
 
 
 class Parser(argparse.ArgumentParser):
@@ -648,6 +755,11 @@ def parser() -> Parser:
         help="Tico Meet's TURN hostname, such as meet-cell-1.tico.team (a DNS-only A record to this host): runs "
         "LiveKit for every company (docs/cell.md \"Tico Meet\"); kept when left out, \"\" turns it off",
     )
+    i.add_argument(
+        "--kms-key",
+        metavar="ARN",
+        help="the cell's one KMS key, used by `add` when it gives none; kept when left out, \"\" clears it",
+    )
     a = cmd("add", "create or converge one company's server; answers once /healthz answers through the router")
     a.add_argument("--company", required=True, metavar="SLUG")
     a.add_argument("--domain", required=True, help="<slug>.<the cell's domain>, or with --own-domain any hostname")
@@ -674,6 +786,18 @@ def parser() -> Parser:
     a.add_argument("--backup-region")
     a.add_argument("--backup-credentials-file", metavar="F", help="this company's own scoped access key (0600)")
     a.add_argument("--company-file", metavar="F", help="the company YAML from the org-chart picker")
+
+    def kms_flags(c):
+        c.add_argument(
+            "--kms-key", metavar="ARN", help="the cell's KMS key for the company's stored secrets (default: init's)"
+        )
+        c.add_argument(
+            "--kms-credentials-file",
+            metavar="F",
+            help="the company's own AWS access key for KMS (0600), limited by `kms-policy`'s policy",
+        )
+
+    kms_flags(a)
     a.add_argument("--company-name", help="the team's name when there is no --company-file (default from the slug)")
     a.add_argument("--memory", help=f"memory limit (default {MEMORY_DEFAULT})")
     a.add_argument("--version", help="the release to run, vX.Y.Z (default the installer's own release)")
@@ -735,6 +859,17 @@ def parser() -> Parser:
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
     u.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT)
+    kms_flags(u)
+    q = cmd("kms-policy", "the IAM policy for one company's KMS access key: the cell's key, its own context only")
+    q.add_argument("--company", required=True, metavar="SLUG")
+    q.add_argument("--kms-key", metavar="ARN", help="the cell's KMS key (default: init's)")
+    w = cmd(
+        "rewrap",
+        "move a company's stored secrets to a fresh KMS data key, then delete its key files here and in its backups",
+    )
+    w.add_argument("--company", required=True, metavar="SLUG")
+    w.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz after")
+    w.add_argument("--step-timeout", type=int, default=1800, help="seconds the rewrap step may take")
     r = cmd("remove", "remove one company's containers, route and (unless --keep-data) its folder")
     r.add_argument("--company", required=True, metavar="SLUG")
     r.add_argument("--keep-data", action="store_true", help="keep its folder, data and port for a later add")
@@ -1853,10 +1988,21 @@ class Cell:
                         raise CellError(
                             "port_taken", f"the route {r['name']} uses port {clash[0]}, which Tico Meet needs"
                         )
-            return self._init(saved, domain, token, page_domain, meet_domain)
+            # The cell's one KMS key (Chris, 2026-11-18): kept when left out, "" clears it. `add` uses it when it gives
+            # none.
+            kms_key = saved.get("kms_key")
+            if getattr(args, "kms_key", None) is not None:
+                kms_key = check_kms_key(args.kms_key) if args.kms_key.strip() else None
+            return self._init(saved, domain, token, page_domain, meet_domain, kms_key)
 
     def _init(
-        self, saved: dict, domain: str, token: str, page_domain: str | None = None, meet_domain: str | None = None
+        self,
+        saved: dict,
+        domain: str,
+        token: str,
+        page_domain: str | None = None,
+        meet_domain: str | None = None,
+        kms_key: str | None = None,
     ) -> dict:
         changed = []
         if self.system.run(["docker", "compose", "version"]).returncode:
@@ -1928,7 +2074,7 @@ class Cell:
         if self.wake_service():
             changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
-        for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain)):
+        for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain), ("kms_key", kms_key)):
             if value:
                 cell[name] = value
             else:
@@ -1952,6 +2098,7 @@ class Cell:
             "changed": changed,
             **({"page_domain": page_domain} if page_domain else {}),
             **({"meet_domain": meet_domain} if meet_domain else {}),
+            **({"kms_key": kms_key} if kms_key else {}),
         }
 
     def meet_files(self) -> list[str]:
@@ -2236,6 +2383,13 @@ class Cell:
         if args.backup_credentials_file:
             keys = backup_keys(read_secret(args.backup_credentials_file, "--backup-credentials-file"))
             self.secrets.append(keys[1])
+        kms_arn = check_kms_key(args.kms_key) if getattr(args, "kms_key", None) else None
+        kms_keys = None
+        if getattr(args, "kms_credentials_file", None):
+            kms_keys = backup_keys(
+                read_secret(args.kms_credentials_file, "--kms-credentials-file"), "--kms-credentials-file"
+            )
+            self.secrets.append(kms_keys[1])
         carried = None
         if args.env_file:
             carried = carried_env(read_secret(args.env_file, "--env-file"))
@@ -2252,6 +2406,22 @@ class Cell:
             plan = (probe.company_file_data, probe.company)
 
         with self.lock("company-" + slug), contextlib.ExitStack() as cleanup:
+            if self.load(slug) is None:
+                # A new company's stored secrets are on KMS from its first one: never a key file a backup could carry.
+                missing = [
+                    flag
+                    for flag, given in (
+                        ("--kms-key", kms_arn or cell.get("kms_key")),
+                        ("--kms-credentials-file", kms_keys),
+                    )
+                    if not given
+                ]
+                if missing:
+                    raise CellError(
+                        "kms_required",
+                        f"a new company needs KMS for its stored secrets: give {' and '.join(missing)} "
+                        "(docs/cell.md, Credentials and KMS)",
+                    )
             # Unpacked under this company's lock only (it can take minutes), then renamed into place under the cell's.
             staged = self.stage_import(args.import_data, self.dir(slug)) if args.import_data else None
             if staged:
@@ -2373,6 +2543,7 @@ class Cell:
                 )
                 if host:
                     env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                env.update(self.kms_values(slug, old_env, kms_arn, kms_keys, cell.get("kms_key")))
                 env = cell_env(env, c, meet)
                 # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
                 written = {k for k, v in env.items() if v}
@@ -2411,7 +2582,29 @@ class Cell:
                 answer["unused"] = sorted(set(extra) - self.compose_keys())
             if staged:
                 answer.update(imported=True, imported_bytes=staged[1])
-            return answer
+            return {**answer, **kms_answer(env)}
+
+    def kms_values(
+        self,
+        slug: str,
+        saved: dict[str, str],
+        arn: str | None,
+        keys: tuple[str, str] | None,
+        default_arn: str | None = None,
+    ) -> dict[str, str]:
+        """The KMS lines for a company's .env: the flags', each one left out kept from `saved` (its .env now), the key
+        last from `init --kms-key` (`default_arn`). Without both a key and an access key, what was saved, as it was: a
+        company made before KMS keeps running as it did (its answer warns, and `rewrap` refuses). The saved secret
+        joins the scrubbed ones."""
+        old = {k: saved[k] for k in KMS_ENV if saved.get(k)}
+        if old.get(KMS_SECRET) and old[KMS_SECRET] not in self.secrets:
+            self.secrets.append(old[KMS_SECRET])
+        arn = arn or old.get(KMS_KEY) or default_arn
+        if keys is None and old.get(KMS_KEY_ID) and old.get(KMS_SECRET):
+            keys = (old[KMS_KEY_ID], old[KMS_SECRET])
+        if not (arn and keys):
+            return old
+        return kms_env(slug, check_kms_key(arn, KMS_KEY), keys)
 
     def extra_env(self, slug: str) -> dict[str, str]:
         """extra.env (settings carried from a moved install), minus anything the cell owns; its values are secrets."""
@@ -2747,7 +2940,7 @@ class Cell:
                 return {"ok": True, "company": slug, "page_host": host or None, "changed": any(routed)}
             d = self.dir(slug)
             env = envfile.parse(_read(d / ".env"))
-            self.secrets += [v for k, v in env.items() if k in contract.SECRET_KEYS and v and v not in self.secrets]
+            self.secrets += [v for k, v in env.items() if k in SECRET_ENV_KEYS and v and v not in self.secrets]
             refuse_server_host(host, env, "--host")
             with self.lock("cell"):  # the host's owner is checked and recorded under one lock, as add does
                 self.refuse_taken(slug, {host} if host else set())
@@ -2806,7 +2999,7 @@ class Cell:
             c = self.live(slug)
             d = self.dir(slug)
             env_text = _read(d / ".env")
-            self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
+            self.secrets += [v for k, v in envfile.parse(env_text).items() if k in SECRET_ENV_KEYS and v]
             if not on:
                 # Named with its profile, so Compose finds it whatever .env says now.
                 self.run(
@@ -2843,17 +3036,43 @@ class Cell:
 
         With the new release come this core's compose files, token and updater keys in .env (`write_compose`,
         `cell_env`). On the release the company already runs they are rewritten alone, and a running server is
-        recreated only when one changed (`changed`): a company made by an older core picks up its updater that way."""
+        recreated only when one changed (`changed`): a company made by an older core picks up its updater that way.
+
+        --kms-key and --kms-credentials-file put the company's stored secrets on KMS (`kms_values`); left out, the
+        saved ones stay. The answer says whether KMS is set (`kms_answer`)."""
+        answer = self._update(args)
+        return {**answer, **kms_answer(envfile.parse(_read(self.dir(answer["company"]) / ".env")))}
+
+    def _update(self, args) -> dict:
         started = self.system.monotonic()
         if not VERSION_RE.fullmatch(args.version or ""):
             raise CellError("bad_args", "--version is a release such as v1.2.3")
         slug = check_slug(args.company)
+        kms_arn = check_kms_key(args.kms_key) if getattr(args, "kms_key", None) else None
+        kms_keys = None
+        if getattr(args, "kms_credentials_file", None):
+            kms_keys = backup_keys(
+                read_secret(args.kms_credentials_file, "--kms-credentials-file"), "--kms-credentials-file"
+            )
+            self.secrets.append(kms_keys[1])
+        default_arn = self.load_cell().get("kms_key") if kms_keys and not kms_arn else None
         self.taken = ""
         with self.lock("company-" + slug):
             c = self.live(slug)
             d = self.dir(slug)
             env_text = _read(d / ".env")
-            self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
+            self.secrets += [v for k, v in envfile.parse(env_text).items() if k in SECRET_ENV_KEYS and v]
+            if kms_arn or kms_keys:
+                values = envfile.parse(env_text)
+                values.update(self.kms_values(slug, values, kms_arn, kms_keys, default_arn))
+                if not kms_set(values):
+                    raise CellError(
+                        "kms_required",
+                        "KMS needs both a key and the company's access key: give "
+                        + ("--kms-credentials-file" if kms_arn else "--kms-key")
+                        + " too (none is saved)",
+                    )
+                env_text = envfile.render(values)
             extra = self.extra_env(slug)
             meet = self.meet()  # before anything stops: a cell whose Tico Meet keys are missing changes nothing
             running = c.get("state") not in ("stopped", "sleeping")  # one that is not stays as it is
@@ -3049,6 +3268,153 @@ class Cell:
             "tunnel_pending": pending,
         }
 
+    def kms_policy(self, args) -> dict:
+        """The IAM policy for the company's own KMS access key (`iam_policy`), for the person who makes its IAM user:
+        the cell's key (--kms-key, or init's) with the company's own encryption context only. Reads nothing else."""
+        slug = check_slug(args.company)
+        arn = args.kms_key
+        if not arn:
+            arn = self.load_cell().get("kms_key")
+            if not arn:
+                raise CellError(
+                    "bad_args", "--kms-key is required: this cell has no KMS key of its own (init --kms-key)"
+                )
+        arn = check_kms_key(arn)
+        return {"ok": True, "company": slug, "kms_key": arn, "policy": iam_policy(slug, arn)}
+
+    def rewrap(self, args) -> dict:
+        """Take an existing company's stored secrets off its key files (docs/cell.md, Credentials and KMS), under its
+        lock, in this order, each step stopping the run before the next:
+
+        1. Its backup bucket (TICO_BACKUP_URL) must block public access, all four settings, read with the host's role:
+           else public_access, naming the bucket, before anything else.
+        2. Its .env must have its KMS settings (`update --kms-key --kms-credentials-file`): else kms_required.
+        3. Its server (and Slack gateway) stopped, Docker saying so (asleep or stopped: already), then the backend step
+           (REWRAP_STEP) in a one-off container: wrap with KMS, every secret moved to a fresh data key, then the key
+           files deleted from data/. A company that was running is started again, also when the step failed. A step
+           that does not answer done is rewrap_failed with its `failed` kinds and counts: nothing deleted.
+        4. With the host's role, every version of the key file copies under <backup prefix>/credential-key/ deleted.
+        5. With the host's role, every version of a bundle backup's key file copy (backups/**.sqlite.keys/, hand-run
+           `manage.py backup`) whose SHA-256 is one of this company's key files' deleted; other copies are counted as
+           kept and left alone. The SHA-256s are recorded beside .env before step 3, so a run after an interruption
+           still finds them.
+
+        Run again, each step finds its work done (the step answers already_done; nothing is left to delete)."""
+        started = self.system.monotonic()
+        slug = check_slug(args.company)
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            env = envfile.parse(_read(self.dir(slug) / ".env"))
+            self.secrets += [v for k, v in env.items() if k in SECRET_ENV_KEYS and v and v not in self.secrets]
+            url, region = env.get("TICO_BACKUP_URL", ""), env.get("TICO_BACKUP_REGION", "")
+            bucket = prefix = ""
+            if url:
+                m = re.fullmatch(r"s3://([^/]+)(?:/(.*))?", url)
+                if not m:
+                    raise CellError("bad_args", f"{slug}'s TICO_BACKUP_URL is not s3://bucket/prefix")
+                bucket, prefix = m.group(1), (m.group(2) or "").strip("/")
+                blocked, why = self.s3(
+                    "reading the public access block of bucket " + bucket,
+                    lambda: self.system.public_access_blocked(bucket, region),
+                )
+                if not blocked:
+                    raise CellError(
+                        "public_access",
+                        f"{why or 'bucket ' + bucket + ' does not block public access'}; turn on all four Block Public "
+                        "Access settings first. Nothing was changed",
+                    )
+            if not kms_set(env):
+                raise CellError(
+                    "kms_required",
+                    f"{slug} has no KMS settings: run `update` with --kms-key and --kms-credentials-file first",
+                )
+            running = c.get("state") == "running"  # asleep or stopped: its server stays down after
+            # The key files' SHA-256s, kept beside .env before the step deletes the files: they pick out this company's
+            # copies in a bundle backup (step 5), also on a run after an interruption, when the files are gone.
+            digests = self.key_digests(slug) if bucket else []
+            self.pull(c["version"])
+            out, failed = {}, None
+            try:
+                self.ensure_stopped(slug)
+                step = self.compose(
+                    slug,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "-T",
+                    "-e",
+                    "TICO_DB=/data/hub.sqlite",
+                    "--entrypoint",
+                    "python",
+                    SERVER_SERVICE,
+                    *REWRAP_STEP,
+                )
+                r = self.system.run(step, timeout=args.step_timeout)
+                out = step_answer(r.stdout)
+                if r.returncode or out.get("status") not in REWRAP_DONE:
+                    failed = rewrap_failed(r, out)
+            except CellError as e:
+                failed = e
+            ready = 0
+            if running:
+                try:
+                    ready = self.launch(c, started, args.timeout)
+                except CellError as e:
+                    if failed is None:
+                        raise
+                    failed.detail += f"; starting {slug} again failed too: {e.detail}"
+            if failed is not None:
+                raise failed
+            deleted, bundles, kept = 0, 0, 0
+            if bucket:
+                deleted = self.s3(
+                    f"deleting the key file copies under s3://{bucket}/{prefix + '/' if prefix else ''}credential-key/",
+                    lambda: self.system.delete_key_copies(bucket, prefix, region),
+                )
+                bundles, kept = self.s3(
+                    f"deleting this company's bundle key copies under s3://{bucket}/backups/",
+                    lambda: self.system.delete_bundle_key_copies(bucket, digests, region),
+                )
+        return {
+            "ok": True,
+            "company": slug,
+            "public_access_blocked": True if bucket else None,
+            "step": out.get("status"),
+            "resealed": out.get("resealed") or {},
+            "deleted": out.get("deleted") or [],
+            "deleted_key_copies": deleted,
+            "deleted_bundle_key_copies": bundles,
+            "kept_bundle_key_copies": kept,
+            "state": c.get("state"),
+            "ready_ms": ready,
+        }
+
+    def key_digests(self, slug: str) -> list[str]:
+        """The SHA-256s of the company's key files, now in data/ or recorded by an earlier run (KEY_DIGESTS, 0600,
+        beside .env), merged and recorded again. Digests only: they open nothing."""
+        from backend import replication
+
+        path = self.dir(slug) / KEY_DIGESTS
+        try:
+            known = set(json.loads(_read(path) or "[]"))
+        except ValueError:
+            known = set()
+        found = sorted(known | replication.key_file_digests(self.dir(slug) / "data"))
+        if found:
+            _write_atomic(path, json.dumps(found) + "\n", 0o600)
+        return found
+
+    def s3(self, what: str, call):
+        """`call()` (an S3 call with the host's role); any error but our own is s3_failed, saying what it did."""
+        try:
+            return call()
+        except CellError:
+            raise
+        except Exception as e:  # noqa: BLE001  botocore's errors, without importing botocore here
+            raise CellError(
+                "s3_failed", self.scrub(f"{what} with the host's role: {type(e).__name__}: {e}")[-600:]
+            ) from None
+
     def remove(self, args) -> dict:
         """The company's slot (its index, so its port) stays taken until the router no longer sends its domain there:
         the record is marked removed and the router reloaded under the cell lock, and only then is the folder deleted.
@@ -3116,6 +3482,46 @@ def _set_wake_at(c: dict, wake_at: str | None) -> None:
         c["wake_at"] = wake_at
     else:
         c.pop("wake_at", None)
+
+
+def step_answer(stdout: str) -> dict:
+    """The backend step's JSON object: the last line of its output that is one (log lines may come before it)."""
+    for line in reversed((stdout or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            with contextlib.suppress(ValueError):
+                data = json.loads(line)
+                if isinstance(data, dict):
+                    return data
+    return {}
+
+
+def rewrap_failed(r: Result, out: dict) -> CellError:
+    """rewrap_failed for a step that did not answer done: its status, reason and `failed` counts (secret kinds and how
+    many did not open under KMS), or the end of its output when it gave no answer. Nothing was deleted."""
+    failed = out.get("failed") if isinstance(out.get("failed"), dict) else {}
+    counts = ", ".join(f"{kind}: {n}" for kind, n in sorted(failed.items()))
+    reason = str(out.get("reason") or "").strip() or (r.stderr or r.stdout or "").strip()[-400:]
+    e = CellError(
+        "rewrap_failed",
+        f"the rewrap step {out.get('status') or 'failed'} (exit {r.returncode})"
+        + (f": {reason}" if reason else "")
+        + (f"; secrets that do not open under KMS: {counts}" if counts else "")
+        + "; nothing was deleted",
+    )
+    e.extra = {"step": out.get("status"), "exit": r.returncode, "failed": failed}
+    return e
+
+
+def kms_answer(env: dict[str, str]) -> dict:
+    """What an `add` or `update` answer says of the company's KMS settings (never the access key)."""
+    if kms_set(env):
+        return {"kms": True, "kms_key": env[KMS_KEY]}
+    return {
+        "kms": False,
+        "warning": "KMS is not set: the company's stored secrets are opened by a key file that its backups carry; "
+        "give it --kms-key and --kms-credentials-file with `update`, then run `rewrap`",
+    }
 
 
 def _read(path: Path) -> str:

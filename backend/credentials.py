@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Literal
@@ -25,6 +26,32 @@ from .models import Contract, ID
 from .store import H, Problem, encode
 
 CONTEXT = {'application': 'tico-credentials'}
+# The registry_metadata markers of `python -m backend.manage vault-rotate` (backend/vault_rotate.py): when every secret
+# moved to a fresh KMS data key, and when the key files beside the database were checked and deleted.
+ROTATED_AT, KEY_FILES_RETIRED = 'vault:rotated-at', 'vault:key-files-retired'
+
+
+def kms_context(company=''):
+    """The KMS encryption context of a company's data key: `company` (TICO_CREDENTIAL_KMS_CONTEXT, a hosted company's
+    id) joins the application's, so under a cell's one KMS key one company's access cannot unwrap another's key. KMS
+    refuses a decrypt whose context differs from the one the key was wrapped with. Unset: the application's alone, as a
+    self-hosted install always had."""
+    company = str(company or '').strip()
+    return {**CONTEXT, 'company': company} if company else dict(CONTEXT)
+
+
+def key_files_retired(c):
+    """Whether `vault-rotate` finished here: the data key is a fresh KMS one and the key files were deleted (both
+    markers). Replication and backups then copy no key file (backend/replication.py keeps the same rule read-only)."""
+    try:
+        found = c.execute(
+            'SELECT COUNT(*) FROM registry_metadata WHERE key IN (?,?)', (ROTATED_AT, KEY_FILES_RETIRED)
+        ).fetchone()
+    except sqlite3.Error:  # a database from before registry_metadata
+        return False
+    return bool(found) and found[0] == 2
+
+
 # A website tool's account (backend/website_tools.py): its sealed value is JSON {"password", "totp"?}. It never reaches a
 # run, a computer's environment or a list with a value: only a signed-in person's reveal (the password alone) and the
 # browser commands that type it. The 2FA key never leaves this process.
@@ -490,9 +517,42 @@ class CredentialCipher:
     only its wrapped form is in the database. Without one it is 32 random bytes in `key_file` (mode 0600, beside the database
     on the server's data volume), generated on first use: the database alone then cannot decrypt a credential."""
 
-    def __init__(self, key_id, kms=None, key_file=None):
+    def __init__(self, key_id, kms=None, key_file=None, company=None, access=None):
+        """`company` is the KMS encryption context's company (`kms_context`) and `access` the (access key id, secret,
+        region) the KMS client is built with. None reads each from the environment (TICO_CREDENTIAL_KMS_CONTEXT,
+        TICO_CREDENTIAL_KMS_ACCESS_KEY_ID, _SECRET_ACCESS_KEY, _REGION), as a migration that builds its own cipher from
+        TICO_CREDENTIAL_KMS_KEY does; the server's Vault passes its settings'."""
         self.key_id, self.kms, self.key_file = key_id, kms, Path(key_file) if key_file else None
+        env = os.environ.get
+        self.context = kms_context(env('TICO_CREDENTIAL_KMS_CONTEXT', '') if company is None else company)
+        self.access = tuple(
+            str(v or '').strip()
+            for v in (
+                access
+                if access is not None
+                else (
+                    env('TICO_CREDENTIAL_KMS_ACCESS_KEY_ID'),
+                    env('TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY'),
+                    env('TICO_CREDENTIAL_KMS_REGION'),
+                )
+            )
+        )
         self.cached = None
+
+    @classmethod
+    def for_settings(cls, settings, kms=None):
+        """The server's cipher: its KMS key, context and access from `settings`, its key file beside the database."""
+        return cls(
+            settings.credential_kms_key,
+            kms,
+            key_file=Path(settings.db_path).parent / KEY_FILE,
+            company=getattr(settings, 'credential_kms_context', ''),
+            access=(
+                getattr(settings, 'credential_kms_access_key_id', ''),
+                getattr(settings, 'credential_kms_secret_access_key', ''),
+                getattr(settings, 'credential_kms_region', ''),
+            ),
+        )
 
     @property
     def configured(self):
@@ -543,33 +603,60 @@ class CredentialCipher:
         return key
 
     def kms_client(self):
+        """The KMS client. With the company's own access key pair it is built with exactly those (a hosted container
+        cannot use the host's role), never boto's default chain; half a pair is refused, never filled in from it."""
         if self.kms is None:
             import boto3
             from botocore.config import Config
 
+            key_id, secret, region = (self.access + ('', '', ''))[:3]
+            if bool(key_id) != bool(secret):
+                raise Problem(
+                    'vault_unavailable',
+                    'Set both TICO_CREDENTIAL_KMS_ACCESS_KEY_ID and TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY, or neither',
+                    503,
+                )
+            explicit = {'aws_access_key_id': key_id, 'aws_secret_access_key': secret} if key_id else {}
             # Called inside write transactions: fail in seconds, not botocore's 60 s timeouts and retries.
             self.kms = boto3.client(
-                'kms', config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
+                'kms',
+                region_name=region or None,
+                config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}),
+                **explicit,
             )
         return self.kms
+
+    def wrap(self, key):
+        """`key` wrapped with the configured KMS key under this company's context."""
+        return self.kms_client().encrypt(KeyId=self.key_id, Plaintext=key, EncryptionContext=self.context)[
+            'CiphertextBlob'
+        ]
+
+    def unwrap(self, wrapped, context=None):
+        """A data key KMS wrapped under this company's context (or `context`)."""
+        return self.kms_client().decrypt(
+            KeyId=self.key_id, CiphertextBlob=bytes(wrapped), EncryptionContext=context or self.context
+        )['Plaintext']
+
+    def generate(self):
+        """A fresh KMS data key under this company's context: (plaintext, wrapped)."""
+        made = self.kms_client().generate_data_key(KeyId=self.key_id, KeySpec='AES_256', EncryptionContext=self.context)
+        return made['Plaintext'], made['CiphertextBlob']
 
     def kms_key(self, c, row):
         self.kms_client()
         if row and row['kms_key'] == LOCAL:
             # Credentials saved before a KMS key was set: wrap the same key with KMS, so nothing is re-encrypted.
             key = self.local_key(c, row)
-            wrapped = self.kms.encrypt(KeyId=self.key_id, Plaintext=key, EncryptionContext=CONTEXT)['CiphertextBlob']
-            c.execute("UPDATE credential_keys SET kms_key=?,wrapped_key=? WHERE id='v1'", (self.key_id, wrapped))
+            c.execute("UPDATE credential_keys SET kms_key=?,wrapped_key=? WHERE id='v1'", (self.key_id, self.wrap(key)))
             return key
         if row:
             if row['kms_key'] != self.key_id:
                 raise ValueError('Unexpected wrapping key')
-            return self.kms.decrypt(KeyId=self.key_id, CiphertextBlob=row['wrapped_key'], EncryptionContext=CONTEXT)[
-                'Plaintext'
-            ]
-        generated = self.kms.generate_data_key(KeyId=self.key_id, KeySpec='AES_256', EncryptionContext=CONTEXT)
-        c.execute('INSERT INTO credential_keys VALUES(?,?,?)', ('v1', self.key_id, generated['CiphertextBlob']))
-        return generated['Plaintext']
+            return self.unwrap(row['wrapped_key'])
+        key, wrapped = self.generate()
+        c.execute('INSERT INTO credential_keys VALUES(?,?,?)', ('v1', self.key_id, wrapped))
+        return key
 
     def key(self, c):
         if not self.configured:
@@ -602,9 +689,12 @@ class CredentialCipher:
                     self.key(c)
                     return
                 key = self.local_key(c, row)
-            wrapped = self.kms_client().encrypt(KeyId=self.key_id, Plaintext=key, EncryptionContext=CONTEXT)[
-                'CiphertextBlob'
-            ]
+            try:
+                wrapped = self.wrap(key)
+            except Problem:
+                raise
+            except Exception:  # noqa: BLE001 - KMS blocked or unreachable: the same clean refusal a read gets
+                raise Problem('vault_unavailable', 'Credential encryption is temporarily unavailable', 503) from None
             with store.transaction() as c:
                 changed = c.execute(
                     "UPDATE credential_keys SET kms_key=?,wrapped_key=? WHERE id='v1' AND kms_key=? AND wrapped_key=?",
@@ -678,9 +768,7 @@ class CredentialCipher:
 class Vault:
     def __init__(self, store, cipher=None, auth=None):
         self.store, self.auth = store, auth
-        self.cipher = cipher or CredentialCipher(
-            store.settings.credential_kms_key, key_file=Path(store.settings.db_path).parent / KEY_FILE
-        )
+        self.cipher = cipher or CredentialCipher.for_settings(store.settings)
 
     @property
     def configured(self):
