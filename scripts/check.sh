@@ -107,7 +107,7 @@ after() {  # JOB COMMAND...: waits for job number JOB to finish, then runs the c
 RUST_CRATES=$(sed -n 's/^CRATES="\(.*\)"$/\1/p' scripts/rust_checks.sh)
 # shellcheck disable=SC2016  # the sed pattern matches the literal ${RUST_TOOLCHAIN:-...} in rust_checks.sh
 RUST_TOOLCHAIN=$(sed -n 's/^TOOLCHAIN="${RUST_TOOLCHAIN:-\(.*\)}"$/\1/p' scripts/rust_checks.sh)
-RUST_TOOLCHAIN=${RUST_TOOLCHAIN:-1.92.0}
+RUST_TOOLCHAIN=${RUST_TOOLCHAIN:-1.99.1}
 # shellcheck disable=SC2329  # job calls it by name
 rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
   local crate=$1 pending=0 status=0 out

@@ -20,6 +20,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
-        run: rustup toolchain install 1.92 --profile minimal
+        run: rustup toolchain install 1.99 --profile minimal
       - name: Test release refusals and exact-commit tagging with synthetic git and Actions
-        run: cargo +1.92 test --locked --manifest-path tools/release-command/Cargo.toml
+        run: cargo +1.99 test --locked --manifest-path tools/release-command/Cargo.toml

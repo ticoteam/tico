@@ -157,7 +157,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q musl-tools
-          rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+          rustup toolchain install 1.99 --profile minimal --target "$TARGET" && rustup default 1.99
       # Every gate part waits for this build (about 3 min uncached). Cache compiled dependencies as on macOS: keyed on
       # Cargo.lock, toolchain and target; only Release validation runs on main write it.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -483,8 +483,8 @@ jobs:
       - name: Install Rust
         if: matrix.part != 'browser'
         run: |
-          rustup toolchain install 1.92 --profile minimal
-          rustup default 1.92
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
       # The Tauri app's Linux build dependencies, as .github/workflows/app.yml installs them.
       - name: Desktop build dependencies
         if: matrix.part == 'desktop'
@@ -626,7 +626,7 @@ jobs:
           node-version: '24.22.3'
       - name: Install Rust
         if: steps.has.outputs.check == 'true'
-        run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92
+        run: rustup toolchain install 1.99 --profile minimal && rustup default 1.99
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.has.outputs.check == 'true'
         with:

@@ -129,7 +129,7 @@ RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
-FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin-compiled
+FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS runner-bin-compiled
 # The release this binary reports (runner-rs/build.rs). A release build must say its own version: checked below.
 ARG TICO_VERSION=dev
 WORKDIR /src/runner-rs
@@ -207,7 +207,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s -
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 
-FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS screen-bin-compiled
+FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS screen-bin-compiled
 WORKDIR /src/relay-rs
 COPY LICENSE /src/LICENSE
 COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./

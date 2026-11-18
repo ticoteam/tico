@@ -308,16 +308,8 @@ pub(crate) fn bridge(
             );
         }
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
-        "showOrgMenu" => {
-            if orgs::multi_org_build() {
-                popup_orgs(&app)
-            }
-        }
-        "addOrg" => {
-            if orgs::multi_org_build() {
-                add_org(&app);
-            }
-        }
+        "showOrgMenu" if orgs::multi_org_build() => popup_orgs(&app),
+        "addOrg" if orgs::multi_org_build() => add_org(&app),
         _ => {}
     }
     Ok(bridge_reply(&name, org_count(&app)))
