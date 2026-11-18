@@ -42,6 +42,7 @@
     "notes": 0,
     "onboarding_state": "",
     "online": true,
+    "output_style": null,
     "owner_id": "ana",
     "owner_name": "Ana",
     "owners": [
@@ -107,6 +108,7 @@
     "thread_mode": "personal",
     "turns_at_once": null,
     "update_subscriptions": [],
+    "verbosity": null,
     "wake": {
       "digest_hour": null,
       "immediate": [

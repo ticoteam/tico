@@ -454,6 +454,12 @@ function settingsEditBot(slug = '', inline = false) {
           if (!target) settingsChoiceMarkSaved(model.box, model.value, model.compact);
           else model.box.dataset.compactCurrent = model.compact ? String(model.compact) : '';
         }
+        // Its output style and verbosity save the same way: the session is kept.
+        if (model?.restyled) {
+          rev = await settingsSaveTurnStyle(slug, settingsBoxStyle(model.box), model.style, rev);
+          model.box.dataset.outputStyleCurrent = model.style.output_style || '';
+          model.box.dataset.verbosityCurrent = model.style.verbosity || '';
+        }
         // Last, since a transition holds the revision it started from; its own dialog shows the progress. A model
         // change applies at once, then the move starts from the bot as it is now (one change at a time per bot).
         let transition: {id: string} | null = null;
@@ -506,12 +512,14 @@ function settingsEditBot(slug = '', inline = false) {
   }
 }
 // A Model, Fallback or Task model applied in the editor's picker and not saved yet (TK-BLOG3EDS): Save saves it.
-// Null when the picker holds what the bot has; `moved` when its model differs, `resized` when its window does.
+// Null when the picker holds what the bot has; `moved` when its model differs, `resized` when its window does,
+// `restyled` when its output style or verbosity does.
 function settingsEditorPendingChoice(rows: ParentNode | null | undefined, kind: ChoiceKind) {
   const box = rows?.querySelector<ChoiceBox>(`[data-bot-choice][data-kind="${kind}"]`);
   if (!box?.picker?.changed()) return null;
-  const value = box.picker.value(), compact = box.picker.compact();
-  return {box, value, compact, moved: value !== (box.dataset.current || ''), resized: compact !== (Number(box.dataset.compactCurrent) || null)};
+  const value = box.picker.value(), compact = box.picker.compact(), style = box.picker.style();
+  return {box, value, compact, style, moved: value !== (box.dataset.current || ''), resized: compact !== (Number(box.dataset.compactCurrent) || null),
+    restyled: !settingsSameStyle(style, settingsBoxStyle(box))};
 }
 // A picker's saved pick, kept on its box: it now holds what the bot has.
 function settingsChoiceMarkSaved(box: ChoiceBox, value: string, compact: number | null = Number(box.dataset.compactCurrent) || null) {

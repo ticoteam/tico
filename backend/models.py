@@ -176,6 +176,12 @@ CompactAt = Literal[
     100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
 ]
 
+# Claude Code's built-in output styles (`outputStyle` in its settings); Default is its own, and saves nothing
+# (backend/harnesses.py OUTPUT_STYLES). Only a Claude Code turn uses it.
+OutputStyle = Literal["Default", "Concise", "Explanatory", "Learning", "Proactive"]
+# Codex's `model_verbosity` (backend/harnesses.py VERBOSITIES); none is the model's own. Only a Codex turn uses it.
+Verbosity = Literal["low", "medium", "high"]
+
 
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
@@ -2248,6 +2254,23 @@ class BotCompactAt(Contract):
     # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
     compact_at: CompactAt | None = Field(
         description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotOutputStyle(Contract):
+    # Required: null or "Default" clears it, back to Claude Code's own. Kept on any harness; only a Claude Code turn
+    # uses it (backend/harnesses.py output_style).
+    output_style: OutputStyle | None = Field(
+        description="Claude Code's output style for the bot's turns; null or Default is Claude Code's own"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotVerbosity(Contract):
+    # Required: null clears it, back to the model's own. Kept on any harness; only a Codex turn uses it.
+    verbosity: Verbosity | None = Field(
+        description="Codex's model_verbosity for the bot's turns; null is the model's own"
     )
     expected_revision: int = Field(ge=1)
 

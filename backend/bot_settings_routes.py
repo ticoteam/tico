@@ -273,6 +273,22 @@ def register(
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_compact_at(c, request.state.identity, bot, body))
 
+    @app.post("/api/v2/bots/{bot}/output-style")
+    def bot_output_style(request: Request, bot: str, body: M.BotOutputStyle):
+        """Claude Code's output style for the bot's turns (Concise, Explanatory, Learning, Proactive); null or Default
+        is Claude Code's own. Only a Claude Code turn uses it."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+        return mutate(request, body, lambda c: settings_admin.set_output_style(c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/verbosity")
+    def bot_verbosity(request: Request, bot: str, body: M.BotVerbosity):
+        """Codex's verbosity for the bot's turns (low, medium, high); null is the model's own. Only a Codex turn uses
+        it."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+        return mutate(request, body, lambda c: settings_admin.set_verbosity(c, request.state.identity, bot, body))
+
     @app.get("/api/v2/wake-presets/measures")
     def wake_preset_measures(request: Request, since: str | None = None, until: str | None = None):
         """Per wake preset a past job recorded, over jobs queued in [since, until) (the last 7 days by default): turns and

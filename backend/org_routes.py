@@ -19,7 +19,7 @@ from . import (
 )
 from . import runner_online
 from .bot_rows import BotRows
-from .harnesses import resolve_harness
+from .harnesses import output_style, resolve_harness, verbosity
 from .settings_admin import compact_at as compact_at_of
 from .store import H, P, Problem, repo_url
 from .api_contract import api_v2
@@ -110,6 +110,9 @@ def register(app, auth, settings, settings_admin, store):
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared, rows.model(c, settings, declared)),
+                    # Claude Code's output style and Codex's verbosity; null is the harness's own.
+                    "output_style": output_style(declared),
+                    "verbosity": verbosity(declared),
                     # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
                     "task_model": task_models.stored(declared),
                     "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),

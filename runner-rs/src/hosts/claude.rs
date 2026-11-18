@@ -844,12 +844,17 @@ impl ClaudeHost {
             argv.extend(["--effort".into(), e]);
         }
         // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
-        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
+        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move,
+        // and the bot's output style goes in the same one `--settings` (a second would replace the first).
+        let mut flag = serde_json::Map::new();
         if let Some(dir) = t.settings.memory_dir.as_deref() {
-            argv.extend([
-                "--settings".into(),
-                py_dumps(&json!({"autoMemoryDirectory": dir})),
-            ]);
+            flag.insert("autoMemoryDirectory".into(), json!(dir));
+        }
+        if let Some(style) = t.settings.output_style.as_deref() {
+            flag.insert("outputStyle".into(), json!(style));
+        }
+        if !flag.is_empty() {
+            argv.extend(["--settings".into(), py_dumps(&Value::Object(flag))]);
         }
         if let Some(from) = &t.fork_from {
             argv.extend([
@@ -2629,6 +2634,43 @@ mod tests {
         let env = turn_env(&settings);
         assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
         assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "120000");
+    }
+
+    #[test]
+    fn the_output_style_goes_in_the_one_settings_flag_beside_auto_memory_and_default_adds_none() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let given = |settings: &Settings| -> Vec<Value> {
+            let thread = host.start_thread(settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+            argv.iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--settings")
+                .map(|(i, _)| serde_json::from_str(&argv[i + 1]).unwrap())
+                .collect()
+        };
+        let mut settings = Settings {
+            cwd: "/w/bot-acme".into(),
+            memory_dir: Some("/w/bot-acme/memory/claude".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            given(&settings),
+            vec![
+                json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude", "outputStyle": "Concise"})
+            ]
+        );
+        settings.memory_dir = None;
+        assert_eq!(given(&settings), vec![json!({"outputStyle": "Concise"})]);
+        // Default (none saved, or an older server) passes no outputStyle, and with no memory folder no --settings.
+        settings.output_style = None;
+        assert!(given(&settings).is_empty());
+        settings.memory_dir = Some("/w/bot-acme/memory/claude".into());
+        assert_eq!(
+            given(&settings),
+            vec![json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})]
+        );
     }
 
     #[test]
