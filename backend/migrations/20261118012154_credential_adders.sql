@@ -14,3 +14,12 @@ WHERE credentials.id = creators.target
   AND credentials.kind <> 'service'
   AND (credentials.created_by IS NULL OR credentials.created_by = '')
   AND (creators.actor GLOB 'human:?*' OR creators.actor GLOB 'bot:?*');
+
+-- A shared model key moved from the vault to Models with 'tico' as its fallback adder.
+UPDATE model_subscriptions
+SET added_by = credentials.created_by
+FROM credentials
+WHERE model_subscriptions.credential_id = credentials.id
+  AND model_subscriptions.added_by = 'tico'
+  AND credentials.kind <> 'service'
+  AND (credentials.created_by GLOB 'human:?*' OR credentials.created_by GLOB 'bot:?*');

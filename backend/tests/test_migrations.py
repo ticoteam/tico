@@ -73,6 +73,14 @@ def test_credential_adder_backfill_uses_creation_evidence_without_guessing(tmp_p
                 )
             ],
         )
+        c.executemany(
+            'INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at,credential_id) '
+            "VALUES(?,?,'openai_key','',?,'now','now',?)",
+            [
+                (key, key, adder, key)
+                for key, adder in (('legacy', 'tico'), ('computer', 'tico'), ('existing', 'human:plan-adder'))
+            ],
+        )
         for action, target, actor in (
             ('credential.created', 'legacy', 'human:adder'),
             ('credential.updated', 'legacy', 'human:rotator'),
@@ -91,6 +99,11 @@ def test_credential_adder_backfill_uses_creation_evidence_without_guessing(tmp_p
             'ambiguous': '',
             'computer': None,
             'unattributed': None,
+        }
+        assert dict(c.execute('SELECT id,added_by FROM model_subscriptions')) == {
+            'legacy': 'human:adder',
+            'computer': 'tico',
+            'existing': 'human:plan-adder',
         }
 
 
