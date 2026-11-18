@@ -5841,6 +5841,19 @@ class Execution:
         is not used for the run's usage: it is the session's size (bot_sessions), a resumed thread's whole total."""
         return "usage_limited" if body.limited else "usage_unreported"
 
+    @staticmethod
+    def cache_write_split(item, runtime):
+        """(5-minute, 1-hour) cache-write tokens of one usage part, for pricing (providers.CACHE_WRITE). A runner that
+        reads the harness's split sends `cache_write_1h_tokens`. Without it (an older runner, or a harness that does
+        not report one) the run's sign-in decides: Claude Code on a Claude plan writes 1-hour entries, so a `claude`
+        runtime billed `subscription` counts every write as 1-hour; anything else (an API key) as 5-minute."""
+        writes = item.cache_write_tokens or 0
+        hour = item.cache_write_1h_tokens
+        if hour is None:
+            hour = writes if runtime == "claude" and item.billing == "subscription" else 0
+        hour = min(hour, writes)
+        return writes - hour, hour
+
     def run_usage(self, c, row, body):
         """The turn's usage columns from the tokens its runner counted, or None when it counted none.
         The model is the runner's choice for each primary/fallback portion. Unknown values stay
@@ -5854,10 +5867,16 @@ class Execution:
             model, runtime = item.model, item.runtime
             catalog = providers.MODEL_BY_ID.get(model) or {}
             provider = catalog.get("provider") or providers.runtime_provider(runtime or catalog.get("runtime"))
-            # Cache writes are priced as input, as before they were counted apart (the requests count them so too).
+            # Cache writes are input (the requests count them so too), plus Anthropic's write premium on a Claude
+            # model, by how long each entry lives (cache_write_split).
             writes = item.cache_write_tokens or 0
             cost, low = providers.estimate(
-                model, item.input_tokens + writes, item.cached_tokens, item.output_tokens, item.requests
+                model,
+                item.input_tokens + writes,
+                item.cached_tokens,
+                item.output_tokens,
+                item.requests,
+                cache_writes=self.cache_write_split(item, runtime or catalog.get("runtime")),
             )
             return {
                 "input_tokens": item.input_tokens,

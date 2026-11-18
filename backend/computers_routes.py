@@ -78,6 +78,8 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
         # `usage_cache_writes`: a run's usage may carry `cache_write_tokens` apart from `input_tokens` (an older one refuses
         # the field; the runner then counts cache writes in input, as before).
+        # `usage_cache_write_1h`: ... and `cache_write_1h_tokens`, the part of them written with the 1-hour TTL (an older
+        # one refuses the field; the runner then leaves it out and the server guesses the split from the sign-in).
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         # `run_rotation`: a run's result may say it started a fresh session and why (an older one refuses the field).
         # `run_session`: a run's result may say whether it resumed its session or started a new one, and why (an older
@@ -98,6 +100,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "usage_requests": True,
                 "usage_request_main": True,
                 "usage_cache_writes": True,
+                "usage_cache_write_1h": True,
                 "run_pushes": True,
                 "run_rotation": True,
                 "run_session": True,

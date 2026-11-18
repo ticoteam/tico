@@ -422,6 +422,36 @@ def test_this_runner_reads_every_answer_a_kept_release_recorded():
             assert not lenient_errors(fixture["answer"], schema, WIRE), (path.name, fixture_path.name)
 
 
+def test_one_hour_cache_writes_are_an_optional_field_a_new_runner_sends_only_when_the_server_says_so(api):
+    """`cache_write_1h_tokens` (RunUsagePart): an old runner never sends it and is still priced (the server guesses the
+    split), and a new runner sends it only once the server's features name `usage_cache_write_1h` (runner-rs
+    execute.rs `served`), so an older server never sees it. Without that gate the field would break 0.6.0."""
+    for name in ("RunUsagePart", "RunUsage"):
+        model = REQUESTS["$defs"][name]
+        assert "cache_write_1h_tokens" in model["properties"] and "cache_write_1h_tokens" not in model.get(
+            "required", []
+        )
+    gated = sorted(k for k in WIRE["gated"] if k.endswith("cache_write_1h_tokens"))
+    assert gated == [
+        "complete.request.usage.cache_write_1h_tokens",
+        "complete.request.usage.segments[].cache_write_1h_tokens",
+    ]
+    ungated = copy.deepcopy(CONTRACT)
+    for key in gated:
+        del ungated["wire"]["gated"][key]
+    assert any(
+        p.startswith("new runner, old server: complete.request.usage") for p in W.breaks(ungated, W.load(kept()[0]))
+    )
+    computer, attempt = turn(api)
+    features = api.get("/api/v2/runners/desired", headers=headers(computer["token"])).json()["features"]
+    assert features["usage_cache_writes"] is True and features["usage_cache_write_1h"] is True
+    token, aid = computer["token"], attempt["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "thread-1"}, token=token)
+    part = {"input_tokens": 1, "cache_write_tokens": 3, "cache_write_1h_tokens": 3, "output_tokens": 1}
+    body = {"outcome": "completed", "text": "Done.", "last_seq": 0, "usage": {**part, "segments": [part]}}
+    assert post(api, f"attempts/{aid}/complete", body, token=token)["outcome"] == "completed"
+
+
 # --- the check itself ----------------------------------------------------------------------------------------------
 
 

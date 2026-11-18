@@ -560,6 +560,9 @@ struct Usage {
     cached: i64,
     /// Prompt tokens written to the cache (`cache_creation_input_tokens`), a part of `input`.
     cache_write: i64,
+    /// The part of `cache_write` written with the 1-hour TTL (`cache_creation.ephemeral_1h_input_tokens`); None until a
+    /// result reports the split (an older Claude Code reports none), so the server guesses it.
+    cache_write_1h: Option<i64>,
     cost: Option<f64>,
     texts: Vec<String>,
     /// Each model request this turn, the bot's and its subagents', in the order Claude made them ([`request_usage`]);
@@ -582,6 +585,11 @@ impl Usage {
         self.output += output;
         self.cached += count(usage, "cache_read_input_tokens");
         self.cache_write += count(usage, "cache_creation_input_tokens");
+        let split = &usage["cache_creation"];
+        if split.is_object() {
+            self.cache_write_1h =
+                Some(self.cache_write_1h.unwrap_or(0) + count(split, "ephemeral_1h_input_tokens"));
+        }
     }
 
     fn record_request(&mut self, msg: &Value, id: Option<&str>, tokens: [i64; 4]) {
@@ -612,7 +620,7 @@ impl Usage {
     }
 
     fn token_event(&self) -> Value {
-        json!({
+        let mut tokens = json!({
             "input": self.input, "output": self.output, "total": self.input + self.output,
             "cost_usd": self.cost.filter(|_| !self.cost_unknown),
             "usage": {
@@ -621,7 +629,11 @@ impl Usage {
                 "requests": self.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
                     .collect::<Vec<_>>()
             }
-        })
+        });
+        if let Some(hour) = self.cache_write_1h {
+            tokens["usage"]["cache_write_1h"] = json!(hour);
+        }
+        tokens
     }
 
     /// Adds the requests no `result` has accounted for yet to the turn's totals; false when they used nothing.
@@ -4575,6 +4587,23 @@ case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; 
         );
         // Cache writes are counted apart (they cost more than input): the input above includes them.
         assert_eq!(tokens["usage"]["cache_write"], json!(3000), "{got:?}");
+        // A result without `cache_creation` says nothing of their TTL: the server guesses it.
+        assert!(tokens["usage"].get("cache_write_1h").is_none(), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn one_hour_cache_writes_are_reported_from_the_results_split() {
+        let result = r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 500, "output_tokens": 7, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 3000}}}"#;
+        let (got, _) = background_turn(&format!("{result}\n"), "", "", false).await;
+        let tokens = got.iter().find(|e| e["kind"] == "tokens").unwrap();
+        assert_eq!(
+            (
+                &tokens["usage"]["cache_write"],
+                &tokens["usage"]["cache_write_1h"]
+            ),
+            (&json!(3000), &json!(3000)),
+            "{got:?}"
+        );
     }
 
     #[tokio::test]
