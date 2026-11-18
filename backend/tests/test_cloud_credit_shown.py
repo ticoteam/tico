@@ -7,7 +7,8 @@ a balance falling to under two days of spend says Low credit. HQ is a fake (help
 
 from datetime import datetime, timedelta, timezone
 
-from backend import cloud_access, events, holds, thread_bot_status
+from backend import cloud_access, cloud_machines, events, holds, thread_bot_status
+from backend.store import H
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
 from backend.tests.helpers.fresh_install import booted, environment, rows, signed_in  # noqa: F401
@@ -36,7 +37,7 @@ def test_a_machine_refused_for_credit_is_out_of_credit_everywhere_while_hq_still
     store = api.app.state.store
     assert _shown(api)["access"] == "open"
     with store.transaction() as c:
-        c.execute("UPDATE cloud_machines SET problem='out_of_credit' WHERE bot='_shared'")
+        c.execute("UPDATE cloud_machines SET problem='out_of_credit', problem_at=? WHERE bot='_shared'", (H.now(),))
     shown = _shown(api)
     assert (shown["access"], shown["reason"]) == ("frozen", "out_of_credit")
     # The status every page reads goes through it: an idle bot on the refused machine reads stopped for credit.
@@ -75,6 +76,26 @@ def test_a_machine_refused_for_credit_is_out_of_credit_everywhere_while_hq_still
         assert events.credit_overlay(c, {"bot": "botops", "state": "idle"})["state"] == "idle"
         assert holds.warning(c, "bot:botops") is None
     assert api.get("/api/v2/status?bot=botops", headers=signed_in()).json()["status"]["state"] == "idle"
+
+
+def test_an_old_refusal_no_machine_asks_again_for_says_nothing(environment, monkeypatch):
+    """TIDY, Nov 18: HQ open with $163 left, yet every page said Out of credit. A machine refused for credit before
+    it was stopped, moved or deleted keeps its mark, and with credit never short HQ's word never "comes back", so
+    nothing cleared it. A machine still wanted asks HQ again every FROZEN_RETRY (each 402 renews the mark): only a
+    refusal within CREDIT_FRESH counts."""
+    api = _cloud_company(environment, monkeypatch)
+    store = api.app.state.store
+    old = H.shift(H.now(), seconds=-(cloud_machines.CREDIT_FRESH + 60))
+    with store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem='out_of_credit', problem_at=? WHERE bot='_shared'", (old,))
+    assert _shown(api)["access"] == "open"
+    with store.read() as c:
+        assert not cloud_machines.credit_refused(c)
+        assert holds.warning(c, "bot:botops") is None
+    # Asked again and refused again: the mark is fresh, and every page says so.
+    with store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem_at=? WHERE bot='_shared'", (H.now(),))
+    assert (_shown(api)["access"], _shown(api)["reason"]) == ("frozen", "out_of_credit")
 
 
 def test_a_frozen_company_stops_its_cloud_bots_too(environment, monkeypatch):

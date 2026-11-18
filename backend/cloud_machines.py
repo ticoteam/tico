@@ -152,6 +152,7 @@ PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
 BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5  # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600  # a 402 is asked again this late, or as soon as HQ says the company is open
+CREDIT_FRESH = 3 * FROZEN_RETRY  # a 402 older than this no longer says the company is out of credit (`credit_refused`)
 ENROLL_MINUTES = 15
 ENROLL_GRACE = 60  # past its newest code's expiry, a machine not enrolled yet never will be
 CREATE_HOLD = ENROLL_MINUTES * 60 + ENROLL_GRACE  # give an unanswered create time to enroll before another request
@@ -2441,11 +2442,18 @@ OUT_OF_CREDIT_WAIT = "out of credit: its cloud machine can't start"
 
 
 def credit_refused(c):
-    """Whether HQ refused any of the company's cloud machines for credit (a 402 on a start or a create), whatever its
-    company-wide word says: HQ's billing can stop machines while its `cloud` answer still says open, and
-    then every page would show nothing while the machines cannot start."""
+    """Whether HQ refused any of the company's cloud machines for credit (a 402 on a start or a create) in the last
+    CREDIT_FRESH, whatever its company-wide word says: HQ's billing can stop machines while its `cloud` answer still
+    says open, and then every page would show nothing while the machines cannot start. A machine a bot still wants asks
+    HQ again every FROZEN_RETRY, and each 402 renews the mark, so an older one is a machine nothing wants any more: one
+    stopped, moved or deleted while refused. Counted forever, it kept "Out of credit" on every TIDY page on Nov 18
+    with HQ open and $163 left, as credit that was never short does not come back (cloud_access.recovered)."""
+    since = H.shift(H.now(), seconds=-CREDIT_FRESH)
     return bool(
-        c.execute("SELECT 1 FROM cloud_machines WHERE problem='out_of_credit' AND mode='cloud' LIMIT 1").fetchone()
+        c.execute(
+            "SELECT 1 FROM cloud_machines WHERE problem='out_of_credit' AND mode='cloud' AND problem_at >= ? LIMIT 1",
+            (since,),
+        ).fetchone()
     )
 
 
