@@ -1,4 +1,4 @@
-"""Recompute main validation episodes, merges per week, and post-release reverts and hotfixes.
+"""Recompute main validation episodes, merges per week, post-release reverts and hotfixes, and merge queue health.
 
 Read-only GitHub and git queries; no ledger is generated. Release validation is the
 same ci.yml workflow dispatched on main that scripts/main_red.py watches. A hotfix is a
@@ -7,10 +7,11 @@ so the PRs in its releases are not hotfixes.
 """
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 import html
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -34,6 +35,10 @@ RELATION = re.compile(
     re.IGNORECASE,
 )
 FIX_SHA = re.compile(r"\b(?:fixes commit|regression from commit) ([0-9a-f]{7,40})\b", re.IGNORECASE)
+QUEUE_REF = re.compile(r"^gh-readonly-queue/(?P<base>[^/]+)/pr-(?P<pr>\d+)-[0-9a-f]{40}$")
+QUEUE_OUTCOMES = ("passed", "failed", "superseded", "removed")
+# GraphQL aliases per query; each pull request reads its last TIMELINE_EVENTS queue events.
+TIMELINE_BATCH, TIMELINE_EVENTS = 50, 50
 
 
 def timestamp(value):
@@ -48,13 +53,14 @@ def iso_week(value):
 class GitHub:
     """Bounded, paginated gh reads. Exhausting the budget fails instead of publishing partial counts."""
 
-    def __init__(self, repo):
+    def __init__(self, repo, budget=250):
         self.repo = repo
         self.calls = 0
+        self.budget = budget
 
     def get(self, path, **params):
         self.calls += 1
-        if self.calls > 250:
+        if self.calls > self.budget:
             raise ValueError("GitHub API budget exceeded")
         query = "?" + urlencode(params) if params else ""
         endpoint = f"repos/{self.repo}" + (f"/{path}" if path else "")
@@ -75,6 +81,56 @@ class GitHub:
             if len(rows) < 100:
                 return result
         raise ValueError("GitHub pagination limit exceeded")
+
+    def graphql(self, query):
+        self.calls += 1
+        if self.calls > self.budget:
+            raise ValueError("GitHub API budget exceeded")
+        done = subprocess.run(
+            ["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, timeout=60, check=False
+        )
+        if done.returncode:
+            raise ValueError("GitHub GraphQL read failed")
+        data = json.loads(done.stdout)
+        if data.get("errors") or not data.get("data"):
+            raise ValueError("GitHub GraphQL read failed")
+        return data["data"]
+
+    def queue_runs(self, since, now):
+        """One-day slices: a busy day has a few hundred merge queue runs, under the 1,000-result limit."""
+        result, start = [], since
+        while start <= now:
+            end = min(now, start + timedelta(days=1) - timedelta(seconds=1))
+            result.extend(
+                self.pages(
+                    "actions/runs",
+                    "workflow_runs",
+                    event="merge_group",
+                    created=f"{start:%Y-%m-%dT%H:%M:%SZ}..{end:%Y-%m-%dT%H:%M:%SZ}",
+                )
+            )
+            start = end + timedelta(seconds=1)
+        return result
+
+    def queue_timelines(self, numbers):
+        """Each pull request's merge time and its merge queue add and remove events."""
+        owner, name = self.repo.split("/", 1)
+        result = {}
+        numbers = sorted(numbers)
+        for i in range(0, len(numbers), TIMELINE_BATCH):
+            fields = "".join(
+                f"p{number}: pullRequest(number: {number}) {{ number mergedAt baseRefName "
+                f"timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT], "
+                f"last: {TIMELINE_EVENTS}) {{ nodes {{ __typename "
+                "... on AddedToMergeQueueEvent { createdAt } "
+                "... on RemovedFromMergeQueueEvent { createdAt reason } } } }"
+                for number in numbers[i : i + TIMELINE_BATCH]
+            )
+            data = self.graphql(f'{{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}')
+            for pr in (data.get("repository") or {}).values():
+                if pr:
+                    result[pr["number"]] = pr
+        return result
 
     def runs(self, workflow, since, now):
         """Date slices avoid Actions' 1,000-result search limit."""
@@ -346,7 +402,157 @@ def collect(api, history, pulls):
     return unique_post_release_records(records + manual), unresolved | unmapped
 
 
-def report(repo, main_episodes, post_release, unresolved, since, now, pulls=()):
+def queue_events(pr):
+    """A pull request's merge queue adds and (time, reason) removals, oldest first; reasons are lower case."""
+    adds, removals = [], []
+    for node in pr.get("timelineItems", {}).get("nodes", []):
+        if node.get("__typename") == "AddedToMergeQueueEvent":
+            adds.append(timestamp(node["createdAt"]))
+        elif node.get("__typename") == "RemovedFromMergeQueueEvent":
+            removals.append((timestamp(node["createdAt"]), (node.get("reason") or "unknown").lower()))
+    return sorted(adds), sorted(removals)
+
+
+def queue_outcomes(runs, timelines):
+    """(run, outcome) for each finished merge queue run on main: passed, failed, superseded, removed or not read.
+
+    Fail-fast ends most failing runs cancelled, as a rebuilt run ends, so a run that did not pass is read from
+    the queue's own record: the first removal of its pull request after the run started and before that pull
+    request's next run. failed_checks is a failure; another reason (manual, a conflict, an invalid merge commit)
+    is removed; no removal means the queue rebuilt the group (superseded), unless the run itself ended failure
+    or timed_out. A pull request whose events were not read leaves its unpassed runs not read.
+    """
+    by_pr = defaultdict(list)
+    for run in runs:
+        match = QUEUE_REF.match(run.get("head_branch") or "")
+        if match and match["base"] == "main" and run.get("status") == "completed":
+            by_pr[int(match["pr"])].append(run)
+    result = []
+    for number, rows in by_pr.items():
+        rows.sort(key=lambda row: (row["created_at"], row["id"]))
+        removals = queue_events(timelines[number])[1] if number in timelines else None
+        for i, run in enumerate(rows):
+            if run.get("conclusion") == "success":
+                result.append((run, "passed"))
+                continue
+            if removals is None:
+                result.append((run, "not read"))
+                continue
+            started = timestamp(run["created_at"])
+            following = timestamp(rows[i + 1]["created_at"]) if i + 1 < len(rows) else None
+            reason = next(
+                (
+                    why
+                    for when, why in removals
+                    if why != "merged" and when >= started and (following is None or when <= following)
+                ),
+                None,
+            )
+            if reason == "failed_checks" or (reason is None and run.get("conclusion") in ("failure", "timed_out")):
+                result.append((run, "failed"))
+            else:
+                result.append((run, "removed" if reason else "superseded"))
+    return result
+
+
+def queue_merges(timelines, since, now):
+    """Pull requests merged into main through the queue in the window: minutes from first and last enqueue."""
+    result = []
+    for pr in timelines.values():
+        if not pr.get("mergedAt") or pr.get("baseRefName") != "main":
+            continue
+        merged = timestamp(pr["mergedAt"])
+        adds, removals = queue_events(pr)
+        if not adds or not since <= merged <= now:
+            continue
+        result.append(
+            dict(
+                number=pr["number"],
+                merged=merged,
+                first=(merged - adds[0]).total_seconds() / 60,
+                last=(merged - adds[-1]).total_seconds() / 60,
+                thrown_out=any(why != "merged" and adds[0] <= when < merged for when, why in removals),
+            )
+        )
+    return result
+
+
+def percentile(values, share):
+    """Nearest rank: the smallest value with at least `share` of the values at or below it."""
+    values = sorted(values)
+    return values[max(0, math.ceil(share * len(values)) - 1)] if values else None
+
+
+def queue_report(runs, timelines, since, now):
+    """The merge queue section: weekly outcomes of its runs, time to merge and removals."""
+    outcomes = [
+        (run, outcome)
+        for run, outcome in queue_outcomes(runs, timelines)
+        if since <= timestamp(run["created_at"]) <= now
+    ]
+    merges = queue_merges(timelines, since, now)
+    removals = [
+        (when, why)
+        for pr in timelines.values()
+        for when, why in queue_events(pr)[1]
+        if why != "merged" and since <= when <= now
+    ]
+    lines = [
+        "",
+        "## Merge queue on main",
+        "",
+        "Goal: under 10% of queue runs fail for a week, and enqueue to merge p90 is 20 min or less.",
+        "",
+        "Each finished run of a merge queue group on main, in the week it started. Failed: the queue removed its "
+        "pull request for failed checks (fail-fast ends most of these cancelled), or the run ended failure. Removed: "
+        "taken out for another reason (manual, a conflict, an invalid merge commit). Superseded: cancelled and rebuilt "
+        "with no removal, such as when a group ahead failed. Enqueue to merge runs from a merged pull request's first "
+        "enqueue (time lost to removals included) and from its last one (the queue's own time); thrown out counts "
+        "merged pull requests removed at least once. Removals count every removal of a pull request with a queue run "
+        "in the window.",
+        "",
+        "| ISO week | Queue runs | Passed | Failed | Superseded | Removed | Merged | Enqueue to merge p50 / p90 (min) "
+        "| Last enqueue to merge p90 (min) | Merged PRs thrown out | Removals by reason |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    week_outcomes = defaultdict(Counter)
+    for run, outcome in outcomes:
+        week_outcomes[iso_week(timestamp(run["created_at"]))][outcome] += 1
+    week_merges = defaultdict(list)
+    for row in merges:
+        week_merges[iso_week(row["merged"])].append(row)
+    week_removals = defaultdict(Counter)
+    for when, why in removals:
+        week_removals[iso_week(when)][why] += 1
+
+    def share(count, total):
+        return f"{count} ({100 * count / total:.1f}%)" if total else "0"
+
+    def minutes(value):
+        return "—" if value is None else f"{value:.0f}"
+
+    cursor = since
+    while cursor <= now:
+        week = iso_week(cursor)
+        counts, rows = week_outcomes[week], week_merges[week]
+        total = sum(counts.values())
+        first = [row["first"] for row in rows]
+        reasons = ", ".join(f"{why} {count}" for why, count in sorted(week_removals[week].items())) or "—"
+        lines.append(
+            f"| {week} | {total} | "
+            + " | ".join(share(counts[outcome], total) for outcome in QUEUE_OUTCOMES)
+            + f" | {len(rows)} | {minutes(percentile(first, 0.5))} / {minutes(percentile(first, 0.9))} | "
+            f"{minutes(percentile([row['last'] for row in rows], 0.9))} | "
+            f"{share(sum(row['thrown_out'] for row in rows), len(rows))} | {reasons} |"
+        )
+        cursor += timedelta(weeks=1)
+    unread = sum(outcome == "not read" for _, outcome in outcomes)
+    if unread:
+        lines += ["", f"Not read: {unread} queue runs whose pull request's queue events could not be read."]
+    return lines
+
+
+def report(repo, main_episodes, post_release, unresolved, since, now, pulls=(), queue=None):
     closed = [row for row in main_episodes if row["green"] and since <= timestamp(row["timestamp"]) <= now]
     flaky = sum(row["red"]["id"] == row["green"]["id"] for row in closed)
     closed = [row for row in closed if row["red"]["id"] != row["green"]["id"]]
@@ -442,6 +648,10 @@ def report(repo, main_episodes, post_release, unresolved, since, now, pulls=()):
         f"- [#{origin}]({base}/pull/{origin})" if isinstance(origin, int) else f"- manual record {origin}"
         for origin in sorted(unresolved, key=str)
     ]
+    if isinstance(queue, str):
+        lines += ["", "## Merge queue on main", "", f"Not read: {queue}."]
+    elif queue is not None:
+        lines += queue_report(*queue, now)
     return "\n".join(lines) + "\n"
 
 
@@ -477,13 +687,27 @@ def html_page(markdown):
     return "\n".join(lines) + ("</table>" if table else "") + "</body></html>\n"
 
 
+def queue_health(repo, since, now, weeks):
+    """(runs, timelines, since) for the queue section, or why it could not be read: the rest of the report stands."""
+    since = max(since, (now - timedelta(days=now.weekday(), weeks=weeks - 1)).replace(hour=0, minute=0, second=0))
+    try:
+        api = GitHub(repo, budget=400)
+        # A day before the window: a pull request merged early in it may have started its queue runs then.
+        runs = api.queue_runs(since - timedelta(days=1), now)
+        numbers = {int(match["pr"]) for run in runs if (match := QUEUE_REF.match(run.get("head_branch") or ""))}
+        return runs, api.queue_timelines(numbers), since
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        return str(error)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weeks", type=int, default=12)
     parser.add_argument("--html", type=Path, help="write the HTML artifact here")
+    parser.add_argument("--queue-weeks", type=int, default=4, help="weeks of merge queue health to report")
     args = parser.parse_args(argv)
-    if args.weeks < 1:
-        parser.error("--weeks must be positive")
+    if args.weeks < 1 or args.queue_weeks < 1:
+        parser.error("--weeks and --queue-weeks must be positive")
     now = datetime.now(timezone.utc).replace(microsecond=0)
     since = (now - timedelta(days=now.weekday(), weeks=args.weeks - 1)).replace(hour=0, minute=0, second=0)
     try:
@@ -493,7 +717,8 @@ def main(argv=None):
         history = History(ROOT, api.pages("releases"))
         runs = [run for run in validation_runs(api, born, since, now) if timestamp(run["updated_at"]) <= now]
         post_release, unresolved = collect(api, history, pulls)
-        markdown = report(api.repo, episodes(runs), post_release, unresolved, since, now, pulls.values())
+        queue = queue_health(api.repo, since, now, args.queue_weeks)
+        markdown = report(api.repo, episodes(runs), post_release, unresolved, since, now, pulls.values(), queue)
         print(markdown, end="")
         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
             with Path(summary).open("a") as stream:
