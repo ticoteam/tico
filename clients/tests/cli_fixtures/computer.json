@@ -110,7 +110,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
+  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"advice\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
   "stderr": "",
   "exit": 0
  },
@@ -139,7 +139,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
+  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"advice\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
   "stderr": "",
   "exit": 0
  },
