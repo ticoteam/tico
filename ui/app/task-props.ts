@@ -116,6 +116,11 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   // Owner. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
+  const developer = t.assignee_id;
+  if (developer && developer !== t.owner_id) {
+    const name = actorLabel(developer);
+    rows.push(row('developer', 'Developer', actorFace(developer, 16) + txt(name), {words: name}));
+  }
   // Code: its worktrees and pull requests, one line each (task-code.ts taskRailPaint fills it from the full task).
   rows.push('<div class="prop prop-code" data-prop-row="code" hidden><span class="prop-k" aria-hidden="true">Code</span><div class="prop-vwrap" data-task-code aria-label="Code"></div></div>');
   // From: the task it was filed from, by its short name (P213, #304) when it has one, else its title; a link to it, its

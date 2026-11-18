@@ -201,7 +201,10 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await desk.locator('[data-pv-col="spec"] [data-sr-open]').getAttribute('aria-label'), 'Spec: 1 rule of its own');
     // The muted gavel, never dimmed or struck through; at the header's right, just before the stage's ⋯, which ends it
     // at its far right edge (▶'s slot before the gavel).
-    assert.equal(await mark.evaluate(el => getComputedStyle(el.querySelector('.nav-icon')!).opacity), '1');
+    await desk.waitForFunction(() => {
+      const icon = document.querySelector('[data-pv-col="build"] [data-sr-open] .nav-icon');
+      return icon?.isConnected && getComputedStyle(icon).opacity === '1';
+    });
     assert.equal(await mark.evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no strike-through');
     const edge = (sel: string) => desk.locator(sel).evaluateAll(els => els.map(el => {
       const h = el.parentElement!, more = el.nextElementSibling, last = h.lastElementChild!;

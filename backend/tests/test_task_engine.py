@@ -325,6 +325,11 @@ def test_reassign_is_a_move_it_resets_the_tries_and_drops_the_old_owners_wakes(c
         "bot:reviewer",
         row["version"] + 1,
     )
+    change = c.execute(
+        "SELECT old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='assignee_id'",
+        (row["id"],),
+    ).fetchone()
+    assert tuple(change) == ("bot:builder", "bot:reviewer")
     assert (moved["visit"]["id"], moved["visit"]["tries"], moved["visit"]["level"]) == (row["visit"]["id"], 0, "owner")
     states = dict(
         c.execute(
