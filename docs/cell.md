@@ -500,7 +500,7 @@ host, with one key pair**. LiveKit OSS lets any key mint a token for any room, s
 isolation, and adding a company would restart LiveKit and drop every call. Rooms are `tico-call-<uuid>`, and each
 server lists and ends only its own rooms by name.
 
-Turn it on with `init --meet-domain <host>`, where `<host>` is the TURN hostname, such as `meet-cell-1.tico.team`. The
+Turn it on with `init --meet-domain <host>`, where `<host>` is the TURN hostname, such as `meet-cell-1.preview.tico.team`. The
 setting is saved in `cell.json` and kept when the flag is left out. `--meet-domain ""` turns it off. `init` then:
 
 - Makes the key pair once, in `/srv/tico-cell/meet/keys/keys.yaml` (0600, `<key>: "<secret>"`, LiveKit's own
@@ -577,10 +577,11 @@ closed. It is a stack of its own, so the host's own stack is never redeployed. F
    (`InstanceId=i-027126437a47a24f4`, `SecurityGroupId=sg-0ee5245bf7bc7a276`). Do not redeploy `tico-cloud-cell-1`.
    Associating the IP changes the host's public IP, which resets outbound connections once. cloudflared reconnects
    within seconds. Note the `PublicIp` output.
-3. **Add the DNS record in Cloudflare**, which holds tico.team (not Route53): an A record `meet-cell-1` pointing to
-   that IP, with the proxy **off** (DNS only). The record overrides the proxied `*.tico.team` wildcard. Check that
-   `dig +short meet-cell-1.tico.team` answers the IP, not a Cloudflare 104.21.x or 172.67.x address.
-4. **Run init over SSM**: `cd /opt/tico-cell/core-<vX> && python3 -m setup cell init --meet-domain meet-cell-1.tico.team --json`.
+3. **Add the DNS record in Route53**, in the `preview.tico.team` hosted zone (the HQ AWS account, `--profile tidy`): an
+   A record `meet-cell-1.preview.tico.team` pointing to that IP. tico.team itself is on Cloudflare behind a proxied
+   wildcard, which can't carry LiveKit's UDP and TURN; the delegated Route53 zone answers the IP directly. Check that
+   `dig +short meet-cell-1.preview.tico.team` answers the IP.
+4. **Run init over SSM**: `cd /opt/tico-cell/core-<vX> && python3 -m setup cell init --meet-domain meet-cell-1.preview.tico.team --json`.
    It answers only once LiveKit is up with its certificate (or fails with `meet_failed` and leaves Tico Meet off).
    Check `iptables -S INPUT | head -4` shows the three `tico-cell-meet` rules first.
 5. **Canary on one company**: `python3 -m setup cell update --company co-tico-team --version <its current release>`.
@@ -597,7 +598,7 @@ closed. It is a stack of its own, so the host's own stack is never redeployed. F
   routes and the `INPUT` rules. Then `cell update --company <slug> --version <its current release>` for each company removes the
   `TICO_MEET_*` keys, and calls answer `meet_unavailable` again.
 - AWS and DNS: delete the `tico-cloud-cell-1-meet` stack. That removes the rules and releases the IP, and the host
-  gets a new auto-assigned IP, which the tunnel does not mind. Then delete the Cloudflare A record.
+  gets a new auto-assigned IP, which the tunnel does not mind. Then delete the Route53 A record.
 
 No database migration or company data is involved.
 
