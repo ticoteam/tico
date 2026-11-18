@@ -96,7 +96,8 @@ async function pageNotes(): Promise<void> {
       + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
       + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
     more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
-    primary: (meetCallable() ? `<button class="ghost" type="button" id="meet-call-now" aria-label="Call now" title="Call now">${CALL_SVG}<span>Call now</span></button>` : '')
+    // Call now only where this server runs Tico Meet (thread-call.ts callTicoMeet): the meeting window and bots are its.
+    primary: (callTicoMeet() ? `<button class="ghost" type="button" id="meet-call-now" aria-label="Call now" title="Call now">${CALL_SVG}<span>Call now</span></button>` : '')
       + '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
@@ -161,8 +162,6 @@ async function pageNotes(): Promise<void> {
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
-// Call now is there only where this server runs Tico Meet: the meeting window and calls with bots are Tico Meet's.
-const meetCallable = (): boolean => (S.config.features as {tico_meet?: boolean} | undefined)?.tico_meet === true;
 // Call now: the people and bots to call, picked in the who picker (its list in the dialog's flow, open for the next
 // pick; who is chosen leaves it), and an optional title; Start makes the call (thread-call.ts callTeammates), which
 // opens its meeting window, and a refusal shows here. A tap on a chosen one's chip takes them out again.

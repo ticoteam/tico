@@ -86,7 +86,7 @@ dialog.meet-call-dialog{background:var(--g1)}
 .meet-call-start{display:inline-flex;align-items:center;gap:8px}
 /* A phone: the dialog stands at the top, so the field, the list and Start stay above the keyboard. */
 @media (max-width:760px){
-  dialog.tmodal.meet-call-dialog{inset:max(12px,env(safe-area-inset-top)) 16px auto 16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}
+  dialog.tmodal.meet-call-dialog{top:max(12px,env(safe-area-inset-top));right:16px;bottom:auto;left:16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}
   .meet-call-who .nm-chip{height:32px;border-radius:16px}
 }
 .ph #notes-search{width:240px;flex:0 1 240px}

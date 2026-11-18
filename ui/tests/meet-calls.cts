@@ -521,8 +521,10 @@ let browser: import('playwright').Browser | null = null;
     await themed(page, 'call-now-pick', phone);
     if (phone) {
       // The dialog stands at the top of a phone's screen, above where the keyboard comes up.
-      const box = await dialog.boundingBox();
-      assert.ok(box && box.y <= 16 && Math.round(box.x) === 16 && Math.round(box.width) === 358, 'pinned to the top, 16px in');
+      // (the page's styles may still be on their way: wait for the position, then check all of it)
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('dialog.meet-call-dialog')!).top === '12px');
+      const at = await dialog.evaluate(d => { const c = getComputedStyle(d); return [c.top, c.left, c.right, c.marginTop]; });
+      assert.deepEqual(at, ['12px', '16px', '16px', '0px'], 'pinned to the top, 16px in');
     }
     await ops.click();
     await dialog.locator('.nm-chip[data-actor="bot:ops"]').waitFor();
