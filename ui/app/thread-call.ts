@@ -116,7 +116,12 @@ function callCode(e: unknown): string {
   return typeof detail === 'string' ? detail : '';
 }
 const callPath = (id: string) => '/v2/calls/' + encodeURIComponent(id);
-const callShareable = () => !!navigator.mediaDevices?.getDisplayMedia;
+const callMicAvailable = (): boolean => typeof navigator.mediaDevices?.getUserMedia === 'function';
+const callShareable = (): boolean =>
+  !window.ticoScreenCaptureUnavailable && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+// Show the API's message when it answered the request. Browser, network and media exceptions get the action's message.
+const callErrorMessage = (e: unknown, fallback: string): string =>
+  isErrorRecord(e) && 'body' in e && errorStatus(e) ? errorMessage(e, fallback) : fallback;
 function callSeatSettled(id: string): void {
   CALL_OWED.delete(id);
   if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
@@ -142,7 +147,7 @@ function callViewsDraw(threadId: string): void { for (const v of THV_VIEWS) if (
 function callNoted(threadId: string, e: unknown): void {
   if (errorStatus(e) === 503) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), off: true});
   else if (errorStatus(e) === 403 || callCode(e) === 'call_access_removed') CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), removed: true});
-  else { toast(errorMessage(e, 'Could not join the call')); return; }
+  else { toast(callErrorMessage(e, 'Could not join the call')); return; }
   callViewsDraw(threadId);
 }
 
@@ -321,7 +326,7 @@ async function callBot(slug: string): Promise<void> {
     if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return; }
     await callJoin(t.id, call, threadTitle(t), gen);
   } catch (e) {
-    if (gen === CALL_GEN) toast(errorMessage(e, 'Could not call'), true);
+    if (gen === CALL_GEN) toast(callErrorMessage(e, 'Could not call'), true);
   } finally {
     CALL_JOINS--;
   }
@@ -416,7 +421,7 @@ function callScheduledMenu(button: HTMLElement, call: CallRecord, done: () => un
       if (v?.id) callViewKeep(v);
       callToast('Call cancelled');
       await done();
-    } catch (e) { toast(errorMessage(e, 'Could not cancel the call')); }
+    } catch (e) { toast(callErrorMessage(e, 'Could not cancel the call')); }
   }, 'call-sched-menu');
 }
 // When a booked call starts, short: "Today 3:00 PM", "Thu 3:00 PM", "Nov 30, 3:00 PM".
@@ -570,7 +575,7 @@ async function callMeetJoin(call: CallRecord): Promise<void> {
   } catch (e) {
     try { tab?.close(); } catch {}
     if (errorStatus(e) === 403 || callCode(e) === 'call_access_removed') { toast('Removed from call'); return; }
-    toast(errorMessage(e, 'Could not join the call'));
+    toast(callErrorMessage(e, 'Could not join the call'));
     if (call.thread_id) void callViewRead(call.id);
   }
 }
@@ -620,7 +625,7 @@ async function callCardEnd(id: string, button: HTMLButtonElement): Promise<void>
   if (!(await askConfirm('End the call for everyone?', button))) return;
   button.disabled = true;
   try { await post(callPath(id) + '/end', {}); void callViewRead(id); }
-  catch (e) { button.disabled = false; toast(errorMessage(e, 'Could not end the call'), true); }
+  catch (e) { button.disabled = false; toast(callErrorMessage(e, 'Could not end the call'), true); }
 }
 // How long it was: "45 s", "23 min", "1 h 5 min".
 function callLength(s: number | null | undefined): string {

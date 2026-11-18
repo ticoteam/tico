@@ -106,7 +106,8 @@ visit to its address, such as a copied link, shows Join.
   thread's call bar.
 - **Controls.** Mic, share and Leave. Share is a small menu: **Screen** (where the browser can share one) and **Show a
   Tico file**, a search of the company's files and pages that shows the pick to everyone in the call. While the viewer
-  shows something, share is Stop. The connector also has End in the Leave menu.
+  shows something, share is Stop. On the macOS desktop app, the system asks for microphone access the first time
+  you join, and the share button opens the Tico file picker. The connector also has End in the Leave menu.
 - **Sharing.** One thing shows at a time: someone's screen or a Tico file. It is one record on the call, its `stage`
   (`PUT /api/v2/calls/{call_id}/stage` with `kind` `screen`, or `file` and a `file_id`; `DELETE` to stop). Only
   someone in the call may set it, a file only when they may read it, and the file's current version is what shows.

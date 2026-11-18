@@ -95,11 +95,93 @@ fn remote_of(hub: &url::Url) -> Value {
     serde_json::json!({"urls": [format!("{}://{host}:{port}/*", hub.scheme())]})
 }
 
+/// WebKit reports an omitted port as zero. Remote hubs must use HTTPS.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn matches_capture_origin(
+    hub: &url::Url,
+    scheme: &str,
+    host: &str,
+    port: isize,
+) -> bool {
+    let default_port = match scheme {
+        "https" => 443,
+        "http" if matches!(host, "localhost" | "127.0.0.1") => 80,
+        _ => return false,
+    };
+    let port = if port == 0 { default_port } else { port };
+    hub.scheme() == scheme
+        && hub.host_str().is_some_and(|expected| {
+            expected == host
+                || expected.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some(host)
+        })
+        && u16::try_from(port).is_ok_and(|port| Some(port) == hub.port_or_known_default())
+}
+
 #[cfg(test)]
 mod capability_tests {
     use super::*;
 
     const ORG: &str = "o_7f3a0001";
+
+    #[test]
+    fn microphone_matches_the_exact_secure_hub_origin() {
+        let hub = url::Url::parse("https://team.example.com/tico/").unwrap();
+        assert!(matches_capture_origin(&hub, "https", "team.example.com", 0));
+        assert!(matches_capture_origin(
+            &hub,
+            "https",
+            "team.example.com",
+            443
+        ));
+        assert!(!matches_capture_origin(
+            &hub,
+            "https",
+            "team.example.com",
+            8443
+        ));
+        assert!(!matches_capture_origin(
+            &hub,
+            "https",
+            "team.example.com.evil.example",
+            443
+        ));
+        assert!(!matches_capture_origin(
+            &hub,
+            "http",
+            "team.example.com",
+            443
+        ));
+
+        let hub = url::Url::parse("http://localhost:8765/").unwrap();
+        assert!(matches_capture_origin(&hub, "http", "localhost", 8765));
+        assert!(!matches_capture_origin(&hub, "https", "localhost", 8765));
+        let insecure = url::Url::parse("http://team.example.com/").unwrap();
+        assert!(!matches_capture_origin(
+            &insecure,
+            "http",
+            "team.example.com",
+            80
+        ));
+    }
+
+    #[test]
+    fn macos_bundle_allows_microphone_capture() {
+        let info =
+            plist::Value::from_reader_xml(include_bytes!("../Info.plist").as_slice()).unwrap();
+        let usage = info.as_dictionary().unwrap()["NSMicrophoneUsageDescription"]
+            .as_string()
+            .unwrap();
+        assert!(!usage.trim().is_empty());
+
+        let entitlements =
+            plist::Value::from_reader_xml(include_bytes!("../entitlements.plist").as_slice())
+                .unwrap();
+        assert_eq!(
+            entitlements.as_dictionary().unwrap()["com.apple.security.device.audio-input"]
+                .as_boolean(),
+            Some(true)
+        );
+    }
 
     #[test]
     fn ipc_is_confined_to_selected_origin_and_its_own_webview() {
@@ -683,6 +765,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         });
     #[cfg(target_os = "macos")]
     {
+        builder = builder.initialization_script(crate::media::NO_SCREEN_CAPTURE_SCRIPT);
         if let Some(store) = home.store {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
@@ -697,6 +780,8 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
     }
     let frame = page_bounds(app, on_screen);
     let webview = window.add_child(builder, frame.position, frame.size)?;
+    #[cfg(target_os = "macos")]
+    crate::media::install(&webview, home.hub.clone());
     if !on_screen {
         let _ = webview.hide();
     }
@@ -2829,6 +2914,7 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
     {
+        builder = builder.initialization_script(crate::media::NO_SCREEN_CAPTURE_SCRIPT);
         if let Some(store) = home.store {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
@@ -2865,8 +2951,10 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
             true
         });
     }
-    if builder.build().is_ok() {
-        owned_by(app, &label, &home.id);
+    if let Ok(window) = builder.build() {
+        #[cfg(target_os = "macos")]
+        crate::media::install(window.as_ref(), home.hub.clone());
+        owned_by(app, window.label(), &home.id);
     }
 }
 
@@ -3434,12 +3522,15 @@ fn open_page_window(
     }
     #[cfg(target_os = "macos")]
     {
+        builder = builder.initialization_script(crate::media::NO_SCREEN_CAPTURE_SCRIPT);
         if let Some(store) = home.store {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
     }
-    if builder.build().is_ok() {
-        owned_by(app, &label, &home.id);
+    if let Ok(window) = builder.build() {
+        #[cfg(target_os = "macos")]
+        crate::media::install(window.as_ref(), home.hub.clone());
+        owned_by(app, window.label(), &home.id);
     }
 }
 

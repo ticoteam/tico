@@ -86,7 +86,9 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
           ['human:thomaz', {identity: 'human:thomaz', isSpeaking: true, isMicrophoneEnabled: true}],
           // Muted wins: the room hears Bea, but her mic is off.
           ['human:bea', {identity: 'human:bea', isSpeaking: true, isMicrophoneEnabled: false}]]);
-        localParticipant = {identity: 'human:ana', isSpeaking: false, trackPublications: new Map(), setMicrophoneEnabled: async () => {},
+        localParticipant = {identity: 'human:ana', isSpeaking: false, trackPublications: new Map(), setMicrophoneEnabled: async (on: boolean) => {
+          if (on && !navigator.mediaDevices) throw new TypeError("Cannot read properties of undefined (reading 'getUserMedia')");
+        },
           setScreenShareEnabled: async (on: boolean) => { window.__screens.push(on); }};
         canPlaybackAudio = true;
         constructor() { window.__rooms.push(this as unknown as FakeRoom); }
@@ -699,6 +701,22 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/call/c2');
     await page.locator('.cw-after-turns .cw-turn').nth(1).waitFor();
     assert.match(await page.locator('.cw-after-turns').innerText(), /Thomaz\s+Let's do another one on Thursday\./);
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+  {
+    const {context, page, seen} = await open(browser);
+    await page.addInitScript(() => Object.defineProperty(navigator, 'mediaDevices', {value: undefined}));
+    await page.goto('https://tico-ui.test/#/call/c1?join=1');
+    const message = page.locator('.toast', {hasText: 'Microphone not available in this window'});
+    await message.waitFor();
+    assert.equal(seen.joins, 1);
+    await message.evaluate(el => el.remove());
+    await page.getByRole('button', {name: 'Unmute'}).click();
+    await message.waitFor();
+    await page.getByRole('button', {name: 'Show a Tico file'}).click();
+    await page.getByPlaceholder('Find a file or page').waitFor();
+    assert.equal(await page.locator('[data-cw-pop="screen"]').count(), 0);
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

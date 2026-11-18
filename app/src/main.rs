@@ -14,6 +14,8 @@ mod bridge;
 mod config;
 mod cookies;
 mod hub;
+#[cfg(target_os = "macos")]
+mod media;
 mod orgs;
 mod signin;
 mod timing;
@@ -136,6 +138,8 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_permission_request(|_, kind| media::default_permission(kind));
     builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);

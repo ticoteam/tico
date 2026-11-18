@@ -571,8 +571,9 @@ function cwBarDraw(st: CwState, v: CallRecord | null): void {
     `<button type="button" class="cw-ctl${on ? ' on' : ''}" data-cw-ctl="${k}" aria-label="${esc(label)}" title="${esc(label)}" aria-pressed="${on}"${more}>${cwIcon(icon)}</button>`;
   // Share: Stop while this person shows something, else the menu (Screen, Show a Tico file).
   const showing = here.sharing || callStageMine(here);
+  const [shareIcon, shareLabel] = callShareable() ? [CW_ICONS.share, 'Share'] : [CW_ICONS.file, 'Show a Tico file'];
   patchHTML(bar, `${btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted)}${
-    showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true) : btn('share', CW_ICONS.share, 'Share', false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`)}
+    showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true) : btn('share', shareIcon, shareLabel, false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`)}
     <span class="spacer"></span><button type="button" class="cw-leave" data-cw-ctl="leave"${here.leaving ? ' disabled' : ''}>Leave</button>`);
 }
 // The wide layout while someone else's screen shows. The desktop app's window grows to fit it and goes back after
@@ -698,9 +699,7 @@ function cwPop(st: CwState, pop: CwState['pop']): void {
 async function cwPopPick(st: CwState, k: string): Promise<void> {
   if (k === 'file') { cwPop(st, 'file'); return; }
   cwPop(st, '');
-  if (k === 'screen' && CALL) { try { await callShareStart(CALL); } catch (e) {
-    if ((isErrorRecord(e) ? e.name : undefined) !== 'NotAllowedError') cwToast(errorMessage(e, 'Could not share the screen'), true);
-  } callBarDraw(); }
+  if (k === 'screen' && CALL) { await callShareStart(CALL); callBarDraw(); }
 }
 // A bot's face (or its People row): one tap puts it in the call; on one in the call it leaves at once, with Undo.
 async function cwBotToggle(st: CwState, slug: string, on: boolean): Promise<void> {
@@ -719,7 +718,7 @@ async function cwBotToggle(st: CwState, slug: string, on: boolean): Promise<void
     } else await cwBotAttach(st, [slug]);
   } catch (e) {
     if (on) callViewKeep(v);
-    cwToast(errorMessage(e, on ? 'Could not take the bot out' : 'Could not add the bot'), true);
+    cwToast(callErrorMessage(e, on ? 'Could not take the bot out' : 'Could not add the bot'), true);
   } finally { st.busy.delete(slug); callWindowDraw(); }
 }
 async function cwBotAttach(st: CwState, slugs: string[]): Promise<void> {
@@ -734,7 +733,7 @@ async function cwTeamAdd(st: CwState, id: string): Promise<void> {
   const slugs = cwAddable().filter(b => (g?.bots || []).includes(b.id) && !inCall.has(b.id)).map(b => b.id);
   if (!slugs.length) { cwToast('Already in the call'); return; }
   try { await cwBotAttach(st, slugs); cwToast(`${g?.name || id} joined`); }
-  catch (e) { cwToast(errorMessage(e, 'Could not add the team'), true); }
+  catch (e) { cwToast(callErrorMessage(e, 'Could not add the team'), true); }
 }
 // A person is rung into the call (backend/call_notes.py): someone who reads the thread keeps their place in it, anyone
 // else is added to it first, as the thread's own Add people does.
@@ -744,7 +743,7 @@ async function cwPersonAdd(st: CwState, actor: string, button: HTMLElement): Pro
   try {
     const r: {added?: boolean} | null = await post(callPath(st.id) + '/ring', {actor});
     cwToast(r?.added ? `${actorName(actor)} added` : `Ringing ${actorName(actor)}`);
-  } catch (e) { button.disabled = false; cwToast(errorMessage(e, 'Could not ring them'), true); }
+  } catch (e) { button.disabled = false; cwToast(callErrorMessage(e, 'Could not ring them'), true); }
 }
 // Leave closes the window: a window the page opened closes, else (a phone, a tab opened by hand) its thread shows.
 function cwClose(st: CwState): void {
@@ -799,7 +798,7 @@ async function cwTaskSubmit(st: CwState, form: HTMLFormElement): Promise<void> {
     st.task = ''; cwTaskDraw(st);
   } catch (e) {
     buttons.forEach(b => { b.disabled = false; });
-    cwToast(errorMessage(e, 'Could not do that'), true);
+    cwToast(callErrorMessage(e, 'Could not do that'), true);
   }
 }
 // A message that is only a task's link (Link a task, New task) is the task's card: its state, its title and its owner.
@@ -930,6 +929,6 @@ async function cwItemAct(st: CwState, k: string, i: number, button: HTMLElement)
     if (!task.id) throw new Error('The task was not made');
     st.made.set(item.title, task.id); cwMadeKeep(st);
     cwToast('Task created');
-  } catch (e) { button.disabled = false; cwToast(errorMessage(e, 'Could not create the task'), true); }
+  } catch (e) { button.disabled = false; cwToast(callErrorMessage(e, 'Could not create the task'), true); }
   cwAfterDraw(st);
 }
