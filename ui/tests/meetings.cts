@@ -28,7 +28,7 @@ const IMPORTERS = ['granola', 'fireflies', 'zoom', 'google-meet'].map(source => 
   zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_succeeded_at: null, last_import: null,
   imported_total: 0, error: '', setup: {file: `secrets/${source}.env`, keys: ['API_KEY'], doc: 'docs/meetings.md'}}));
 type Item = {id: string; status: string; version: number; detail: {owner?: string}; [k: string]: unknown};
-type World = {role?: string; sources: unknown[]; meetings: {id: string; [k: string]: unknown}[]; employees?: {id: string; slug: string}[];
+type World = {role?: string; meet?: boolean; sources: unknown[]; meetings: {id: string; [k: string]: unknown}[]; employees?: {id: string; slug: string}[];
   items?: {sections: Record<string, Item[]>}; importers: {source: string; [k: string]: unknown}[]; saved: unknown[];
   imported: {source?: string; title?: string; transcript?: string; notes?: string; [k: string]: unknown}[]; pushes: unknown[]; itemEdits: unknown[]};
 
@@ -61,7 +61,9 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    if (p === '/api/me') return json({id: 'ana', role: world.role || 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
+    // `meet`: this server runs Tico Meet, so the header has its Call icon too (the busiest header)
+    if (p === '/api/me') return json({id: 'ana', role: world.role || 'owner', name: 'Ana', email: 'ana@example.test', cloud: true, ...world.meet ? {config: {features: {tico_meet: true}}} : {}});
+    if (p === '/api/v2/config' && world.meet) return json({features: {tico_meet: true}});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben'}]});
     if (p === '/api/employees') return json(world.employees || []);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
@@ -321,10 +323,11 @@ async function shot(page: import('playwright').Page, name: string) {
       // computer too narrow for a box beside the tabs, the search is its magnifier: a tap opens it in the title's place,
       // and leaving it gives the title back, its words kept.
       for (const [width, look] of [[1440, 'dark'], [1280, 'light'], [1024, 'dark'], [900, 'light'], [800, 'dark'], [390, 'dark'], [390, 'light']] as [number, string][]) {
-        w = world({sources: SOME, meetings: MEETINGS});
+        w = world({sources: SOME, meetings: MEETINGS, meet: true});
         ({page, errors, context} = await open(browser, {width, height: 844}, w, {colorScheme: look}));
         await page.goto('https://tico-ui.test/#/meetings');
         await page.locator('.meet-row').first().waitFor();
+        await page.locator('header.notes-head #meet-call-now').waitFor({state: 'attached'});
         await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));   // the header fits itself in the next frame
         const head = await page.evaluate(() => {
           const h = document.querySelector<HTMLElement>('header.notes-head')!, vw = document.documentElement.clientWidth, bad: string[] = [];
@@ -333,9 +336,15 @@ async function shot(page: import('playwright').Page, name: string) {
           if (q.closest('.ph-menu')) bad.push('the search is in ⋯');
           const hits = (el: HTMLElement) => { const r = el.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
             return r.width > 0 && r.left >= 0 && r.right <= vw + 0.5 && !!top && el.contains(top); };
-          for (const sel of ['.meet-q', '#notes-manual', ':scope > .ph-more']) {
+          for (const sel of ['.meet-q', ':scope > .ph-more']) {
             const el = h.querySelector<HTMLElement>(sel);
             if (!el || !hits(el)) bad.push(sel + ' is not in view on top');
+          }
+          // Call and Log a meeting: on the row in view, or in ⋯ when the row is too narrow, never cut off
+          for (const sel of ['#meet-call-now', '#notes-manual']) {
+            const el = h.querySelector<HTMLElement>(sel);
+            if (!el) bad.push(sel + ' is missing');
+            else if (!el.closest('.ph-menu') && !hits(el)) bad.push(sel + ' is on the row but not in view on top');
           }
           const filter = document.querySelector<HTMLElement>('#notes-filter')!;
           if (!filter.closest('.ph-menu') && !hits(filter)) bad.push('the filter is on the row but not in view on top');
