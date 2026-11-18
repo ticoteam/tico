@@ -776,6 +776,49 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn a_kept_process_takes_only_its_own_thread_in_its_own_folder() {
+        let dir = std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("worktree")).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = AntigravityHost::new(&dir.join("home"), vec![fake_agy(&dir)], tx);
+        host.start().unwrap();
+        let s = settings(&dir, &[("CUMULATIVE", "1".into())]);
+        let reply = |events: &[Value]| events[2]["text"].clone();
+        // The next turn on the same thread and folder writes to the running process.
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).unwrap();
+        assert_eq!(reply(&turn_events(&mut rx).await), "turn 1");
+        host.resume_thread(&thread, &s).unwrap();
+        host.start_turn(&thread, "two", None).unwrap();
+        assert_eq!(reply(&turn_events(&mut rx).await), "turn 2");
+        // A fresh session is a new thread: agy's conversation is the old one's, so a new process takes it.
+        let fresh = host.start_thread(&s);
+        host.start_turn(&fresh, "three", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        assert_eq!(reply(&events), "turn 1", "{events:?}");
+        // So does the same thread in another folder (a task that moved to its worktree).
+        let mut moved = s.clone();
+        moved.cwd = dir.join("worktree").display().to_string();
+        host.resume_thread(&fresh, &moved).unwrap();
+        host.start_turn(&fresh, "four", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        assert_eq!(reply(&events), "turn 1", "{events:?}");
+        // The replaced processes said nothing more to the turns after them.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(rx.try_recv().is_err());
+        assert!(host.alive());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("args.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            3
+        );
+        host.stop().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn efforts_follow_the_python_host() {
         let s = Settings {
