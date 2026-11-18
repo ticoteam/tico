@@ -267,3 +267,18 @@ def test_follow_up_access_follows_thread_membership(meet):
     assert get(meet, f"tasks/{task_id}", "cara-test")["task"]["title"] == ask
     ok(remove_member(meet, "ana-test", thread_id, "human:cara"))
     get(meet, f"tasks/{task_id}", "cara-test", expected=404)
+
+
+def test_restoring_a_follow_up_restores_its_call_link_and_audience(meet):
+    with meet.app.state.store.transaction() as c:
+        unrelated_task_managers(c, "ops")
+    thread_id = thread(meet)
+    call = start_call(meet, thread_id, bots=["ops"])
+    task_id = _follow_up(meet, call, "Check the rehearsal time")['task_id']
+
+    post(meet, f"tasks/{task_id}/delete", {})
+    get(meet, f"tasks/{task_id}", "ben-test", expected=404)
+    post(meet, f"tasks/{task_id}/restore", {})
+    assert get(meet, f"tasks/{task_id}", "ben-test")["task"]["id"] == task_id
+    get(meet, f"tasks/{task_id}", "cara-test", expected=404)
+    assert [row["task_id"] for row in get(meet, f"calls/{call['id']}/notes", "ben-test")["follow_ups"]] == [task_id]
