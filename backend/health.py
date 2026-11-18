@@ -4104,12 +4104,23 @@ def _instant(value):
     return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
+def _whole_second(value):
+    """A stored time as Health's release history lists it: whole-second UTC, "2026-11-17T08:03:11Z". A value that
+    can't be read is passed on as stored."""
+    at = _instant(value)
+    if at is None:
+        return str(value or "")
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def release_history(c, since=None):
     """The releases this server ran and when it first started on each (backend/releases.py `record_start`), oldest
-    first, as Health shows them to bots and people: only version and since, whatever else an entry may carry. `since`
-    (an ISO time) keeps the entries that started at or after it; a malformed one is refused with a 400."""
+    first, as Health shows them to bots and people: only version and since, whatever else an entry may carry. Each
+    since is given to the whole second in UTC ("2026-11-17T08:03:11Z") so 500 entries stay within Health's 30 KB
+    guard; the stored record keeps its microseconds. Versions are never shortened. `since` (an ISO time) keeps the
+    entries that started at or after it, to the second as listed; a malformed one is refused with a 400."""
     entries = [
-        {"version": str(r.get("version") or ""), "since": str(r.get("since") or "")} for r in releases.history(c)
+        {"version": str(r.get("version") or ""), "since": _whole_second(r.get("since"))} for r in releases.history(c)
     ]
     if since is None:
         return entries
