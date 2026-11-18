@@ -124,7 +124,7 @@ in the address, so a filtered view can be shared; whoever opens it sees only the
 Admins get **Export CSV**: time, actor, kind, subject, result and link for up to the newest 20,000 rows the filters
 show in one file. Narrow the dates when more remain.
 
-Not in the Log, because Tico does not record it in one place: a webhook send refused while the send switch is off.
+Not in the Log, because Tico does not keep it in one place: a webhook send refused while the send switch is off.
 
 **What does the line on a task mean?**
 An open task always says whose turn it is: a bot working, a person asked, Paused (a bot that can't run, with the fix),

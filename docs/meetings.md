@@ -18,7 +18,7 @@ or org owner may remove it. Writes require an `Idempotency-Key`.
 `GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
 normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
 Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
-and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear and cannot be restored.
 
 The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
 its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
@@ -30,9 +30,10 @@ The meeting's task rows also follow title and status changes. Link events carry 
 null after unlink). Delivery checks access to both resources for each viewer, so hidden meeting activity sends
 no link event or meeting reference. An ordinary task change carries no hidden link kinds or references.
 
-**Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
-have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools
-produce, keeps it in one list, and turns it into work. How the pieces fit:
+**Meetings** is where the team's meeting transcripts live. They come from two places: calls held in
+Tico Meet, which Tico records and transcribes itself ([Calls](meet.md)), and the tools the team already
+uses (Granola, Zoom, Google Meet, Otter, Fireflies or Close), whose transcripts Tico imports. Tico
+keeps them in one list and turns them into work. How the pieces fit:
 [How Tico works](how-it-works.md).
 
 A meeting is a title, when it started, who was in it, a transcript (a list of segments: speaker,
@@ -69,7 +70,8 @@ does, and the row shows **Processing** while it works and then what it created. 
 the select-all box) for Share and Dismiss on all of them; they apply only to ticked meetings shown by the current
 search and filters. Hidden meetings are never included, even if previously selected. Bulk sharing
 keeps each meeting's source privacy. Restore in Dismissed
-returns a meeting to Pending. **Settings** controls future imports and, for the owner, the Team default.
+returns a meeting to Pending. Two words sound alike: a dismissed meeting can be restored; a deleted
+meeting cannot be restored. **Settings** controls future imports and, for the owner, the Team default.
 Human **Add notes** stays live, including a pasted or uploaded transcript; a human API caller
 can also choose `review: "live"`. Computer importers keep using the same payloads: the server
 decides the review state for the person named in `owner_email`.
@@ -90,14 +92,9 @@ and attached bots through `GET /api/v2/live-meetings/{id}` under the live meetin
   `"audience": "participants"` keeps it readable only by the
   person it is filed for, people added to or joined in the live meeting it came from, and attached bots;
   the company owner is held to that too. Attached bots can read filed notes, transcripts, versions and
-  attachments regardless of who added them or the filed audience, once shared and until deleted or discarded.
+  attachments regardless of who added them or the filed audience, once shared and until deleted.
   Pending and dismissed meetings remain unavailable to bots. `"audience": "team"` opens it to the Team. The import route takes
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
-- `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
-  removes its transcript, chat and events from Tico. It also deletes a meeting already filed for review, removing its
-  delivery receipt and task links. Tasks already sent remain unchanged.
-  Queued links and Link proposals are cleared; recovery cannot finalize the discarded live share or send its links.
-  An older Tico without discard ends the meeting and reports that its live transcript remains until Tico is updated.
 - `POST /api/v2/meetings/{id}/review` with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a
@@ -636,8 +633,10 @@ def file_meeting(meeting, vtt):
 
 ## Upgrading from Recordings
 
-Tico used to record meetings itself. That is gone: no browser or desktop capture, no live captions,
-no live meeting brain, no processing worker on the Mac, no xAI or Gemini keys on the server. What
+Tico's browser and desktop app used to record meetings themselves. That recording is gone: the browser
+and desktop-app capture, their live captions, the live meeting brain, the processing worker on the Mac
+and the server's xAI and Gemini keys. Tico now records only calls held in Tico Meet ([Calls](meet.md)).
+What
 stays is everything that was ever imported or recorded. An upgrading install keeps all of it:
 
 - The tables are unchanged (`meetings`, `meeting_versions`, `meeting_items`, `meeting_comments`,
