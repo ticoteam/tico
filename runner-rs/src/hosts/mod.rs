@@ -138,12 +138,74 @@ fn secretish_re() -> &'static Regex {
 }
 
 pub fn is_limit(text: &str) -> bool {
-    limit_re().is_match(text)
+    limit_re().is_match(text) && !is_edge_outage(text)
 }
 
 /// Whether a limit notice is the provider's temporary model capacity: quota or billing words in it win.
 pub fn is_capacity(text: &str) -> bool {
-    capacity_re().is_match(text) && !quota_re().is_match(text)
+    capacity_re().is_match(text) && !quota_re().is_match(text) && !is_edge_outage(text)
+}
+
+fn edge_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r#"(?i)"cloudflare_error"\s*:\s*true|/cloudflare-5xx-errors/|\berror code 5\d\d\b[\s\S]*\bcloudflare\b"#)
+            .unwrap()
+    })
+}
+
+/// A Cloudflare 5xx page in place of the service's answer (the Tico AI Gateway's edge, or a provider's API): the service
+/// behind it is down, not a login's limit or a busy model, though its boilerplate says the origin "is overloaded or
+/// misconfigured" for every 502 (backend clients/gateway.py `edge_outage`). Tico Team, Nov 18: that word made a 502 a
+/// usage limit, retried every two minutes.
+pub fn is_edge_outage(text: &str) -> bool {
+    edge_re().is_match(text)
+}
+
+/// A Cloudflare 5xx page in one line, with its status, host and ray id (what support looks it up by); None for any
+/// other text (backend clients/gateway.py `edge_summary`).
+pub fn edge_summary(text: &str) -> Option<String> {
+    static STATUS: OnceLock<Regex> = OnceLock::new();
+    static TITLE: OnceLock<Regex> = OnceLock::new();
+    static RAY: OnceLock<Regex> = OnceLock::new();
+    static ZONE: OnceLock<Regex> = OnceLock::new();
+    if !is_edge_outage(text) {
+        return None;
+    }
+    let status =
+        STATUS.get_or_init(|| Regex::new(r#""status"\s*:\s*(5\d\d)\b|\b(5\d\d)\b"#).unwrap());
+    let title = TITLE.get_or_init(|| {
+        Regex::new(r#""title"\s*:\s*"(?:Error )?(?:5\d\d:\s*)?([^"]{1,60})""#).unwrap()
+    });
+    let ray = RAY.get_or_init(|| {
+        Regex::new(r#"(?i)"ray_id"\s*:\s*"([0-9a-f]{8,32})"|\bray id:?\s*(?:<[^>]*>\s*)*([0-9a-f]{8,32})\b"#).unwrap()
+    });
+    let zone =
+        ZONE.get_or_init(|| Regex::new(r#"(?i)"zone"\s*:\s*"([a-z0-9.-]{1,100})""#).unwrap());
+    let either = |c: regex::Captures<'_>| {
+        c.get(1)
+            .or_else(|| c.get(2))
+            .map(|m| m.as_str().to_string())
+    };
+    let code = status.captures(text).and_then(either).unwrap_or_default();
+    let words = title
+        .captures(text)
+        .and_then(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+        .filter(|w| !w.is_empty())
+        .unwrap_or_else(|| "server error".into());
+    let host = zone
+        .captures(text)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .unwrap_or_else(|| "Cloudflare".into());
+    let head = [code, words]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(match ray.captures(text).and_then(either) {
+        Some(id) => format!("{head} from {host} (Cloudflare ray {id})"),
+        None => format!("{head} from {host} (Cloudflare)"),
+    })
 }
 
 pub fn is_auth_rejected(text: &str) -> bool {
@@ -1396,7 +1458,7 @@ pub mod fixtures {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1983,6 +2045,9 @@ mod tests {
         assert_eq!(reply, "Holding until it recovers.\n\nNo change.");
     }
 
+    /// The Tico AI Gateway's Cloudflare edge answering for it (Tico Team, Nov 18), as pi printed it.
+    pub(crate) const CLOUDFLARE_502: &str = r#"502 {"type":"https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502/","title":"Error 502: Bad gateway","status":502,"detail":"The origin web server returned an invalid or incomplete response to Cloudflare. This typically indicates the origin is overloaded or misconfigured.","error_name":"origin_bad_gateway","ray_id":"a5c90c403eed9ea1","zone":"updates.tico.team","cloudflare_error":true,"retryable":true,"retry_after":60}"#;
+
     #[test]
     fn the_python_classifiers_agree() {
         assert!(is_limit("You've hit your usage limit"));
@@ -1991,6 +2056,17 @@ mod tests {
         ));
         assert!(is_limit("HTTP 503 overloaded"));
         assert!(!is_limit("all good"));
+        // A Cloudflare 502 page says "overloaded" in its boilerplate: an outage, neither a limit nor a busy model.
+        assert!(
+            is_edge_outage(CLOUDFLARE_502)
+                && !is_limit(CLOUDFLARE_502)
+                && !is_capacity(CLOUDFLARE_502)
+        );
+        assert_eq!(
+            edge_summary(CLOUDFLARE_502).as_deref(),
+            Some("502 Bad gateway from updates.tico.team (Cloudflare ray a5c90c403eed9ea1)")
+        );
+        assert_eq!(edge_summary("HTTP 503 overloaded"), None);
         assert!(is_limit(
             "Claude AI monthly spend limit reached. Raise it in your account settings."
         ));

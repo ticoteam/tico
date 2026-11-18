@@ -1742,6 +1742,12 @@ def limit_errors(c, attempt_id):
     ]
 
 
+def outage_only(c, attempt_id):
+    """Whether every error the attempt's runtime reported is a Cloudflare 5xx page (clients/gateway.py edge_outage)."""
+    errors = [error for error in limit_errors(c, attempt_id) if error]
+    return bool(errors) and all(gateway.edge_outage(error) for error in errors)
+
+
 # Said to the turn that continues one the model's capacity stopped (capacity_continuation): its thread holds what it did.
 CONTINUE_NOTE = (
     "\n\nTico: the model was at capacity and stopped your previous turn on this request partway through. "
@@ -6724,6 +6730,11 @@ class Execution:
 
         if row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid):
             body = body.model_copy(update={"text": counsel.REMOVED_PAGE})
+        if body.limited and body.outcome != "completed" and outage_only(c, aid):
+            # A Cloudflare 5xx page is the service down, not a limit, whatever an older runner matched in its
+            # boilerplate ("overloaded"): the turn takes the outage's way (the Gateway's backoff, or a quiet failure's
+            # retries), never a usage limit's hold, and its usage is not "usage_limited".
+            body = body.model_copy(update={"limited": False})
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
         # rest of the turn's work, to run when the quarantine lifts, unless `quarantine_stops.requeues` holds it for review

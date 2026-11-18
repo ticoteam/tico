@@ -593,6 +593,18 @@ def held_plan(c, runner_id, runtime, loads=None, profile=""):
     return login_holds.subscription_login(sub["id"])
 
 
+def company_plan(c, runtime):
+    """The label of the company's plan for `runtime` ("Claude plan"), when it holds one a computer could be given, else
+    '': a computer signed out of a runtime the company has a plan for needs that plan, not a sign-in (readiness.can_run)."""
+    kinds = [k for k, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"]
+    if not kinds or not _present(c):
+        return ""
+    found = c.execute(
+        f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) LIMIT 1", kinds
+    ).fetchone()
+    return KINDS[found["kind"]]["label"] if found else ""
+
+
 def passed_over(c, runner_id, runtime, loads=None):
     """Whether this computer is given a plan (or a person's plans) for `runtime` and every one is passed over now: at
     its usage limit or needing reconnecting. Its turns then run on its own login, else wait, unless the computer falls
@@ -1683,6 +1695,34 @@ def _set(c, runner_id, runtime, subscription_id, actor, person=""):
         "person=excluded.person",
         (runner_id, runtime, subscription_id, actor, H.now(), person),
     )
+
+
+def carry_over(c, old_id, new_id):
+    """A computer made in place of one that is gone (a cloud machine replaced or made again: cloud_machines.enrolled)
+    takes what the old one was given, runtime by runtime: the same subscription, or the same person's plans, with who
+    set it. Nothing it already has is replaced, and a subscription removed since is not brought back. Nothing is
+    stopped or reset: the new computer has run nothing yet. Returns the runtimes carried over."""
+    carried = []
+    for r in c.execute(
+        "SELECT runtime,subscription_id,person,set_by FROM computer_subscriptions WHERE runner_id=? ORDER BY runtime",
+        (old_id,),
+    ).fetchall():
+        if not r["person"] and not row(c, r["subscription_id"]):
+            continue
+        if c.execute(
+            "SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (new_id, r["runtime"])
+        ).fetchone():
+            continue
+        _set(c, new_id, r["runtime"], r["subscription_id"], r["set_by"], r["person"])
+        H.event(
+            c,
+            H.TICO_ACTOR,
+            "subscription.carried_over",
+            r["person"] or r["subscription_id"],
+            {"runner": new_id, "from": old_id, "runtime": r["runtime"]},
+        )
+        carried.append(r["runtime"])
+    return carried
 
 
 def _why_moved(c, entry, runtime):

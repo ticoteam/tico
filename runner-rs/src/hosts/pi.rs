@@ -406,6 +406,8 @@ pub fn gateway_code(text: &str) -> Option<&'static str> {
                 .contains("gateway cap reached")
                 .then_some("cap_reached")
         })
+        // Its Cloudflare edge answering in its place (a 502 page): the Gateway is unavailable.
+        .or_else(|| crate::hosts::is_edge_outage(text).then_some("upstream_unavailable"))
 }
 
 /// The Gateway's own message in a refusal pi printed as `<status>: {"code": .., "message": ..}`, if it has one.
@@ -443,7 +445,10 @@ pub fn plain_error(text: &str) -> String {
         }
         "unknown_model" => "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)".into(),
         "no_route" => "Tico AI Gateway: no Tico route for this request (no_route)".into(),
-        "upstream_unavailable" => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
+        "upstream_unavailable" => match crate::hosts::edge_summary(text) {
+            Some(edge) => format!("Tico AI Gateway is unavailable, try again: {edge} (upstream_unavailable)"),
+            None => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
+        },
         _ => {
             let said = gateway_said(text).unwrap_or_else(|| "the request can't be sent as it is".into());
             format!("Tico AI Gateway refused the request as sent: {said} ({code})")
@@ -2361,6 +2366,14 @@ mod tests {
             plain_error("429 rate limit: slow down"),
             "429 rate limit: slow down"
         );
+        // Its Cloudflare edge's 502 page: the Gateway unavailable, with the ray id kept, and no limit.
+        let edge = plain_error(crate::hosts::tests::CLOUDFLARE_502);
+        assert_eq!(
+            edge,
+            "Tico AI Gateway is unavailable, try again: 502 Bad gateway from updates.tico.team \
+             (Cloudflare ray a5c90c403eed9ea1) (upstream_unavailable)"
+        );
+        assert!(!is_limit(&edge) && !is_auth_rejected(&edge));
         assert_eq!(
             gateway_models_json("")["providers"]["tico"]["baseUrl"],
             GATEWAY_DEFAULT_URL

@@ -2958,6 +2958,64 @@ def test_a_claude_bot_with_a_codex_task_model_gets_the_codex_plan_too(cloud):
     assert given(cloud, computer["runner_id"]) == {"claude": sid, "codex": csid}
 
 
+def people(cloud, runner_id):
+    with cloud.store.read() as c:
+        return {
+            r["runtime"]: r["person"]
+            for r in c.execute("SELECT runtime,person FROM computer_subscriptions WHERE runner_id=?", (runner_id,))
+        }
+
+
+def test_a_replaced_machine_keeps_every_plan_the_old_one_had_a_persons_plans_included(cloud):
+    # Tico Team, Nov 18: Reviewer 1 (a GPT bot) had Chris's Claude plans given to its machine by hand for its Claude
+    # reviews. Its replacement got only what the company lends a GPT bot (ChatGPT), so its next Claude review had none.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    sid = add(cloud.api)["id"]
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    old = own_computer(cloud)
+    assert given(cloud, old["runner_id"]) == {"codex": csid}  # the bot runs Codex only: Claude is not lent
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    assert people(cloud, old["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    replaced = cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers())
+    assert replaced.status_code == 200, replaced.text
+    new = enroll_made(cloud, "ops")
+    assert placed(cloud)["ops"] == new["runner_id"] != old["runner_id"]
+    assert given(cloud, new["runner_id"]) == {"claude": sid, "codex": csid}
+    assert people(cloud, new["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    carried = events(cloud, "subscription.carried_over")
+    assert sorted(json.loads(e["detail"])["runtime"] for e in carried) == ["claude", "codex"]
+    assert {json.loads(e["detail"])["from"] for e in carried} == {old["runner_id"]}
+    sign_in_report(cloud, new, "missing")
+    assert can_run(cloud, "ops", new["runner_id"]) is True
+
+
+def test_a_plan_removed_from_the_company_is_not_carried_to_the_replacement(cloud):
+    sid = plan_company(cloud, "ops")
+    old = own_computer(cloud)
+    assert given(cloud, old["runner_id"]) == {"claude": sid}
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM model_subscriptions")
+    new = enroll_made(cloud, "ops")
+    assert given(cloud, new["runner_id"]) == {} and not events(cloud, "subscription.carried_over")
+
+
+def test_a_bot_moving_off_a_computer_still_in_use_leaves_its_plans_there(cloud):
+    sid = plan_company(cloud, "ops")
+    laptop = runner(cloud.api, label="Office Mac")
+    assign(cloud.api, laptop, "ops")
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(cloud.api, laptop, "codex", csid)
+    computer = own_computer(cloud)
+    assert placed(cloud)["ops"] == computer["runner_id"]
+    assert given(cloud, computer["runner_id"]) == {"claude": sid}  # lent as before; the laptop's ChatGPT stays there
+    assert given(cloud, laptop["runner_id"])["codex"] == csid and not events(cloud, "subscription.carried_over")
+
+
 def generation(cloud, bot):
     with cloud.store.read() as c:
         return c.execute("SELECT generation FROM assignments WHERE bot=?", (bot,)).fetchone()["generation"]

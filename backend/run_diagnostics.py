@@ -307,6 +307,10 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             if isinstance(err, dict):
                 err = json.dumps(err, ensure_ascii=False)
             code = p.get('code') or ''
+            from clients.gateway import edge_summary
+
+            # A Cloudflare 5xx page says only its status, host and ray id worth keeping (what support looks it up by).
+            err = edge_summary(err) or err
             return scrub('Model error' + (' (' + str(code) + ')' if code else '') + ': ' + str(err))[:500]
     for ev in events:
         p = json.loads(ev['payload'])
