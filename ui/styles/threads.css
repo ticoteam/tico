@@ -37,6 +37,7 @@
 .thv-list{display:flex;flex-direction:column}
 .th-empty{padding:var(--s4) 0;text-align:center}
 .th-msg{position:relative;display:flex;gap:10px;padding:6px;border-radius:8px;font-size:var(--read-size,var(--t-base));line-height:var(--lh-read,1.5)}
+.th-msg.th-left-out{display:none}
 .th-msg.th-cont{padding-top:1px;padding-bottom:1px}
 .th-av{flex:none;width:28px;padding-top:2px}
 /* a message under its author's header: its time in the avatar's place, on hover */

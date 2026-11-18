@@ -1,7 +1,8 @@
 # Calls: Google Meet and Tico Meet
 
-A call happens in a thread. A call is a Google Meet (the default) or a Tico Meet call (audio and screen share on the
-install's own LiveKit). A live transcript is kept while it runs, and bots that were attached listen and reply in the
+A call happens in a thread. A call is a Tico Meet call (the default, for every call, people-only calls too: audio and
+screen share on the install's own LiveKit) or a Google Meet, picked per call with **Use Google Meet instead** next to the
+call button. A Google Meet has no bots. A live transcript is kept while it runs, and bots that were attached listen and reply in the
 thread. When the call ends, the transcript and the action items drafted from it are posted to the thread.
 
 ## Google Meet
@@ -57,8 +58,10 @@ presses Check. The check proves the scope with a token for it and a read of a sp
 and makes nothing. A key without it keeps working for mail and calendar, and What Tico may do is unchanged.
 
 **Availability.** `google_meet` is available to a person when the Workspace key is active, covers their mailbox and
-its last check proved the Meet scope. `auto` picks Google Meet when it is available, else Tico Meet when LiveKit is
-set up, else `503 meet_unavailable`. If Google will not make the space, `auto` falls back to Tico Meet when it can.
+its last check proved the Meet scope. `auto` picks Tico Meet when LiveKit is set up, else Google Meet when it
+is available, else `503 meet_unavailable`. A Google Meet is started by naming it (`provider: google_meet`); the call
+button's menu offers it as **Use Google Meet instead** when it is available. If Google will not make the space, `auto`
+falls back to Tico Meet when it can.
 
 **Live check.** `scripts/meet-live-check.py --key <key.json> --mailbox <address>` makes a space, prints its link, polls
 who is in it every 10 s and ends it. It needs no running Tico.
@@ -72,6 +75,46 @@ one; CI does not start one (no CI job runs a `livekit-server`). In the first, a 
 hears it, the Gateway's speech-to-text is the only fake, and the transcript posts into the thread and the LiveKit
 session is closed. In the second, the call's Tico voice speaks into the room and a person subscribed to it hears it.
 No install has run calls yet.
+
+## The meeting window
+
+Opening a Tico Meet call (starting it, the thread's call bar, the call card or the ring) opens a view that shows only
+the meeting, at `#/call/<call id>`: a small window (about 400 by 640) in the desktop app, a new tab on the web, and the
+whole screen on a phone. There is one window per call: Start, Join, the call card and the ring all open the same one
+(the desktop app's `call-<org>-<call id>`, a browser's tab named `tico-call-<call id>`), so a second open brings it to
+the front. If the window cannot open (a blocked popup), the call is joined in the thread with its call bar instead.
+The window joins the call only when it was opened to (`#/call/<call id>?join=1`, which those entries add); a plain
+visit to its address, such as a copied link, shows Join.
+
+- **Header.** The title, `Live` with the time since the call started, and one face per person and bot in the call:
+  the people the call view lists as in it and its bots. The media room only says who of them is speaking or muted; it
+  never adds a face. Each face shows one state: a green ring on the one whose words the caption shows while they speak,
+  a small crossed-out mic on someone muted (a muted mic shows no ring), or a breathing ring on a bot that is thinking
+  or making its voice. Past two rows of faces (three on a phone) the rest are
+  `+N`, which opens People. The dashed `+` face opens People to add someone. Tapping a bot's face adds it to the call,
+  or takes it out at once with `<Bot> left · Undo`.
+- **Caption.** Under the faces, up to three lines: who is speaking and what they said (a bot speaking: its own
+  caption in the call view's `voice.bots`; else the latest words of someone the room hears now; else the transcript's
+  last words), and for a few seconds the voice's `note`.
+- **Tabs.** Chat (the thread itself, with the composer, without the call's own posts; its `+` menu has Upload file,
+  Link a file, Link a task and New task, which makes a task linked to the call's meeting at once), Transcript (the live
+  transcript, each new or corrected piece applied from the meeting's event stream as it comes) and People (who is in
+  the call, or while searching, people, bots, or a whole team's bots to add). Adding a person rings them into the call
+  (`POST /api/v2/calls/{call_id}/ring`): someone who already reads the thread keeps their place in it, anyone else is
+  added to the thread first. The count on People is who is in the call, bots tapped out not counted, the same as the
+  thread's call bar.
+- **Controls.** Mic, share (the screen) and Leave. The connector also has End in the Leave menu.
+- **Sharing.** While someone else shares their screen, the window switches to the wide layout: the screen on the left,
+  the tabs on the right, or the screen above the tabs in a window too narrow for that. It goes back to small when
+  sharing stops. The desktop app's window (it asks the app, `callWindowSize`, which only the call's own window may) and
+  a pop-up the page opened grow to about 1100 by 720 and go back to their size after; a tab keeps its size. On a phone
+  the screen has a full-screen button.
+- **After the call.** When the call ends, the open window stops its chat and transcript stream and leaves the media
+  room, and the same view shows the meeting notes (`GET /api/v2/calls/{call_id}/notes`): who was in it (bots too), how
+  long it ran, a short summary, the action items (each with who took it on, Create, which makes the task linked to the
+  meeting for that person, and ✕ to hide it here) and the transcript, with search and copy.
+
+A Google Meet call still opens Meet in a tab of its own.
 
 ## How a call works
 
@@ -120,17 +163,18 @@ No install has run calls yet.
    it, and each is marked `restricted`:
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
      the message says where the full one is.
-   - `Action items: <title>` with one `- ` line per item, or `No action items were found.`. The items are drafted
-     from the transcript on the install's meeting model through the Gateway. The drafting follows a
-     prompt and rule (an item stands only when its quote is in the transcript word for word; at most 5),
-     in `backend/call_items.py`. If the Gateway does not answer, the items stay owed. The sweep tries again, each wait
-     longer than the last (two minutes, doubling, up to an hour). A day after the first failure the thread gets one
-     line, `Action items for <title> could not be made`, with the retry route, and the call gives up on them. The
-     connector can ask again (`POST /api/v2/calls/{call_id}/action-items/retry`), and the sweep makes them on its next
-     pass.
+   - `Action items: <title>` with one `- ` line per item, or `No action items were found.`, then `Summary:` and 3 to 5
+     `- ` lines. The items and the summary come from one call to the install's meeting model through the Gateway. The
+     drafting follows a prompt and rule (an item stands only when its quote is in the transcript word for word; at most
+     5; its owner, when someone took it on, is one of the speakers), in `backend/call_items.py`. The message keeps them
+     as data too (`refs.call.notes`), which the meeting window reads. If the Gateway does not answer, the items stay
+     owed. The sweep tries again, each wait longer than the last (two minutes, doubling, up to an hour). A day after the
+     first failure the thread gets one line, `Action items for <title> could not be made`, with the retry route, and the
+     call gives up on them. The connector can ask again (`POST /api/v2/calls/{call_id}/action-items/retry`), and the
+     sweep makes them on its next pass.
    A thread that refuses one of these posts is final: nothing retries it. The call records the refusal in its audit log
    and in its `holds` list (`kind`, `reason`, `created_at`), which only its connector sees.
-   Tasks are still made by hand from the action items.
+   Tasks are still made by hand from the action items (the meeting window's Create).
 7. **Presence.** The sweep reads who is in the room from LiveKit (Tico voice left out): it sets each person's
    `in_call`, the call's `live_count` and `status_source: recorder`. A room nobody is in ends the call
    (`end_reason: empty`) after 60 seconds, so someone who drops can rejoin; a call nobody ever joined ends `no_answer`
@@ -211,6 +255,8 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined (Tico Meet only) |
 | `POST /api/v2/calls/{call_id}/leave` | Leave |
 | `POST /api/v2/calls/{call_id}/end` | End (the connector). Answers the call `ended`, or `ending` while speech already heard is transcribed |
+| `GET /api/v2/calls/{call_id}/notes` | The call's own summary and action items (each `title` and `owner`), read from its items message under that message's rules; `pending` while still owed |
+| `POST /api/v2/calls/{call_id}/ring` | Ring a person into a live call. Body: `actor`. Someone who reads the thread keeps their role; anyone else is added to it first. Answers `actor` and `added` |
 | `POST /api/v2/calls/{call_id}/action-items/retry` | Ask again for action items the Gateway could not make (the connector, after the call ended) |
 | `POST /api/v2/calls/{call_id}/bots` | Attach bots. Body: `bots`, 1 to 10 slugs; at most 10 in the call (`422 bot_limit`) |
 | `DELETE /api/v2/calls/{call_id}/bots/{bot}` | Detach a bot |

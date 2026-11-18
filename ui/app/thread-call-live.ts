@@ -2,7 +2,8 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    A page part (ui/parts.json): it loads on the first join, so a cold open of Home does not download it (P05b). The call
    state (CALL, CALL_GEN, CALL_JOINS), the header's phone button, Start and leaving the page stay in ui/app/thread-call.ts
-   with Home. */
+   with Home. The meeting window (ui/app/call-window.ts) draws the same call: its screen box takes a shared screen, and
+   each change here redraws it (callWindowDraw). */
 'use strict';
 
 function callLib(): Promise<LivekitNamespace> {
@@ -52,6 +53,9 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
   room.on(LK.RoomEvent.ParticipantConnected, callBarDraw);
   room.on(LK.RoomEvent.ParticipantDisconnected, callBarDraw);
   room.on(LK.RoomEvent.LocalTrackUnpublished, (pub: CallPublication) => { if (pub.source === LK.Track.Source.ScreenShare && CALL === here) { here.sharing = false; callBarDraw(); } });
+  // Who speaks, who is muted and whether the browser lets the call be heard: only the meeting window shows them.
+  for (const event of [LK.RoomEvent.ActiveSpeakersChanged, LK.RoomEvent.TrackMuted, LK.RoomEvent.TrackUnmuted,
+    LK.RoomEvent.AudioPlaybackStatusChanged, LK.RoomEvent.LocalTrackPublished]) if (event) room.on(event, () => { if (CALL === here) callWindowDraw(); });
   room.on(LK.RoomEvent.Disconnected, (reason: unknown) => {
     if (CALL !== here || here.leaving) return;
     if (reason === LK.DisconnectReason?.PARTICIPANT_REMOVED) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), removed: true});
@@ -92,14 +96,20 @@ function callTrackOn(track: CallTrack, who: CallParticipant | undefined): void {
   if (track.kind === 'audio') { $('#call-bar .call-audio')?.append(track.attach()); return; }
   // Video arrives only as someone's shared screen: nobody publishes a camera.
   if (track.source !== LK.Track.Source.ScreenShare) return;
-  const box = $('#call-bar .call-screen');
+  const box = callScreenBox();
   if (!box) return;
   const el = track.attach();
   el.setAttribute('aria-label', `${actorName(who?.identity || '') || 'Someone'}'s screen`);
+  el.dataset.who = who?.identity || '';
   box.append(el);
   callScreenSync();
 }
-function callScreenSync(): void { const box = $('#call-bar .call-screen'); if (box) box.hidden = !box.querySelector('video'); }
+// Where a shared screen shows: the meeting window's stage when this page is the window, else the bar's.
+const callScreenBox = (): HTMLElement | null => $('#cw-screen') || $('#call-bar .call-screen');
+function callScreenSync(): void {
+  for (const box of document.querySelectorAll<HTMLElement>('#call-bar .call-screen, #cw-screen')) box.hidden = !box.querySelector('video');
+  callWindowDraw();
+}
 // Leave always leaves. End must reach the server: when it does not, the call goes on, End stays and the error shows.
 async function callLeave({end = false}: {end?: boolean} = {}): Promise<void> {
   const here = CALL; if (!here) return;
@@ -133,6 +143,7 @@ function callDone(here: CallState): void {
 function callBarDraw(): void {
   let bar: HTMLElement | null = $('#call-bar');
   document.body.classList.toggle('in-call', !!CALL);
+  callWindowDraw();
   if (!CALL) { bar?.remove(); return; }
   if (!bar) {
     bar = document.createElement('div');
@@ -144,9 +155,8 @@ function callBarDraw(): void {
     });
     document.body.append(bar);
   }
-  // The call's Tico voice (the bots speaking) is a participant of the room, never a person: not counted.
-  const people = [...(CALL.room?.remoteParticipants?.values() ?? [])].filter(p => !p.identity.startsWith(CALL_VOICE_PREFIX));
-  const n = people.length + 1, mine = CALL.connector === myActor();
+  // The call's Tico voice (the bots speaking) is a participant of the room, never a person: the count is the call view's.
+  const n = callCount(CALL_VIEWS.get(CALL.id)) || 1, mine = CALL.connector === myActor();
   callVoiceDraw(bar.querySelector<HTMLElement>('.call-voice'), CALL_VIEWS.get(CALL.id)?.voice);
   const btn = (k: string, icon: string, label: string, extra = '') => `<button type="button" class="ghost small call-btn${extra}" data-cb="${k}" aria-label="${esc(label)}" title="${esc(label)}"><span class="nav-icon" aria-hidden="true">${icon}</span><span class="call-lbl">${esc(label)}</span></button>`;
   const row = bar.querySelector<HTMLElement>('.call-row');
@@ -155,6 +165,7 @@ function callBarDraw(): void {
     ${btn('mute', CALL.muted ? CALL_ICONS.muted : CALL_ICONS.mic, CALL.muted ? 'Unmute' : 'Mute', CALL.muted ? ' on' : '')}
     ${callShareable() ? btn('share', CALL.sharing ? CALL_ICONS.stop : CALL_ICONS.share, CALL.sharing ? 'Stop sharing' : 'Share screen', CALL.sharing ? ' on' : '') : ''}
     ${btn('bot', CALL_ICONS.bot, 'Add bot')}
+    ${btn('window', CALL_ICONS.window, 'Open window')}
     ${btn('leave', CALL_ICONS.leave, 'Leave', ' danger')}${mine ? '<button type="button" class="ghost small call-btn danger" data-cb="end">End</button>' : ''}`);
 }
 // The bots' voice above the buttons: the bot answering, with dots while it thinks and its sentence while it speaks; a
@@ -181,6 +192,7 @@ async function callBarAct(k: string, button: HTMLElement): Promise<void> {
     else if (k === 'leave') { await callLeave(); return; }
     else if (k === 'end') { if (await askConfirm('End the call for everyone?')) await callLeave({end: true}); return; }
     else if (k === 'bot') { callBotPick(button); return; }
+    else if (k === 'window') { callWindowOpen(CALL_VIEWS.get(here.id) || {id: here.id, thread_id: here.threadId}); return; }
   } catch (e) {
     if (k === 'share') here.sharing = false;
     if (k === 'mute') here.muted = !here.muted;
@@ -212,5 +224,13 @@ function callHangUp(here: CallState): void {
   here.leaving = true;
   callStopLocal(here);
   callSeatLeave(here.id);
+  callDone(here);
+}
+// The call moves to its meeting window (callWindowOpen): this tab's microphone and screen stop and its room goes, but its
+// seat stays, for the window that joins next.
+function callHandOff(here: CallState): void {
+  here.leaving = true;
+  callStopLocal(here);
+  callSeatSettled(here.id);
   callDone(here);
 }

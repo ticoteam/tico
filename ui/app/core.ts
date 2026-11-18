@@ -12,6 +12,7 @@ const CHAT = '#/chat';                // retired with the Tico chat: old links l
 const NOTES = '#/notes';               // legacy route
 const RECORDINGS = '#/recordings';    // legacy route
 const MEETINGS = '#/meetings';        // imported meeting transcripts: the list, Import, and each meeting
+const CALL_ROUTE = '#/call/';        // a Tico Meet call's meeting window: #/call/<call id> (ui/app/call-window.ts)
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
 const DECIDE = '#/decide';            // retired: old links land on Needs you, or open the item's card (ui/app/router.ts)

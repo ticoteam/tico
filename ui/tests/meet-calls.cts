@@ -5,7 +5,8 @@
 // coming and going with the call; the ring (a card at the top right, × remembered across a reload, gone when the call
 // ends, Join opening the Meet) and on a phone the sheet at 390px, and a push link's `?call=` showing it without a sound;
 // Start and Join opening a blank tab in the click before any request (so a pop-up blocker lets it through), even when
-// the server did not say what it starts, and closing it on a Tico Meet answer or a failure.
+// the server did not say what it starts, sending it to the call's meeting window on a Tico Meet answer and closing it
+// on a failure.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots: meet-calls-<name>-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -79,6 +80,8 @@ async function open(browser: import('playwright').Browser, {phone = false}: {pho
   });
   // The Meet tab lands on a stand-in for Google's page.
   await context.route('https://meet.google.com/**', route => route.fulfill({contentType: 'text/html', body: '<title>Meet</title>'}));
+  // A meeting window's tab lands on a blank stand-in (the page's own routes below answer only `page`).
+  await context.route('https://tico-ui.test/**', route => route.fulfill({contentType: 'text/html', body: '<title>Call</title>'}));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -383,17 +386,30 @@ let browser: import('playwright').Browser | null = null;
     let tab = await opened;
     await tab.waitForEvent('close');
     assert.deepEqual(await order(), ['open ', 'POST /api/v2/threads/t-plan/calls']);
-    // The server makes a Tico Meet call: its tab closes and the call is joined here.
+    // The server makes a Tico Meet call: its tab goes to the call's meeting window (ui/app/call-window.ts), which joins
+    // it; this page does not.
     mode.start = 'tico';
     opened = context.waitForEvent('page');
     await start.click();
     tab = await opened;
-    await tab.waitForEvent('close');
-    // Joined here: the in-call code is a page part (ui/parts.json), so the join goes out once it has loaded.
-    await page.waitForFunction(() => window.__order.some(e => e.endsWith('/join')));
-    assert.deepEqual((await order()).slice(0, 2), ['open ', 'POST /api/v2/threads/t-plan/calls']);
-    // The bots' voice in the bar: dots while a bot thinks, its sentence while it speaks, a note when none answers.
-    assert.deepEqual(await page.evaluate(() => {
+    await tab.waitForURL(u => u.hash.startsWith('#/call/ct'), {waitUntil: 'commit'});
+    assert.equal(await tab.evaluate(() => window.name), 'tico-call-ct');
+    assert.deepEqual(await order(), ['open ', 'POST /api/v2/threads/t-plan/calls']);
+    // Join from the header now: the same window, brought to the front (one window per call), not a second one.
+    let more = 0;
+    const counted = () => { more++; };
+    context.on('page', counted);
+    // The window drops its join flag once used (ui/app/call-window.ts); the Join lands in it with the flag again.
+    await tab.evaluate(() => history.replaceState(null, '', '#/call/ct'));
+    await page.locator('.thv-head .thv-call.on[data-call="join"]').click();
+    await tab.waitForURL(u => u.hash === '#/call/ct?join=1');
+    assert.equal(more, 0, 'no second window');
+    assert.deepEqual(await order(), ['open /#/call/ct?join=1']);
+    context.off('page', counted);
+    await tab.waitForFunction(() => typeof callVoiceDraw === 'function');
+    // The bots' voice in the thread's call bar (the window loads it too): dots while a bot thinks, its sentence while it
+    // speaks, a note when none answers.
+    assert.deepEqual(await tab.evaluate(() => {
       const box = document.createElement('div');
       const shown = (voice: unknown) => { callVoiceDraw(box, voice); return box.hidden ? null : [box.querySelector('.typing') ? 'dots' : '', box.querySelector('.call-caption')?.textContent ?? '']; };
       return [
@@ -404,6 +420,10 @@ let browser: import('playwright').Browser | null = null;
         shown({bots: [{slug: 'ops', state: 'listening'}], note: 'Please repeat that'}),
       ];
     }), [null, null, ['dots', ''], ['', 'finance It costs less.'], ['', 'Please repeat that']]);
+    await tab.close();
+    // Its header is the live call's pill now; a fresh read (the stand-in lists no such call) shows the phone again.
+    await page.reload();
+    await start.waitFor();
     // A Google Meet: the blank tab goes to it.
     mode.start = 'google_meet';
     opened = context.waitForEvent('page');

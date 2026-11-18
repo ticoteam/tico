@@ -1,5 +1,7 @@
 # Google Meet calls in threads: build contract
 
+Since Nov 18, new calls default to Tico Meet and open the meeting window ([meet.md](../meet.md)); Google Meet is a per-call option. The rest is the original contract.
+
 The shared contract for the tracks building Google Meet calls, the New message pane and phone push. Each track builds against this file; a change to it goes through the integration branch `chris/meet-calls`.
 
 ## What Chris approved (Nov 9-10)

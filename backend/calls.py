@@ -528,12 +528,12 @@ class Calls:
             )
 
     def providers(self, c, who):
-        """The call providers `who` could start now, in the order `auto` tries them."""
+        """The call providers `who` could start now, in the order `auto` tries them: Tico Meet first, for every call."""
         offered = []
-        if google_workspace.meet_ready(c) and google_workspace.workspace_mailbox(c, who.actor):
-            offered.append("google_meet")
         if self.media is not None:
             offered.append("tico")
+        if google_workspace.meet_ready(c) and google_workspace.workspace_mailbox(c, who.actor):
+            offered.append("google_meet")
         return offered
 
     def choose(self, c, who, thread_id, wanted, speak_replies=None, bots=()):
@@ -1223,9 +1223,10 @@ class Calls:
             self.settling.pop(call_id, None)
         return True
 
-    def _post_in_thread(self, c, row, body):
+    def _post_in_thread(self, c, row, body, notes=None):
         """One message in the call's thread, from its connector, naming the call and its meeting as the source. The
-        live_meeting reference makes the meeting's own rules decide who reads the message. Returns the message."""
+        live_meeting reference makes the meeting's own rules decide who reads the message. `notes`: the action items
+        and summary, as data under refs.call. Returns the message."""
         who = self.auth.identity_for_actor(c, row["connector_actor"])
         return threads.post(
             c,
@@ -1234,7 +1235,7 @@ class Calls:
             body,
             kind="say",
             refs={
-                "call": {"id": row["id"], "meeting_id": row["live_meeting_id"]},
+                "call": {"id": row["id"], "meeting_id": row["live_meeting_id"], **({"notes": notes} if notes else {})},
                 "live_meeting": {"meeting_id": row["live_meeting_id"]},
             },
         )
@@ -1297,18 +1298,23 @@ class Calls:
         if not rows or not key:
             return True
         try:
-            items = call_items.draft(base, key, model, rows)
+            notes = call_items.draft(base, key, model, rows)
         except call_items.ItemsUnavailable as exc:
             log.warning("A call's action items were not drafted: %s", exc)
             return self._action_items_failed(call_id)
+        items, summary = notes["items"], notes["summary"]
         listed = "\n".join(f"- {item['title']}" for item in items) or "No action items were found."
         body = f"Action items: {row['title']}\n{listed}"
+        if summary:
+            body += "\n\nSummary:\n" + "\n".join(f"- {line}" for line in summary)
+        # The meeting window's notes read them from here (backend/call_notes.py): the items with who took each on.
+        shown = {"summary": summary, "items": [{"title": item["title"], "owner": item["owner"]} for item in items]}
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
                 if row["action_items_posted_at"]:
                     return True
-                self._post_in_thread(c, row, body)
+                self._post_in_thread(c, row, body, notes=shown)
                 c.execute(
                     "UPDATE calls SET action_items_posted_at=?,action_items_retry_at=NULL,updated_at=? WHERE id=?",
                     (H.now(), H.now(), call_id),

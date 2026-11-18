@@ -241,7 +241,10 @@ document.addEventListener('visibilitychange', () => document.documentElement.cla
 
 // People: Workspace/Slack photo when we have one, otherwise the same initials circle as a bot with no art.
 const personInitials = (name: string | null | undefined) => avInitials(String(name || '?').replace(/[^A-Za-z0-9 ]+/g, ' '));
-const personCircle = (name: string | null | undefined, size = 22) => `<span class="av av-initials" style="width:${size}px;height:${size}px;--hue:${avHue(String(name || ''))};font-size:${Math.round(size * 0.42)}px" aria-hidden="true">${esc(personInitials(name))}</span>`;
+// A person's colour: one of ten hues 36° apart, picked from their name (FNV-1a), so the people in a room rarely share one;
+// avHue's nearby names land on nearby hues ("Chris", "Thomaz", "Bea" were all green).
+const personHue = (name: string): number => { let h = 2166136261; for (let i = 0; i < name.length; i++) h = Math.imul(h ^ name.charCodeAt(i), 16777619); return (h >>> 0) % 10 * 36; };
+const personCircle = (name: string | null | undefined, size = 22) => `<span class="av av-initials" style="width:${size}px;height:${size}px;--hue:${personHue(String(name || ''))};font-size:${Math.round(size * 0.42)}px" aria-hidden="true">${esc(personInitials(name))}</span>`;
 const personPhotoUrl = (p: AvatarPerson | null | undefined) => p?.photo_url || p?.photo || '';
 function personAvatar(person: AvatarPerson | null | undefined, size = 22) {
   const name = person?.name || person?.id || '';

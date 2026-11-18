@@ -120,5 +120,17 @@ SCHEMAS.update(
             required=["call", "url"],
         ),
         "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+        # The meeting window's notes and ringing (backend/call_notes.py).
+        "CallNotes": obj(
+            {
+                "pending": {"type": "boolean", "description": "The call still owes its notes"},
+                "message_id": "n",
+                "summary": items({"type": "string"}),
+                "items": items(
+                    obj({"title": "s", "owner": {"type": "string", "description": "Who took it on; '' for nobody"}})
+                ),
+            }
+        ),
+        "CallRing": obj({"actor": "s", "added": {"type": "boolean", "description": "Added to the thread to be rung"}}),
     }
 )

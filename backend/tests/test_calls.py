@@ -140,7 +140,10 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
         drafts.append(len(rows))
         if not gateway_up:
             raise call_items.ItemsUnavailable("The Gateway answered 0")
-        return [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH}]
+        return {
+            "summary": [],
+            "items": [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH, "owner": ""}],
+        }
 
     monkeypatch.setattr(call_items, "draft", draft)
     cid = thread(meet)
@@ -199,7 +202,10 @@ def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold
     monkeypatch.setattr(
         call_items,
         "draft",
-        lambda base, key, model, rows: [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH}],
+        lambda base, key, model, rows: {
+            "summary": [],
+            "items": [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH, "owner": ""}],
+        },
     )
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
