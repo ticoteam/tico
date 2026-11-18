@@ -42,6 +42,7 @@ from . import growth_sync as GS
 from . import hubdb as _hubdb
 from . import kpis as _kpis
 from . import marketing_tasks as MT
+from .hubdb_core import TICO_ACTOR
 from .store import Problem
 
 G: Any = _growth
@@ -643,7 +644,7 @@ def _file(c: Conn, row: Row, text: str, slug: str) -> str:
 
 
 def _comment(c: Conn, task_id: str, text: str) -> None:
-    H.task_comment(c, H.KEEPER, task_id, text)
+    H.task_comment(c, TICO_ACTOR, task_id, text)
 
 
 def _hook(c: Conn, row: Row, kind: str, crossing_id: str, actor: str) -> None:
