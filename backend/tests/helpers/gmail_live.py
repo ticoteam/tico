@@ -41,6 +41,22 @@ def raw_message(mid, epoch=100):
     }
 
 
+def masked(raw):
+    """What Gmail answers a list read (gmail_live.LIST_FIELDS): every part kept, no part's bytes or headers."""
+
+    def strip(part, top):
+        if not top:
+            part.pop("headers", None)
+        part["body"] = {"size": int((part.get("body") or {}).get("size") or 0)}
+        for child in part.get("parts") or []:
+            strip(child, False)
+
+    strip(raw["payload"], True)
+    for key in ("historyId", "sizeEstimate"):
+        raw.pop(key, None)
+    return raw
+
+
 @pytest.fixture
 def gmail_http(monkeypatch):
     state = {
@@ -94,10 +110,13 @@ def gmail_http(monkeypatch):
         if "/threads/" in path:
             return 200, {"id": "t1", "messages": [copy.deepcopy(state["messages"][mid]) for mid in ("m2", "m1")]}
         raw = copy.deepcopy(state["messages"][path.rsplit("/", 1)[-1]])
-        if query.get("format") == ["metadata"]:
+        if "fields" in query or query.get("format") == ["metadata"]:
             if state["metadata_status"] != 200:
                 return state["metadata_status"], {}
-            raw["payload"].pop("parts")
+            if "fields" in query:
+                masked(raw)
+            else:  # Gmail's metadata read has no parts tree
+                raw["payload"].pop("parts")
         return 200, raw
 
     monkeypatch.setattr(G, "gmail_call", call)
