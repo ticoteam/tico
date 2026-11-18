@@ -23,10 +23,12 @@ NOW = datetime(2026, 11, 5, 15, 30, tzinfo=timezone.utc)  # Thursday 07:30 PST
 MORNING = pt(2026, 11, 5, 7, 0)  # half an hour before NOW
 
 
-def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1):
+def run(
+    sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1, anchor=None
+):
     return {
         "id": id,
-        "display_title": rt.title(sha, version, previous),
+        "display_title": rt.title(sha, version, previous, anchor),
         "status": status,
         "conclusion": conclusion,
         "html_url": "https://github.example/run/%d" % id,
@@ -132,6 +134,9 @@ class FakeGitHub:
     def find(self, number):
         return next(issue for issue in self.issue_list if issue["number"] == number)
 
+    def get(self, path):
+        return self.find(int(path.removeprefix("issues/")))
+
     def add_issue(self, title, *, labels=(), body="", state="open", number=None):
         number = number if number is not None else next(self.numbers)
         issue = {
@@ -151,6 +156,9 @@ class FakeGitHub:
         names = lambda issue: [item["name"] for item in issue["labels"]]  # noqa: E731
         return [i for i in self.issue_list if label in names(i) and state in ("all", i["state"])]
 
+    def approval_issues(self, state="open"):
+        return iter(self.issues(rt.APPROVAL_LABEL, state))
+
     def pages(self, path, key=None, limit=10):
         found = re.match(r"issues/(\d+)/(events|comments)", path)
         number = int(found.group(1))
@@ -169,9 +177,16 @@ class FakeGitHub:
         self.created.append(issue)
         return issue
 
-    def edit(self, number, body, state):
+    def edit(self, number, body, state=None, *, title=None):
         issue = self.find(number)
-        issue["body"], issue["state"] = body, state
+        issue["body"] = body
+        if title:
+            issue["title"] = title
+        if state == "closed":
+            self.close(number)
+        elif state:
+            issue["state"] = state
+        return issue
 
     def last_text(self, issue):
         said = [body for number, body in self.comments if number == issue["number"]]
@@ -204,7 +219,6 @@ def approval_of(gh, version):
 
 # An approval body whose notes list a High risk item, as scripts/release_notes.py writes them.
 HIGH_RISK_NOTES = (
-    "Candidate v0.5.200 at aaaaaaaaaaaa (validated: u)\n\n"
     "Changes since v0.5.199: 0 user-facing, 1 high risk, 0 backend, 0 internal\n\n"
     "## High risk\n\n### #9 Rewrite the task store\n- Risk: high — moves every task row\n"
 )
@@ -256,6 +270,7 @@ def publishes(gh):
                     conclusion=None,
                     at=datetime.now(timezone.utc),
                     id=50,
+                    anchor=inputs.get("anchor"),
                 ),
             )
 
@@ -1038,7 +1053,8 @@ def test_promote_updates_stable_to_the_approved_canary_release_and_closes_its_ap
     assert installs["updated"] == [("stable", "0.5.200")]
     assert record["state"] == "closed" and record["number"] in gh.closed
     assert any("approved by @chris" in line for line in rt.LOG)
-    assert gh.comments == [(record["number"], "Promoted to stable (TIDY), approved by @chris.")]
+    assert record["body"].startswith("Promoted to stable (TIDY), approved by @\u2060chris.\n\n")
+    assert gh.comments == []
 
 
 def test_a_comment_approve_by_someone_with_write_access_counts(installs):
@@ -1156,12 +1172,8 @@ def test_a_release_with_no_high_risk_item_is_approved_automatically_and_its_issu
     rt.promote(gh, AUTO)
     assert installs["updated"] == [("stable", "0.5.200")]
     assert record["state"] == "closed"
-    assert gh.comments == [
-        (
-            record["number"],
-            "Promoted to stable (TIDY), approved automatically (no high-risk items; RELEASE_NEEDS_PERSON is off).",
-        )
-    ]
+    assert record["body"].startswith("Promoted to stable (TIDY), %s.\n\n" % rt.AUTO_APPROVED)
+    assert gh.comments == []
     assert any(rt.AUTO_APPROVED in line for line in rt.LOG)
 
 
@@ -1187,7 +1199,81 @@ def test_a_high_risk_release_or_needs_person_on_still_waits_for_a_person(install
     record["labels"].append({"name": rt.APPROVED})
     rt.promote(gh, env)
     assert installs["updated"] == [("stable", "0.5.200")]
-    assert gh.comments == [(record["number"], "Promoted to stable (TIDY), approved by @chris.")]
+    assert record["body"].startswith("Promoted to stable (TIDY), approved by @\u2060chris.\n\n")
+    assert gh.comments == []
+
+
+@pytest.mark.parametrize("state, how", [("closed", "approved_by"), ("open", "comment_by")])
+def test_prior_human_approval_covers_the_same_high_risk_pr(installs, state, how):
+    gh = FakeGitHub()
+    older = approval_for(gh, "v0.5.199", body=HIGH_RISK_NOTES, **{how: "chris"})
+    older["state"] = state
+    current = approval_for(gh, "v0.5.200", body=HIGH_RISK_NOTES)
+    assert rt.pending_approval(gh, AUTO) == ("v0.5.200" if state == "closed" else "v0.5.199")
+    rt.promote(gh, AUTO)
+    reason = "approved earlier in #%d" % older["number"]
+    assert installs["updated"] == [("stable", "0.5.200")]
+    assert current["state"] == "closed" and current["body"].startswith("Promoted to stable (TIDY), %s.\n\n" % reason)
+    assert any(reason in line for line in rt.LOG)
+    assert gh.comments == []
+
+
+@pytest.mark.parametrize(
+    "body, env",
+    [
+        (HIGH_RISK_NOTES + "\n### #10 Change backups\n", AUTO),
+        (rt.release_notes.CUT_SHORT + "\n\n" + HIGH_RISK_NOTES, AUTO),
+        (HIGH_RISK_NOTES, ENV),
+    ],
+    ids=["new-pr", "cut-short", "needs-person-on"],
+)
+def test_prior_human_approval_does_not_cover_unreviewed_risk_or_override_gates(installs, body, env):
+    gh = FakeGitHub()
+    older = approval_for(gh, "v0.5.199", body=HIGH_RISK_NOTES, approved_by="chris")
+    older["state"] = "closed"
+    current = approval_for(gh, "v0.5.200", body=body)
+    assert rt.pending_approval(gh, env) is None
+    rt.promote(gh, env)
+    assert installs["updated"] == [] and current["state"] == "open"
+    assert any("#%d is not approved yet" % current["number"] in line for line in rt.LOG)
+
+
+def test_earlier_approval_reads_closed_records_beyond_the_first_page(monkeypatch):
+    gh = rt.GitHub("o/r", "token")
+    previous_page = "https://github.example/second-page"
+    old = {"title": rt.approval_title("v0.5.198"), "body": HIGH_RISK_NOTES, "number": 8, "state": "closed"}
+    ignored = dict(old, number=9, pull_request={})
+
+    def call(method, path):
+        assert method == "GET"
+        if path == "issues?labels=release-approval&state=all&per_page=100&sort=created&direction=desc":
+            return 200, [ignored], '<%s>; rel="next"' % previous_page
+        if path == previous_page:
+            return 200, [old], ""
+        if path == "issues/8/comments?per_page=100":
+            return 200, [{"body": "/approve", "user": {"login": "chris", "type": "User"}}], ""
+        assert path == "collaborators/chris/permission"
+        return 200, {"permission": "write"}, ""
+
+    monkeypatch.setattr(gh, "call", call)
+    assert rt.earlier_approval(gh, "v0.5.200", {9}) == 8
+
+
+def test_approval_history_never_fetches_a_fourth_page(monkeypatch):
+    gh = rt.GitHub("o/r", "token")
+    first = "issues?labels=release-approval&state=all&per_page=100&sort=created&direction=desc"
+    page_urls = [first] + ["https://github.example/approvals?page=%d" % page for page in (2, 3, 4)]
+    fetched = []
+
+    def call(method, path):
+        assert method == "GET" and path in page_urls[:3]
+        fetched.append(path)
+        page = page_urls.index(path)
+        return 200, [{"number": page + 1}], '<%s>; rel="next"' % page_urls[page + 1]
+
+    monkeypatch.setattr(gh, "call", call)
+    assert list(gh.approval_issues("all")) == [{"number": number} for number in (1, 2, 3)]
+    assert fetched == page_urls[:3]
 
 
 def test_the_hold_label_release_hold_and_blockers_still_stop_an_automatic_approval(installs):
@@ -1217,10 +1303,8 @@ def test_with_no_person_needed_releases_flow_canary_then_stable_with_no_one_in_t
     assert older["state"] == "closed"
     newer = approval_of(gh, "v0.5.201")
     assert newer["state"] == "closed" and "approved automatically" in newer["body"]
-    assert gh.comments[-1] == (
-        newer["number"],
-        "Promoted to stable (TIDY), approved automatically (no high-risk items; RELEASE_NEEDS_PERSON is off).",
-    )
+    assert newer["body"].startswith("Promoted to stable (TIDY), %s.\n\n" % rt.AUTO_APPROVED)
+    assert gh.comments == []
 
 
 def test_a_canary_that_rolls_back_never_reaches_stable_in_the_same_step(installs):
@@ -1321,31 +1405,93 @@ def test_every_step_promotes_an_approved_release_even_with_nothing_to_ship(insta
     assert installs["updated"] == [("stable", "0.5.200")] and record["state"] == "closed"
 
 
-def test_a_newer_canary_release_closes_the_older_approval_with_a_link(installs):
+@pytest.mark.parametrize("protection", [{"held": True}, {"comment_by": "chris"}], ids=["held", "approved"])
+def test_a_newer_canary_release_keeps_a_protected_records_title_and_closes_it_silently(installs, protection):
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200")  # on the canary, still waiting for approval
-    assert rt.cmd_step(gh, ENV, NOW) == 0
+    older = approval_for(gh, "v0.5.200", **protection)
+    assert rt.cmd_step(gh, dict(ENV, RELEASE_HOLD="billing fix first"), NOW) == 0
     newer = approval_of(gh, "v0.5.201")
-    assert older["state"] == "closed"
-    assert [body for number, body in gh.comments if number == older["number"]] == [
-        "Superseded by v0.5.201, which is on the canary: %s" % newer["html_url"]
-    ]
+    assert older["state"] == "closed" and older["title"] == rt.approval_title("v0.5.200")
+    assert older["body"].startswith("Superseded by v0.5.201, which is on the canary: %s\n\n" % newer["html_url"])
+    assert gh.comments == []
     # The new release's notes start at the last stable release (the one stable runs), and the record says how to decide.
     assert newer["body"].startswith("Candidate v0.5.201 at %s" % C[:12])
     assert "NOTES v0.5.199..%s" % C in newer["body"] and "/approve" in newer["body"]
 
 
-def test_a_canary_that_rolls_back_leaves_the_release_not_latest_and_its_approval_closed(installs):
+def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkeypatch, tmp_path):
+    gh = publishes(FakeGitHub())
+    monkeypatch.setattr(rt.release_notes, "build", lambda api, base, head: HIGH_RISK_NOTES + "\n@octocat\n")
+    shots = tmp_path / "shots.md"
+    shots.write_text("A picture of the candidate\n")
+    for patch, sha, previous in [(201, B, "v0.5.200"), (202, C, "v0.5.201"), (203, D, "v0.5.202")]:
+        version = "v0.5.%d" % patch
+        if sha not in gh.order:
+            gh.order.append(sha)
+        gh.head_ = sha
+        gh.runs = [run(sha, version, previous)]
+        assert rt.cmd_step(gh, AUTO, NOW) == 0
+        (issue,) = filed(gh, rt.APPROVAL_LABEL)
+        assert rt.open_approvals(gh) == [(version, issue)]
+        assert rt.find_approval(gh, previous, state="all") is None
+        assert rt.pending_approval(gh, AUTO) is None
+        assert issue["body"].startswith("Candidate %s at %s" % (version, sha[:12]))
+        assert "@octocat" not in issue["body"]
+        if patch == 201:
+            issue["labels"].append({"name": "release-owner"})
+            assert rt.cmd_shots_into_approval(gh, version, str(shots)) == 0
+        else:
+            assert "A picture of the candidate" in issue["body"]
+            assert {label["name"] for label in issue["labels"]} == {rt.APPROVAL_LABEL, "release-owner"}
+        assert any("Promote: holding %s" % version in line and "not approved yet" in line for line in rt.LOG)
+    assert installs["updated"] == [("canary", "0.5.%d" % patch) for patch in (201, 202, 203)]
+    assert gh.comments == []
+    gh.user_comments[issue["number"]] = [{"body": "/approve", "user": {"login": "chris", "type": "User"}}]
+    assert rt.pending_approval(gh, AUTO) == "v0.5.203"
+    rt.promote(gh, AUTO)
+    assert installs["updated"][-1] == ("stable", "0.5.203")
+    assert issue["state"] == "closed" and gh.comments == []
+    shots.write_text("An older release's late picture\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.202", str(shots)) == 0
+    assert "An older release's late picture" not in issue["body"]
+
+
+@pytest.mark.parametrize("held", [False, True], ids=["reused-record", "separate-record"])
+def test_a_canary_that_rolls_back_leaves_the_old_canarys_approval_intact(installs, held):
     installs["outcome"] = "rolled_back"
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200")
+    older = approval_for(gh, "v0.5.200", held=held)
+    old_body = older["body"]
     assert rt.cmd_step(gh, ENV, NOW) == 1
     assert "v0.5.201" in gh.releases and gh.latest == [] and COMMANDS == []
     assert "rolled_back" in filed(gh)[0]["body"]
-    refused = approval_of(gh, "v0.5.201")
-    assert refused["state"] == "closed"
-    assert any("Not on the canary" in body for number, body in gh.comments if number == refused["number"])
-    assert older["state"] == "open", "the canary still runs v0.5.200, so its approval still stands"
+    refused = rt.find_approval(gh, "v0.5.201", state="all")
+    if held:
+        assert refused["state"] == "closed" and refused["body"].startswith("Not on the canary")
+    else:
+        assert refused is None
+    assert older["state"] == "open" and older["body"] == old_body
+    assert rt.find_approval(gh, "v0.5.200") is older
+    assert gh.comments == []
+
+
+def test_a_hold_added_during_a_failed_rollout_stays_with_the_candidate(installs, monkeypatch):
+    gh = publishes(FakeGitHub([run(C)]))
+    older = approval_for(gh, "v0.5.200")
+    old_body = older["body"]
+
+    def fail(target, version):
+        assert target["name"] == "canary"
+        assert rt.find_approval(gh, version) is older
+        older["labels"] = [*older["labels"], {"name": rt.HOLD}]
+        raise rt.Fail("rolled back")
+
+    monkeypatch.setattr(rt, "update_install", fail)
+    assert rt.cmd_step(gh, ENV, NOW) == 1
+    assert older["state"] == "closed" and older["title"] == rt.approval_title("v0.5.201")
+    restored = rt.find_approval(gh, "v0.5.200")
+    assert restored["body"] == old_body and restored["labels"] == [{"name": rt.APPROVAL_LABEL}]
+    assert gh.comments == []
 
 
 def test_a_failed_image_move_is_reported_and_the_release_stays_not_latest(installs, monkeypatch):
@@ -1604,6 +1750,19 @@ def test_hotfix_without_promote_leaves_stable_and_records_the_reason(installs, t
     assert approval_of(gh, "v0.5.201")["state"] == "open", "the approval decides stable"
 
 
+def test_hotfix_waiting_for_a_person_reuses_the_canarys_waiting_record(installs, monkeypatch):
+    gh = hotfix_github()
+    older = approval_for(gh, "v0.5.200", body=HIGH_RISK_NOTES)
+    monkeypatch.setattr(rt.release_notes, "build", lambda api, base, head: HIGH_RISK_NOTES)
+    assert rt.hotfix(gh, AUTO, "", "Tasks vanish from the board after an update", False) == "v0.5.201"
+    assert rt.find_approval(gh, "v0.5.200", state="all") is None
+    assert rt.find_approval(gh, "v0.5.201") is older
+    rt.promote(gh, AUTO)
+    assert installs["updated"] == [("canary", "0.5.201")]
+    assert any("#%d is not approved yet" % older["number"] in line for line in rt.LOG)
+    assert len(gh.issue_list) == 1 and gh.comments == []
+
+
 def test_each_failed_hotfix_run_gets_its_own_comment(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = FakeGitHub()
@@ -1720,7 +1879,7 @@ def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(insta
 
 def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_change_nothing(tmp_path, monkeypatch):
     gh = FakeGitHub()
-    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
     shots = tmp_path / "release-shots.md"
     shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
     assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
@@ -1728,19 +1887,20 @@ def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_chang
     assert rt.SHOTS_PENDING not in body and "| before | after |" in body
     assert body.count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in body and rt.APPROVE_FOOTER in body
     edits = []
-    monkeypatch.setattr(gh, "edit", lambda number, text, state: edits.append(number))
+    monkeypatch.setattr(gh, "edit", lambda number, text: edits.append(number))
     assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
     assert edits == []
 
 
 def test_reopening_an_approval_keeps_the_pictures_already_on_it(tmp_path):
     gh = FakeGitHub()
-    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
     shots = tmp_path / "release-shots.md"
     shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
     assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    gh.close(issue["number"])
     # A republish or a retry of the same version reopens the same record: its pictures stay, and nothing goes pending.
-    again = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    again, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
     assert again is issue and issue["state"] == "open"
     assert "| before | after |" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
     assert issue["body"].count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in issue["body"]
@@ -1751,7 +1911,7 @@ def test_missing_pictures_put_the_failure_and_the_run_that_tried_on_the_issue(tm
     monkeypatch.setenv("GITHUB_REPOSITORY", "ticoteam/tico")
     monkeypatch.setenv("GITHUB_RUN_ID", "4242")
     gh = FakeGitHub()
-    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES")
+    issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES")
     assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "missing.md")) == 0
     assert "could not be made" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
     assert "https://github.example/ticoteam/tico/actions/runs/4242" in issue["body"]

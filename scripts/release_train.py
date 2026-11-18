@@ -32,15 +32,15 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
                                            (a dispatch naming VALIDATION_RUN is a finished run, not a manual one)
     RELEASE_NEEDS_PERSON                   `on`: every release waits for a person's approval. Anything else (the
-                                           default): a release whose notes list no High risk item needs no person
+                                           default): only new High risk items or cut-short notes need a person
     GITHUB_ACTOR                           hotfix only: who overrode a hold
 
-Approval: each candidate that reaches the canary gets an open issue, "Release vX.Y.Z: awaiting approval" (label
-release-approval), whose body is its release notes. A person with write access approves it by adding the `approved` label
-or commenting `/approve` (a bot or app never counts). With RELEASE_NEEDS_PERSON not `on`, the Release Owner approves a
-release whose notes list no High risk item and were not cut short. The `hold` label keeps it from stable. Promotion takes
-the canary's release to stable on each job run, only when it is approved, not held and healthy, and then closes its
-issue, saying who approved it. A newer release on the canary closes the older issues, with a link to the new one.
+Approval: the candidate on the canary has an issue, "Release vX.Y.Z: awaiting approval" (label release-approval), whose
+body is its release notes. A candidate waiting for a person can reuse the previous waiting issue. A person with write
+access approves by adding the `approved` label or commenting `/approve` (a bot or app never counts). With
+RELEASE_NEEDS_PERSON off and complete notes, a release is automatically approved if one earlier human-approved issue
+lists all its High risk items, or if it has none. The `hold` label keeps it from stable. Promotion takes an approved,
+healthy canary release to stable and closes its issue. Superseded issues close too, with the reason in their body.
 
 There are no release windows: a candidate is validated and shipped whenever main has moved past the newest release
 and no candidate is in flight, at any hour. A release is published as not latest and marked latest (the GitHub release
@@ -97,7 +97,8 @@ AUTO_APPROVED = "approved automatically (no high-risk items; RELEASE_NEEDS_PERSO
 APPROVE_FOOTER = (
     "---\n"
     "Approve: a person with write access adds the `approved` label or comments `/approve`. Hold: add the `hold` label.\n"
-    "With RELEASE_NEEDS_PERSON off, a release with no High risk item needs no person: it is approved automatically.\n"
+    "With RELEASE_NEEDS_PERSON off and complete notes, a release with no High risk items or with all its High risk"
+    " items covered by an earlier person's approval is approved automatically.\n"
     "Stable (TIDY) takes an approved release at the next train run (the backstop runs every 20 minutes), unless it is"
     " held or a health check fails."
 )
@@ -343,17 +344,20 @@ class GitHub:
 
     def pages(self, path, key=None, limit=10):
         """Up to `limit` pages of a list, following Link: next."""
-        items, url = [], path
-        for _ in range(limit):
+        return list(self.page_items(path, key, limit))
+
+    def page_items(self, path, key=None, limit=None):
+        url, count = path, 0
+        while limit is None or count < limit:
             code, data, link = self.call("GET", url)
             if code != 200:
                 raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")))
-            items.extend(data[key] if key else data)
+            yield from data[key] if key else data
             found = re.search(r'<([^>]+)>;\s*rel="next"', link or "")
             if not found:
                 break
             url = found.group(1)
-        return items
+            count += 1
 
     def tags(self):
         """Every v* tag name."""
@@ -498,6 +502,12 @@ class GitHub:
         query = urllib.parse.urlencode({"labels": label, "state": state, "per_page": 20})
         return [issue for issue in self.get("issues?" + query) if "pull_request" not in issue]
 
+    def approval_issues(self, state="open"):
+        query = urllib.parse.urlencode(
+            {"labels": APPROVAL_LABEL, "state": state, "per_page": 100, "sort": "created", "direction": "desc"}
+        )
+        return (issue for issue in self.page_items("issues?" + query, limit=3) if "pull_request" not in issue)
+
     def ensure_label(self, name, color, description):
         self.call("POST", "labels", {"name": name, "color": color, "description": description})  # 422: exists
 
@@ -507,10 +517,18 @@ class GitHub:
             raise Fail("opening the %s issue: %s %s" % (labels[0], code, data.get("message", "")))
         return data
 
-    def edit(self, number, body, state):
-        code, data, _ = self.call("PATCH", "issues/%d" % number, {"body": body, "state": state})
+    def edit(self, number, body, state=None, *, title=None):
+        fields = {"body": body}
+        if state:
+            fields["state"] = state
+        if state == "closed":
+            fields["state_reason"] = "completed"
+        if title:
+            fields["title"] = title
+        code, data, _ = self.call("PATCH", "issues/%d" % number, fields)
         if code != 200:
             raise Fail("updating #%d: %s %s" % (number, code, data.get("message", "")))
+        return data
 
     def last_text(self, issue):
         """The issue's last comment, or its body when it has none."""
@@ -1111,13 +1129,13 @@ def approval_title(version):
 def find_approval(gh, version, state="open"):
     """The approval record of a version (open unless state says otherwise), or None."""
     want = approval_title(version)
-    return next((issue for issue in gh.issues(APPROVAL_LABEL, state) if issue.get("title") == want), None)
+    return next((issue for issue in gh.approval_issues(state) if issue.get("title") == want), None)
 
 
 def open_approvals(gh):
     """The open approval records, oldest version first, as (version, issue)."""
     found = []
-    for issue in gh.issues(APPROVAL_LABEL):
+    for issue in gh.approval_issues():
         match = APPROVAL_TITLE.match(str(issue.get("title") or ""))
         if match:
             found.append((match.group(1), issue))
@@ -1159,29 +1177,42 @@ def needs_person(env):
     return (env.get("RELEASE_NEEDS_PERSON") or "").strip().lower() == "on"
 
 
-def why_person(issue, env):
-    """Why this release needs a person's approval, or "" when it is approved automatically: RELEASE_NEEDS_PERSON is on,
-    its notes list a High risk item, or its notes were cut short (a high-risk item may be missing). The notes are the
-    approval issue's body, as the train wrote them (scripts/release_notes.py)."""
-    body = str(issue.get("body") or "")
+def earlier_approval(gh, version, prs):
+    """An earlier record whose notes list every PR in `prs` and which a person approved."""
+    for issue in gh.approval_issues("all"):
+        match = APPROVAL_TITLE.fullmatch(issue.get("title") or "")
+        if match and parse_version(match[1]) < parse_version(version):
+            body = SHOTS_SECTION.sub("", issue.get("body") or "", count=1)
+            if prs <= release_notes.high_risk_prs(body) and person_approval(gh, issue)[0]:
+                return issue["number"]
+    return None
+
+
+def automatic_approval(gh, version, body, env):
+    """How the release was approved automatically, or why it needs a person."""
     if needs_person(env):
-        return "RELEASE_NEEDS_PERSON is on"
+        return "", "RELEASE_NEEDS_PERSON is on"
+    cut_short = release_notes.cut_short(body)
     if release_notes.high_risk(body):
-        return "its notes list a High risk item"
-    if release_notes.cut_short(body):
-        return "its notes were cut short, so a High risk item may be missing"
-    return ""
+        prs = release_notes.high_risk_prs(body)
+        if version and prs and not cut_short and (number := earlier_approval(gh, version, prs)):
+            return "approved earlier in #%d" % number, ""
+        return "", "its notes list a High risk item"
+    if cut_short:
+        return "", "its notes were cut short, so a High risk item may be missing"
+    return AUTO_APPROVED, ""
 
 
 def approval_state(gh, issue, env):
     """(approval, held, why a person is needed). `approval` says how the release was approved: "approved by @login" for
-    a person, AUTO_APPROVED when no person is needed (why_person), "" while it waits. A person's approval counts either
-    way."""
+    a person, the automatic approval reason, or "" while it waits."""
     approver, held = person_approval(gh, issue)
     if approver:
         return "approved by @" + approver, held, ""
-    why = why_person(issue, env)
-    return ("" if why else AUTO_APPROVED), held, why
+    match = APPROVAL_TITLE.fullmatch(issue.get("title") or "")
+    body = SHOTS_SECTION.sub("", issue.get("body") or "", count=1)
+    approval, why = automatic_approval(gh, match[1] if match else None, body, env)
+    return approval, held, why
 
 
 def pending_approval(gh, env):
@@ -1198,10 +1229,15 @@ def shots_block(section):
     return "\n".join([SHOTS_START, section.strip(), SHOTS_END])
 
 
+def quiet_mentions(text):
+    # GitHub resolves Markdown-escaped mentions too. The word joiner keeps handles readable without a notification.
+    return re.sub(r"(?<![\w/@])@(?=[a-zA-Z0-9])", "@\u2060", text)
+
+
 def approval_body(version, sha, notes, validated):
     head = "Candidate %s at %s (validated: %s)" % (version, sha[:12], validated or "not recorded")
     pending = shots_block("%s\n\n%s" % (SHOTS_HEADING, SHOTS_PENDING))
-    return "\n".join([head, "", pending, "", notes.rstrip(), "", APPROVE_FOOTER]) + "\n"
+    return "\n".join([head, "", pending, "", quiet_mentions(notes.rstrip()), "", APPROVE_FOOTER]) + "\n"
 
 
 def with_shots(body, section):
@@ -1214,19 +1250,28 @@ def with_shots(body, section):
     return head + "\n\n" + block + "\n" + rest
 
 
-def open_approval(gh, version, sha, notes, validated=""):
-    """The approval record of a candidate the canary is about to run: created, or updated and reopened when an earlier
-    attempt made it. Its labels exist first. Returns the issue."""
+def open_approval(gh, env, version, sha, notes, validated=""):
+    """Open the candidate's record. Return the issue and its previous contents if it was retitled."""
     gh.ensure_label(APPROVAL_LABEL, "0e8a16", "A release waits for someone to approve its notes")
     gh.ensure_label(APPROVED, "0e8a16", "Stable (TIDY) may take this release")
     gh.ensure_label(HOLD, "b60205", "Holds this release from stable (TIDY)")
     body = approval_body(version, sha, notes, validated)
     found = find_approval(gh, version, state="all")
     if found:
-        # A republish or a retry keeps the pictures already on the record; only a new record starts with them pending.
-        gh.edit(found["number"], kept_shots(body, found.get("body")), "open")
-        return found
-    return gh.create_issue(approval_title(version), body, [APPROVAL_LABEL])
+        old_body = found.get("body") or ""
+        if person_approval(gh, found)[0]:
+            body = old_body  # The notes are the record of what the person approved.
+        return gh.edit(found["number"], kept_shots(body, old_body), "open"), None
+    if automatic_approval(gh, version, notes, env)[1]:
+        for old, issue in reversed(open_approvals(gh)):
+            if parse_version(old) >= parse_version(version):
+                continue
+            approval, held, _ = approval_state(gh, issue, env)
+            if not approval and not held:
+                previous = issue.copy()
+                body = kept_shots(body, issue.get("body"))
+                return gh.edit(issue["number"], body, "open", title=approval_title(version)), previous
+    return gh.create_issue(approval_title(version), body, [APPROVAL_LABEL]), None
 
 
 def kept_shots(body, old):
@@ -1240,19 +1285,43 @@ def kept_shots(body, old):
 
 
 def retire_approvals(gh, version, text, *, inclusive):
-    """Closes the open approval records older than `version` (and `version`'s own, when inclusive), with a comment."""
+    """Close older approval records, and `version`'s own when inclusive, with the reason in their bodies."""
     for old, issue in open_approvals(gh):
         older = parse_version(old) < parse_version(version)
         if older or (inclusive and old == version):
-            gh.comment(issue["number"], text)
-            gh.close(issue["number"])
+            close_approval(gh, issue, text)
             note("Closed the approval for %s: %s" % (old, " ".join(text.split())))
+
+
+def close_approval(gh, issue, reason):
+    body = quiet_mentions(" ".join(reason.split())) + "\n\n" + (issue.get("body") or "")
+    gh.edit(issue["number"], body, "closed")
 
 
 def drop_approval(gh, issue, reason):
     """Closes the approval record of a candidate the canary did not reach: there is nothing to approve."""
-    gh.comment(issue["number"], "Not on the canary, so there is nothing to approve: %s" % " ".join(str(reason).split()))
-    gh.close(issue["number"])
+    close_approval(gh, issue, "Not on the canary, so there is nothing to approve: %s" % reason)
+
+
+def ship_canary(gh, env, canary, version, sha, notes, validated):
+    # Open the record before rollout so a person can review the candidate while the canary updates.
+    issue, previous = open_approval(gh, env, version, sha, notes, validated)
+    try:
+        update_install(canary, version)
+    except Exception as exc:
+        if previous:
+            # After a failed rollout the old candidate still needs a record. Approval or hold added during the rollout
+            # belongs to the new candidate, so keep that record if somebody acted on it.
+            issue = gh.get("issues/%d" % issue["number"])
+            if not any(person_approval(gh, issue)):
+                gh.edit(issue["number"], previous.get("body") or "", "open", title=previous["title"])
+                raise
+            gh.create_issue(
+                previous["title"], previous.get("body") or "", [label["name"] for label in previous["labels"]]
+            )
+        drop_approval(gh, issue, str(exc))
+        raise
+    return issue
 
 
 def release_base(env, previous):
@@ -1299,13 +1368,19 @@ def cmd_shots_into_approval(gh, version, path):
         markdown = ""
     found = find_approval(gh, version, state="all")
     if not found:
+        target = parse_version(version)
+        for issue in gh.approval_issues("all"):
+            match = APPROVAL_TITLE.fullmatch(issue.get("title") or "")
+            if target and match and parse_version(match[1]) > target:
+                note("The approval record for %s was superseded; its pictures were skipped" % version)
+                return 0
         raise Fail("no approval record for %s to put its pictures in" % version)
     body = found.get("body") or ""
     updated = with_shots(body, shots_section(markdown, run_url()))
     if updated == body:
         note("The pictures on #%s are already current" % found["number"])
         return 0
-    gh.edit(found["number"], updated, found["state"])  # the issue keeps its state: a closed record stays closed
+    gh.edit(found["number"], updated)
     note("Put the pictures on #%s (%s)" % (found["number"], "made" if markdown.strip() else "not made: see the run"))
     return 0
 
@@ -1496,15 +1571,9 @@ def cmd_step(gh, env, now=None):
             def ship():
                 nonlocal shipment, record
                 canary, base, notes = published["canary"], published["base"], published["notes"]
-                # The approval record exists before the canary moves, so an approval of the candidate is never lost.
-                approval = open_approval(
-                    gh, plan["version"], plan["sha"], notes, plan.get("run", {}).get("html_url", "")
+                approval = ship_canary(
+                    gh, env, canary, plan["version"], plan["sha"], notes, plan.get("run", {}).get("html_url", "")
                 )
-                try:
-                    update_install(canary, plan["version"])
-                except Exception as exc:
-                    drop_approval(gh, approval, str(exc))
-                    raise
                 # The canary runs it and its approval record is open: its release shots may run (train.yml). Written now,
                 # not at the end of the step, so a crash after this point still leaves the shots their candidate.
                 shipment = {"version": plan["version"], "sha": plan["sha"], "base": base}
@@ -1628,12 +1697,7 @@ def hotfix(gh, env, sha, reason, promote_stable, override_hold=False, record=Non
         note("Canary: skipped, %s; stable not touched" % missing("CANARY"))
         mark_latest(gh, version)
         return version
-    approval = open_approval(gh, version, sha, notes, green.get("html_url", ""))
-    try:
-        update_install(canary, version)
-    except Exception as exc:
-        drop_approval(gh, approval, str(exc))
-        raise
+    approval = ship_canary(gh, env, canary, version, sha, notes, green.get("html_url", ""))
     retire_approvals(
         gh,
         version,
