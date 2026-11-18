@@ -86,6 +86,10 @@ export interface OpenOptions {
   runs?: Record<string, unknown[]>;
   bots?: unknown[];
   beforeGoto?: ((page: Page) => unknown) | null;
+  /** Answers held back by path until the test lets them go (a slow server, in the order the test sets). */
+  slow?: Hold | null;
+  /** false: return as soon as the page is asked for, before its first read lands. */
+  settle?: boolean;
 }
 
 // The app's classic-script globals, read inside page.evaluate. A script declares the ones it reads itself
@@ -230,8 +234,29 @@ const BOTS = [['pm', 'PM'], ['eng', 'Engineer'], ['ops', 'Ops'], ['writer', 'Wri
   ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 const CONFIG = {version: '0.6.0', app_name: 'Tico', local: true};
 
+/** A slow server whose order the test sets: a read on a held path waits until the test lets that path go. */
+class Hold {
+  private waiting = new Map<string, (() => void)[]>();
+  private held: Set<string>;
+  constructor(...paths: string[]) { this.held = new Set(paths); }
+  pass(path: string): Promise<void> {
+    if (!this.held.has(path)) return Promise.resolve();
+    return new Promise<void>(go => { this.waiting.set(path, [...(this.waiting.get(path) ?? []), go]); });
+  }
+  /** How many reads of `path` are waiting. */
+  asked(path: string): number { return this.waiting.get(path)?.length ?? 0; }
+  hold(...paths: string[]) { for (const p of paths) this.held.add(p); }
+  release(...paths: string[]) {
+    for (const p of paths.length ? paths : [...this.held]) {
+      this.held.delete(p);
+      for (const go of this.waiting.get(p) ?? []) go();
+      this.waiting.delete(p);
+    }
+  }
+}
+
 async function open(browser: Browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/tasks', mover = true, tasks: given,
-  needs: givenNeeds, comments = {}, events = {}, runs = {}, bots = BOTS, beforeGoto = null}: OpenOptions = {}) {
+  needs: givenNeeds, comments = {}, events = {}, runs = {}, bots = BOTS, beforeGoto = null, slow = null, settle = true}: OpenOptions = {}) {
   const tasks = given ?? fixtures();
   let needs = givenNeeds ?? needsOf(tasks);
   const posts: Posted[] = [], reads: URL[] = [];
@@ -246,6 +271,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
+    if (slow) await slow.pass(p);
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]!)))
       return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
@@ -366,6 +392,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
   });
   await beforeGoto?.(page);
   await page.goto('https://tico-ui.test/' + hash);
+  if (!settle) return {page, errors, posts, reads, tasks, needs: () => needs};
   // A task waiting on Ana's own answer opens on its ask (decideTaskOpen), any other on its page.
   const ready = hash.startsWith('#/task/')
     ? page.locator('#task-modal[open] .tmodal-title, #need-card[open] .dc-q').first().waitFor()
@@ -495,6 +522,152 @@ async function youByTitle(browser: Browser) {
     await page.close();
   }
   console.log('You: rows with the same ask read by their titles; Paused and a mention by their line: ok');
+}
+
+// The page once opened as a blank "You", with no other boards in the view button, for seconds: the boards' list went in
+// only when the slower Needs you or the rows read landed too, and until then a board left in view (tico.tasks.view)
+// drew as You with "Nothing here". Each frame of a slow open is recorded: the view button never says You while a board
+// is in view, nothing says "Nothing here" before the rows land, the boards are offered as soon as their read lands, and
+// a later open names the board at once from the boards kept from the last read. The kept list is only ever shown: it
+// is another person's never, and the live list replaces it on every path (a task opened by its address, a search typed
+// while the page loads).
+type Kept = {who: string; names: Record<string, string>; drop?: string} | null;
+const KEPT_KEY = 'tico.tasks.pipelines';
+async function recorded(browser: Browser, hash: string, slow: Hold, kept: Kept = null, view = 'ops') {
+  const list = kept ? PIPELINES.filter(p => !p.retired_at && p.id !== kept.drop).map(p => ({...p, name: kept.names[p.id] ?? p.name})) : null;
+  return open(browser, {hash, slow, settle: false, beforeGoto: (pg: Page) => pg.addInitScript(([key, seed, board]) => {
+    localStorage.setItem('tico.tasks.view', JSON.stringify({pipeline: board, layout: 'list'}));
+    if (seed && !sessionStorage.getItem('seeded')) { localStorage.setItem(key, seed); sessionStorage.setItem('seeded', '1'); }
+    const seen: string[][] = (window as unknown as {seen: string[][]}).seen = [];
+    const look = () => {
+      const st = typeof TASKS_ST === 'undefined' ? null : TASKS_ST;   // a classic script's `let`: no window property
+      const scope = document.querySelector('#task-scope .tl-scope-l')?.textContent ?? null;
+      if (st) seen.push([String(st.loading), scope ?? '', String((st.pipelines as unknown[]).length), document.querySelector('#task-body .empty') ? 'empty' : '']);
+      requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
+  }, [KEPT_KEY, list ? JSON.stringify({who: kept!.who, list}) : '', view] as const)});
+}
+const frames = (page: Page) => page.evaluate(() => (window as unknown as {seen: string[][]}).seen);
+/** More than `n` frames drawn while a read is out: the page draws on while the held reads wait. */
+const drawing = (page: Page, n = 5) =>
+  page.waitForFunction(k => (window as unknown as {seen: string[][]}).seen.filter(f => f[0] === 'true').length > k, n);
+/** Every read answered: the held ones let go, and the page done with them. */
+const loaded = (page: Page) => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading);
+/** The boards' read let go and taken in: the live names are the page's. */
+const boards = async (page: Page, slow: Hold) => {
+  slow.release(PIPES);
+  await page.waitForFunction(() => (TASKS_ST?.pipelines as {name: string}[] | undefined)?.map(p => p.name).join() === 'Product,Operations');
+};
+const shown = (page: Page) => page.evaluate(() => ({view: TASKS_ST!.pipeline, scope: document.querySelector('#task-scope .tl-scope-l')?.textContent ?? '',
+  names: (TASKS_ST!.pipelines as {name: string}[]).map(p => p.name)}));
+const ROWS = '/api/v2/tasks', NEEDS = '/api/v2/needs-you', PIPES = '/api/v2/pipelines';
+async function slowOpen(browser: Browser) {
+  {
+    // Needs you answers at once (the app's own read): only the board's rows are slow, so its count must not stand in.
+    const slow = new Hold(ROWS);
+    const {page, errors} = await recorded(browser, '#/tasks', slow);
+    await drawing(page);
+    // The boards are offered while the rows are still held: before the fix, this waited out its deadline.
+    await page.waitForFunction(() => (TASKS_ST?.pipelines as unknown[] | undefined)?.length === 2);
+    slow.release();
+    await loaded(page);
+    let seen = await frames(page);
+    const loading = seen.filter(f => f[0] === 'true');
+    assert.deepEqual(loading.filter(f => f[1] === 'You'), [], 'a board in view never shows as You');
+    assert.deepEqual(loading.filter(f => f[3] === 'empty'), [], 'no "Nothing here" before the rows land');
+    assert.ok(loading.some(f => f[1] === 'Operations' && f[2] === '2'), 'the boards are offered before the rows land');
+    // The next open, the boards' read slow too: the board is named from the first frame the page has.
+    slow.hold(ROWS, PIPES);
+    await page.reload();
+    await drawing(page);
+    slow.release();
+    await loaded(page);
+    seen = await frames(page);
+    assert.equal(seen[0]?.[0], 'true', 'the first frame is drawn before any read lands');
+    assert.deepEqual(seen[0]?.slice(1, 3), ['Operations', '2'], 'named at once from the boards kept');
+    assert.deepEqual(seen.filter(f => f[1] === 'You' || (f[0] === 'true' && f[3] === 'empty')), []);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // From You, Needs you read, to a board whose rows are slow: Needs you's rows say nothing of the board's.
+    const slow = new Hold();
+    const {page, errors} = await recorded(browser, '#/tasks?view=foryou', slow);
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.needs.length > 0);
+    slow.hold(ROWS);
+    await page.evaluate(() => { (window as unknown as {seen: string[][]}).seen.length = 0; });
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-scope="ops"]').click();
+    await page.waitForFunction(() => TASKS_ST?.pipeline === 'ops');
+    await drawing(page);
+    slow.release();
+    await loaded(page);
+    const loading = (await frames(page)).filter(f => f[0] === 'true');
+    assert.deepEqual(loading.filter(f => f[3] === 'empty'), [], 'no "Nothing here" before the board\'s rows land');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // Boards kept here for another person: none of them is shown to Ana.
+    const slow = new Hold(ROWS, PIPES);
+    const {page, errors} = await recorded(browser, '#/tasks', slow, {who: 'sam', names: {ops: 'Sam ops'}});
+    await drawing(page);
+    await boards(page, slow);
+    slow.release();
+    await loaded(page);
+    const seen = await frames(page);
+    assert.deepEqual(seen[0]?.slice(1, 3), ['', '0'], "another person's boards are not shown");
+    assert.ok(!seen.some(f => f[1] === 'Sam ops'));
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  const old: Kept = {who: 'ana', names: {ops: 'Ops (old name)'}};
+  // The boards land first, then the rows and Needs you: the order a slow open used to race on.
+  const behindTask = async (kept: Kept, view: string, what: string) => {
+    const slow = new Hold(ROWS, NEEDS, PIPES);
+    const {page, errors} = await recorded(browser, '#/task/t-3', slow, kept, view);
+    await page.waitForFunction(() => !!document.querySelector('dialog[open]'));
+    assert.equal(await page.evaluate(() => TASKS_ST?.pipeline), 'ops', `the task's board is behind it before the boards land: ${what}`);
+    await boards(page, slow);
+    slow.release();
+    await loaded(page);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, what);
+    assert.deepEqual(errors, []);
+    await page.close();
+  };
+  // A task opened by its address puts its board behind it before the boards land: the live name wins once they do.
+  await behindTask(old, 'ops', 'the live list, not the kept one');
+  // A task on a board made since the kept list was read still has its board put behind it.
+  await behindTask({who: 'ana', names: {}, drop: 'ops'}, 'product', 'a board new since the kept list');
+  {
+    // Nothing kept, a search's rows landing before the boards: the board in view is not taken for gone.
+    const slow = new Hold(ROWS, NEEDS, PIPES);
+    const {page, errors} = await recorded(browser, '#/tasks', slow);
+    await page.locator('#task-q').fill('a');
+    await page.waitForFunction(() => TASKS_ST?.q === 'a');
+    slow.release(ROWS, NEEDS);
+    await loaded(page);
+    await boards(page, slow);
+    await loaded(page);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, 'the board stays in view');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  for (const kept of [old, null]) {
+    // A search typed while the page loads reads with what was known then: the live list still wins, and the board stays.
+    const slow = new Hold(ROWS, NEEDS, PIPES);
+    const {page, errors} = await recorded(browser, '#/tasks', slow, kept);
+    await page.locator('#task-q').fill('a');
+    await page.waitForFunction(() => TASKS_ST?.q === 'a');
+    await boards(page, slow);
+    slow.release();
+    await loaded(page);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, `searching during a slow open, ${kept ? 'a kept list' : 'none kept'}`);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('a slow open: a board in view is never a blank You; the boards show before the rows; the live list wins: ok');
 }
 
 async function views(browser: Browser) {
@@ -658,6 +831,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
+    for (const run of [slowOpen, you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
