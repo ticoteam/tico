@@ -241,11 +241,13 @@ declare function bootSnapDrop(): unknown;
       const link = document.querySelector('#sign-out') as HTMLElement;
       link.hidden = false;
       window.addEventListener('click', e => { if ((e.target as Element).closest('#sign-out')) e.preventDefault(); });
+      localStorage.setItem('tico.tasks.pipelines', JSON.stringify({who: 'ana', list: []}));   // the Tasks page's kept boards
       link.click();
       const main = document.getElementById('main') as HTMLElement;
-      return {host: !!document.querySelector('[data-boot-snap]'), kids: main.childElementCount, shown: main.style.visibility};
+      return {host: !!document.querySelector('[data-boot-snap]'), kids: main.childElementCount, shown: main.style.visibility,
+        boards: localStorage.getItem('tico.tasks.pipelines')};
     });
-    assert.deepEqual(out, {host: false, kids: 0, shown: ''}, 'nothing of the screen is left on the page');
+    assert.deepEqual(out, {host: false, kids: 0, shown: '', boards: null}, 'nothing of the screen, nor the kept boards, is left');
     await keptAs(entry => entry === null, 'sign-out drops the kept screen');
     // The roster answering after the sign-out, the page settling and leaving keep nothing either.
     const rest = held; held = null; rest.forEach(answer => answer());

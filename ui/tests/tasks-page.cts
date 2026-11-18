@@ -503,16 +503,20 @@ async function youByTitle(browser: Browser) {
   console.log('You: rows with the same ask read by their titles; Paused and a mention by their line: ok');
 }
 
-// Chris, Nov 16: the page opened as a blank "You", with no other boards in the view button, for a few seconds. Cause: the
-// boards' list was put in only when the slower Needs you or the rows read landed too, and until then a board left in
-// view (tico.tasks.view) drew as You with "Nothing here". Each frame of a slow open is recorded: the view button never
-// says You while a board is in view, nothing says "Nothing here" before the rows land, the boards are offered as soon
-// as their read lands, and a later open names the board at once from the boards kept from the last read.
-async function slowOpen(browser: Browser) {
-  const slow: Record<string, number> = {'/api/v2/needs-you': 1500, '/api/v2/tasks': 1500};
-  const frames = (page: Page) => page.evaluate(() => (window as unknown as {seen: string[][]}).seen);
-  const {page, errors} = await open(browser, {hash: '#/tasks', slow, settle: false, beforeGoto: (pg: Page) => pg.addInitScript(() => {
-    localStorage.setItem('tico.tasks.view', JSON.stringify({pipeline: 'ops', layout: 'list'}));
+// The page once opened as a blank "You", with no other boards in the view button, for seconds: the boards' list went in
+// only when the slower Needs you or the rows read landed too, and until then a board left in view (tico.tasks.view)
+// drew as You with "Nothing here". Each frame of a slow open is recorded: the view button never says You while a board
+// is in view, nothing says "Nothing here" before the rows land, the boards are offered as soon as their read lands, and
+// a later open names the board at once from the boards kept from the last read. The kept list is only ever shown: it
+// is another person's never, and the live list replaces it on every path (a task opened by its address, a search typed
+// while the page loads).
+type Kept = {who: string; names: Record<string, string>; drop?: string} | null;
+const KEPT_KEY = 'tico.tasks.pipelines';
+async function recorded(browser: Browser, hash: string, slow: Record<string, number>, kept: Kept = null, view = 'ops') {
+  const list = kept ? PIPELINES.filter(p => !p.retired_at && p.id !== kept.drop).map(p => ({...p, name: kept.names[p.id] ?? p.name})) : null;
+  return open(browser, {hash, slow, settle: false, beforeGoto: (pg: Page) => pg.addInitScript(([key, seed, board]) => {
+    localStorage.setItem('tico.tasks.view', JSON.stringify({pipeline: board, layout: 'list'}));
+    if (seed && !sessionStorage.getItem('seeded')) { localStorage.setItem(key, seed); sessionStorage.setItem('seeded', '1'); }
     const seen: string[][] = (window as unknown as {seen: string[][]}).seen = [];
     const look = () => {
       const st = typeof TASKS_ST === 'undefined' ? null : TASKS_ST;   // a classic script's `let`: no window property
@@ -521,25 +525,103 @@ async function slowOpen(browser: Browser) {
       requestAnimationFrame(look);
     };
     requestAnimationFrame(look);
-  })});
+  }, [KEPT_KEY, list ? JSON.stringify({who: kept!.who, list}) : '', view] as const)});
+}
+const frames = (page: Page) => page.evaluate(() => (window as unknown as {seen: string[][]}).seen);
+/** Every read answered: the page's own and the slowest one held back. */
+const settled = async (page: Page, ms: number) => {
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
-  let seen = await frames(page);
-  const loading = seen.filter(f => f[0] === 'true');
-  assert.ok(loading.length > 5, 'frames were drawn while the rows were out');
-  assert.deepEqual(loading.filter(f => f[1] === 'You'), [], 'a board in view never shows as You');
-  assert.deepEqual(loading.filter(f => f[3] === 'empty'), [], 'no "Nothing here" before the rows land');
-  assert.ok(loading.some(f => f[1] === 'Operations' && f[2] === '2'), 'the boards are offered before the rows land');
-  // The next open, the boards' read slow too: the board is named from the first frame the page has.
-  slow['/api/v2/pipelines'] = 1500;
-  await page.reload();
+  await page.waitForTimeout(ms);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
-  seen = await frames(page);
-  assert.equal(seen[0]?.[0], 'true', 'the first frame is drawn before any read lands');
-  assert.deepEqual(seen[0]?.slice(1, 3), ['Operations', '2'], 'named at once from the boards kept');
-  assert.deepEqual(seen.filter(f => f[1] === 'You' || (f[0] === 'true' && f[3] === 'empty')), []);
-  assert.deepEqual(errors, []);
-  await page.close();
-  console.log('a slow open: a board in view is never a blank You; the boards show before the rows: ok');
+};
+const shown = (page: Page) => page.evaluate(() => ({view: TASKS_ST!.pipeline, scope: document.querySelector('#task-scope .tl-scope-l')?.textContent ?? '',
+  names: (TASKS_ST!.pipelines as {name: string}[]).map(p => p.name)}));
+async function slowOpen(browser: Browser) {
+  {
+    // Needs you answers at once (the app's own read): only the board's rows are slow, so its count must not stand in.
+    const slow: Record<string, number> = {'/api/v2/tasks': 1500};
+    const {page, errors} = await recorded(browser, '#/tasks', slow);
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
+    let seen = await frames(page);
+    const loading = seen.filter(f => f[0] === 'true');
+    assert.ok(loading.length > 5, 'frames were drawn while the rows were out');
+    assert.deepEqual(loading.filter(f => f[1] === 'You'), [], 'a board in view never shows as You');
+    assert.deepEqual(loading.filter(f => f[3] === 'empty'), [], 'no "Nothing here" before the rows land');
+    assert.ok(loading.some(f => f[1] === 'Operations' && f[2] === '2'), 'the boards are offered before the rows land');
+    // The next open, the boards' read slow too: the board is named from the first frame the page has.
+    slow['/api/v2/pipelines'] = 1500;
+    await page.reload();
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
+    seen = await frames(page);
+    assert.equal(seen[0]?.[0], 'true', 'the first frame is drawn before any read lands');
+    assert.deepEqual(seen[0]?.slice(1, 3), ['Operations', '2'], 'named at once from the boards kept');
+    assert.deepEqual(seen.filter(f => f[1] === 'You' || (f[0] === 'true' && f[3] === 'empty')), []);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // From You, Needs you read, to a board whose rows are slow: Needs you's rows say nothing of the board's.
+    const slow: Record<string, number> = {};
+    const {page, errors} = await recorded(browser, '#/tasks?view=foryou', slow);
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.needs.length > 0, null, {timeout: 10000});
+    slow['/api/v2/tasks'] = 1500;
+    await page.evaluate(() => { (window as unknown as {seen: string[][]}).seen.length = 0; });
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-scope="ops"]').click();
+    await page.waitForFunction(() => TASKS_ST && TASKS_ST.pipeline === 'ops' && !TASKS_ST.loading, null, {timeout: 10000});
+    const loading = (await frames(page)).filter(f => f[0] === 'true');
+    assert.ok(loading.length > 5);
+    assert.deepEqual(loading.filter(f => f[3] === 'empty'), [], 'no "Nothing here" before the board\'s rows land');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // Boards kept here for another person: none of them is shown to Ana.
+    const {page, errors} = await recorded(browser, '#/tasks', {'/api/v2/tasks': 1500, '/api/v2/pipelines': 1200}, {who: 'sam', names: {ops: 'Sam ops'}});
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
+    const seen = await frames(page);
+    assert.deepEqual(seen[0]?.slice(1, 3), ['', '0'], "another person's boards are not shown");
+    assert.ok(!seen.some(f => f[1] === 'Sam ops'));
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  const slow = {'/api/v2/tasks': 2500, '/api/v2/needs-you': 2500, '/api/v2/pipelines': 1200};
+  const old: Kept = {who: 'ana', names: {ops: 'Ops (old name)'}};
+  {
+    // A task opened by its address puts its board behind it before the boards land: the live name wins once they do.
+    const {page, errors} = await recorded(browser, '#/task/t-3', slow, old);
+    await settled(page, 2800);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, 'the live list, not the kept one');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // A task on a board made since the kept list was read still has its board put behind it.
+    const {page, errors} = await recorded(browser, '#/task/t-3', slow, {who: 'ana', names: {}, drop: 'ops'}, 'product');
+    await settled(page, 2800);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, 'a board new since the kept list');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // Nothing kept, a search's rows landing before the boards: the board in view is not taken for gone.
+    const {page, errors} = await recorded(browser, '#/tasks', {'/api/v2/tasks': 300, '/api/v2/needs-you': 300, '/api/v2/pipelines': 2000});
+    await page.locator('#task-q').fill('a');
+    await settled(page, 2300);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, 'the board stays in view');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  for (const kept of [old, null]) {
+    // A search typed while the page loads reads with what was known then: the live list still wins, and the board stays.
+    const {page, errors} = await recorded(browser, '#/tasks', slow, kept);
+    await page.locator('#task-q').fill('a');
+    await settled(page, 2800);
+    assert.deepEqual(await shown(page), {view: 'ops', scope: 'Operations', names: ['Product', 'Operations']}, `searching during a slow open, ${kept ? 'a kept list' : 'none kept'}`);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('a slow open: a board in view is never a blank You; the boards show before the rows; the live list wins: ok');
 }
 
 async function views(browser: Browser) {
