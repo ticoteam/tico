@@ -442,7 +442,6 @@ def _spoken(name):
     return re.sub(r"\s+", " ", str(name or "")).strip().casefold()
 
 
-
 def bot_ids(c, refs):
     """The bots a request names, each by its id or its slug (H.resolve_bot), as their ids: each once, in order. A call
     stores and checks bots by id; a name that is no bot is 404."""
@@ -454,6 +453,7 @@ def bot_ids(c, refs):
         if bot["id"] not in ids:
             ids.append(bot["id"])
     return ids
+
 
 class Calls:
     """The call operations. Writes run inside the caller's transaction (`c`) and record their audit row and threads change

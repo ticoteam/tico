@@ -291,9 +291,7 @@ def test_a_bot_named_by_its_slug_joins_by_its_id_and_answers_everything_in_its_d
     assert again["bots"] == [bot]
     missing = post(meet, f"calls/{call['id']}/bots", {"bots": ["no-such-bot"]}, expected=404)
     assert "no-such-bot" in str(missing)
-    left = meet.request(
-        "DELETE", f"/api/v2/calls/{call['id']}/bots/field-helper", json={}, headers=headers("ana-test")
-    )
+    left = meet.request("DELETE", f"/api/v2/calls/{call['id']}/bots/field-helper", json={}, headers=headers("ana-test"))
     assert left.status_code == 200, left.text
     assert left.json()["bots"] == []
 
