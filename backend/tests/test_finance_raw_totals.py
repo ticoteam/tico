@@ -498,7 +498,7 @@ def test_the_bank_line_is_the_providers_balance_across_covered_history(books, sh
     fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
     with books.transaction() as c:
         assert act(c, OWNER, "import_raw_totals", _body(mapping, csv=csv)).status == "committed"
-    connect(books, fake)
+    connect(books, fake, history_from="2025-12-01")  # reads back to the December row (the default starts Jan 1)
     sync_once(books, fake)
     with books.transaction() as c:
         line, held = _bank_gl(c)
