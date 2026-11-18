@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from backend import call_media, call_voice, calls, live_meetings, threads
+from backend import call_media, call_voice, calls, diagnostics, live_meetings, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
@@ -253,7 +253,7 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
         found = [r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn ")]
         return [dict(part.split("=", 1) for part in line.split()[1:]) for line in found]
 
-    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
+    with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
         _speak(meet, call["id"], 0)
         _answer(meet, machine, "ops", "Ops can take the reliability review.")
         _speak(meet, call["id"], 10_000)  # the next one is not answered in time
@@ -327,7 +327,7 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     assert turn["text"] == SYNTHETIC_SPEECH
     assert post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"] is None
     first, full = "Yes.", "Yes. Ops can take the reliability review."
-    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
+    with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
         post(
             meet,
             f"{path}/events",
@@ -358,6 +358,10 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn "))
     timing = dict(piece.split("=", 1) for piece in line.split()[1:])
     assert 0 <= int(timing["first_token_ms"]) <= int(timing["first_sentence_ms"]) <= int(timing["first_audio_ms"])
+    ring, _ = diagnostics.RING.snapshot()
+    [record] = [line for line in ring if "call_voice_turn " in line and f"call_id={call['id']}" in line]
+    for field in ("first_token_ms", "first_sentence_ms", "first_audio_ms"):
+        assert f"{field}={timing[field]} " in record
     with meet.app.state.store.read() as c:
         assert (
             c.execute("SELECT ran_model FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()[0]

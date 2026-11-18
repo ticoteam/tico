@@ -26,7 +26,7 @@ process skips playback for a call it does not hold, and a restart starts the cal
 from the sweep). The states readers see (`listening`, `waiting`, `thinking`, `making_voice`, `speaking`) are in the call
 view as `voice.bots`, and each change writes a `call.updated` change so open views read the call again.
 
-Each turn ends in one `call_voice_turn` log line (`_log_turn`): how long each step took, and how it ended. No words.
+Each turn writes a `call_voice_turn` timing line to the support diagnostics ring.
 """
 
 import asyncio
@@ -296,7 +296,7 @@ def estimate_ms(text: str) -> int:
 
 
 class Voice:
-    """The voice of every call this process holds. `clock` is wall time in seconds, swapped in tests; `tick` is what the
+    """The voice of every call this process holds. `clock` is monotonic seconds, swapped in tests; `tick` is what the
     ticker thread runs, and tests call it directly."""
 
     def __init__(self, app: Any, store: Any, calls: Any) -> None:
@@ -904,7 +904,7 @@ class Voice:
     # --- timing
 
     def _log_turn(self, c: Any, call_id: str, timing: dict[str, Any], outcome: str, reason: str | None) -> None:
-        """The `call_voice_turn` line for one turn, at INFO, no words in it (docs/meet.md, Voice). The pause, the stored
+        """The `call_voice_turn` line for one turn, no words in it (docs/meet.md, Voice). The pause, the stored
         text, the hand-over and the first audio are this clock's; asked, picked up and replied are the turn's own row.
         A step the turn never reached is null. `reason` is why it was skipped, or why its reply stayed text."""
         report: Any = _report()
@@ -929,10 +929,16 @@ class Voice:
             if outcome == "skipped" and reason is None:
                 reason = (turn["skip_reason"] if turn else "") or "skipped"
             heard, audio = timing.get("asked"), timing.get("audio")
-            log.info(
-                "call_voice_turn call_id=%s bot=%s turn=%s outcome=%s skip_reason=%s transcribe_ms=%s queue_ms=%s "
-                "answer_ms=%s speech_ms=%s total_ms=%s first_token_ms=%s first_sentence_ms=%s first_audio_ms=%s "
-                "heard_to_transcript_ms=%s tts_first_chunk_ms=%s",
+
+            def first(stamp: str) -> int | None:
+                return ms(heard, timing.get(stamp))
+
+            # The support ring captures warnings and clips long lines. Keep the latency milestones up front.
+            log.warning(
+                "call_voice_turn first_token_ms=%s first_sentence_ms=%s first_audio_ms=%s "
+                "call_id=%s bot=%s turn=%s outcome=%s skip_reason=%s transcribe_ms=%s queue_ms=%s "
+                "answer_ms=%s speech_ms=%s total_ms=%s heard_to_transcript_ms=%s tts_first_chunk_ms=%s",
+                *("null" if v is None else v for v in (first("token"), first("sentence"), first("audio"))),
                 call_id,
                 timing["bot"],
                 timing["turn"],
@@ -945,11 +951,8 @@ class Voice:
                         ms(created, claimed),
                         ms(claimed, None if outcome == "skipped" else replied),
                         ms(timing.get("handed"), audio),
-                        ms(heard, audio) if timing.get("stored") is not None else None,
-                        ms(heard, timing.get("token")),
-                        ms(heard, timing.get("sentence")),
-                        ms(heard, audio),
-                        ms(heard, timing.get("stored")),
+                        first("audio") if timing.get("stored") is not None else None,
+                        first("stored"),
                         ms(timing.get("tts_requested"), timing.get("tts_chunk")),
                     )
                 ),

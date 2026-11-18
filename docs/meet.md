@@ -250,7 +250,7 @@ call must still be live and the bot's attacher must still have access. Bots spea
 failed synthesis leaves the reply text in the thread. Detach, lost access and End stop playback and close the bot's
 voice session.
 
-**Timing.** Each turn writes one INFO log line, `call_voice_turn`, with its call, bot, turn, outcome and any skip
+**Timing.** Each turn writes one `call_voice_turn` line to support diagnostics with its call, bot, turn, outcome and any skip
 reason. `first_token_ms`, `first_sentence_ms` and `first_audio_ms` use the recorder's monotonic clock, starting
 when it heard the utterance. The line also records transcription, queue, answer and speech durations, and
 `tts_first_chunk_ms` measures the speech request to the first response bytes. A milestone the
