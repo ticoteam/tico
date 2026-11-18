@@ -89,10 +89,10 @@ def features(company, time_machine):
     return company
 
 
-def _related(store, title="Refund button", body="Let a customer refund an order from its page."):
+def _related(store, title="Refund button", body="Let a customer refund an order from its page.", private=False):
     """A task the owner files, moved into Related input."""
     with store.transaction() as c:
-        row = H.task_create(c, OWNER, title, body, OWNER, pipeline="features", lint=False)
+        row = H.task_create(c, OWNER, title, body, OWNER, pipeline="features", lint=False, private=private)
         row = E.task(c, row["id"])
         X.say_done(c, row)
         E.advance(c, row["id"])
@@ -320,3 +320,66 @@ def test_a_stage_whose_time_runs_out_with_nobody_picked_moves_on(features, jev, 
     _beat(features)
     assert _asked(features, row) == []
     assert _stage(features, row) == "features-ok-spec"
+
+
+# ----------------------------------------------------------------------------- the comment, through the route
+@pytest.fixture
+def routed(api, time_machine, jev):
+    """The fictional company behind a test client, with the features pipeline and a token for each other bot."""
+    from backend.tests.helpers.task_moves_routes import as_bot
+
+    time_machine.move_to(START, tick=False)
+    store = api.app.state.store
+    _company(store)
+    return api, store, {slug: as_bot(api, slug) for slug in ("billing", "mail", "docs")}
+
+
+def _comment(api, token, row, text, expected=200):
+    from backend.tests.helpers.api import headers
+
+    r = api.post(f"/api/v2/tasks/{row['id']}/comments", json={"text": text}, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_a_picked_bot_that_is_no_party_comments_through_the_route_and_the_stage_moves_on(routed, jev):
+    api, store, tokens = routed
+    jev.says = {"billing": 0.95, "mail": 0.9}
+    row = _related(store)
+    _beat(store)
+    assert _asked(store, row) == [BILLING, MAIL]
+    with store.read() as c:
+        task = H.task(c, row["id"])
+        assert not H.task_participant(c, BILLING, task) and not H.task_can_work(c, BILLING, task)
+    _comment(api, tokens["billing"], row, "Refunds over $500 need a second look; say so in the spec.")
+    _comment(api, tokens["mail"], row, "Send the refund receipt from the existing template.")
+    # Any bot that reads the task may comment, picked or not.
+    _comment(api, tokens["docs"], row, "The help center has a refunds page to update.")
+    _beat(store)
+    assert _stage(store, row) == "features-ok-spec"
+    assert _events(store, row)[-1] == ("done", "Related input: Comments from billing and mail")
+
+
+def test_a_bot_that_cannot_read_a_private_task_is_never_picked_nor_lets_comment(routed, jev):
+    api, store, tokens = routed
+    jev.says = {"billing": 0.95, "mail": 0.9}
+    row = _related(store, private=True)
+    _beat(store)
+    assert jev.calls == [] and _asked(store, row) == []
+    assert _events(store, row) == [
+        ("none", "Related input: No other bot can read this private task, so nobody was asked")
+    ]
+    _comment(api, tokens["billing"], row, "From billing.", expected=404)
+
+
+def test_a_bot_the_task_owner_takes_no_comments_from_is_never_picked_nor_lets_comment(routed, jev):
+    from backend import bot_settings as BS
+
+    api, store, tokens = routed
+    with store.transaction() as c:
+        BS.update(c, "owner", {"bot_contact": "tasks"})  # the owner bot takes tasks from other bots, not comments
+    jev.says = {"billing": 0.95, "mail": 0.9}
+    row = _related(store)
+    _beat(store)
+    assert jev.calls == [] and _asked(store, row) == []
+    _comment(api, tokens["billing"], row, "From billing.", expected=403)

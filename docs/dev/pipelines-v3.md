@@ -272,8 +272,9 @@ spec, the bots whose areas the work touches get one say.
   during the call. Jev writes no prose, so each score's "why" is the bot's own job line.
 - **Never asked.** The task's owner and assignee, the pipeline's manager, and every bot that holds one of the
   pipeline's stages (a fixed owner, or a bot on a pick list, such as the reviewers and QA). Also never asked: the
-  General Manager and the helper bots, a bot that cannot run, and, on a private task, a bot that cannot already read
-  it. The engine never adds a reader.
+  General Manager and the helper bots, a bot that cannot run, and a bot that could not post its comment: one that
+  cannot read the task (the engine never adds a reader) or one the task's bot refuses through its Write access or
+  contact setting. Any bot that reads a task may comment on it, as a person may, so a pick needs no party role.
 - **Picks.** The top `most` bots (default 2) that score at or over `bar` (default 0.8). Each pick gets one wake on the
   task: read the spec page and comment once, from its area, with `tico task comment`. Its run needs no turn (the
   wake key's kind is `related`), and nobody chases it.
