@@ -180,7 +180,7 @@ async function stripSteady(browser: Browser) {
         return rect && rect.width && rect.height ? {x: rect.x, width: rect.width, height: rect.height} : null;
       }, selector);
       const box = await measured.jsonValue();
-      assert.ok(box);
+      if (!box) throw new Error('The phone stage menu has no layout box');
       assert.ok(box.width >= 44 && box.height >= 44, `44 px: ${box.width}x${box.height}`);
       assert.ok(box.x + box.width <= 390, 'on screen');
       assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll');
