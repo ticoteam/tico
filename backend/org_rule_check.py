@@ -211,15 +211,21 @@ def asking(place):
     return bool(getattr(place, "asks_person", False))
 
 
+def _can_hold_reply(rule):
+    """Whether a rule can hold a live reply back: a Block or Escalate rule not met only by a bot's question to a person
+    (`kind:ask`). A Warn rule never holds one (holds), so its bots' replies still stream as they are written."""
+    return rule["if_broken"] != "warn" and not R.asks_only(rule["where"])
+
+
 def watched(c, bot):
-    """Whether any active rule's Who names this bot: its live reply text stays hidden until delivered."""
+    """Whether a rule that can hold a reply (_can_hold_reply) names this bot in its Who: its live reply text stays
+    hidden until delivered."""
     slug = H.actor_id(bot)
     try:
         if not R.any_active(c) or not on(c):
             return False
         key = R.who_key(c, "bot:" + slug)
-        # A rule met only by a bot's question to a person (`kind:ask`) never reads a live reply.
-        return any(R._hits(row["who"], key) for row in R._active(c) if not R.asks_only(row["where"]))
+        return any(R._hits(row["who"], key) for row in R._active(c) if _can_hold_reply(row))
     except Exception:  # noqa: BLE001 - no tables yet (an old copy): nothing to hide
         return False
 
@@ -229,7 +235,10 @@ def watched_bots(c):
     try:
         if not R.any_active(c) or not on(c):
             return []
-        rules, ctx = [rule for rule in R._active(c) if not R.asks_only(rule["where"])], R._ctx(c)
+        rules = [rule for rule in R._active(c) if _can_hold_reply(rule)]
+        if not rules:
+            return []
+        ctx = R._ctx(c)
         return [
             row["id"]
             for row in H.bots(c)
