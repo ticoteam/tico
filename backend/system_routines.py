@@ -179,6 +179,7 @@ ACTIONS = {
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
     "check_gateway": ("check this server's Gateway key and the month's cap", ("gateway", "key", "cap")),
     "check_tools": ("call each proxied API tool's check with its keys", ("tools", "keys", "check")),
+    "renew_keys": ("open a Renew task for each tool whose key ends soon", ("tools", "keys", "expiry", "renew")),
     "close_access_requests": (
         "close access requests and old access tasks whose access exists now",
         ("access", "requests", "grant", "tools", "repositories"),
@@ -327,6 +328,10 @@ def _bookkeeper(c, settings):
 
 def _tools_checked(c, settings):
     return _row_exists(c, "SELECT 1 FROM tools WHERE delivery='proxy' AND base_url<>'' AND check_path<>'' LIMIT 1")
+
+
+def _keys_ending(c, settings):
+    return _row_exists(c, "SELECT 1 FROM credentials WHERE tool_id IS NOT NULL AND expires_on IS NOT NULL LIMIT 1")
 
 
 def _pages_watched(c, settings):
@@ -529,6 +534,17 @@ JOBS = [
         300,
         then=("check_tools",),
         applies=_tools_checked,
+    ),
+    Job(
+        "tool_renewals",
+        "Key renewals",
+        "Opens a Renew task for each API tool whose key ends within 14 days, from the date a person typed or the vendor "
+        "sent, so the key is replaced before a bot's run fails.",
+        HOUSEKEEPING,
+        "Hourly",
+        3600,
+        then=("renew_keys",),
+        applies=_keys_ending,
     ),
     Job(
         "access_requests",

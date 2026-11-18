@@ -125,6 +125,10 @@ function apiFake() {
       status: {tone: 'fail', text: 'Key rejected'}, needs_you: true, can_manage: true,
       private: true, can_set_audience: true, audience: {everyone: false, people: ['cara'], teams: [], bots: []}},
   };
+  // A GitHub token whose end date GitHub sent on its check (backend/api_tools.py vendor_end_date): no Set for it.
+  tools['t-gh'] = {tool: {id: 't-gh', name: 'GitHub', service: 'github', base_url: 'https://api.github.com', auth_scheme: 'bearer', check_path: '/user', delivery: 'proxy'},
+    keys: [key('k-gh', 'Key', 'gh_…77e0', 'read_write', {env: 'GITHUB_TOKEN', expires_on: '2026-12-01', expires_source: 'vendor'})],
+    access: [], checks: [], recent: [], status: {tone: 'wait', text: 'Expires in 13 days'}, needs_you: true, can_manage: true, private: false, can_set_audience: false};
   tools['t-gads'] = {tool: {id: 't-gads', name: 'Google Ads', service: 'google-ads', base_url: '', auth_scheme: 'bearer', check_path: '', delivery: 'computer'},
     keys: [key('k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN', 'dt_…01ab', 'read_write', {env: 'GOOGLE_ADS_DEVELOPER_TOKEN'})],
     access: [], checks: [], recent: [], status: {tone: 'idle', text: 'Not checked'}, needs_you: false, can_manage: true, private: false, can_set_audience: false};
@@ -588,6 +592,18 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         assert.equal(await page.locator('#tool-finance').count(), 0, `${tag}: no Finance card`);
         assert.equal(api.writes.length, 0, `${tag}: nothing written`);
         await page.close();
+      }
+      // A vendor's end date says where it came from and offers no Set; a typed one keeps Set.
+      {
+        const {page, seen} = await start(browser, '#/tools/api/t-gh', {width, ready: '#tool-keys'});
+        assert.match(await page.locator('#tool-keys').innerText(), /2026-12-01 · from GitHub/, `${tag}: vendor date`);
+        assert.equal(await page.locator('#tool-keys [data-ta-expires]').count(), 0, `${tag}: no Set for a vendor date`);
+        assert.deepEqual(seen.errors, [], `${tag}: github errors`);
+        await page.close();
+        const crm = await start(browser, '#/tools/api/t-crm', {width, ready: '#tool-keys'});
+        assert.equal(await crm.page.locator('#tool-keys [data-ta-expires]').count(), 1, `${tag}: Set for a typed date`);
+        assert.equal(await crm.page.locator('#tool-keys [data-ta-expires-from]').count(), 0, `${tag}: no source for a typed date`);
+        await crm.page.close();
       }
       // A key on computers: Move to proxy patches delivery.
       {

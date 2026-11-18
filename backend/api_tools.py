@@ -34,6 +34,11 @@ about a key but its tool and id is logged or stored. A tool with an MCP address 
 remote MCP server: its check is MCP's initialize and tools/list instead, and it may sign in over OAuth rather than hold
 a pasted key.
 
+A key's end date (`expires_on`) is typed by a person, or read from the vendor on its check (`vendor_end_date`: GitHub
+and Cloudflare say it on every check that works), and then marked `expires_source` 'vendor': the vendor's date replaces
+a typed one and the next check keeps it current. From EXPIRING_DAYS before it the tool reads "Expires in N days", and
+its Renew task opens (backend/reconnect_tasks.py).
+
 Who may do what, the vault's rules: a credential administrator (`credentials.administrator`) manages every tool and
 sees every row. Anyone else reads the page of a tool they hold a grant on or added a key to, sees only their own
 access row and the grants they made, and only the calls they or a bot they may see made. A bot reads the tools it is
@@ -120,6 +125,16 @@ SCOPE_SAYS = (
     "insufficient permission",
     "missing_scope",
     "missing scope",
+)
+# A vendor that says when a key ends, read on the key's check (`vendor_end_date`): GitHub sends this header on its API's
+# replies to a personal token that has an end date, and Cloudflare's token verify answers `result.expires_on`. Only the
+# day is kept (`credentials.expires_on`, `expires_source` 'vendor'); nothing else of the reply is.
+GITHUB_ENDS = "github-authentication-token-expiration"
+ENDS_READ = ("github", "cloudflare")  # services whose check reply is read for an end date
+ENDS_IN_BODY = ("cloudflare",)  # of them, those whose end date is in the reply's body, not a header
+ENDS_BODY = 64 * 1024  # bytes of a 2xx reply read for an end date in its body
+ENDS_AT = re.compile(
+    r"(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?))?\s*(UTC|GMT|Z|[+-]\d{2}:?\d{2})?", re.IGNORECASE
 )
 # A tool_calls row's detail for a real call the vendor answered 401 with a missing scope (never the reply's text).
 MISSING_SCOPE = "missing_scope"
@@ -755,6 +770,7 @@ def _key_view(c, who, key, admin, admins):
         "preview": key["preview"] if shown else "",
         "access_level": key["access_level"],
         "expires_on": key["expires_on"],
+        "expires_source": key["expires_source"],
         "env": key["env"],
         "username": key["username"] if shown else "",
         "stored": key["ciphertext"] is not None,
@@ -918,10 +934,14 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result="", sinc
 
 
 class Reply(NamedTuple):
-    """A check's answer: the status code, and whether a 401's reply says the key lacks a permission for the path."""
+    """A check's answer: the status code, whether a 401's reply says the key lacks a permission for the path, GitHub's
+    token expiration header (GITHUB_ENDS, '' without one), and a 2xx reply's first ENDS_BODY bytes when they were asked
+    for (`read_body`)."""
 
     status_code: int
     missing_scope: bool = False
+    ends_header: str = ""
+    body: bytes = b""
 
 
 def said_missing_scope(challenge, body):
@@ -939,9 +959,19 @@ def _missing_scope(response):
     )
 
 
-def send_check(url, headers, params):
+def _first_bytes(response, limit):
+    out = b""
+    for chunk in response.iter_bytes():
+        out += chunk
+        if len(out) >= limit:
+            return out[:limit]
+    return out
+
+
+def send_check(url, headers, params, read_body=False):
     """One GET: a `Reply`. Tests replace it. Only to a public https address, pinned to the IP it resolved to, no
-    redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds."""
+    redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds. With `read_body`, a 2xx reply's
+    first ENDS_BODY bytes come back too, for its end date (`vendor_end_date`)."""
     import httpx
     from . import egress
 
@@ -954,12 +984,67 @@ def send_check(url, headers, params):
             "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
         ) as response:
             code = response.status_code
-            return Reply(code, code == 401 and _missing_scope(response))
+            ends = response.headers.get(GITHUB_ENDS, "")
+            body = _first_bytes(response, ENDS_BODY) if read_body and 200 <= code < 300 else b""
+            return Reply(code, code == 401 and _missing_scope(response), ends, body)
+
+
+def _utc_day(raw):
+    """The UTC day of a vendor's end date ("2026-12-01 09:00:00 UTC", "2026-12-01T00:00:00Z", an offset), or None."""
+    found = ENDS_AT.fullmatch(str(raw).strip())
+    if not found:
+        return None
+    day, clock, zone = found.groups()
+    try:
+        at = datetime.fromisoformat(f"{day}T{clock or '00:00'}")
+    except ValueError:
+        return None
+    if zone and zone.upper() not in ("UTC", "GMT", "Z"):
+        sign = 1 if zone[0] == "+" else -1
+        at -= sign * timedelta(hours=int(zone[1:3]), minutes=int(zone[-2:]))
+    return at.date().isoformat()
+
+
+def vendor_end_date(service, reply):
+    """The key's end date its vendor sent with a check that worked: a day (YYYY-MM-DD), '' when the vendor says the key
+    has none, or None when this vendor says nothing either way or what it sent does not read as a date."""
+    if service not in ENDS_READ:
+        return None
+    raw = reply.ends_header
+    if service in ENDS_IN_BODY:
+        try:
+            answer = json.loads(reply.body or b"null")
+        except ValueError:
+            return None
+        result = answer.get("result") if isinstance(answer, dict) else None
+        if not isinstance(result, dict):
+            return None
+        raw = result.get("expires_on") or ""
+    return _utc_day(raw) if raw else ""
+
+
+def _revision(c, key_id):
+    row = c.execute("SELECT revision FROM credentials WHERE id=?", (key_id,)).fetchone()
+    return row["revision"] if row else None
+
+
+def _keep_end_date(c, key_id, ends, revision=None):
+    """A check's word on its key's end date (`vendor_end_date`): a day replaces any date and marks it the vendor's; ''
+    clears a date the vendor gave before and keeps one a person typed. Nothing changes when the key's value was
+    replaced since the check read it (`revision`): the answer was about the old value."""
+    row = c.execute("SELECT expires_on, expires_source, revision FROM credentials WHERE id=?", (key_id,)).fetchone()
+    if row is None or (revision is not None and row["revision"] != revision):
+        return
+    if ends and (row["expires_on"], row["expires_source"]) != (ends, "vendor"):
+        c.execute("UPDATE credentials SET expires_on=?, expires_source='vendor' WHERE id=?", (ends, key_id))
+    elif not ends and row["expires_source"] == "vendor":
+        c.execute("UPDATE credentials SET expires_on=NULL, expires_source=NULL WHERE id=?", (key_id,))
 
 
 def _check_one(tool, key, secret, auth=None):
-    """(ok, status_code, detail) for one key, or for a template's keys together (`auth`: the headers and query its
-    template built). An exception's text is never kept: a query-param key would be in it."""
+    """(ok, status_code, detail, end date) for one key, or for a template's keys together (`auth`: the headers and query
+    its template built). The end date is `vendor_end_date`'s on a check that worked, else None (nothing known). An
+    exception's text is never kept: a query-param key would be in it."""
     from . import egress
 
     service = TS.SERVICES.get(tool["service"]) or {}
@@ -967,7 +1052,7 @@ def _check_one(tool, key, secret, auth=None):
     try:
         headers, params = auth if auth is not None else TS.apply_auth(tool["auth_scheme"], secret, username)
     except ValueError:
-        return False, None, "Check failed: unknown auth scheme"
+        return False, None, "Check failed: unknown auth scheme", None
     headers = {
         "Accept": "application/json",
         **TS.check_headers(tool["service"]),
@@ -976,17 +1061,23 @@ def _check_one(tool, key, secret, auth=None):
     }
     url = tool["base_url"].rstrip("/") + check_path_of(tool)
     try:
-        reply = send_check(url, headers, params)
+        if tool["service"] in ENDS_IN_BODY and auth is None:
+            reply = send_check(url, headers, params, read_body=True)
+        else:
+            reply = send_check(url, headers, params)
     except egress.Blocked:
-        return False, None, "Check failed: address refused"
+        return False, None, "Check failed: address refused", None
     except Exception as exc:  # noqa: BLE001 - every network failure is one answer: the check failed
-        return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer")
+        return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer"), None
     code = reply.status_code
     if code == 401 and reply.missing_scope:  # a restricted key: known to the vendor, this path needs another permission
-        return True, code, LIMITED
+        return True, code, LIMITED, vendor_end_date(tool["service"], reply) if auth is None else None
     rejected = TS.rejects(tool["service"], code)
     ok = 200 <= code < 300 or (code == 403 and not rejected)  # a 403: the key is known, the path needs another scope
-    return ok, code, _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
+    text = _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
+    # A template's keys go together: no one key's end date is known from their call.
+    ends = vendor_end_date(tool["service"], reply) if ok and auth is None else None
+    return ok, code, text, ends
 
 
 def check_tool(store, vault, tool_id):
@@ -1020,6 +1111,9 @@ def _check_tool(store, vault, tool_id):
             if mcp or together
             else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
         )
+        # The revision each value was checked at, read after decrypt (which may reseal it): an end date is kept only
+        # while the key still holds that value (`_keep_end_date`), never on a value saved while the check was out.
+        stored = [({**dict(k), "revision": _revision(c, k["id"])}, secret) for k, secret in stored]
     if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
         return mcp_connect.check(store, vault, tool_id)
     if together:  # a template's keys go on one call together, as the proxy sends them
@@ -1037,7 +1131,7 @@ def _check_tool(store, vault, tool_id):
 def _record_checks(store, tool_id, results):
     rows = []
     with store.transaction() as c:
-        for key, ok, code, text in results:
+        for key, ok, code, text, ends in results:
             row = {
                 "id": H.new_id(),
                 "tool_id": tool_id,
@@ -1053,6 +1147,8 @@ def _record_checks(store, tool_id, results):
                 row,
             )
             rows.append(row | {"ok": ok})
+            if ends is not None:
+                _keep_end_date(c, key["id"], ends, key.get("revision"))
     rows.sort(key=lambda r: r["ok"])
     return rows
 
@@ -1474,8 +1570,8 @@ def add_key(c, who, vault, tool_id, body):
         ),
     )
     c.execute(
-        "UPDATE credentials SET tool_id=?, access_level=?, expires_on=? WHERE id=?",
-        (tool_id, body.access_level, body.expires_on or None, brief["id"]),
+        "UPDATE credentials SET tool_id=?, access_level=?, expires_on=?, expires_source=? WHERE id=?",
+        (tool_id, body.access_level, body.expires_on or None, "person" if body.expires_on else None, brief["id"]),
     )
     H.event(c, who.actor, "tool.key_added", tool_id, {"credential": brief["id"], "access_level": body.access_level})
     access_requests.settled(c, who, resource_type="tool", resource_id=tool_id)  # a Read key may make Read default
@@ -1628,8 +1724,16 @@ def update_key(c, who, vault, tool_id, key_id, body):
             key_id,
         )
     level = body.access_level or key["access_level"]
-    expires = key["expires_on"] if body.expires_on is None else (body.expires_on or None)
-    c.execute("UPDATE credentials SET access_level=?, expires_on=? WHERE id=?", (level, expires, key_id))
+    if body.expires_on is not None:  # typed by a person; the next check's vendor date, if any, still wins
+        expires, source = body.expires_on or None, "person" if body.expires_on else None
+    elif body.value is not None and key["expires_source"] == "vendor":
+        expires, source = None, None  # the old value's end date: the next check reads the new value's
+    else:
+        expires, source = key["expires_on"], key["expires_source"]
+    c.execute(
+        "UPDATE credentials SET access_level=?, expires_on=?, expires_source=? WHERE id=?",
+        (level, expires, source, key_id),
+    )
     H.event(
         c,
         who.actor,
@@ -1639,6 +1743,8 @@ def update_key(c, who, vault, tool_id, key_id, body):
     )
     if body.value is not None:
         reconnect_tasks.replaced(c, tool_id)  # its Reconnect task, if one is open, is done
+    elif body.expires_on is not None:
+        reconnect_tasks.redated(c, tool_id)  # a Renew task ends once no key's end date is near
     return _key_view(c, who, vault.row(c, key_id), True, vault.admins)
 
 
@@ -1648,6 +1754,7 @@ def delete_key(c, who, vault, tool_id, key_id):
     if not may_remove(who, key["created_by"], manages=TA.admin(c, who, vault.admins)):
         TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     _drop_key(c, who, key["id"])
+    reconnect_tasks.redated(c, tool_id)  # the key it renewed is gone
     return {"deleted": True, "id": key_id}
 
 
