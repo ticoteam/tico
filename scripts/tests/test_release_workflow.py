@@ -308,27 +308,46 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 
 
-def test_an_incremental_validation_runs_hosted_except_its_product_and_desktop_parts():
-    """An incremental validation's jobs run on GitHub-hosted runners; its product and desktop VMs need the 35 GiB disk
-    and the Docker images, so they stay on RunsOn. A full validation keeps the configured runners."""
+def test_an_incremental_validation_runs_its_critical_path_on_runson_and_its_test_parts_hosted():
+    """Every validation's critical path (candidate, the Linux binaries, the images) runs on RunsOn, hosted only under
+    TICO_CI_HOSTED: the x86_64 binaries build about 2 minutes faster there and need no disk clean-up. An incremental
+    validation's python and browser parts run hosted; its product and desktop VMs need the 35 GiB disk and the Docker
+    images, so they stay on RunsOn."""
     ci, _ = _workflow("ci.yml")
     jobs = ci["jobs"]
     for name in ("candidate", "native-linux", "images"):
-        assert "inputs.anchor != ''" in str(jobs[name]["runs-on"]), name
-        assert "runs-on=" in str(jobs[name]["runs-on"]), name  # a full validation still runs on RunsOn
+        runs_on = str(jobs[name]["runs-on"])
+        assert runs_on.startswith("${{ vars.TICO_CI_HOSTED == 'true' && ") and "inputs.anchor" not in runs_on, name
+        assert "runs-on=" in runs_on, name
     gate = str(jobs["gate"]["runs-on"])
     assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "matrix.part != 'desktop'" in gate
     assert "runs-on=" in gate
-    # The hosted disk clean-up step is reused, gated on the same mode: no new step text.
+    # The hosted disk clean-up step follows each job's own runner choice.
     for name in ("native-linux", "images"):
         step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
-        assert step["if"] == "vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''", name
+        assert step["if"] == "vars.TICO_CI_HOSTED == 'true'", name
     # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.
     gate_step = next(step for step in jobs["gate"]["steps"] if step.get("name", "").startswith("Free disk"))
     assert gate_step["run"] == "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc"
     assert gate_step["if"] == (
         "vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')"
     )
+
+
+def test_a_failed_poll_of_this_runs_jobs_is_one_more_poll_not_a_failed_validation():
+    """The waits for the Linux binaries and the images poll this run's jobs. One 502 or dropped connection failed whole
+    validations (Nov 18); a failed call now sleeps and polls again, inside the same time bound."""
+    ci, _ = _workflow("ci.yml")
+    waits = [
+        step
+        for job in ci["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name", "").startswith("Wait for the release")
+    ]
+    assert len(waits) == 3
+    for step in waits:
+        assert "jobs?per_page=100" in step["run"]
+        assert "|| { sleep 10; continue; }" in step["run"], step["name"]
 
 
 def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
