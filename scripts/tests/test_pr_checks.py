@@ -3483,3 +3483,12 @@ def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
         assert retry["if"] == "${{ steps.checkout_first.outcome == 'failure' }}", name
         assert first["timeout-minutes"] == retry["timeout-minutes"] == 3, name
         assert first["uses"] == retry["uses"] and first["with"] == retry["with"], name
+
+
+def test_cli_does_not_accept_abbreviated_options(monkeypatch, capsys):
+    # `run --quar` once could silently turn quarantine on in a release workflow.
+    monkeypatch.setattr(sys, "argv", ["pr_checks.py", "run", "unit", "--quar"])
+    with pytest.raises(SystemExit) as stop:
+        checks.main()
+    assert stop.value.code == 2
+    assert "unrecognized arguments: --quar" in capsys.readouterr().err

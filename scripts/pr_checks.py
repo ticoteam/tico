@@ -2811,9 +2811,9 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest="action", required=True)
-    plan = sub.add_parser("plan")
+    plan = sub.add_parser("plan", allow_abbrev=False)
     plan.add_argument("--event", required=True)
     plan.add_argument("--base", default="")
     plan.add_argument("--head", default="HEAD")
@@ -2822,7 +2822,7 @@ def main():
     plan.add_argument(
         "--light", action="store_true", help="narrow the plan for an event in NARROW (a pull request); others ignore it"
     )
-    execute = sub.add_parser("run")
+    execute = sub.add_parser("run", allow_abbrev=False)
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
     execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
@@ -2837,15 +2837,19 @@ def main():
     mine.add_argument("--base", default=LOCAL_BASE)
     mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers and browser scripts at once")
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
-    ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
+    ran = sub.add_parser(
+        "junit-ran", allow_abbrev=False, help="exit 1 unless a pytest JUnit report holds a test that was not skipped"
+    )
     ran.add_argument("report")
-    failed = sub.add_parser("failed", help="print the first failing tests or browser scripts reported in a folder")
+    failed = sub.add_parser(
+        "failed", allow_abbrev=False, help="print the first failing tests or browser scripts reported in a folder"
+    )
     failed.add_argument("folder")
-    sub.add_parser("durations")
-    sub.add_parser("flaky", help="combine the legs' successful retries into flaky.json")
-    sub.add_parser("receipt")
-    sub.add_parser("smoke-check")
-    cancel = sub.add_parser("cancel-superseded")
+    sub.add_parser("durations", allow_abbrev=False)
+    sub.add_parser("flaky", allow_abbrev=False, help="combine the legs' successful retries into flaky.json")
+    sub.add_parser("receipt", allow_abbrev=False)
+    sub.add_parser("smoke-check", allow_abbrev=False)
+    cancel = sub.add_parser("cancel-superseded", allow_abbrev=False)
     cancel.add_argument("--head-ref", required=True)
     cancel.add_argument("--run-number", type=int, required=True)
     cancel.add_argument("pages", nargs="+", help="gh api --paginate --slurp output files of the runs to consider")
