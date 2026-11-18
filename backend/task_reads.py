@@ -385,24 +385,23 @@ def _running(c, bots):
 
 
 def comment_rights(c, auth, who, task_id):
-    """Whether the caller may write on the task: every comment and file goes through here. Returns the task's row."""
-    from . import lifecycle
-    from .store import H, Problem
+    """Whether the caller may write on the task: every comment and file goes through here. Returns the task's row.
 
+    Anyone who can read the task may write on it, a bot as a person: a bot Related input picks is no party to the task
+    (related_input.candidates), and its comment is what the stage waits on. What stays: the read check, onboarding,
+    and the owner bot's own Write access and contact settings (refuse_comment)."""
     row = auth.task(c, who, task_id)
+    refuse_comment(c, auth, who, row)
+    return row
+
+
+def refuse_comment(c, auth, who, row):
+    """Refuse a comment on a task the caller already reads: an onboarding bot, or one the task's bot (owner, requester
+    or origin) gives no Write access or does not take contact from. related_input.candidates asks it of each bot."""
+    from . import lifecycle
+    from .store import H
+
     lifecycle.refuse_send(c, who, None, what="task comments")
-    if who.role == "bot" and not H.task_participant(c, who.actor, row):
-        delegated = c.execute(
-            "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
-            (task_id, who.actor, H.now()),
-        ).fetchone()
-        if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.task_can_work(c, who.actor, row):
-            raise Problem(
-                "forbidden",
-                "Only the task's parties, their managers, delegates, the parties of a task above it and its "
-                "pipeline's manager may comment",
-                403,
-            )
     origin = None if H.task_private(c, row) else H.task_origin(c, row)
     others = [
         a
@@ -413,8 +412,7 @@ def comment_rights(c, auth, who, task_id):
     if target and not H.task_represents(c, who.actor, row["owner_id"]):
         auth.require_write(c, who, H.actor_id(target))
     if target:
-        auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")
-    return row
+        auth.require_bot_contact(c, who, target, task_id=row["id"], kind="comment")
 
 
 COVERS_SQL = (
