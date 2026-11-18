@@ -131,6 +131,13 @@ pub fn release(name: &str) {
     dropped().lock().unwrap().remove(name);
 }
 
+/// Capability holds are process-wide: tests that set them take turns, so one never drops another's.
+#[cfg(test)]
+pub fn holding() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
@@ -141,9 +148,9 @@ const NEWEST_FIRST: &[&str] = &[
     PLAN_SWITCH_RESUME,
     crate::claude_login::CAPABILITY,
     PLAN_USAGE,
-    crate::browser::CAPABILITY,
     FRESH_SESSION,
     FORK_SESSION,
+    crate::browser::CAPABILITY,
     "make_page",
     "harness_allocation_v1",
     "threads_v1",
@@ -239,16 +246,21 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
         return Some("worktrees.record_updated".into()); // every worktree report still goes, unstamped
     }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
-    if detail.contains("capabilities") {
+    // Only an error at the top-level `capabilities` or one of its elements: a bot or field named "capabilities"
+    // further down (say readiness.bots.capabilities) is not about them.
+    static CAPS: OnceLock<regex::Regex> = OnceLock::new();
+    let refused = CAPS
+        .get_or_init(|| {
+            regex::Regex::new(r"(?:^|; )(?:body\.)?capabilities(?:[.\[]([0-9]+)\]?)?:").unwrap()
+        })
+        .captures(detail);
+    if let Some(refused) = refused {
         // Pydantic names the rejected element: drop that one, whatever it is, and keep every other negotiated one.
-        if let Some(index) = regex::Regex::new(r"capabilities[.\[]([0-9]+)")
-            .ok()?
-            .captures(detail)
-            .and_then(|m| m[1].parse::<usize>().ok())
-        {
-            if let Some(name) = caps.get(index).filter(|n| !n.is_empty()) {
-                return Some(name.clone());
-            }
+        let index = refused
+            .get(1)
+            .and_then(|i| i.as_str().parse::<usize>().ok());
+        if let Some(name) = index.and_then(|i| caps.get(i)).filter(|n| !n.is_empty()) {
+            return Some(name.clone());
         }
         if let Some(name) = NEWEST_FIRST.iter().find(|n| caps.iter().any(|c| c == *n)) {
             return Some(name.to_string());
@@ -320,12 +332,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::{Path, PathBuf};
-
-    /// Capability holds are process-wide: tests that set them take turns, so one never drops another's.
-    fn holding() -> std::sync::MutexGuard<'static, ()> {
-        static TURN: Mutex<()> = Mutex::new(());
-        TURN.lock().unwrap_or_else(|e| e.into_inner())
-    }
 
     /// Everything a heartbeat can advertise, in the order `capabilities` builds it on a computer that offers its
     /// screen and a browser and reads its own logins.
@@ -458,10 +464,36 @@ mod tests {
         assert!(!capabilities(false).contains(&COMPUTER_LOGINS));
     }
 
+    /// The hubs between the floor and today, by what each added to the floor's Heartbeat capabilities (git tags).
+    fn releases_since_floor(floor: &[String]) -> Vec<(String, Vec<String>)> {
+        let mut known = floor.to_vec();
+        let mut found = vec![];
+        for (release, added) in [
+            ("0.6.0-rc.23", &[crate::browser::CAPABILITY][..]),
+            ("0.6.0-rc.30", &[FORK_SESSION, FRESH_SESSION][..]),
+            ("0.6.16", &[PLAN_USAGE][..]),
+            (
+                "0.6.37",
+                &[crate::claude_login::CAPABILITY, PLAN_SWITCH_RESUME][..],
+            ),
+            ("0.6.71", &[VOICE_SESSIONS][..]),
+        ] {
+            known.extend(added.iter().map(|c| c.to_string()));
+            found.push((release.to_string(), known.clone()));
+        }
+        found
+    }
+
     #[test]
     fn a_new_runner_checks_in_with_every_supported_server_and_keeps_what_it_knows() {
         let _turn = holding();
-        for (server, known, max) in servers() {
+        let mut servers = servers();
+        let floor = servers[1].1.clone(); // the oldest kept release: the supported floor
+        for (release, known) in releases_since_floor(&floor) {
+            servers.push((release, known, 32));
+        }
+        for (server, known, max) in servers {
+            assert!(sendable().len() <= max, "{server} takes at most {max}");
             for indexed in [true, false] {
                 release_all();
                 let (kept, tries) = negotiate(&known, max, indexed);
@@ -479,14 +511,38 @@ mod tests {
                         "today's server takes everything today's runner sends"
                     );
                 }
-                // The next heartbeat inside ten minutes goes straight through: every hold applies to what
-                // runner.rs advertises, plan usage and computer logins included.
-                let mut next = json!({"capabilities": capabilities(true)});
-                drop_held(&mut next);
+                // The next heartbeat inside ten minutes goes straight through: what runner.rs advertises already
+                // leaves out every hold, plan usage and computer logins included.
+                let next = json!({"capabilities": capabilities(true)});
                 assert_eq!(refusal(&known, max, &next, true), None, "{server}");
             }
         }
+        // A server that takes fewer than the runner offers: the newest go first, until the rest fit.
         release_all();
+        let (_, current, _) = &servers()[0];
+        let (kept, tries) = negotiate(current, sendable().len() - 2, true);
+        let expected: Vec<String> = sendable()
+            .into_iter()
+            .filter(|c| !NEWEST_FIRST[..2].contains(c))
+            .map(String::from)
+            .collect();
+        assert_eq!((kept, tries), (expected, 3));
+        release_all();
+    }
+
+    #[test]
+    fn only_a_refusal_of_the_capabilities_themselves_drops_one() {
+        let body = json!({"capabilities": ["task_lanes_v2", "threads_v1"], "readiness": {}});
+        // A bot named "capabilities" is not the capability list.
+        let bot =
+            "body.readiness.StructuredReadiness.bots.capabilities.commands.0.name: Field required";
+        assert_eq!(refused_field(bot, &body), None);
+        let both = format!("{bot}; body.capabilities.1: Input should be 'task_lanes_v2'");
+        assert_eq!(refused_field(&both, &body).as_deref(), Some("threads_v1"));
+        assert_eq!(
+            refused_field("capabilities.0: Input should be 'x'", &body).as_deref(),
+            Some("task_lanes_v2")
+        );
     }
 
     #[test]
