@@ -1775,31 +1775,3 @@ def test_a_part_that_is_no_on_a_bots_stage_still_goes_back_to_the_pages_bot(stor
         (told,) = _jev_wakes(r, row, WRITER)
         assert "Doesn't say what was run or looked at in production" in told
         assert _jev_wakes(r, row, "bot:manager") == []
-
-
-def test_at_release_an_open_unsure_is_judged_again_and_old_lines_lose_their_probability(c, store):
-    """The migration that ships this: the open task's unsure page is owed again; a closed one's verdict stays, and
-    every line in the old template is said the new way."""
-    import importlib
-
-    migration = importlib.import_module("backend.migrations.20261113070000_jev_reasons_by_part")
-    _pipeline(c)
-    open_row = _task(c)
-    closed_row = X.new_task(c, ANA, "Billing spec", "product", assignee=WRITER)
-    old = "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): Spec page"
-    waiting = _say(c, _attach(c, open_row, "page:" + _page(c, store)[0]), "unsure", old)
-    shut = _say(c, _attach(c, closed_row, "page:" + _page(c, store)[0]), "unsure", old)
-    E.move(c, closed_row["id"], E.CLOSED, ANA, "not needed")
-    migration.up(c)
-    again = V.get(c, waiting["file_id"], waiting["version"], waiting["rubric_hash"])
-    assert (again["verdict"], again["reasons"], again["tries"]) == (None, None, 0)
-    assert V.owed(c, H.shift(H.now(), seconds=1)) and again["id"] in [
-        o["id"] for o in V.owed(c, H.shift(H.now(), seconds=1))
-    ]
-    kept = V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])
-    assert (kept["verdict"], kept["reasons"]) == ("unsure", "Can't tell if it meets the check.")
-    migration.up(c)  # a second run changes nothing it already changed
-    assert (
-        V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])["reasons"]
-        == "Can't tell if it meets the check."
-    )

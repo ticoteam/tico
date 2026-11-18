@@ -8,7 +8,6 @@ and a manager bot, and Ana, who files the tasks.
 
 import importlib
 import shutil
-import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +22,7 @@ from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.migrations import at_floor
 
 ANA = X.ANA
 BUILDER, REVIEWER, MANAGER = "bot:builder", "bot:reviewer", "bot:manager"
@@ -303,10 +303,8 @@ def test_the_side_stages_migration_preserves_existing_visits_and_schema_objects(
     for migration in migrations.files():
         if migration.version < MIGRATION:
             shutil.copy(migration.path, directory)
-    for name in (migrations.BASELINE, migrations.RETIRED_LIST):
-        shutil.copy(migrations.DIRECTORY / name, directory)
-    path = tmp_path / "hub.sqlite"
-    with closing(sqlite3.connect(path, isolation_level=None)) as conn:
+    shutil.copy(migrations.DIRECTORY / migrations.RETIRED_LIST, directory)
+    with closing(at_floor(tmp_path / "hub.sqlite")) as conn:
         migrations.apply(conn, directory)
         conn.execute("PRAGMA foreign_keys=ON")
         assert "side" not in [row[1] for row in conn.execute("PRAGMA table_info(stages)")]

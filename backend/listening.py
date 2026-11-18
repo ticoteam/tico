@@ -2,7 +2,7 @@
 
 A listening is an automation whose trigger is `listening` (backend/automation_flow.py checks its shape). Its sources
 say where posts come from, its Keep and Drop rules which ones matter, and its limits how many are sent on and when.
-Two tables (backend/migrations/20261111190425_listening_feed.py):
+Two tables (backend/migrations/baseline.sql, from migration listening_feed):
 
     listening_sources   one row per source in the trigger, in step with the flow on every save (`sync_sources`)
     listening_items     what the sources saved, and what became of each

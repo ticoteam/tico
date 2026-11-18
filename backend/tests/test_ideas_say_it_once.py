@@ -5,7 +5,6 @@ an idea); a bot's own idea is filed snoozed, and only a person unsnoozes it.
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and a few bots.
 """
 
-import importlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -239,27 +238,3 @@ def test_on_ice_is_gone_from_what_the_board_and_task_page_say(product):
     with product.read() as c:
         purpose = c.execute("SELECT purpose, by_hand FROM stages WHERE id='product-ideas'").fetchone()
     assert purpose[1] == 0 and "by hand" not in purpose[0]
-
-
-def test_release_snoozes_bot_ideas_and_owes_one_check_for_each_idea(product, jev):
-    with product.transaction() as c:
-        c.execute("UPDATE stages SET by_hand=1, requests_move_on=1 WHERE id='product-ideas'")
-        mine = X.new_task(c, ANA, "Asked by a person", "product")
-        brief = X.new_task(c, "bot:pm", "A bot's brief", "product")
-        c.execute("UPDATE snoozes SET ended_at=? WHERE task_id=?", (H.now(), brief["id"]))
-        c.execute("DELETE FROM idea_checks")
-        migration = importlib.import_module("backend.migrations.20261112190728_ideas_say_it_once")
-        migration.up(c)
-        migration.up(c)  # again: nothing more
-        assert tuple(c.execute("SELECT by_hand, requests_move_on FROM stages WHERE id='product-ideas'").fetchone()) == (
-            0,
-            0,
-        )
-        assert E.task(c, brief["id"])["snooze"]["filed"] == 1
-        assert E.task(c, mine["id"]).get("snooze") is None
-        assert c.execute("SELECT COUNT(*) FROM idea_checks WHERE checked_at IS NULL").fetchone()[0] == 2
-        assert (
-            c.execute("SELECT COUNT(*) FROM snoozes WHERE task_id=? AND ended_at IS NULL", (brief["id"],)).fetchone()[0]
-            == 1
-        )
-    assert IC.run(product) == 2 and len(jev.calls) == 1

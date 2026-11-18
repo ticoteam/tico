@@ -1,7 +1,7 @@
 """A new database and the oldest one this code opens, upgraded, end up with the same schema.
 
 A new file loads the baseline (backend/migrations/baseline.sql) and runs only the migration files written after it; a
-database at the compatibility floor (a v0.6.0-rc.1 install, fixtures/schema_floor.sql) runs every file the floor did
+database at the compatibility floor (a v0.6.0 install, fixtures/schema_floor.sql) runs every file the floor did
 not ship. Both then take the same start. If the baseline lacks something the files make, or a file was folded into
 the baseline that a floor database never ran, the two differ here: table by table, column by column, and every index,
 view and trigger by its SQL. Tables made on first use count too: the fixture holds the floor's, and both sides get
