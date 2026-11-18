@@ -6,7 +6,7 @@ the source's cursor, kept in its `snapshot` as JSON (`{"follow": "prs"|"releases
 
 - The first read, and the first after `follow` changed, only sets the cursor: as a Page source, a GitHub source starts
   from now on and makes no item of what was there before.
-- Releases are listed whole at each read: see `_releases`.
+- Releases are listed whole at each read, and past GitHub's first 1,000 found by their tags: see `_releases`.
 - Pull requests are listed most recently updated first. A merged PR's `updated_at` is never before its `merged_at`, so
   the listing stops at the first PR updated before the cursor: nothing past it can have been merged since.
 - A read GitHub refuses part way (a rate limit, an error) saves nothing and keeps the old cursor, so the next read
@@ -20,12 +20,14 @@ It reads with a token from the team's GitHub App when one can be minted (the rep
 installation's, which reads public repositories), otherwise with GitHub's public API.
 """
 
+import hashlib
 import json
 import logging
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, NamedTuple, Protocol, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -39,6 +41,7 @@ REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.\.?$)[A-Za-z0-9._-]{1
 PER_PAGE = 100
 MAX_PAGES = 5  # pages a read lists; a longer listing carries on at the next read (`_listing`)
 RELEASES_LISTED = 1_000  # GitHub lists only a repository's first 1,000 releases ("Only the first 1000 results")
+TAG_LOOKUPS = 20  # tags past that list a read looks up as releases (`_releases`)
 MAX_SEGMENTS = 8  # unread stretches a cursor keeps (`_listing`)
 PR_BODY = 1_500
 RELEASE_NOTES = 4_000
@@ -128,6 +131,11 @@ class Refused(Exception):
 
 def _get(path: str, token: str, repo: str) -> Any:
     status, headers, body = (FETCH or _fetch)(path, token)
+    return _answer(status, headers, body, repo)
+
+
+def _answer(status: int, headers: Mapping[str, str], body: Any, repo: str) -> Any:
+    """GitHub's body when it answered 200, else why it refused, raised as `Refused`."""
     if status == 200:
         return body
     lower = {str(k).lower(): str(v) for k, v in dict(headers).items()}
@@ -290,20 +298,29 @@ def _prs(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Lis
     return Listing(list(found.values()), newest, {**left, "newest": newest} if left else {})
 
 
-def _releases(repo: str, token: str, since: str | None) -> Listing:
+def _tag_key(tag: str) -> str:
+    return hashlib.sha1(tag.encode()).hexdigest()[:12]
+
+
+def _releases(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Listing:
     """Releases published after `since`, the time the source started (pre-releases too, drafts never).
 
     GitHub lists releases by the date of the commit each was made from, not by when it was published: a release
     published today from an older commit (a backport, an old draft) lies anywhere in the list, and no row marks where
-    older publications start. So `since` never moves and each read lists the whole list, as far as GitHub lists it (its
-    first RELEASES_LISTED): a release published since the last read is found by this one, wherever it lies, and one
-    read again is saved once by its id. A release made from a commit older than the newest 1,000 releases' is past
-    what GitHub lists and is not seen. A read GitHub refuses part way keeps what it listed before the refusal and says
-    why (`Listing.refused`)."""
+    older publications start. So `since` never moves and each read lists the whole list: a release published since the
+    last read is found by this one, wherever it lies, and one read again is saved once by its id.
+
+    GitHub lists only a repository's first RELEASES_LISTED releases. Past them, a release is found by its tag: one call
+    lists every tag, and a tag that is neither a listed release's nor one already looked up (`carry["beyond"]`, a short
+    hash per tag) is looked up as a release, at most TAG_LOOKUPS a read; the rest wait for the next. The first read
+    only notes the tags past the list. A read GitHub refuses part way keeps what it found and says why."""
     found: dict[str, Item] = {}
+    listed: set[str] = set()
+    known: set[str] | None = None if carry.get("beyond") is None else {str(k) for k in _list(carry.get("beyond"))}
 
     def take(rows: list[Any]) -> None:
         for release in rows:
+            listed.add(str(release.get("tag_name") or ""))
             published = _iso(release.get("published_at"))
             if release.get("draft") or not published or not since or published <= since:
                 continue
@@ -313,19 +330,42 @@ def _releases(repo: str, token: str, since: str | None) -> Listing:
     def page_of(n: int) -> list[Any]:
         return _list(_get(f"/repos/{repo}/releases?per_page={PER_PAGE}&page={n}", token, repo))
 
-    rows = page_of(1)  # the first read too: a repository Tico can't see is Blocked at once
+    def kept() -> dict[str, Any]:
+        return {} if known is None else {"beyond": sorted(known)}
+
+    rows = page_of(1)  # a repository Tico can't see is Blocked at once
     take(rows)
-    if not since:  # the first read only sets the start
-        return Listing([], None, {})
     page = 1
     try:
         while len(rows) >= PER_PAGE and page * PER_PAGE < RELEASES_LISTED:
             page += 1
             rows = page_of(page)
             take(rows)
-    except Refused as refused:  # what was listed is kept: `since` stays, so the next read lists the rest again
-        return Listing(list(found.values()), None, {}, (refused.status, refused.error))
-    return Listing(list(found.values()), None, {})
+        if len(rows) < PER_PAGE:  # the list ended before GitHub's limit: every release was listed
+            return Listing(list(found.values()), None, {})
+        refs = _list(_get(f"/repos/{repo}/git/matching-refs/tags", token, repo))
+        beyond = {_tag_key(tag): tag for ref in refs if (tag := str(_map(ref).get("ref") or "")[10:]) not in listed}
+        if not since:  # the first read: the tags past the list are what was there before
+            known = set(beyond)
+            return Listing([], None, kept())
+        known = (known or set()) & set(beyond)  # a tag that came back into the list is dropped
+        lookups = 0
+        for key, tag in sorted(beyond.items(), key=lambda kv: kv[1]):
+            if key in known:
+                continue
+            if lookups >= TAG_LOOKUPS:  # the rest wait for the next read
+                break
+            lookups += 1
+            path = f"/repos/{repo}/releases/tags/{quote(tag, safe='')}"
+            status, headers, body = (FETCH or _fetch)(path, token)
+            if status == 200:
+                take([body])
+            elif status != 404:  # a tag with no release is 404; anything else is GitHub refusing
+                _answer(status, headers, body, repo)
+            known.add(key)
+    except Refused as refused:  # what was found is kept: `since` stays, so the next read looks again
+        return Listing(list(found.values()), None, kept(), (refused.status, refused.error))
+    return Listing(list(found.values()), None, kept())
 
 
 def read(target: str, follow: str, snapshot: str | None, now: str, token: str = "") -> Result:
@@ -343,7 +383,7 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
     since = (str(cursor.get("since") or "") or None) if same else None
     carry = _map(cursor.get("carry")) if same else {}
     try:
-        listing = _prs(repo, token, since, carry) if follow == "prs" else _releases(repo, token, since)
+        listing = _prs(repo, token, since, carry) if follow == "prs" else _releases(repo, token, since, carry)
     except Refused as refused:
         return {"status": refused.status, "items": [], "snapshot": None, "error": refused.error}
     # GitHub can answer anything (a page that is not a list, a row missing a field): the source says so, the rest read.
@@ -356,7 +396,11 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
             "error": f"Could not read {repo}: {type(exc).__name__}",
         }
     if follow == "releases":  # `since` stays the time the source started (`_releases`)
-        keep: dict[str, Any] = {"follow": follow, "since": since or now}
+        keep: dict[str, Any] = {
+            "follow": follow,
+            "since": since or now,
+            **({"carry": listing.carry} if listing.carry else {}),
+        }
         items = [] if not since else sorted(listing.items, key=lambda item: item["posted_at"] or "")
         status, error = listing.refused or ("ok", "")
         return {"status": status, "items": items, "snapshot": json.dumps(keep), "error": error}

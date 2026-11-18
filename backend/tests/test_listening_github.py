@@ -3,7 +3,7 @@ merged into the default branch, or per release, deduped by the repository and nu
 
 import json
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 import time_machine
@@ -34,7 +34,7 @@ class FakeGitHub:
 
     def __init__(self):
         self.repos = {"acme/widgets": {"default_branch": "main"}}
-        self.prs, self.releases, self.calls, self.refuse = [], [], [], {}
+        self.prs, self.releases, self.calls, self.refuse, self.tags = [], [], [], {}, []  # tags with no release
 
     def merge(self, number, title, when, base="main", labels=(), body=""):
         self.prs.append(
@@ -80,6 +80,12 @@ class FakeGitHub:
             return 404, {}, {"message": "Not Found"}
         if len(bits) == 3:
             return 200, {}, self.repos[repo]
+        if bits[3:6] == ["git", "matching-refs", "tags"]:  # every tag, in one answer
+            tags = [r["tag_name"] for r in self.releases if not r["draft"]] + self.tags
+            return 200, {}, [{"ref": f"refs/tags/{t}"} for t in sorted(tags)]
+        if bits[3:5] == ["releases", "tags"]:
+            found = [r for r in self.releases if r["tag_name"] == unquote(bits[5]) and not r["draft"]]
+            return (200, {}, found[0]) if found else (404, {}, {"message": "Not Found"})
         page, per = int(query["page"][0]), int(query["per_page"][0])
         if bits[3] == "pulls":
             rows = sorted(
@@ -307,17 +313,45 @@ def test_a_release_published_from_an_old_commit_deep_in_the_list_is_an_item_at_t
     assert len(items(api, aid)) == 2
 
 
-def test_a_read_stops_where_github_stops_listing_releases_and_is_ok(api, github, monkeypatch):
+def test_releases_past_the_ones_github_lists_are_found_by_their_tags(api, github, monkeypatch):
     monkeypatch.setattr(LG, "PER_PAGE", 2)
-    monkeypatch.setattr(LG, "RELEASES_LISTED", 6)
+    monkeypatch.setattr(LG, "RELEASES_LISTED", 6)  # GitHub lists 6; it answers 422 past them
     aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
     run(api, START)
-    for n in range(1, 10):
+    for n in range(1, 10):  # nine published since the source started: three past what GitHub lists
         github.release(n, f"v1.{n}.0", at(n))
+    github.tags.append("nightly-marker")  # a tag with no release
     run(api, at(61))
+    assert sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid)) == list(range(1, 10))
     assert source(api, aid)["status"] == "ok"
-    assert len(items(api, aid)) == 6  # the six GitHub lists; it answers 422 past them
-    assert not any("page=4" in call for call in github.calls)
+    before = len(github.calls)
+    run(api, at(125))  # read again: no copies, and no tag looked up twice
+    assert len(items(api, aid)) == 9
+    assert not any("/releases/tags/" in call for call in github.calls[before:])
+
+
+def test_a_backport_older_than_every_release_github_lists_arrives_at_the_next_read(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "RELEASES_LISTED", 6)
+    monkeypatch.setattr(LG, "TAG_LOOKUPS", 1)
+    for n in range(1, 13):  # twelve from before the source started: six past what GitHub lists
+        github.release(n, f"v1.{n}.0", at(n - 600))
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)  # the first read notes the tags past the list, and makes no item
+    assert items(api, aid) == []
+    # Two backports from commits older than all of them: GitHub lists neither, they are past its first six.
+    github.release(30, "v0.9.1", at(20), commit_at=at(-900))
+    github.release(31, "v0.9.2", at(25), commit_at=at(-899))
+    run(api, at(65))  # the next hourly read, inside the spec's two hours (AC-6); one lookup a read here
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#release:30"]
+    run(api, at(130))
+    assert [i["native_id"] for i in items(api, aid)] == [
+        "gh:acme/widgets#release:30",
+        "gh:acme/widgets#release:31",
+    ]
+    run(api, at(195))
+    assert len(items(api, aid)) == 2
+    assert source(api, aid)["status"] == "ok"
 
 
 def test_more_new_prs_between_two_reads_than_a_read_lists_lose_none(api, github, monkeypatch):
