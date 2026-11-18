@@ -8,8 +8,8 @@ tasks, a few hundred threads with posts, and a message history.
 Env: OPEN (default 1500), CLOSED (16500), THREADS (400), RUNS (5), PROFILE=<path> (cProfile one route),
 STATEMENTS=<path> (the statement shapes one call runs), DB=<file> (keep the seeded database there and reuse it),
 PATHS=<path,...> (the routes measured), ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB),
-TOKENS=<token,...> (the readers, default ana-test,ben-test,cara-test), SLOW=<dir> (with STATEMENTS: each reader's slowest
-statements written there whole, as <token>-<n>.sql).
+TOKENS=<token,...> (the readers, default ana-test,ben-test,cara-test), SLOW=<dir> (with STATEMENTS: each reader's statements
+written there whole, slowest first, as <token>-<n>.sql).
 
 Per route it prints the statements one call takes, the median wall time of RUNS calls and the answer's size. Only
 fictional data, in a temporary folder removed afterwards (unless DB is given). Never point it at a real hub.
@@ -203,8 +203,9 @@ def report(api):
             # Until the next statement starts: the statement's own time and the Python after it, so slow SQL stands out.
             gaps = sorted(((b - a) * 1000, q) for a, b, q in zip(started[:-1], started[1:], seen, strict=True))[::-1]
             print(f"    slowest (ms until the next statement; {sum(g for g, _ in gaps):.0f} ms in all):")
-            for n, (ms, q) in enumerate(gaps[:8]):
-                print(f"{ms:8.1f}  {re.sub(r'\s+', ' ', q)[:400]}")
+            for n, (ms, q) in enumerate(gaps):
+                if n < 8:
+                    print(f"{ms:8.1f}  {re.sub(r'\s+', ' ', q)[:400]}")
                 if os.environ.get("SLOW"):
                     Path(os.environ["SLOW"]).mkdir(parents=True, exist_ok=True)
                     Path(os.environ["SLOW"], f"{token}-{n}.sql").write_text(f"-- {ms:.1f} ms\n{q}\n")
