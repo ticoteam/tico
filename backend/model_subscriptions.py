@@ -1479,6 +1479,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
             spread(c, settings, sid, who.actor, signed_on)  # one that needed reconnecting works again
+            if kind == "claude_login":
+                claude_login.read_soon(c, sid)
             _follow(c, settings, who.actor)
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
@@ -1502,6 +1504,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     spread(c, settings, sid, who.actor, signed_on)
+    if body.kind == "claude_login":
+        claude_login.read_soon(c, sid)
     _follow(c, settings, who.actor)
     return view(c, row(c, sid))
 

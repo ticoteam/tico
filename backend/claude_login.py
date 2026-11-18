@@ -299,6 +299,12 @@ def _tell(c: Any, runner_ids: Iterable[str]) -> None:
         )
 
 
+def read_soon(c: Any, sid: str) -> None:
+    """A new login's usage is read now, not on a computer's next 5-minute poll: each computer that can read it is told
+    (a plan never read is due at once, `_wanted`)."""
+    _tell(c, [r["id"] for r, _ in _computers(c, sid) if takes_turns(r) and _online(r)])
+
+
 def pushed(c: Any, sid: str) -> None:
     """A plan's login changed (a refresh, or a Reconnect of the same account): every computer with a turn on it is told,
     and rewrites its turns' files on its poll; a turn waiting for it goes."""
