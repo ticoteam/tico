@@ -54,6 +54,46 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_credential_adder_backfill_uses_creation_evidence_without_guessing(tmp_path):
+    path = fresh(tmp_path)
+    version = next(m.version for m in migrations.files() if m.version.endswith('_credential_adders'))
+    with sqlite3.connect(path) as c:
+        c.execute('DELETE FROM schema_migrations WHERE version=?', (version,))
+        c.executemany(
+            'INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by,created_by) '
+            "VALUES(?,?,'api_key','now','later','human:rotator',?)",
+            [
+                (key, key, adder)
+                for key, adder in (
+                    ('legacy', None),
+                    ('existing', 'human:original'),
+                    ('ambiguous', ''),
+                    ('computer', None),
+                    ('unattributed', None),
+                )
+            ],
+        )
+        for action, target, actor in (
+            ('credential.created', 'legacy', 'human:adder'),
+            ('credential.updated', 'legacy', 'human:rotator'),
+            ('credential.created', 'existing', 'human:other'),
+            ('credential.created', 'ambiguous', 'human:adder'),
+            ('credential.created', 'ambiguous', 'human:other'),
+            ('credential.migrated', 'computer', 'runner:computer'),
+            ('credential.created', 'unattributed', 'system'),
+        ):
+            H.event(c, actor, action, target)
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert dict(c.execute('SELECT id,created_by FROM credentials')) == {
+            'legacy': 'human:adder',
+            'existing': 'human:original',
+            'ambiguous': '',
+            'computer': None,
+            'unattributed': None,
+        }
+
+
 def test_a_migration_written_after_the_baseline_runs_on_a_new_file(tmp_path, monkeypatch):
     """The baseline records the files it holds; one it does not (a later PR's) runs on top of it."""
     directory = tmp_path / "migrations"

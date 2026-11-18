@@ -393,6 +393,20 @@ def test_accounts_are_added_replaced_shared_and_removed_and_each_answer_is_the_d
     assert PASSWORD not in tables(api, "events", "idempotency") and KEY not in tables(api, "events", "idempotency")
 
 
+def test_a_demoted_adder_can_remove_a_shared_website_account_without_access_to_its_login(api):
+    start(api)
+    tid = website(api)
+    aid = account(api, tid, token="ben-test", totp=KEY)
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    [row] = get(api, f"website-tools/{tid}", "ben-test")["accounts"]
+    assert row["id"] == aid and row["can_remove"] and not row["can_manage"] and not row["can_use"]
+    assert "username" not in row and not row["has_totp"]
+    path = f"website-tools/{tid}/accounts/{aid}"
+    call(api, "DELETE", path, token="cara-test", expected=403)
+    post(api, f"credentials/{aid}/reveal", {}, "ben-test", expected=403)
+    assert call(api, "DELETE", path, token="ben-test")["deleted"]
+
+
 def test_the_code_route_gives_a_person_who_uses_it_the_code_logs_it_without_the_code_and_slows_down(api):
     start(api)
     tid = website(api)

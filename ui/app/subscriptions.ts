@@ -15,7 +15,7 @@ interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window
 type SubsComputer = string | {runner_id: string; label?: string};
 // `order`: where a plan comes in its owner's plans for its tool (the plan in use first, then the pick order; null when
 // held or waiting to be reconnected). `in_use_on`: the computers whose turns sign in with it now.
-interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]; reconnect_by?: string | null}
+interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]; reconnect_by?: string | null; can_remove?: boolean}
 // A computer given a person's plans: the plan in use (`on`) and why (backend model_subscriptions.set_state).
 interface SubsSetWhy {kind: 'soonest' | 'held' | 'reconnect' | 'all_held' | 'none' | string; plan?: string | null; until?: string | null}
 interface SubsSet {person: string; person_name: string; plans: number; on: string | null; on_name: string | null; why: SubsSetWhy}
@@ -198,7 +198,7 @@ function subsRowHTML(sub: SubsRow, next = false) {
     <td class="muted subs-kind">${esc(subsKindLabel(sub))}</td>
     ${subsCountHTML(sub)}
     <td class="subs-use">${subsStatusHTML(sub) || `${subsUsageHTML(sub)}${subsReconnectByHTML(sub)}`}</td>
-    <td class="subs-more-cell">${subsRefreshHTML(sub)}${subsMayEdit() ?`<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
+    <td class="subs-more-cell">${subsRefreshHTML(sub)}${subsMayEdit() || sub.can_remove ?`<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {
   const el = $('#set-subs'); if (!el) return;
@@ -293,10 +293,10 @@ function subsMenu(anchor: HTMLElement, sub: SubsRow | undefined) {
     document.body.append(pop);
   }
   pop.anchor = anchor;
-  pop.innerHTML = `<div class="tl-menu" role="menu" aria-label="${esc(sub.name)}">
+  pop.innerHTML = `<div class="tl-menu" role="menu" aria-label="${esc(sub.name)}">${subsMayEdit() ? `
     <button type="button" class="tl-mi" role="menuitem" data-subs-act="edit">Edit</button>
-    <button type="button" class="tl-mi" role="menuitem" data-subs-act="reconnect">Reconnect</button>
-    <button type="button" class="tl-mi danger" role="menuitem" data-subs-act="remove">Remove</button></div>`;
+    <button type="button" class="tl-mi" role="menuitem" data-subs-act="reconnect">Reconnect</button>` : ''}${(sub.can_remove ?? subsMayEdit()) ? `
+    <button type="button" class="tl-mi danger" role="menuitem" data-subs-act="remove">Remove</button>` : ''}</div>`;
   pop.onclick = (event: MouseEvent) => {
     const act = eventElement(event)?.closest<HTMLElement>('[data-subs-act]')?.dataset.subsAct;
     if (!act) return;

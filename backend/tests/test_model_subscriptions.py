@@ -86,6 +86,18 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     assert again["status"] == "new" and again["revision"] == 2 and again["preview"].endswith(OTHER[-4:])
 
 
+def test_a_demoted_adder_can_remove_a_model_key_but_other_members_cannot(api):
+    setup(api)
+    sid = add(api, "openai_key", "sk-acme-synthetic-key-123456789", token="ben-test")["id"]
+    post(api, "access/humans/ben", {"role": "member"})
+    assert listed(api, "ben-test")[0]["can_remove"]
+    assert not listed(api, "cara-test")[0]["can_remove"]
+    path = f"/api/v2/model-subscriptions/{sid}"
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    assert listed(api) == []
+
+
 def test_a_computer_holds_one_subscription_per_runtime_of_the_right_kind(api):
     setup(api)
     company(api)

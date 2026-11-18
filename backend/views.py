@@ -2610,7 +2610,7 @@ def install_views(app, store, auth, mutate, task_view):
                 and access.get(row["id"], auth.FULL)["see"]
                 and access.get(row["id"], auth.FULL)["write"]
             ]
-            from .credentials import administrator, can_open
+            from .credentials import administrator, can_open, has_removable_loose_key
             from .onboarding import config_view
             from .mail import can_access
 
@@ -2641,6 +2641,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "proxy_session": who.via_proxy,
                 "sign_in_name": auth.sign_in_name(request.headers) if who.via_proxy else "",
                 "credential_access": bool(can_open(c, who, admins)),
+                "credential_remove_access": has_removable_loose_key(c, who),
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),

@@ -162,7 +162,7 @@ function lcCredHTML(cred: LcCredential): string {
   const used = cred.last_used_at ? `used ${ago(cred.last_used_at)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
   const acts = [
     VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${cred.stored ? 'Rotate' : 'Set'}</button>` : '',
-    `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
+    cred.remove_only ? '' : `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
     cred.stored && cred.can_reveal ? `<button class="linkish" type="button" data-vault-reveal="${esc(cred.id)}">Reveal</button>` : '',
   ].filter(Boolean).join('');
   return `<div class="lc-cred" data-cred="${esc(cred.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
@@ -254,7 +254,7 @@ function lcDrawCredential(id: string, back: string): void {
     <div id="tool-facts">${lcIssuesHTML(item)}
     <section class="card lc-creds">${lcCredHTML(cred)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Value', cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
       ${row('Changed', cred.updated_at && `<span title="${esc(fmt(cred.updated_at))}">${esc(ago(cred.updated_at))}</span>`)}</dl>
-      ${VAULT?.can_manage ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
+      ${(cred.can_remove ?? VAULT?.can_manage) ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
     <section class="card lc-access"><header><h2>Access <span class="muted">${(cred.grants || []).length}</span></h2></header>${grants}</section></div>`;
   lcWireFacts();
 }

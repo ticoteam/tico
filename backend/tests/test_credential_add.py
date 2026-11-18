@@ -195,6 +195,22 @@ def test_a_bot_replaces_only_its_own_key(api, monkeypatch):
     assert runtime(api, attempt["token"])["CLOSE_API_KEY"] == SECRET + "-rotated"
 
 
+def test_a_bot_removes_its_own_key_through_mcp(api, monkeypatch):
+    vault(api)
+    _, attempt = turn(api)
+    token = attempt["token"]
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
+    saved = run(api, token, "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
+    [own] = credential(api, "CLOSE_API_KEY")
+    err, out = call(api, "tico_credential_delete", {"credential": saved["id"]}, token=token)
+    assert not err and out["deleted"]
+    assert credential(api, "CLOSE_API_KEY") == []
+    with api.app.state.store.read() as c:
+        assert c.execute(
+            "SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (own["tool_id"],)
+        ).fetchone()[0] == "bot:ops"
+
+
 def test_a_bot_never_overwrites_anyone_elses_key_nor_gives_its_own_away(api, monkeypatch):
     vault(api)
     machine, attempt = turn(api)

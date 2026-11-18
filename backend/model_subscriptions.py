@@ -87,7 +87,7 @@ from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
 from . import hubdb as H
-from .credentials import SERVICE, keep_service
+from .credentials import SERVICE, keep_service, may_remove
 from .models import Contract, ID
 from .store import Problem, readiness_document
 from .api_contract import api_v2
@@ -1121,15 +1121,18 @@ def _reader(who):
         raise Problem("forbidden", "Only a person reads the company's subscriptions", 403)
 
 
+def _may_manage(auth, who):
+    return (
+        who.role in ("human", "owner")
+        and str(who.actor).startswith("human:")
+        and not who.support
+        and auth.bot_admin(who)
+    )
+
+
 def _admin(auth, who, secret=False):
-    """An owner or admin. A secret is pasted by the person themselves: never through the Assistant or BotOps acting
-    for them, a bot run, or a Tico support session; support changes nothing here."""
-    if (
-        who.role not in ("human", "owner")
-        or not str(who.actor).startswith("human:")
-        or who.support
-        or not auth.bot_admin(who)
-    ):
+    """An owner or admin. A person pastes their own secret into Settings."""
+    if not _may_manage(auth, who):
         raise Problem("forbidden", "Only an owner or admin changes the company's subscriptions", 403)
     if secret and (who.via or who.attempt_id):
         raise Problem("forbidden", "Save a subscription yourself in Settings > Models", 403)
@@ -2507,7 +2510,11 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         _reader(who)
         with store.read() as c:
-            return {"subscriptions": listed(c), "kinds": kinds(), "connect": connect_ready(c)}
+            manages = _may_manage(auth, who)
+            subscriptions = [
+                sub | {"can_remove": may_remove(who, sub["added_by"], manages=manages)} for sub in listed(c)
+            ]
+            return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
 
     @app.post(
         "/api/v2/model-subscriptions",
@@ -2563,7 +2570,8 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "removeModelSubscription",
-            "Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`",
+            "Remove a subscription from every computer (its adder or an admin). "
+            "Returns 409 `confirm_restart` if runs would stop without `confirm=1`",
             "ModelSubscriptionDeleted",
         ),
     )
@@ -2572,7 +2580,11 @@ def install(app, store, auth, mutate, settings):
 
         def work(c):
             auth.domain(who)
-            _admin(auth, who)
+            if not _may_manage(auth, who):
+                _reader(who)
+                sub = row(c, sid)
+                if sub is None or not may_remove(who, sub["added_by"]):
+                    _admin(auth, who)
             return remove(c, settings, who, sid, confirm)
 
         return mutate(request, Empty(), work)

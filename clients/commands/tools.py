@@ -461,7 +461,8 @@ def credential_revoke(api, args):
 
 @tool(
     "tico_credential_delete",
-    "Delete a stored Credential and all its grants. Credential administrators only. "
+    "Delete a stored Credential and all its grants. Its adder can remove it while they can still see its tool. "
+    "Credential administrators can also remove it. "
     "The encrypted value is erased; history keeps metadata only.",
     {"credential": _s("Credential name, id or variable name")},
     required=("credential",),
@@ -574,7 +575,7 @@ CREDENTIAL_AFTER_SET = (
     ),
     Command(
         "credential delete",
-        "erase a Credential and all its grants (credential administrators)",
+        "erase a Credential and its grants (its adder or a credential administrator)",
         example="tico credential delete JIRA_BASIC_AUTH",
     ),
     Command(

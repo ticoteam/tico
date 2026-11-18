@@ -28,6 +28,11 @@ Four words, used the same way everywhere:
 
 Tools → Credentials lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. A member who stored a credential for their bot sees it listed (name, variable, grants; no **Reveal** unless it is also granted to them) and gives it to, or takes it from, bots they own or manage, while it is still theirs ([permissions.md](permissions.md#bot-owners)); giving it to someone else's bot is refused with who to ask. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
 
+The person or bot that added a credential can remove it while they can still see its tool. This also applies to
+independently stored credentials and website accounts. **Remove** stays available to the adder after someone else
+rotates the value. Removal erases the credential and its grants and records who removed it. Credential
+administrators can also remove credentials they manage.
+
 Credentials use AES-256-GCM with per-write random nonces and credential-bound authenticated data. Reveal operations are audited; credential values are excluded from audit and idempotency receipts. Restoring a snapshot revokes restored grants to avoid resurrecting permissions.
 
 The Credential's variable-name field becomes an environment variable only for a granted bot, during its run (`GET /api/v2/credential-runtime`), on a Mac or Linux computer and in the Docker runner alike. File Credentials become mode-0600 temporary files during the run. A bot cannot be granted two Credentials that use one variable name (the second grant is refused until the first is taken away). Computer login entries describe existing CLI/browser sessions and must be connected separately on each computer. A bot's Tools list and Health count a granted Credential as present ("granted through the credential vault") even though its computer's secrets file does not hold it. Existing bots' own-file values migrate into grants on upgrade; an old file is never a run fallback. Storing a Credential does not erase that file or give its value to another bot.
