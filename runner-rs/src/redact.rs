@@ -68,7 +68,75 @@ fn variants(value: &str) -> BTreeSet<String> {
         forms.insert(text.trim_end_matches('=').to_string());
         forms.insert(text);
     }
+    forms.extend(json_forms(value));
+    forms.extend(utf16_forms(value));
     forms
+}
+
+/// The value as a JSON string's inside: `/` as is or as `\/`, non-ASCII as is or as `\uXXXX` (lower or upper hex,
+/// as encoders write it), and every character as `\uXXXX`. A value only partly `\u`-escaped is not one of them (spec
+/// Out: a value split inside itself). Kept step for step with redact.py json_forms.
+fn json_forms(value: &str) -> BTreeSet<String> {
+    let mut forms = BTreeSet::new();
+    for slash in [false, true] {
+        for ascii in [false, true] {
+            for upper in [false, true] {
+                let mut out = String::new();
+                for ch in value.chars() {
+                    match ch {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '/' if slash => out.push_str("\\/"),
+                        '\u{8}' => out.push_str("\\b"),
+                        '\u{c}' => out.push_str("\\f"),
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        c if (c as u32) < 0x20 || (ascii && (c as u32) > 0x7f) => {
+                            out.push_str(&unicode_escape(c, upper))
+                        }
+                        c => out.push(c),
+                    }
+                }
+                forms.insert(out);
+            }
+        }
+    }
+    for upper in [false, true] {
+        forms.insert(value.chars().map(|c| unicode_escape(c, upper)).collect());
+    }
+    forms
+}
+
+/// `\uXXXX` for one character: two for one past the Basic Multilingual Plane, as JSON writes it (UTF-16 units).
+fn unicode_escape(c: char, upper: bool) -> String {
+    let mut units = [0u16; 2];
+    c.encode_utf16(&mut units)
+        .iter()
+        .map(|u| {
+            if upper {
+                format!("\\u{u:04X}")
+            } else {
+                format!("\\u{u:04x}")
+            }
+        })
+        .collect()
+}
+
+/// The value's UTF-16 LE and BE bytes, each byte read as one latin-1 character, the way `holds` reads a file: a UTF-16
+/// file, or UTF-16 text in a log line or an event, holding the value matches it. Kept step for step with redact.py
+/// utf16_forms.
+fn utf16_forms(value: &str) -> BTreeSet<String> {
+    let mut le = String::new();
+    let mut be = String::new();
+    for unit in value.encode_utf16() {
+        let [lo, hi] = unit.to_le_bytes();
+        le.push(lo as char);
+        le.push(hi as char);
+        be.push(hi as char);
+        be.push(lo as char);
+    }
+    BTreeSet::from([le, be])
 }
 
 fn worth(value: &str) -> bool {
@@ -324,6 +392,28 @@ impl Redactor {
         }
     }
 
+    /// What one changed file's bytes become (redact.py file_outcome): Clean when no form of a secret is in them;
+    /// LeftOut when git would treat them as binary (a NUL in the first 8000 bytes, which every UTF-16 text with ASCII
+    /// in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still hold a form once masked (a
+    /// UTF-16 text with no NUL); else the masked bytes. A file left out is not committed and is named in the reply.
+    pub fn file_outcome(&self, data: &[u8]) -> FileScrub {
+        if !self.holds(data) {
+            return FileScrub::Clean;
+        }
+        if data.iter().take(8000).any(|&b| b == 0)
+            || data.starts_with(&[0xff, 0xfe])
+            || data.starts_with(&[0xfe, 0xff])
+            || data.len() as u64 > TEXT_LIMIT
+        {
+            return FileScrub::LeftOut;
+        }
+        let masked = self.scrub_bytes(data);
+        if self.holds(&masked) {
+            return FileScrub::LeftOut;
+        }
+        FileScrub::Masked(masked)
+    }
+
     /// Scrub what a turn changed in the checkout at `root`: rewrite changed text files holding a secret,
     /// report binary or oversized ones, and whether a commit made since `since` carries one.
     pub fn scrub_tree(&self, root: &Path, since: &str) -> Tree {
@@ -522,12 +612,11 @@ impl Redactor {
             .take(TEXT_LIMIT + 1)
             .read_to_end(&mut data)?;
         drop(stream);
-        if !self.holds(&data) {
-            return Ok(Scrubbed::Clean);
-        }
-        if data.iter().take(8000).any(|&b| b == 0) || data.len() as u64 > TEXT_LIMIT {
-            return Ok(Scrubbed::LeftOut);
-        }
+        let masked = match self.file_outcome(&data) {
+            FileScrub::Clean => return Ok(Scrubbed::Clean),
+            FileScrub::LeftOut => return Ok(Scrubbed::LeftOut),
+            FileScrub::Masked(masked) => masked,
+        };
         use std::os::unix::fs::MetadataExt;
         let mode = (info.mode() & 0o7777) as libc::mode_t;
         let temporary = cstr(format!(".tico-scrub-{}", uuid::Uuid::new_v4().simple()).as_bytes())?;
@@ -547,7 +636,7 @@ impl Redactor {
             if unsafe { libc::fchmod(fd, mode) } != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            out.write_all(&self.scrub_bytes(&data))?;
+            out.write_all(&masked)?;
             out.sync_all()?;
             let current = stat_at(&dir, &leaf)?;
             if (current.st_dev as u64, current.st_ino as u64) != (info.dev(), info.ino()) {
@@ -565,6 +654,13 @@ impl Redactor {
         }
         written
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FileScrub {
+    Clean,
+    LeftOut,
+    Masked(Vec<u8>),
 }
 
 #[derive(Default, Debug)]
