@@ -308,7 +308,8 @@ def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parall
     assert plan["python"] == [checks.CONTRACT_TESTS[0]]
     assert jobs == [
         {"suite": "python-1", "files": [checks.CONTRACT_TESTS[0]]},
-        {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)},
+        # The contracts include test_e2e_cli, which reads history: that VM checks out all of it (HISTORY_TESTS).
+        {"suite": "contracts", "files": list(checks.CONTRACT_TESTS), "history": True},
     ]
     # Even a plan with no default tests must retain the contracts job.
     monkeypatch.setattr(checks, "collect", Counter)
@@ -370,7 +371,12 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     )
     target = tmp_path / "plan.json"
     jobs = checks.prepare("pull_request", "base", target)["matrix"]["include"]
-    assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
+    assert {
+        "suite": "conformance",
+        "files": [checks.CONFORMANCE],
+        "crates": ["relay-rs", "runner-rs"],
+        "history": True,
+    } in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     (tmp_path / "runner_support/tests").mkdir(parents=True)
@@ -581,14 +587,18 @@ def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_ke
     monkeypatch.setattr(checks, "collect", Counter)
     target = tmp_path / "plan.json"
     for sweeps, job in (
-        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)}),
-        ([TEMPLATES_SWEEP], {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP]}),
+        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS), "history": True}),
+        (
+            [TEMPLATES_SWEEP],
+            {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP], "history": True},
+        ),
         (
             [CLI_SWEEP, TEMPLATES_SWEEP],
             {
                 "suite": "contracts",
                 "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP],
                 "env": {"TICO_E2E_CLI_ALL": "1"},
+                "history": True,
             },
         ),
     ):
@@ -2936,6 +2946,24 @@ def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_
     assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
 
 
+def test_a_base_missing_from_a_one_commit_checkout_is_fetched_before_it_is_read(python_retry_leg, monkeypatch):
+    base_sha = "b" * 40
+    monkeypatch.setenv("BASE_SHA", base_sha)
+
+    def output(command, *args, **kwargs):
+        if command[:2] == ["git", "rev-parse"] and "--verify" in command:
+            raise subprocess.CalledProcessError(1, command)
+        return "a" * 40 + "\n"
+
+    monkeypatch.setattr(checks.subprocess, "check_output", output)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=head)
+    assert status == 0
+    fetch, cat = calls[2][0], calls[3][0]
+    assert fetch == ["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha]
+    assert cat[:3] == ["git", "cat-file", "-e"]
+
+
 @pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
 def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
     monkeypatch.setenv("BASE_SHA", base_sha)
@@ -3587,3 +3615,49 @@ def test_cli_does_not_accept_abbreviated_options(monkeypatch, capsys):
         checks.main()
     assert stop.value.code == 2
     assert "unrecognized arguments: --ret" in capsys.readouterr().err
+
+
+# A git command that reads history (beyond the one commit a shallow checkout has), run in this checkout: "git" in a call
+# whose cwd is the repository root, or a test's git() helper bound to it. A temporary repository's git is not counted.
+GIT_CALL = re.compile(r'\[\s*"git",(?:[^\]]|\n)*?\][^\n]*(?:\n[^\n]*){0,2}')
+AT_ROOT = re.compile(r"cwd=(ROOT|REPO|REPO_ROOT|ROOT_DIR)\b")
+READS_HISTORY = re.compile(r'"(rev-list|merge-base|log|describe|blame|show|diff)"|HEAD~|HEAD\^|origin/main')
+ROOT_HELPER = re.compile(r"def git\(\*args\)[^\n]*\n(?:[^\n]*\n){0,3}[^\n]*cwd=ROOT\b")
+
+
+def test_every_test_that_reads_this_checkouts_history_gets_a_full_checkout(tmp_path, monkeypatch):
+    """A test VM checks out only the commit it tests unless its plan entry says "history" (pr_checks.HISTORY_TESTS): a
+    test that counts commits or diffs against origin/main would otherwise see one commit and quietly run less."""
+    names = subprocess.check_output(["git", "ls-files", "*.py"], cwd=ROOT, text=True).split()
+    tests = [n for n in names if Path(n).name.startswith("test_") or n.endswith("_test.py")]
+    found = set()
+    for name in tests:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        if '"git"' not in text:
+            continue
+        calls = (m.group(0) for m in GIT_CALL.finditer(text))
+        if ROOT_HELPER.search(text) or any(AT_ROOT.search(c) and READS_HISTORY.search(c) for c in calls):
+            found.add(name)
+    assert found == checks.HISTORY_TESTS, "list a test that reads history in pr_checks.HISTORY_TESTS, or drop it there"
+
+    history = sorted(checks.HISTORY_TESTS)[0]
+    picked = {"python": [history, "backend/tests/test_other.py"], "browser": [], "caddy": False}
+    picked |= {"conformance": False, "rust": [], "contracts": False}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", lambda: Counter({history: 1, "backend/tests/test_other.py": 1}))
+    monkeypatch.setattr(checks, "CEILING", {"pull_request": 2, "merge_group": 2})
+    monkeypatch.setattr(checks, "size_groups", lambda counts, *a, **kw: _two_groups(counts))
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    marked = {job["suite"]: job.get("history", False) for job in jobs}
+    assert marked == {"python-1": True, "python-2": False}
+
+    # The conformance VM always keeps full history: the Rust updater test reads main's parser from origin/main.
+    picked |= {"conformance": True, "rust": ["runner-rs"]}
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    assert {job["suite"]: job.get("history", False) for job in jobs}["conformance"] is True
+
+
+def _two_groups(counts):
+    split = [[name] for name in sorted(counts)]
+    return {"split": split, "loads": [1.0] * len(split), "target": 330}

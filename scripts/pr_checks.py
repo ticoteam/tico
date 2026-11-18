@@ -102,6 +102,11 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
+# Test files that read this checkout's git history (a commit count, origin/main, HEAD~1). The plan marks a test VM
+# holding one "history" so the tests job of pr-checks.yml can check out only the commit under test on every other VM
+# (fetch-depth from matrix.history), which saves the full-history fetch. scripts/tests/test_pr_checks.py fails when a test file runs such
+# a git command in this checkout and is not listed here.
+HISTORY_TESTS = frozenset({"backend/tests/test_e2e_cli.py"})
 # A migration runs the checks that upgrade the floor's database or a fixture through every migration, in light plans
 # too. Booting through helpers and subprocesses makes source-only discovery unreliable.
 MIGRATIONS = "backend/migrations/"
@@ -2336,7 +2341,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         jobs += [{"suite": f"browser-{i + 1}", "files": names} for i, names in enumerate(browser_split) if names]
         loads += sized["browser_loads"]
     if picked["conformance"]:
-        jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
+        # Always full history: runner-rs's updater test (follow.rs) reads main's parser from origin/main and falls back
+        # to the checkout's own copy without it, so a one-commit checkout would quietly stop checking compatibility.
+        jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"], "history": True})
     if picked["contracts"]:
         # The release contracts, and the content sweeps the change turned on, run their slow tests (-m slow); packed by
         # measured seconds like the python VMs. A job holding a sweep names the environment it runs with (sweep_env).
@@ -2354,6 +2361,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
         jobs.append({"suite": "selection", "files": []})
+    for job in jobs:
+        if HISTORY_TESTS.intersection(job["files"]):
+            job["history"] = True
     coverage = {"lines": {}}
     if event in ("pull_request", "merge_group") and base:
         # The statements this change adds to backend/ and clients/ (diff_coverage.py): the gate counts which of them run.
@@ -2458,6 +2468,11 @@ def check_base_failures(root, suite, retry_report, remaining):
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         if base == commit:
             return None
+        try:
+            subprocess.check_output(["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"], cwd=root)
+        except subprocess.CalledProcessError:
+            # A one-commit checkout (no "history" in the plan) holds only the merge commit: fetch the base alone.
+            subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", base], cwd=root, check=True)
         for path in dict.fromkeys(test.split("::", 1)[0] for test in messages):
             subprocess.run(["git", "cat-file", "-e", f"{base}:{path}"], cwd=root, check=True)
         with TemporaryDirectory(prefix="tico-pr-base-") as temp:
