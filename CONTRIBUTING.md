@@ -141,8 +141,9 @@ documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 `scripts/osv_gate.py` runs the pinned OSV-Scanner (`scripts/pinned_tool.sh`) over every `requirements*.txt`,
 `package-lock.json` and `Cargo.lock`, the libraries in `ui/vendor/` and `templates/employee-repo/ui/vendor/`, and the uv
-versions scripts pin. PR checks run it when one of those inputs changes. It fails only on a known advisory, never on an
-older version, and prints RustSec maintenance notices without failing. It never changes a version.
+versions scripts pin. PR checks run it when one of those inputs changes, and the daily full release validation runs it
+too, so an advisory published against untouched inputs shows there as a red `advisories` job. It fails only on a known
+advisory, never on an older version, and prints RustSec maintenance notices without failing. It never changes a version.
 
 - Vendoring or updating a library: set its package, version and `sha256` in `scripts/advisories/vendored.json`.
 - Pinning uv in a script: list the file in `scripts/advisories/tools.json`.
