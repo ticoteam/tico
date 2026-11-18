@@ -2,12 +2,14 @@
 (`SELECT owner_id,bot_owners FROM bot_config WHERE bot=?`), its cloud machine (`SELECT * FROM cloud_machines WHERE
 bot=?`) and its declaration (bot_settings.ONE_SQL), plus the whole-roster read (bot_settings.ROW_SQL), on a fictional
 Tico Cloud company: BOTS bots on cloud machines (most shared, some their own, two refused for credit), half of them
-owned by the non-admin person Ben, each with an open task.
+owned by Cara, a person with no admin rights, each with an open task.
 
     nice -n 10 .venv/bin/python bench/perf-shared-lookups.py
 
-Env: BOTS (default 150), RUNS (20), CALLERS=1 (who issues the counted lookups), SAME=1 (each answer read again with
-the snapshot read cache off, which must give the same JSON).
+Env: BOTS (default 150), RUNS (20), PATHS (comma-separated routes), CALLERS=1 (who issues the counted lookups), SAME=1
+(each answer read again with the snapshot read cache off, which must give the same JSON), COLD=1 (each call starts
+with no roster shared from an earlier request, as on a server whose bots finish turns all the time: each turn's
+`bots.last_turn_at` moves the roster clock).
 
 Per route and person it prints the statements of one call, each counted shape, and the median of RUNS calls. Only
 fictional data, in a temporary folder removed afterwards. Never point it at a real hub.
@@ -38,8 +40,9 @@ from backend.tests.helpers.cloud_access import signals
 
 BOTS = [f"bot{n:03d}" for n in range(int(os.environ.get("BOTS", 150)))]
 RUNS = int(os.environ.get("RUNS", 20))
-PATHS = ("/api/v2/bots", "/api/v2/health", "/api/v2/company/floor", "/api/employees")
-TOKENS = ("ana-test", "ben-test")
+PATHS = tuple(os.environ.get("PATHS", "/api/v2/bots,/api/v2/health,/api/v2/company/floor,/api/employees").split(","))
+# Ana owns the company; Cara is a person with no admin rights (Ben is a bot admin in the test registry).
+TOKENS = ("ana-test", "cara-test")
 SHAPES = {
     "owners": "SELECT owner_id,bot_owners FROM bot_config WHERE bot=",
     "cloud": "SELECT * FROM cloud_machines WHERE bot=",
@@ -81,7 +84,7 @@ def seed(api):
             X.bot(c, slug, computer=False)
             c.execute(
                 "UPDATE bot_config SET owner_id=?, reports_to=? WHERE bot=?",
-                ("ben" if n % 2 else "ana", BOTS[n // 10] if n >= 10 else None, slug),
+                ("cara" if n % 2 else "ana", BOTS[n // 10] if n >= 10 else None, slug),
             )
             own = n % 7 == 0
             problem = "out_of_credit" if n in (3, 4) else ""
@@ -150,15 +153,21 @@ def canonical(response):
     return json.dumps(response.json(), sort_keys=True)
 
 
+def call(api, path, token):
+    if os.environ.get("COLD"):
+        api.app.state.store.roster_rows.clear()
+    return api.get(path, headers=headers(token))
+
+
 def measure(api, path, token, callers):
     store, times, seen = api.app.state.store, [], []
-    r = api.get(path, headers=headers(token))
+    r = call(api, path, token)
     assert r.status_code == 200, (path, r.text[:300])
     with counting(store, seen, callers, f"{path} {token}"):
-        api.get(path, headers=headers(token))
+        call(api, path, token)
     for _ in range(RUNS):
         t = time.perf_counter()
-        api.get(path, headers=headers(token))
+        call(api, path, token)
         times.append((time.perf_counter() - t) * 1000)
     counts = collections.Counter(shape(s) for s in seen)
     return len(seen), counts, statistics.median(times)
@@ -180,6 +189,40 @@ def same(api, path, token):
     return "same" if off == first else "DIFFERENT"
 
 
+def costs(api):
+    """One bot's row read alone against every bot's read whole, best of 200, and each statement's query plan."""
+    pairs = (
+        (
+            "owners",
+            "SELECT owner_id,bot_owners FROM bot_config WHERE bot=?",
+            "SELECT owner_id,bot_owners,bot FROM bot_config",
+        ),
+        (
+            "cloud",
+            "SELECT * FROM cloud_machines WHERE bot=?",
+            "SELECT m.*,d.machine_id IS NOT NULL AS deleting FROM cloud_machines m "
+            "LEFT JOIN cloud_machine_deletions d ON d.machine_id=m.machine_id",
+        ),
+        ("config", BS.ONE_SQL, f"SELECT {BS.CONFIG} AS config,bc.bot AS bot FROM bot_config bc {BS.JOIN}"),
+        ("roster", BS.ONE_SQL, BS.ROW_SQL),
+    )
+    with api.app.state.store.read() as c:
+        for name, alone, whole in pairs:
+            timed = {}
+            for label, sql, args in (("alone", alone, (BOTS[7],)), ("whole", whole, ())):
+                best = min(_timed(c, sql, args) for _ in range(200))
+                plan = "; ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args))
+                timed[label] = best
+                print(f"{name:7s} {label:5s} {best * 1e6:8.1f} us  plan: {plan}")
+            print(f"{name:7s} whole/alone {timed['whole'] / timed['alone']:.1f}x")
+
+
+def _timed(c, sql, args):
+    t = time.perf_counter()
+    c.execute(sql, args).fetchall()
+    return time.perf_counter() - t
+
+
 def report(api):
     callers = collections.defaultdict(collections.Counter) if os.environ.get("CALLERS") else None
     print(f"{len(BOTS)} bots, {RUNS} runs")
@@ -196,6 +239,8 @@ def report(api):
                 f"{counts['deleting']:6d} {counts['config1']:6d} {counts['roster']:6d} {counts['roster_in']:7d} "
                 f"{ms:10.1f} {verdict}"
             )
+    if os.environ.get("COSTS", "1") == "1":
+        costs(api)
     if callers is not None:
         for name, found in callers.items():
             print(f"-- {name}")
