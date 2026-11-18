@@ -1,7 +1,10 @@
 """Helpers that other tests share, moved out of test_calls.py so they import no test file."""
 
+import asyncio
 from array import array
+from contextlib import aclosing
 
+import httpx
 import pytest
 from backend import call_media, gateway_connection
 from backend.store import H
@@ -22,6 +25,10 @@ PCM_EIGHT_SECONDS = PCM_ONE_SECOND * 8 + SILENCE_ONE_SECOND
 
 # A sentence of the Gateway's speech: 24 kHz mono, a tenth of a second.
 SPEECH_PCM = array("h", [2000, -2000] * 1200).tobytes()
+
+
+def speech_response(pcm=SPEECH_PCM):
+    return httpx.Response(200, headers={"Content-Type": "audio/pcm", "X-Audio-Sample-Rate": "24000"}, content=pcm)
 
 
 SYNTHETIC_SPEECH = "The rollout needs a reliability review"
@@ -61,6 +68,30 @@ class FakeMedia:
         self.said.append((call_id, pcm, rate))
         return max(1, len(pcm) * 1000 // (rate * 2))
 
+    def say_stream(self, call_id, frames, mark, budget, before, started):
+        async def play():
+            sent, current, pcm = 0, None, bytearray()
+
+            def flush(index):
+                return self.say(call_id, bytes(pcm), call_media.VOICE_RATE, lambda: started(index), mark)
+
+            async with aclosing(frames):
+                async for index, frame in frames:
+                    if current != index:
+                        if current is not None:
+                            sent += flush(current)
+                            pcm.clear()
+                        if not before(index):
+                            return sent, False
+                        current = index
+                    length = (len(pcm) + len(frame)) * 1000 // (call_media.VOICE_RATE * 2)
+                    if sent + length > budget:
+                        return sent + (flush(current) if pcm else 0), True
+                    pcm.extend(frame)
+            return sent + (flush(current) if pcm else 0), False
+
+        return asyncio.run(play())
+
     def hush(self, call_id):
         self.hushed.append(call_id)
 
@@ -95,7 +126,7 @@ def meet(live, monkeypatch):
     live.app.state.call_media = FakeMedia()
     live.app.state.calls.voice.ticking = False  # tests tick the voice by hand (calls.voice.tick)
     monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: SYNTHETIC_SPEECH)
-    monkeypatch.setattr(call_media, "speech", lambda base, key, text, voice="": (SPEECH_PCM, 24000))
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(lambda request: speech_response()))
     monkeypatch.setattr(call_media, "voices", lambda base, key: ["acme-alto", "acme-bass"])
     monkeypatch.setattr(
         gateway_connection,

@@ -15,6 +15,7 @@ import time
 import wave
 from array import array
 
+import httpx
 import pytest
 
 from backend import call_media, calls
@@ -27,6 +28,7 @@ from backend.tests.helpers.calls import (
     join,
     post,
     private_lanes_ready,
+    speech_response,
     start_call,
     thread,
     thread_texts,
@@ -251,7 +253,7 @@ def test_a_question_said_in_a_one_to_one_bot_call_is_answered_aloud_and_the_wait
         return 503, b"{}"
 
     monkeypatch.setattr(gateway, "relay", relay)
-    monkeypatch.setattr(gateway, "relay_speech", lambda url, body, headers, timeout: (200, tone, 24000))
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(lambda request: speech_response(tone)))
     with live.app.state.store.transaction() as c:
         cid = H.open_conversation(c, "human:ana", ["bot:ops"], kind="chat", subject="Ops")["id"]
     call = start_call(live, cid, bots=["ops"])

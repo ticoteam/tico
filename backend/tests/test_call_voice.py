@@ -3,10 +3,12 @@ and when, the bots' spoken replies, End, presence and the bot limit. LiveKit and
 meet fixture), and every name is synthetic (Acme, acme.example)."""
 
 import logging
+import json
 import threading
 from array import array
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from backend import call_media, call_voice, calls, live_meetings, threads
@@ -21,6 +23,7 @@ from backend.tests.helpers.calls import (
     join,
     meet,  # noqa: F401
     private_lanes_ready,
+    speech_response,
     start_call,
     thread,
     thread_texts,
@@ -68,6 +71,18 @@ def test_a_long_utterance_is_cut_at_a_minute_and_a_click_is_not_speech():
 
     click = call_voice.Segmenter()
     assert click.feed(ms(100, SPEECH) + ms(800, QUIET), 0) == []
+
+
+def test_a_full_utterance_ends_at_460_ms_but_a_short_fragment_can_continue():
+    cut = call_voice.Segmenter()
+    first = ms(400, SPEECH) + ms(500, QUIET)
+    assert cut.feed(first, 0) == []
+    assert cut.feed(ms(600, SPEECH) + ms(440, QUIET), 900) == []
+    assert cut.feed(QUIET, 1940) == [(0, first + ms(600, SPEECH) + ms(200, QUIET))]
+
+    short = call_voice.Segmenter()
+    assert short.feed(ms(300, SPEECH) + ms(680, QUIET), 0) == []
+    assert short.feed(QUIET, 980) == [(0, ms(300, SPEECH) + ms(200, QUIET))]
 
 
 def test_a_reply_is_spoken_without_its_markdown_and_only_its_first_part():
@@ -138,7 +153,7 @@ def test_in_a_one_to_one_call_the_bot_answers_every_question_aloud_one_at_a_time
     machine = _machine(meet, "ops")
     _answer(meet, machine, "ops", "**Yes.** Ops can take the reliability review this week.")
     assert "**Yes.** Ops can take the reliability review this week." in thread_texts(meet, cid)
-    assert heard == [1] and len(media.said) == 1 and media.said[0][2] == 24000
+    assert heard == [1] and len(media.said) == 1 and media.said[0][2] == 48000
     assert _states(meet, call_id) == [("ops", "listening", None)]
     with meet.app.state.store.read() as c:
         assert c.execute("SELECT voice_ms FROM calls WHERE id=?", (call_id,)).fetchone()[0] == 100
@@ -207,10 +222,7 @@ def test_a_clip_that_cannot_be_transcribed_asks_for_a_repeat_and_asks_no_bot(mee
 
 
 def test_a_voice_that_fails_leaves_the_reply_as_text_and_logs_why(meet, monkeypatch, caplog):
-    def refuse(base, key, text, voice=""):
-        raise call_media.MediaUnavailable("The Gateway's text-to-speech answered 404", 404)
-
-    monkeypatch.setattr(call_media, "speech", refuse)
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(lambda request: httpx.Response(404)))
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])
     _speak(meet, call["id"], 0)
@@ -221,12 +233,18 @@ def test_a_voice_that_fails_leaves_the_reply_as_text_and_logs_why(meet, monkeypa
     assert _states(meet, call["id"]) == [("ops", "listening", None)]
 
 
-def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, caplog):
+def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypatch, caplog):
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])
     voice, now = meet.app.state.calls.voice, [1000.0]
     voice.clock = lambda: now[0]
     machine = _machine(meet, "ops")
+
+    def synthesize(request):
+        now[0] += 0.33
+        return speech_response()
+
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(synthesize))
 
     def lines():
         found = [r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn ")]
@@ -240,8 +258,21 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, caplog):
         now[0] += call_voice.ANSWER_SECONDS + 1
         voice.tick()
     spoken, skipped = lines()
-    fields = {"call_id", "bot", "turn", "outcome", "skip_reason", "transcribe_ms", "queue_ms", "answer_ms", "speech_ms"}
-    assert set(spoken) == set(skipped) == fields | {"total_ms"}
+    fields = {
+        "call_id",
+        "bot",
+        "turn",
+        "outcome",
+        "skip_reason",
+        "transcribe_ms",
+        "queue_ms",
+        "answer_ms",
+        "speech_ms",
+        "heard_to_transcript_ms",
+        "tts_first_chunk_ms",
+        "total_ms",
+    }
+    assert set(spoken) == set(skipped) == fields
     assert (spoken["call_id"], spoken["bot"], spoken["outcome"], spoken["skip_reason"]) == (
         call["id"],
         "ops",
@@ -249,6 +280,8 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, caplog):
         "null",
     )
     assert all(spoken[k].isdigit() for k in ("transcribe_ms", "queue_ms", "answer_ms", "speech_ms", "total_ms"))
+    assert spoken["heard_to_transcript_ms"] == spoken["transcribe_ms"]
+    assert spoken["tts_first_chunk_ms"] == "330" and skipped["tts_first_chunk_ms"] == "null"
     assert (skipped["outcome"], skipped["skip_reason"]) == ("skipped", "voice_deadline")
     assert (
         skipped["queue_ms"].isdigit() and skipped["answer_ms"] == skipped["speech_ms"] == skipped["total_ms"] == "null"
@@ -262,12 +295,12 @@ def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypat
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])
 
-    def speech(base, key, text, voice=""):
+    def speech(request):
         with meet.app.state.store.transaction() as c:  # End was pressed while the speech was being made
             c.execute("UPDATE calls SET ending_at=? WHERE id=?", (H.now(), call["id"]))
-        return array("h", [1000] * 2400).tobytes(), 24000
+        return speech_response()
 
-    monkeypatch.setattr(call_media, "speech", speech)
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(speech))
     _speak(meet, call["id"], 0)
     _answer(meet, _machine(meet, "ops"), "ops", "Ops can take it.")
     assert "Ops can take it." in thread_texts(meet, cid) and meet.app.state.call_media.said == []
@@ -493,11 +526,11 @@ def test_a_reply_stored_in_time_whose_speech_would_start_late_stays_text(meet, m
     attempt = _claim(meet, machine, "ops")
     now[0] += call_voice.ANSWER_SECONDS - 1  # stored with a second to spare
 
-    def slow(base, key, text, voice=""):
+    def slow(request):
         now[0] += 11  # its speech is made only after the deadline
-        return array("h", [1000] * 2400).tobytes(), 24000
+        return speech_response()
 
-    monkeypatch.setattr(call_media, "speech", slow)
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(slow))
     _complete(meet, machine, attempt, "Ops can take it.")
     assert "Ops can take it." in thread_texts(meet, cid) and meet.app.state.call_media.said == []
     assert _states(meet, call["id"]) == [("ops", "listening", None)]
@@ -649,11 +682,11 @@ def test_taking_out_a_waiting_bot_leaves_the_one_speaking_alone(meet, monkeypatc
 def test_speech_is_never_made_past_the_voice_cap_or_for_a_call_already_ending(meet, monkeypatch):
     made = []
 
-    def speech(base, key, text, voice=""):
-        made.append(text)
-        return array("h", [1000] * 2400).tobytes(), 24000
+    def speech(request):
+        made.append(json.loads(request.content)["input"])
+        return speech_response()
 
-    monkeypatch.setattr(call_media, "speech", speech)
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(speech))
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])
     call_id, media = call["id"], meet.app.state.call_media
@@ -707,11 +740,12 @@ def test_the_gateway_voices_are_read_when_the_call_starts_and_a_reply_never_wait
     monkeypatch.setattr(
         call_media, "cached_voices", lambda base: ["acme-alto", "acme-bass"] if reads else None, raising=False
     )
-    monkeypatch.setattr(
-        call_media,
-        "speech",
-        lambda base, key, text, voice="": made.append(voice) or (array("h", [9] * 240).tobytes(), 24000),
-    )
+
+    def synthesize(request):
+        made.append(json.loads(request.content)["voice"])
+        return speech_response()
+
+    monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(synthesize))
     call = start_call(meet, _dm(meet), bots=["ops"])
     voice = meet.app.state.calls.voice
     voice.makers.submit(lambda: None).result(5)

@@ -144,10 +144,11 @@ A Google Meet call still opens Meet in a tab of its own.
    `POST /api/v2/calls/{call_id}/token` before it expires. Once End is pressed (`ending`) joins and token refreshes are
    refused (`409 call_ended`), and the thread rail no longer shows the call as live.
 3. **Transcript.** The recorder subscribes to each person's microphone track (never Tico voice's, and not a shared
-   screen's sound). Each speaker's audio is cut where they pause: a clip ends after 700 ms of quiet, keeps 200 ms before
-   the first loud frame and after the last, and is cut at 60 seconds when nobody pauses. A click shorter than 200 ms is
-   not speech. A speaker whose audio stops coming (muted, left) has their clip cut 700 ms after their last frame, by a
-   timer on the recorder's own loop. Each clip goes to the Gateway's speech-to-text (`tico-transcribe-1.1`; when the
+   screen's sound). Each speaker's audio is cut after about 450 ms of quiet. A fragment with less than 600 ms of speech
+   gets 700 ms of quiet so the speaker has more time to continue. A clip keeps 200 ms before the first loud frame and
+   after the last, and is cut at 60 seconds when nobody pauses. A clip needs at least 200 ms of speech.
+   If microphone frames stop coming, a timer on the recorder's loop flushes the clip after 450 ms. The recorder flushes
+   immediately when the track ends. Each clip goes to the Gateway's speech-to-text (`tico-transcribe-1.1`; when the
    Gateway answers 400 that it does not know that model, the call falls back once to `elevenlabs/scribe-v2` and logs
    it). Clips are transcribed on workers, so the recorder never waits on the Gateway, and are stored in the order they
    start, across people: a clip waits for the clips that start before it and for an utterance someone else began before
@@ -231,22 +232,24 @@ after that time, or whose first sentence would start playing after it, is posted
 
 **Speaking it.** The reply is posted in the thread as text first; the voice is made after the reply's transaction
 commits, never inside it. It goes to the Gateway's text-to-speech (`POST /audio/speech`, model `tico-voice-1.0`, raw
-16-bit PCM; the voice is picked from `GET /audio` by the bot's slug, so a bot keeps its voice) one sentence at a time,
-the next made while one plays, and plays on Tico voice's track. The Gateway's voices are read when the call starts and
+16-bit PCM; the voice is picked from `GET /audio` by the bot's slug, so a bot keeps its voice). Tico plays audio frames
+on Tico voice's track as the response streams in and starts the next sentence's request while the current one plays.
+The Gateway's voices are read when the call starts and
 kept for an hour, so no reply waits on them. Markdown is taken out and the spoken part is cut to about 600 characters.
 Only a reply to the open question's own turn is spoken. Before any speech is made, and before each sentence plays, the
 call must still be live and not ending, and the bot still attached by someone who may still use it. A reply is spoken
 once. Bots speak at most 30 minutes in a call: a sentence is made only when its length (estimated from its characters)
-fits in what is left. A voice the Gateway does not make leaves the text as it is (the server logs
+fits in what is left, and playback stops at the cap. A voice the Gateway does not make leaves the text as it is (the server logs
 `call_voice_speech_failed` with the Gateway's status). Detach (through the call's route or the live meeting's), lost
 access and End stop a bot's voice at once, even a sentence cleared to play a moment before; taking out a bot that is
 only waiting leaves the bot speaking alone.
 
 **Timing.** Each turn ends in one INFO log line, `call_voice_turn`, with no words in it: `call_id`, `bot`, `turn`,
 `outcome` (`spoken`, `text_only` or `skipped`), `skip_reason` (why it was skipped or stayed text), and in ms
-`transcribe_ms` (the pause to the text stored), `queue_ms` (asked to picked up), `answer_ms` (picked up to the reply
-stored), `speech_ms` (the reply's commit to its first sentence starting on the call's track) and `total_ms` (the pause
-to that first audio). A step the turn never reached, or a question that was typed, logs `null`.
+`heard_to_transcript_ms` (clip cut to transcript stored, also reported as `transcribe_ms`),
+`queue_ms` (asked to picked up), `answer_ms` (picked up to the reply stored),
+`tts_first_chunk_ms` (speech request to the first response bytes), `speech_ms` (reply commit to its first frame on the
+call's track) and `total_ms` (clip cut to that first frame). A step with no timestamps logs `null`.
 
 **What the call shows.** A call's view has `voice`: each attached bot's `state` (`listening`, `waiting`, `thinking`,
 `making_voice` or `speaking`) and `caption` (the sentence being spoken), and `note`, the latest short note for 10
