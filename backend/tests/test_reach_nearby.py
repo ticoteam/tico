@@ -541,8 +541,9 @@ def test_a_bot_two_levels_down_is_refused_a_person_whatever_it_shares_with_them(
     for title in ("Straight to Ben",):
         task(api, "ops-test", "human:ben", title=title, expected=409)
     refused = message(api, "ops-test", "human:ben", "A question.", expected=409, refs={"task": [child["id"]]})
-    assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] == "bot:product-design"
-    assert "Send it to product-design, who can pass it on." in refused["error"]["detail"]
+    # Ben wrote to ops this week, so the refusal sends it to file the work for him from that message, not upward.
+    assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] is None
+    assert f"--from-message {asked['id']}" in refused["error"]["detail"], refused
     # Handing Ben the task is checked the same way.
     r = api.post(
         f"/api/v2/tasks/{child['id']}/owner",
@@ -681,3 +682,57 @@ def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
     with api.app.state.store.read() as c:  # on the task: passes (raises nothing)
         reach.check(c, Identity("bot:ops", "bot", agent="test"), "bot:finance", "task", task_id=copy["id"])
     task(api, "ops-test", "bot:finance", title="Something new for Finance", expected=409)
+
+
+def test_a_task_filed_for_the_person_from_their_message_lets_the_bot_ask_them_until_it_ends(api):
+    """Ben asks ops, two levels down, for work. Filed for him from his message, the task names him as requester, so
+    ops's ask on it reaches him; once the task is done the same ask is refused again."""
+    two_levels_down(api)
+    said = message(api, "ben-test", "ops", "Send me your questions for the launch note")
+    filed = task(
+        api,
+        "ops-test",
+        "bot:ops",
+        title="Questions for the launch note",
+        for_actor="human:ben",
+        from_message=said["id"],
+    )
+    assert filed["requester_id"] == "human:ben", filed
+
+    def ask():
+        with api.app.state.store.transaction() as c:
+            question_marks.ask(c, "bot:ops", filed["id"], "human:ben", "Which launch date do you want?")
+
+    ask()
+    with api.app.state.store.read() as c:
+        version = H.task(c, filed["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{filed['id']}/move",
+        json={"to": "closed", "why": "Answered elsewhere", "version": version},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:  # the task no longer opens Ben: a write to him on it is out of reach again
+        with pytest.raises(reach.Refused) as refused:
+            reach.check(c, Identity("bot:ops", "bot", agent="test"), "human:ben", "task", task_id=filed["id"])
+    assert refused.value.code == "reach_closed"
+
+
+def test_the_refusal_for_a_person_who_wrote_lately_says_to_file_for_them_and_names_no_manager(api):
+    two_levels_down(api)
+    own = task(api, "ops-test", "bot:ops", title="A question for Ben")
+    with api.app.state.store.transaction() as c:  # the bot never heard from Ben: today's refusal
+        with pytest.raises(reach.Refused) as before:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    assert before.value.extra["via"] == "bot:product-design" and "who can pass it on" in before.value.detail
+    said = message(api, "ben-test", "ops", "Can you draft the launch note?")
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(reach.Refused) as after:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    detail = after.value.detail
+    assert after.value.code == "reach_closed" and after.value.extra["via"] is None, detail
+    assert f"--for human:ben --from-message {said['id']}" in detail, detail
+    assert "product-design" not in detail and "pass it on" not in detail, detail
+    with api.app.state.store.read() as c:
+        week_later = (datetime.now(timezone.utc) + timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        assert reach.wrote_lately(c, "bot:ops", "human:ben", before=week_later) is None
