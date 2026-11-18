@@ -229,17 +229,19 @@ def test_the_sealed_subtask_is_private_and_a_company_visible_one_is_refused(api)
 
 
 @pytest.mark.parametrize(
-    "words,check",
+    "words,check,refusal",
     [
         (
             "Confidential: Zip triage. The Gateway key for the vendor is stored in the shared vault under vendor ops "
             "and must be rotated",
             "copies 12 or more words",
+            "copies 12 or more words",
         ),
-        ("Use token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8 to push the fix", "secret-shaped"),
+        # A key in any task text is refused first, with the stable code every client reads (task_text_keys).
+        ("Use token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8 to push the fix", "secret-shaped", "looks_like_key"),
     ],
 )
-def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, check):
+def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, check, refusal):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     with api.app.state.store.transaction() as c:
         c.execute(
@@ -253,9 +255,13 @@ def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, ch
     attempt = run_on(api)
     body = repair(row["id"], body=words)
     r = api.post("/api/v2/tasks", json=body, headers=headers(attempt["token"]))
-    assert r.status_code == 422 and check in r.text, r.text
+    assert r.status_code == 422 and refusal in r.text, r.text
     assert "Gateway key" not in r.json()["error"]["detail"] and "ghp_" not in r.json()["error"]["detail"]
-    assert any(check in p for p in dry_run(api, body, attempt["token"]))
+    if refusal == check:
+        assert any(check in p for p in dry_run(api, body, attempt["token"]))
+    else:  # a dry run is refused the same way: the key never reaches the sealed subtask's own checks either
+        d = api.post("/api/v2/tasks/dry-run", json=body, headers=headers(attempt["token"]))
+        assert d.status_code == 422 and refusal in d.text and "ghp_" not in d.text, d.text
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops'").fetchone()
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
