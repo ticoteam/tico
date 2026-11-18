@@ -44,6 +44,11 @@ def validate(model: str | None, effort: str | None) -> None:
         raise Problem("voice_model", "Choose a supported voice subscription model and effort", 422)
 
 
+def effort(c: Any, call_id: str) -> str | None:
+    row = c.execute("SELECT effort FROM call_voice_options WHERE call_id=?", (call_id,)).fetchone()
+    return row[0] if row else None
+
+
 def choice(
     c: Any, settings: Any, bot: str, model_override: str | None, effort_override: str | None
 ) -> dict[str, Any] | None:
@@ -101,7 +106,7 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     if not runner or CAPABILITY not in json.loads(runner[0] or "[]"):
         return False
     meeting = live_meetings._meeting(c, rid)
-    if not choice(c, settings, bot, meeting["meeting_model"], row["voice_effort"]):
+    if not choice(c, settings, bot, meeting["meeting_model"], effort(c, row["id"])):
         return False
     from . import call_voice
 

@@ -538,7 +538,7 @@ class Calls:
             "bots": bots,
             "speak_replies": bool(row["speak_replies"]),
             "model": live_meetings._meeting(c, row["live_meeting_id"])["meeting_model"] or None,
-            "effort": row["voice_effort"],
+            "effort": call_sessions.effort(c, call_id),
             "voice": self.voice.view(call_id, bots, voiced),
             "holds": holds,
             "stage": self._stage_view(c, row, who),
@@ -831,7 +831,7 @@ class Calls:
         c.execute(
             "INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
             "created_at,updated_at,speak_replies,provider,meet_space,meet_uri,meet_code,ring,scheduled_start,"
-            "scheduled_end,voice_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "scheduled_end) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 call_id,
                 thread_id,
@@ -851,9 +851,10 @@ class Calls:
                 json.dumps([] if scheduled else self._ring_for(c, who, thread_id)),
                 scheduled["start"] if scheduled else None,
                 scheduled["end"] if scheduled else None,
-                effort,
             ),
         )
+        if effort is not None:
+            c.execute("INSERT INTO call_voice_options(call_id,effort) VALUES(?,?)", (call_id, effort))
         if scheduled:
             calendar_api.record_call_event(c, who, scheduled["event"], call_id, scheduled.get("occurrence"))
             self._record(

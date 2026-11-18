@@ -573,7 +573,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
 
     voice = calls.voice_call(c, rid)
     if voice:
-        choice = call_sessions.choice(c, settings, bot, row[0], voice["voice_effort"])
+        choice = call_sessions.choice(c, settings, bot, row[0], call_sessions.effort(c, voice["id"]))
         if choice:
             if turn_id:
                 c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (choice["model"], turn_id))
