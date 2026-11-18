@@ -998,7 +998,7 @@ Do not ask about anything a sensible default answers.
   cost the most). A message from the Automations page may carry its filters (`automations_filter` in its refs).
 - New: `tico automation create --file -` (the flow as JSON on stdin). Its owner is the asker unless they named another.
   It is saved on unless the flow sends `"enabled": false` (what BotOps builds is saved off when it leaves `enabled`
-  out); send `"enabled": false` unless the request said to turn it on.
+  out); send `"enabled": false` unless the request said to turn it on; then send `"enabled": true`.
 - Use a template: `tico automation templates` lists the inbox templates (founder, support, sales, blank) with their
   destinations. `tico automation template <id> --owner <ref> --inbox <address>` returns one filled in for that owner: the
   roles it names resolved on the org chart, and the destinations the owner may not use taken out. It saves nothing. Show
