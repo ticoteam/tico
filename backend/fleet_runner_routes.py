@@ -680,6 +680,7 @@ def register(
     @app.post("/api/v2/attempts/{aid}/inputs")
     def inputs(request: Request, aid: str, body: M.Empty, voice: VoicePhase = "ready"):
         key = request.headers.get("idempotency-key", "")
+        phase = {"voice": voice} if voice != "ready" else {}
         if 0 < len(key) <= 200:
             with store.read_transaction() as c:
                 validate_identity(c, request.state.identity)
@@ -687,11 +688,11 @@ def register(
                     "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                     (request.state.identity.actor, request.url.path, key),
                 ).fetchone():
-                    idle = execution.idle_inputs(c, request.state.identity, aid, voice=voice)
+                    idle = execution.idle_inputs(c, request.state.identity, aid, **phase)
                     if idle is not None:
                         privacy.require_payload(c, request.state.identity, idle)
                         return idle
-        return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid, voice=voice))
+        return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid, **phase))
 
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
     def input_ack(request: Request, aid: str, mid: str, body: M.Empty):
