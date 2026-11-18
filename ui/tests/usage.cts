@@ -269,6 +269,8 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     // On a phone the header's tools fold into ⋯: the icon is there, and its menu is a sheet that stays in the window.
     // The focus leaves Filter first: a header keeps a tool that has the focus in its row, and would fold it only when the
     // press on ⋯ takes the focus, moving ⋯ away before the release (the click then misses and ⋯ never opens).
+    // Escape gives Filter the focus back (as above): wait for that, or a late return would undo the blur.
+    await page.waitForFunction(() => document.activeElement?.classList.contains('use-filter'));
     await filter.evaluate(el => (el as HTMLElement).blur());
     await page.setViewportSize({width: 400, height: 844});
     await page.locator('header.use-head.ph-fold > .ph-menu button.use-filter').waitFor({state: 'attached'});
