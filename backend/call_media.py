@@ -28,6 +28,7 @@ import urllib.error
 import urllib.request
 import wave
 from array import array
+from collections.abc import AsyncGenerator
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
@@ -682,31 +683,51 @@ async def speech_frames(base, key, sentences, voice, first_chunk, *, request_sta
         "Accept": "audio/pcm",
         "User-Agent": G.user_agent(),
     }
+
+    async def lines():
+        if isinstance(sentences, AsyncGenerator):
+            async with aclosing(sentences):
+                async for text in sentences:
+                    yield text
+        else:
+            for text in sentences:
+                yield text
+
     # The Gateway allows plain HTTP to loopback only. A proxy must never see that key in clear.
-    async with _speech_client(url.startswith("https:"), clients) as client:
+    async with _speech_client(url.startswith("https:"), clients) as client, aclosing(lines()) as source:
+
+        async def next_sentence(first=False):
+            text = await anext(source, None)
+            if text is None:
+                return None
+            frames = _sentence_frames(
+                client, url, headers, text, voice, first_chunk if first else None, request_started if first else None
+            )
+            try:
+                return frames, await anext(frames)
+            except BaseException:
+                await frames.aclose()
+                raise
+
         ahead = None
         try:
-            for index, text in enumerate(sentences):
-                if ahead is None:
-                    frames = _sentence_frames(client, url, headers, text, voice, first_chunk, request_started)
-                    head = None
-                else:
-                    frames, head = ahead
-                    ahead = None
+            index, current = 0, await next_sentence(first=True)
+            while current is not None:
+                frames, head = current
                 async with aclosing(frames):
-                    frame = await (head if head is not None else anext(frames))
-                    yield index, frame
-                    if index + 1 < len(sentences):
-                        next_frames = _sentence_frames(client, url, headers, sentences[index + 1], voice, None, None)
-                        ahead = next_frames, asyncio.create_task(anext(next_frames))
+                    yield index, head
+                    ahead = asyncio.create_task(next_sentence())
                     async for frame in frames:
                         yield index, frame
+                current = await ahead
+                ahead = None
+                index += 1
         finally:
             if ahead is not None:
-                next_frames, next_head = ahead
-                next_head.cancel()
-                await asyncio.gather(next_head, return_exceptions=True)
-                await next_frames.aclose()
+                ahead.cancel()
+                [prefetched] = await asyncio.gather(ahead, return_exceptions=True)
+                if isinstance(prefetched, tuple):
+                    await prefetched[0].aclose()
 
 
 class _SpeechPCM:

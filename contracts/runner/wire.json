@@ -34,6 +34,7 @@
     "heartbeat.request.capabilities[]=\"harness_allocation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; without allocation reporting the hub preserves existing grants under memory pressure",
     "heartbeat.request.capabilities[]=\"browser_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it no browser command is sent to that computer",
     "heartbeat.request.capabilities[]=\"plan_switch_resume_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it a move between Claude plans starts that computer's Claude sessions fresh, as before",
+    "heartbeat.request.capabilities[]=\"voice_sessions_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422; only an advertising runner can claim a resident voice session",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
     "heartbeat.request.readiness.browser": "runner-rs/src/runner.rs: sent only once GET config says readiness_browser (fallback.rs server_takes_browser)",
     "heartbeat.request.readiness.disk_cleanup": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it reports only what the computer already cleaned",

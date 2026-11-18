@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 from array import array
+from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -14,7 +15,7 @@ import pytest
 
 from backend import call_media, call_voice, calls, live_meetings, threads
 from backend.store import H
-from backend.tests.helpers.api import assign, get, headers, post, runner
+from backend.tests.helpers.api import assign, get, headers, post, put, ready, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
 from backend.tests.helpers.calls import (
     PCM_EIGHT_SECONDS,
@@ -23,7 +24,6 @@ from backend.tests.helpers.calls import (
     SYNTHETIC_SPEECH,
     join,
     meet,  # noqa: F401
-    private_lanes_ready,
     speech_response,
     start_call,
     thread,
@@ -31,6 +31,9 @@ from backend.tests.helpers.calls import (
 )
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
+from backend.tests.helpers.credentials import setup as credential_setup
+from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.models_preset import connected, on_tico
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
@@ -53,6 +56,25 @@ def test_speech_is_cut_where_the_speaker_pauses_with_a_little_before_and_after()
     assert start == 5000 + 400 - call_voice.PREROLL_MS  # the soft start before the first loud frame is kept
     assert len(pcm) // call_voice.BYTES_PER_MS == call_voice.PREROLL_MS + 1000 + call_voice.PREROLL_MS
     assert not cut.speaking and cut.flush() is None
+
+
+def test_voice_stream_waits_for_a_sentence_boundary_across_deltas():
+    timing = {}
+    stream = call_voice.ReplyStream(timing)
+    stream.add("It costs 3.", 1)
+    assert stream.buffer == [] and "sentence" not in timing
+    stream.add("14 dollars.", 2)
+    assert stream.buffer == [] and "sentence" not in timing
+    stream.finish("It costs 3.14 dollars.", 3)
+    assert stream.buffer == ["It costs 3.14 dollars."] and timing["sentence"] == 3
+
+
+def test_voice_stream_plays_the_final_suffix_after_a_trimmed_prefix():
+    stream = call_voice.ReplyStream({})
+    stream.add(" Yes. ", 1)
+    assert stream.buffer == ["Yes."]
+    stream.finish("Yes. Tomorrow.", 2)
+    assert stream.buffer == ["Yes.", "Tomorrow."]
 
     cut = call_voice.Segmenter()
     cut.feed(ms(600, SPEECH), 0)
@@ -251,7 +273,7 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
         found = [r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn ")]
         return [dict(part.split("=", 1) for part in line.split()[1:]) for line in found]
 
-    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
+    with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
         _speak(meet, call["id"], 0)
         _answer(meet, machine, "ops", "Ops can take the reliability review.")
         _speak(meet, call["id"], 10_000)  # the next one is not answered in time
@@ -272,6 +294,9 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
         "heard_to_transcript_ms",
         "tts_first_chunk_ms",
         "total_ms",
+        "first_token_ms",
+        "first_sentence_ms",
+        "first_audio_ms",
     }
     assert set(spoken) == set(skipped) == fields
     assert (spoken["call_id"], spoken["bot"], spoken["outcome"], spoken["skip_reason"]) == (
@@ -290,6 +315,309 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
     assert not any(
         "reliability" in r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn")
     )
+
+
+def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet, monkeypatch, caplog):
+    credential_setup(meet)
+    company(meet)
+    on(meet, "ops", "claude", "claude-sonnet-5-5")
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    token = worker["token"]
+    cid = _dm(meet)
+    call = start_call(meet, cid, model="claude-opus-5-5", effort="medium")
+    post(meet, f"calls/{call['id']}/bots", {"bots": ["ops"]})
+    attempt = _claim(meet, worker, "ops")
+    path = f"attempts/{attempt['id']}"
+    assert [attempt["config"][k] for k in ("model", "reasoning_effort")] == ["claude-opus-5-5", "medium"]
+    assert len(attempt["subscriptions"]) == 1 and attempt["gateway"] is False
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
+    heard = threading.Event()
+    media = meet.app.state.call_media
+
+    def record(call_id, frames, mark, budget, before, started):
+        async def play():
+            previous, played = None, 0
+            async with aclosing(frames):
+                async for index, frame in frames:
+                    if index != previous and before(index):
+                        previous = index
+                        played += media.say(call_id, frame, call_media.VOICE_RATE, lambda: started(index), mark)
+                        heard.set()
+            return played, False
+
+        return asyncio.run(play())
+
+    monkeypatch.setattr(media, "say_stream", record)
+    _speak(meet, call["id"], 0)
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert turn["text"] == SYNTHETIC_SPEECH
+    prep = post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"]
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
+    first, full = "Yes.", "Yes. Ops can take the reliability review."
+    with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
+        post(
+            meet,
+            f"{path}/events",
+            {
+                "events": [
+                    {"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "Yes"}},
+                    {"seq": 2, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": ". "}},
+                ]
+            },
+            token,
+        )
+        assert heard.wait(10), "the first sentence never played before Claude finished"
+        assert full not in thread_texts(meet, cid)
+        post(
+            meet,
+            f"{path}/events",
+            {
+                "events": [
+                    {"seq": 3, "kind": "message", "payload": {"voice_turn": turn["id"], "text": full, "final": True}},
+                ]
+            },
+            token,
+        )
+        assert meet.app.state.calls.settle()
+    assert full in thread_texts(meet, cid)
+    assert len(media.said) == 2
+    assert first not in thread_texts(meet, cid)
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn "))
+    timing = dict(piece.split("=", 1) for piece in line.split()[1:])
+    assert 0 <= int(timing["first_token_ms"]) <= int(timing["first_sentence_ms"]) <= int(timing["first_audio_ms"])
+    bundle = json.loads(get(meet, "support/diagnostics")["text"])
+    record = [line for line in bundle["logs"]["server"] if "call_voice_turn " in line][-1]
+    for field in ("first_token_ms", "first_sentence_ms", "first_audio_ms"):
+        assert f"{field}={timing[field]} " in record
+    with meet.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT ran_model FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()[0]
+            == "claude-opus-5-5"
+        )
+
+    _speak(meet, call["id"], 10_000)
+    another = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert another["id"] != turn["id"]
+    post(meet, f"calls/{call['id']}/end", {})
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": True}
+    post(
+        meet,
+        f"{path}/events",
+        {
+            "events": [
+                {"seq": 4, "kind": "delta", "payload": {"voice_turn": another["id"], "text": "Too late."}},
+            ]
+        },
+        token,
+    )
+    assert len(media.said) == 2 and "Too late." not in thread_texts(meet, cid)
+
+
+def test_voice_uses_the_company_subscription_meeting_model_at_low_effort(meet):
+    credential_setup(meet)
+    company(meet)
+    on(meet, "ops", "claude", "claude-sonnet-5-5")
+    settings = get(meet, "providers")
+    put(
+        meet,
+        "providers",
+        {
+            "enabled": settings["enabled"],
+            "meeting_model": "claude-haiku-5-5",
+            "expected_revision": settings["revision"],
+        },
+    )
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    cid = _dm(meet)
+    post(meet, f"threads/{cid}/calls", {"model": "unknown-model"}, expected=422)
+    start_call(meet, cid, bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    assert (attempt["config"]["model"], attempt["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
+    assert post(meet, f"attempts/{attempt['id']}/inputs", {}, worker["token"])["call_voice"] == {"closed": False}
+
+
+def test_call_end_stops_a_leased_resident_before_it_can_start(meet):
+    worker = _machine(meet, "ops", resident=True)
+    token = worker["token"]
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    attempt = post(meet, "jobs/claim", {"bot": "ops", "start_places": True}, token)["attempt"]
+    path = f"attempts/{attempt['id']}"
+    post(meet, f"{path}/start-place", {"waiting": "shared login"}, token)
+    post(meet, f"calls/{call['id']}/end", {})
+    renewed = post(meet, f"{path}/renew", {}, token)
+    assert renewed["stop"] is True and renewed["lease_until"] == attempt["lease_until"]
+    assert post(meet, f"{path}/start-place", {}, token) == {"reserved": False, "stop": True}
+    post(meet, f"{path}/started", {"thread_id": "must-not-start"}, token, expected=409)
+    assert post(meet, f"{path}/complete", {"outcome": "interrupted", "last_seq": 0}, token)["outcome"] == "interrupted"
+    with meet.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE attempt_id=?", (attempt["id"],)).fetchone()[0] == "canceled"
+
+
+def test_detached_resident_can_settle_without_saving_late_content(meet):
+    worker = _machine(meet, "ops", resident=True)
+    token = worker["token"]
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    path = f"attempts/{attempt['id']}"
+    response = meet.request("DELETE", f"/api/v2/calls/{call['id']}/bots/ops", json={}, headers=headers("ana-test"))
+    assert response.status_code == 200, response.text
+    assert post(meet, f"{path}/inputs", {}, token) == {"messages": [], "call_voice": {"closed": True}}
+    assert (
+        post(
+            meet,
+            f"{path}/events",
+            {"events": [{"seq": 1, "kind": "delta", "payload": {"text": "Detached text"}}]},
+            token,
+        )["ack_seq"]
+        == 1
+    )
+    body = {
+        "outcome": "completed",
+        "text": "Detached text",
+        "last_seq": 1,
+        "usage": {"input_tokens": 100, "output_tokens": 10, "model": "Detached text"},
+    }
+    other = runner(meet, label="Other Mac")
+    post(meet, f"{path}/complete", body, other["token"], expected=403)
+    result = post(meet, f"{path}/complete", body, token, key="finished-after-detach")
+    assert result == {"attempt_id": attempt["id"], "outcome": "interrupted", "message": None}
+    assert post(meet, f"{path}/complete", body, token, key="finished-after-detach") == result
+    with meet.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT state,final_text,last_seq,input_tokens,output_tokens,billing,usage_model FROM attempts WHERE id=?",
+            (attempt["id"],),
+        ).fetchone()
+        assert tuple(row) == ("interrupted", "", 0, 100, 10, "subscription", attempt["config"]["model"])
+    assert "Detached text" not in thread_texts(meet, cid)
+
+
+def test_forged_meeting_refs_on_a_gateway_job_cannot_skip_another_bots_turn(meet, monkeypatch):
+    connected(meet, monkeypatch)
+    call = start_call(meet, thread(meet), bots=["ops", "finance"])
+    _speak(meet, call["id"], 0, "Finance, can you take the review?")
+    [victim] = _turns(meet, call["meeting_id"])
+    worker = runner(meet)
+    assign(meet, worker, "ops")
+    on_tico(meet, worker, isolated=True, capabilities=("private_lanes_v1",))
+    target = "bot:ops"
+    with meet.app.state.store.transaction() as c:
+        conv = H.open_conversation(c, "human:ana", [target], kind="chat", subject="Finance")["id"]
+        H.say(
+            c,
+            "human:ana",
+            target,
+            "Check this",
+            conversation_id=conv,
+            refs={"live_meeting": {"meeting_id": call["meeting_id"], "turn_id": victim["id"]}},
+        )
+    attempt = post(meet, "jobs/claim", {"bot": "ops"}, worker["token"])["attempt"]
+    assert attempt["gateway"] is True
+    assert _turns(meet, call["meeting_id"])[0]["status"] == "pending"
+
+
+def test_legacy_voice_refuses_api_credentials_and_turns_fallback_off_on_a_plan(meet):
+    worker = _machine(meet, "ops", subscription=False)
+    token = worker["token"]
+    key = add(meet, kind="anthropic_key", secret="sk-ant-api03-" + "a" * 48)["id"]
+    give(meet, worker, "claude", key)
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    _speak(meet, call["id"], 0)
+    prep = post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"]
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
+    [turn] = _turns(meet, call["meeting_id"])
+    assert (turn["status"], turn["skip_reason"]) == ("skipped", "voice_requires_subscription")
+    give(meet, worker, "claude", add(meet)["id"], confirm=True)
+    meet.app.state.calls.voice.tick()
+    _speak(meet, call["id"], 10_000)
+    attempt = _claim(meet, worker, "ops")
+    assert attempt["config"]["fallback"] == {"off": True} and not attempt["gateway"]
+    assert attempt["subscriptions"][0]["billing"] == "subscription"
+
+
+def test_pending_resident_question_moves_to_legacy_once_when_runner_loses_capability(meet):
+    _machine(meet, "ops", resident=True)
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    _speak(meet, call["id"], 0)
+    [turn] = _turns(meet, call["meeting_id"])
+    worker = runner(meet, label="Legacy Mac")
+    assign(meet, worker, "ops", generation=1)
+    ready(meet, worker, ["ops"], capabilities=("model_subscriptions_v1", "private_lanes_v1"))
+    give(meet, worker, "claude", add(meet, name="Legacy plan")["id"])
+    attempt = _claim(meet, worker, "ops")
+    assert attempt["message"]["refs"]["live_meeting"]["turn_id"] == turn["id"]
+    prep = post(meet, "jobs/claim", {"bot": "ops"}, worker["token"])["attempt"]
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
+    _complete(meet, worker, attempt, "The review is tomorrow.")
+    assert _turns(meet, call["meeting_id"])[0]["status"] == "replied"
+    with meet.app.state.store.read() as c:
+        assert (
+            c.execute(
+                "SELECT count(*) FROM messages WHERE json_extract(refs,'$.live_meeting.turn_id')=?",
+                (turn["id"],),
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_resident_primer_and_inputs_read_each_bots_current_notes(meet):
+    call = start_call(meet, thread(meet), bots=["ops", "finance"])
+    notes = f"calls/{call['id']}/bot-notes"
+    initial = "The review starts Monday."
+    other = "Private finance notes."
+    update = "The review moved to Tuesday."
+    post(meet, notes, {"text": initial}, token="ops-live")
+    post(meet, notes, {"text": other}, token="finance-live")
+    worker = _machine(meet, "ops", resident=True)
+    utterance = "Ops, when is the reliability review?"
+    _speak(meet, call["id"], 0, utterance)
+    attempt = _claim(meet, worker, "ops")
+    assert initial in attempt["message"]["body"] and other not in attempt["message"]["body"]
+    post(meet, notes, {"text": update}, token="ops-live")
+    brief = initial + "\n\n" + update
+    path = f"attempts/{attempt['id']}/inputs"
+    token = worker["token"]
+    assert post(meet, path + "?voice=busy", {}, token)["call_voice"] == {"closed": False}
+    recap = post(meet, path + "?voice=restart", {}, token)["call_voice"]["primer"]
+    assert brief in recap and other not in recap and utterance in recap
+    assert _turns(meet, call["meeting_id"])[0]["status"] == "pending"
+    assert post(meet, path, {}, token)["call_voice"]["turn"]["notes"] == brief
+
+
+def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, caplog):
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    voice, now = meet.app.state.calls.voice, [1000.0]
+    voice.clock = lambda: now[0]
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    path, token = f"attempts/{attempt['id']}", worker["token"]
+    _speak(meet, call["id"], 0)
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    post(
+        meet,
+        f"{path}/events",
+        {"events": [{"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "I think"}}]},
+        token,
+    )
+    now[0] += call_voice.ANSWER_SECONDS + 1
+    voice.tick()
+    assert voice.settle(5), "the expired speech stream is still holding a player"
+    [expired] = _turns(meet, call["meeting_id"])
+    assert (expired["status"], expired["skip_reason"]) == ("skipped", "voice_deadline")
+    assert meet.app.state.call_media.said == []
+    [line] = [record.message for record in caplog.records if record.message.startswith("call_voice_turn ")]
+    assert "skip_reason=voice_deadline " in line
+    _speak(meet, call["id"], 10_000)
+    next_turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert next_turn["id"] != turn["id"]
 
 
 def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypatch):
@@ -853,11 +1181,18 @@ def _speak(api, call_id, start_ms, text=None):
             call_media.transcribe = call_media_transcribe
 
 
-def _machine(api, bot):
-    machine = runner(api)
-    assign(api, machine, bot)
-    private_lanes_ready(api, machine, bot)
-    return machine
+def _machine(api, bot, *, resident=False, subscription=True, label="Test Mac"):
+    credential_setup(api)
+    company(api)
+    default = get(api, "providers")["default"]
+    on(api, bot, default["runtime"], default["model"])
+    caps = ("model_subscriptions_v1", "private_lanes_v1")
+    if resident:
+        caps += ("voice_sessions_v1",)
+    worker = machine(api, signed_in=True, bot=bot, caps=caps, label=label)
+    if subscription:
+        give(api, worker, "claude", add(api, name=label)["id"])
+    return worker
 
 
 def _answer(api, machine, bot, text):
@@ -892,7 +1227,7 @@ def _turns(api, meeting_id):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT bot,status,skip_reason FROM live_meeting_turns WHERE meeting_id=? ORDER BY created_at,id",
+                "SELECT id,bot,status,skip_reason FROM live_meeting_turns WHERE meeting_id=? ORDER BY created_at,id",
                 (meeting_id,),
             )
         ]

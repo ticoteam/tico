@@ -48,6 +48,7 @@ from . import (
     call_prep,
     call_media,
     call_ring,
+    call_sessions,
     call_voice,
     gateway_connection,
     google_meet,
@@ -234,6 +235,8 @@ class StartCall(Contract):
     # the call a Tico Meet one: only there can a bot speak.
     speak_replies: bool | None = None
     provider: Literal["auto", "google_meet", "tico"] = "auto"
+    model: str | None = Field(default=None, max_length=120)
+    effort: str | None = Field(default=None, max_length=20)
     bots: list[str] = Field(default_factory=list, max_length=BOT_LIMIT)  # bots in the call from its start
     # Both given: the call is booked for then (docs/meet.md, Scheduled calls), not started. ISO 8601 with an offset.
     starts_at: str | None = Field(default=None, max_length=40)
@@ -246,6 +249,9 @@ class StartCall(Contract):
         if dumped.get("starts_at") is None and dumped.get("ends_at") is None:
             dumped.pop("starts_at", None)
             dumped.pop("ends_at", None)
+        for key in ("model", "effort"):
+            if dumped.get(key) is None:
+                dumped.pop(key, None)
         return dumped
 
 
@@ -259,7 +265,7 @@ def _start_hashed_before_voice(body):
     """A start as servers before voice calls stored its idempotency hash (speak_replies false by default, no bots), so
     a retry of a start sent to one of them is answered from its first answer rather than refused as different. None for
     a start those servers could not have been sent."""
-    if body.bots or body.starts_at or body.ends_at:
+    if body.bots or body.starts_at or body.ends_at or body.model is not None or body.effort is not None:
         return None
     return {"title": body.title, "speak_replies": bool(body.speak_replies), "provider": body.provider}
 
@@ -530,6 +536,8 @@ class Calls:
             "participants": people,
             "bots": bots,
             "speak_replies": bool(row["speak_replies"]),
+            "model": live_meetings._meeting(c, row["live_meeting_id"])["meeting_model"] or None,
+            "effort": call_sessions.effort(c, call_id),
             "voice": self.voice.view(call_id, bots, voiced),
             "holds": holds,
             "stage": self._stage_view(c, row, who),
@@ -753,11 +761,22 @@ class Calls:
         return [actor for actor in people if actor != who.actor and readable(c, actor, thread_id)]
 
     def start(
-        self, c, who, thread_id, title, speak_replies=None, provider="tico", space=None, bots=(), *, scheduled=None
+        self,
+        c,
+        who,
+        thread_id,
+        title,
+        speak_replies=None,
+        provider="tico",
+        space=None,
+        bots=(),
+        *,
+        scheduled=None,
+        model=None,
+        effort=None,
     ):
         """Store a call, its live meeting, its card in the thread, who it rings and the bots it starts with. A Google
-        Meet start brings the space `make_space` made before this write; a Tico Meet one needs LiveKit set up. A voice
-        call's bots answer on their own models (`meeting_model` ''), as they do in their chats.
+        Meet start brings the space `make_space` made before this write; a Tico Meet one needs LiveKit set up.
 
         `scheduled` books a Tico Meet call for later instead (`schedule_plan`): the call is `scheduled` and its meeting
         paused, nobody is in it and nobody is rung until the first join starts it, and its calendar event is recorded
@@ -765,6 +784,9 @@ class Calls:
         self._may_start(c, who, thread_id, scheduled=scheduled is not None)
         if speak_replies is None:
             speak_replies = provider == "tico"
+        call_sessions.validate(model, effort)
+        if model and not speak_replies:
+            raise Problem("voice_model", "A model override requires spoken replies", 422)
         if (speak_replies or bots) and provider != "tico":
             raise Problem("voice_needs_tico_meet", "Bots join and speak in Tico Meet calls only", 422)
         if provider == "tico" and self.media is None:
@@ -793,7 +815,7 @@ class Calls:
                 stamp,
                 stamp,
                 "private",
-                "" if speak_replies else None,
+                model,
                 thread_id,
             ),
         )
@@ -830,6 +852,8 @@ class Calls:
                 scheduled["end"] if scheduled else None,
             ),
         )
+        if effort is not None:
+            c.execute("INSERT INTO call_voice_options(call_id,effort) VALUES(?,?)", (call_id, effort))
         if scheduled:
             calendar_api.record_call_event(c, who, scheduled["event"], call_id, scheduled.get("occurrence"))
             self._record(
@@ -1092,6 +1116,9 @@ class Calls:
         )
         self.app.state.call_prep.live(c, row)
         call_id = row["id"]
+        live = _call(c, call_id)
+        for bot in live_meetings._attached(c, row["live_meeting_id"]):
+            call_sessions.ensure(c, self.store.settings, live, bot["bot"])
         c.after_commit.append(lambda: self._went_live(call_id))
         return True
 
@@ -1241,6 +1268,7 @@ class Calls:
         if not row["ending_at"]:
             c.execute("UPDATE calls SET ending_at=?,updated_at=? WHERE id=?", (H.now(), H.now(), call_id))
             live_meetings._end_open_turns(c, row["live_meeting_id"])
+            call_sessions.stop(c, row["live_meeting_id"])
             self._record(c, who.actor, call_id, row["thread_id"], "call.ending", {})
         return self.view(c, call_id, who)
 
@@ -1339,6 +1367,7 @@ class Calls:
             c, row["live_meeting_id"], "meeting.state", {"state": "ended", "by": actor, "action": reason}
         )
         live_meetings._end_open_turns(c, row["live_meeting_id"])
+        call_sessions.stop(c, row["live_meeting_id"])
         self._record(c, actor, call_id, row["thread_id"], "call.ended", {"reason": reason})
         c.after_commit.append(lambda: self.voice.forget(call_id))
         return True
@@ -1391,6 +1420,7 @@ class Calls:
                 self._record(
                     c, who.actor, call_id, row["thread_id"], "call.bot_attached", {"bot": slug, "joined_by": who.actor}
                 )
+            call_sessions.ensure(c, self.store.settings, row, slug)
 
     def detach_bot(self, c, who, call_id, slug):
         human_only(who)
@@ -1407,6 +1437,7 @@ class Calls:
             ).fetchone()
         ):
             raise Problem("forbidden", "Only the person who attached this bot can remove it", 403)
+        call_sessions.stop(c, row["live_meeting_id"], slug)
         cursor = c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
         if cursor.rowcount:
             cancel_bot_turns(c, row["live_meeting_id"], slug, "bot_detached")
@@ -2047,6 +2078,7 @@ class Calls:
         for slug in stale_bots:
             c.after_commit.append(lambda slug=slug: self.voice.cancel(call_id, slug))
             cancel_bot_turns(c, row["live_meeting_id"], slug, "attacher_lost_thread")
+            call_sessions.stop(c, row["live_meeting_id"], slug)
             c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
             live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left", {"bot": slug, "by": "access_ended"})
             self._record(
@@ -2499,7 +2531,9 @@ def install_calls(app, store, auth, write):
                 provider, space = "tico", None
                 if not replayed:
                     with store.read() as c:
-                        provider = calls.choose(c, who, thread_id, body.provider, body.speak_replies, body.bots)
+                        provider = calls.choose(
+                            c, who, thread_id, body.provider, body.speak_replies or body.model, body.bots
+                        )
                     if provider == "google_meet":
                         try:
                             space = calls.make_space(who)
@@ -2522,6 +2556,8 @@ def install_calls(app, store, auth, write):
                         provider=provider,
                         space=space,
                         bots=body.bots,
+                        model=body.model,
+                        effort=body.effort,
                     ),
                 )
         finally:
@@ -2558,6 +2594,8 @@ def install_calls(app, store, auth, write):
                             provider="tico",
                             bots=plan["bots"] if plan else body.bots,
                             scheduled=plan,
+                            model=body.model,
+                            effort=body.effort,
                         ),
                     )
                 except BaseException:

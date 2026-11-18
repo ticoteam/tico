@@ -81,7 +81,10 @@ SECRETS = [
 # Consume quoted values as a unit, including escaped quotes and truncated log lines.
 # Unquoted values may contain spaces; discard through the next field separator.
 SECRET_FIELD = re.compile(
-    r'''(?i)(["']?\b[A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|passwd)[A-Za-z0-9_.-]*["']?\s*[=:]\s*)'''
+    # The voice timing counter has a fixed numeric/null value and is followed by the next timing field.
+    r'''(?i)(["']?\b(?!first_token_ms=(?:\d{1,9}|null) first_sentence_ms=(?:\d{1,9}|null) '''
+    r'''first_audio_ms=(?:\d{1,9}|null)(?: |$))'''
+    r'''[A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|passwd)[A-Za-z0-9_.-]*["']?\s*[=:]\s*)'''
     r'''(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^,;\r\n}\]]+)'''
 )
 LONG = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_=-]{32,}")

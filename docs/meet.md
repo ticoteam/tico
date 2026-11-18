@@ -229,33 +229,33 @@ question is dropped with a note (`<bot> missed a question`) 30 seconds after it 
 own transcript and chat routes ask through the same queue, so they never open a second question. A question heard 30
 seconds or more before it was transcribed (a slow Gateway) is not asked; a 1:1 call shows `Please repeat that`.
 
-**The answer.** The bot answers on its own model (a voice call's meeting model is the bot's own), with an instruction to
-speak in plain sentences, at most about 80 words. During the turn the bot can use its usual tools and permissions
-to create tasks, update memory or send messages. People read the call transcript and chat through the call thread's
-access rules. A turn is dead 30 seconds after its question was heard: a bot that has not answered by then is cut off (`skip_reason:
-voice_deadline`, note `<bot> couldn't answer in time`), and its late answer is neither posted nor heard. A reply stored
-after that time, or whose first sentence would start playing after it, is posted as text and not heard.
+**The answer.** When a bot joins, a current runner starts a Claude Code session on the bot's computer with the
+company subscription. Its first model request warms the bot's identity, the call notes and the voice instructions.
+Each bot in the call holds a normal lease and uses one `turns_at_once` slot for the whole call (five slots on Shared).
+Each question goes to the resident session, with updated notes when they change. At 24,000 context tokens the runner
+starts a fresh process with the primer and a short excerpt of the recent call transcript. The company Meeting model is the
+default when it supports subscription voice sessions. Otherwise the bot's own model is used. Voice uses low effort
+where available. To try a different model or effort, set `model` and `effort` when starting the call, or run
+`tico call start <thread> --bot <bot> --model <model-id> --effort medium`. Each turn records the model that ran.
 
-**Speaking it.** The reply is posted in the thread as text first; the voice is made after the reply's transaction
-commits, never inside it. It goes to the Gateway's text-to-speech (`POST /audio/speech`, model `tico-voice-1.0`, raw
-16-bit PCM; the voice is picked from `GET /audio` by the bot's slug, so a bot keeps its voice). Tico plays audio frames
-on Tico voice's track as the response streams in and starts the next sentence's request while the current one plays.
-The Gateway's voices are read when the call starts and
-kept for an hour, so no reply waits on them. Markdown is taken out and the spoken part is cut to about 600 characters.
-Only a reply to the open question's own turn is spoken. Before any speech is made, and before each sentence plays, the
-call must still be live and not ending, and the bot still attached by someone who may still use it. A reply is spoken
-once. Bots speak at most 30 minutes in a call: a sentence is made only when its length (estimated from its characters)
-fits in what is left, and playback stops at the cap. A voice the Gateway does not make leaves the text as it is (the server logs
-`call_voice_speech_failed` with the Gateway's status). Detach (through the call's route or the live meeting's), lost
-access and End stop a bot's voice at once, even a sentence cleared to play a moment before; taking out a bot that is
-only waiting leaves the bot speaking alone.
+The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
+The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's
+access rules. When work needs more time, the bot can say “Let me check.” and file a follow-up task. At 30 seconds
+from the time it heard a question, the call skips an unanswered turn and shows `<bot> couldn't answer in time`.
 
-**Timing.** Each turn ends in one INFO log line, `call_voice_turn`, with no words in it: `call_id`, `bot`, `turn`,
-`outcome` (`spoken`, `text_only` or `skipped`), `skip_reason` (why it was skipped or stayed text), and in ms
-`heard_to_transcript_ms` (clip cut to transcript stored, also reported as `transcribe_ms`),
-`queue_ms` (asked to picked up), `answer_ms` (picked up to the reply stored),
-`tts_first_chunk_ms` (speech request to the first response bytes), `speech_ms` (reply commit to its first frame on the
-call's track) and `total_ms` (clip cut to that first frame). A step with no timestamps logs `null`.
+**Speaking it.** The first complete sentence goes to the Gateway's text-to-speech while the model continues writing.
+Later sentences are prepared as they arrive and play in order on the Tico voice track as PCM frames stream in. The full reply is posted to
+the thread when the model finishes. The bot keeps its voice across calls. The Gateway's voices are read when the call
+starts and kept for an hour. The spoken part is capped at about 600 characters. Before synthesis and playback, the
+call must still be live and the bot's attacher must still have access. Bots speak at most 30 minutes in a call. A
+failed synthesis leaves the reply text in the thread. Detach, lost access and End stop playback and close the bot's
+voice session.
+
+**Timing.** Each turn writes one `call_voice_turn` line to support diagnostics with its call, bot, turn, outcome and any skip
+reason. `first_token_ms`, `first_sentence_ms` and `first_audio_ms` use the recorder's monotonic clock, starting
+when it heard the utterance. The line also records transcription, queue, answer and speech durations, and
+`tts_first_chunk_ms` measures the speech request to the first response bytes. A milestone the
+turn never reaches is `null`.
 
 **What the call shows.** A call's view has `voice`: each attached bot's `state` (`listening`, `waiting`, `thinking`,
 `making_voice` or `speaking`) and `caption` (the sentence being spoken), and `note`, the latest short note for 10
