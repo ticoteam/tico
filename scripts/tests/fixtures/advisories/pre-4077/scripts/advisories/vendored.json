@@ -1,0 +1,38 @@
+{
+  "templates/employee-repo/ui/vendor/js-yaml.min.js": {
+    "package": "js-yaml",
+    "ecosystem": "npm",
+    "version": "4.1.0",
+    "sha256": "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7"
+  },
+  "ui/vendor/js-yaml.min.js": {
+    "package": "js-yaml",
+    "ecosystem": "npm",
+    "version": "4.1.0",
+    "sha256": "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7"
+  },
+  "ui/vendor/docx-preview.min.js": {
+    "package": "docx-preview",
+    "ecosystem": "npm",
+    "version": "0.3.7",
+    "sha256": "a011a499016a269eb048b8558a3eefc94bc33568ef434235943948ff24a40005"
+  },
+  "ui/vendor/jszip.min.js": {
+    "package": "jszip",
+    "ecosystem": "npm",
+    "version": "3.10.1",
+    "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"
+  },
+  "ui/vendor/livekit-client.umd.min.js": {
+    "package": "livekit-client",
+    "ecosystem": "npm",
+    "version": "2.5.7",
+    "sha256": "e597aca6fa688f508b467b29cd68e9d4e6a286048eec530c37418c2126072e1f"
+  },
+  "ui/vendor/marked.min.js": {
+    "package": "marked",
+    "ecosystem": "npm",
+    "version": "12.0.2",
+    "sha256": "15fabce5b65898b32b03f5ed25e9f891a729ad4c0d6d877110a7744aa847a894"
+  }
+}

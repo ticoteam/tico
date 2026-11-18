@@ -1,0 +1,22 @@
+{
+  "uv": {
+    "ecosystem": "PyPI",
+    "pins": {
+      ".github/workflows/ci.yml": [
+        "0.13.1"
+      ],
+      ".github/workflows/pr-checks.yml": [
+        "0.13.0"
+      ],
+      ".github/workflows/release-shots.yml": [
+        "0.13.1"
+      ],
+      "Dockerfile": [
+        "0.13.1"
+      ],
+      "scripts/ci/merge_commit_checks.sh": [
+        "0.13.0"
+      ]
+    }
+  }
+}

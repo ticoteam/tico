@@ -21,8 +21,8 @@ original file plus the patched source hash.
 `0.18.5` and the lockfile records a path package; it does not pretend to be
 `0.20`. Version-based scanners may still report
 [RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g](https://rustsec.org/advisories/RUSTSEC-2024-0429.html).
-No advisory suppression is installed and this does not claim that Dependabot
-will close the alert. Assess the patched source and these tests alongside the
+The advisory gate accepts it for `app/Cargo.lock` and the regression test's lock only, until a dated review
+(`scripts/advisories/allowlist.json`); this does not claim that Dependabot will close the alert. Assess the patched source and these tests alongside the
 scanner result.
 
 From the repository root, with Rust, Python 3.11+ and native GLib development

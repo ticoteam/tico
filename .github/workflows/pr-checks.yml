@@ -9,7 +9,7 @@
 # gate: its plan goes one level further (two, at most nineteen Python VMs) and keeps every other job's condition. A fork's
 # pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
-# a failure shows before the change is enqueued: the Rust lint, desktop and Linux Caddy jobs when the
+# a failure shows before the change is enqueued: the Rust lint, desktop, advisories and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
 # no VM, on a pull request and in a group alike. The timing receipt, flake artifact and merge commit checks are
 # queue-only (a pull request's own static checks and types jobs run the same list on its own head).
@@ -69,6 +69,7 @@ jobs:
       caddy: ${{ steps.plan.outputs.caddy }}
       rust_lint: ${{ steps.plan.outputs.rust_lint }}
       desktop: ${{ steps.plan.outputs.desktop }}
+      advisories: ${{ steps.plan.outputs.advisories }}
     steps:
       - id: checkout_first
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -495,6 +496,40 @@ jobs:
           shared-key: pr-rust-lint
       - run: bash scripts/rust_checks.sh
 
+  advisories:
+    # Merge queue groups, and a ready pull request from this repository: known advisories in the dependency inputs, from the
+    # pinned OSV-Scanner (scripts/osv_gate.py), when the plan sees a change to one (pr_checks.QUEUE_JOB_PATHS): a Python,
+    # npm or Cargo lock, a vendored browser library, the uv inventory, a disposition or the gate itself. It fails only on an
+    # advisory with no unexpired disposition in scripts/advisories/allowlist.json; maintenance notices are printed. First
+    # the same scanner runs offline on the pre-#4077 fixture with recorded advisories: it must catch what that release
+    # fixed, and this tree must clear them. No VM starts when no input changed.
+    name: advisories
+    needs: plan
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.advisories == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
+      - name: Cache pinned tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
+      - name: The scanner catches the pre-#4077 advisories offline, and this tree clears them
+        run: python3 scripts/osv_gate.py selftest
+      - name: Known advisories (pinned OSV-Scanner)
+        run: python3 scripts/osv_gate.py scan
+
   desktop-app:
     # Merge queue groups, and a ready pull request from this repository. The Tauri desktop app (app/): rustfmt, clippy
     # -D warnings and its unit tests, on Linux with the build dependencies app.yml installs. No VM starts when the plan
@@ -708,7 +743,7 @@ jobs:
     # tests and the Rust, desktop and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, types, merge-checks, tests, rust-lint, desktop-app, caddy-linux]
+    needs: [plan, static, types, merge-checks, tests, rust-lint, desktop-app, caddy-linux, advisories]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -722,6 +757,7 @@ jobs:
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
           CADDY: ${{ needs.caddy-linux.result }}
+          ADVISORIES: ${{ needs.advisories.result }}
           GH_TOKEN: ${{ github.token }}
         run: |
           status=0
@@ -741,6 +777,7 @@ jobs:
           check rust-lint "$RUST_LINT"
           check desktop-app "$DESKTOP_APP"
           check caddy-linux "$CADDY"
+          check advisories "$ADVISORIES"
           # A failed leg cancels the whole run, itself included, so its job reads "cancelled". Name the step that
           # really failed, or say that nothing did (cancelled from outside: a superseded queue group, or by hand).
           if [ "$cancelled" = 1 ]; then

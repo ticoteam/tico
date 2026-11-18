@@ -1,0 +1,9 @@
+[
+  {
+    "id": "RUSTSEC-2024-0429",
+    "package": "glib",
+    "sources": ["app/Cargo.lock", "app/tests/glib-backport/Cargo.lock"],
+    "reason": "Patched in-tree: both build glib 0.18.5 from app/vendor/glib with the upstream VariantStrIter fix (app/vendor/README.md); the version scanners read stays 0.18.5. app/tests/glib-backport is the regression test for that fix.",
+    "expires": "2027-05-18"
+  }
+]

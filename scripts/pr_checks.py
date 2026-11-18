@@ -1292,6 +1292,9 @@ def callers(root, defined, scripts):
 # merge group. A draft skips the static job until it is marked ready. The table chooses only the tests. No ui/ folder
 # has an owner yet, so none is listed.
 OWNED_DATA = {
+    # The advisory gate's inventories and dispositions, and its pre-#4077 fixture (scripts/osv_gate.py).
+    "scripts/advisories/": ("scripts/tests/test_osv_gate.py",),
+    "scripts/tests/fixtures/advisories/": ("scripts/tests/test_osv_gate.py",),
     "baselines/": (
         "scripts/tests/test_lint_baseline.py",  # scripts/lint_baseline.py: baselines/ruff
         "scripts/tests/test_pyright_baseline.py",  # scripts/pyright_baseline.py and check_pyright_ratchet.py
@@ -1871,11 +1874,19 @@ def image_checks(changed, root=ROOT):
 
 # The Rust lint and desktop app jobs check their own folders, so a merge queue group starts their VMs only when
 # its change touches one (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs them all.
+# The advisories job (scripts/osv_gate.py) scans the dependency inputs: the Python, npm and Cargo locks, both vendor
+# folders, the vendor and uv inventories and the dispositions in scripts/advisories/, and the gate, its pinned scanner and
+# its fixture. A uv pin a script changes reaches it through scripts/advisories/tools.json, which the drift gate
+# (scripts/gates/advisory_inputs.py, every pull request) keeps in step with the scripts.
 QUEUE_JOB_PATHS = {
     "rust_lint": re.compile(
         r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
     ),
     "desktop": re.compile(r"app/"),
+    "advisories": re.compile(
+        r"(.*/)?(requirements[^/]*\.txt|package-lock\.json|Cargo\.lock)$|(templates/employee-repo/)?ui/vendor/"
+        r"|scripts/advisories/|scripts/tests/fixtures/advisories/|scripts/osv_gate\.py$|scripts/pinned_tool\.sh$"
+    ),
 }
 
 
