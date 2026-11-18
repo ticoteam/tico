@@ -287,8 +287,10 @@ function skillsRowLinks(box: HTMLElement) {
   }; });
 }
 
-// Re-run: send it back to screening, then watch for the result (about a minute) so a screen that fails again says so.
-const SKILLS_RESCREEN_WAIT_MS = 60_000, SKILLS_RESCREEN_EVERY_MS = 2_000;
+// Re-run: send it back to screening, then watch for the result. A screen takes up to 90 seconds (STRICT_SECONDS in
+// backend/judge.py), and a pass screens up to three waiting proposals one at a time (BATCH in backend/skill_screening.py),
+// so the watch allows one full pass ahead of this proposal plus its own screen: 90 + 3 x 90 seconds.
+const SKILLS_RESCREEN_WAIT_MS = (90 + 3 * 90) * 1000, SKILLS_RESCREEN_EVERY_MS = 3_000;
 async function skillsRescreen(id: string) {
   try { await post(`/v2/skills/proposals/${encodeURIComponent(id)}/rescreen`, {}); }
   catch (e) { toast(errorMessage(e, ''), true); return; }
@@ -302,11 +304,15 @@ async function skillsRescreen(id: string) {
     catch { return; }
     if (!SKP || SKP.run !== run) return;
     if (p.screen_status === 'pending' || p.screen_status === 'screening') continue;
-    if (p.screen_status === 'not_screened') toast(`Still not screened${(p.screen_failures || 0) > 1 ? ` (${p.screen_failures} in a row)` : ''}. ${p.screen_action || ''}`, true);
+    if (p.screen_status === 'not_screened') toast(`${(p.screen_failures || 0) > 1 ? `Still not screened (${p.screen_failures} in a row)` : 'Not screened'}. ${p.screen_action || ''}`, true);
     else toast('Screened');
     skillsRedraw();
     return;
   }
+  // The window ended with no result: the screen may still be queued or running, so say so and show what the page holds.
+  if (!SKP || SKP.run !== run) return;
+  toast('Still screening; this page shows the result when you open it again');
+  skillsRedraw();
 }
 
 // ----------------------------------------------------------------- one skill

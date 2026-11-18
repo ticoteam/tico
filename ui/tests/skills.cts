@@ -3,7 +3,7 @@
 // when none wait; the skills with who each is on (+N past the first few), version and last used; search; a proposal
 // rated high risk needs "I've read this" before Approve (and the server's 422 is mirrored when the tick is missing);
 // Decline with a reason; an unscreened proposal says why, what to do and its judge call, and a Re-run that fails again
-// says so; the proposal's crumb is Skills › name; one skill's usage,
+// says so, and one still screening when its watch ends says it is still screening; the proposal's crumb is Skills › name; one skill's usage,
 // coverage, files, Install for a team and Remove where the server allows it; the Claude Code command; an admin's
 // Suggestions (Remove, Ask to submit as her own message to the bot, Dismiss) and Not in directory, which a member
 // never reads; a member sees no Approve; the Skills nav row; 390px with no sideways scroll.
@@ -25,7 +25,7 @@ interface SkillFake { writes: Write[]; asked: string[]; answer: (p: string, meth
 interface Screening { [key: string]: unknown; risk: string | null; verdict: string | null }
 const who = (type: string, id: string, name: string) => ({type, id, name});
 
-function skillsFake({admin = true, waiting = true}: {admin?: boolean; waiting?: boolean} = {}) {
+function skillsFake({admin = true, waiting = true, stayPending = false}: {admin?: boolean; waiting?: boolean; stayPending?: boolean} = {}) {
   const fake = {writes: [] as Write[], asked: [] as string[]} as SkillFake;
   const skills = [
     {id: 's1', name: 'refund-check', description: 'Checks a refund request against the 30-day policy and the unit\'s warranty, step by step, with every exception named',
@@ -106,8 +106,9 @@ function skillsFake({admin = true, waiting = true}: {admin?: boolean; waiting?: 
     if (m) {
       const [, id, action] = m as [string, string, string | undefined], row = proposals.find(x => x.id === id)!;
       if (!row) return refuse(404, 'not_found', 'No such proposal');
-      // A Re-run that fails again: the second read after it answers not screened, two in a row.
-      if (!action && row.screen_status === 'pending' && (rescreenReads[id] = (rescreenReads[id] || 0) + 1) > 1)
+      // A Re-run that fails again: the third read after it (the redraw, then one poll still pending) answers not screened,
+      // two in a row. stayPending keeps it pending for good.
+      if (!action && row.screen_status === 'pending' && (rescreenReads[id] = (rescreenReads[id] || 0) + 1) > (stayPending ? Infinity : 2))
         Object.assign(row, {screen_status: 'not_screened', screen_failures: 2});
       if (!action) return {proposal: row, files: files[id], diff: row.base_version ? '--- a/SKILL.md\n+++ b/SKILL.md\n@@ -1 +1 @@\n-old\n+new\n' : '',
         stale: false, screening: screening[id]};
@@ -143,9 +144,10 @@ async function shot(page: import('playwright').Page, name: string) {
     .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({animations: 'disabled', path: path.join(dir, `skills-${name}.png`), fullPage: true});
 }
-async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready, admin = true, waiting = true}: {width?: number; ready?: string; admin?: boolean; waiting?: boolean} = {}) {
-  const api = skillsFake({admin, waiting});
-  const got = await open(browser, mailboxesFake({admin, me: admin ? 'ana' : 'cara'}), googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, theme: 'dark',
+async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready, admin = true, waiting = true, stayPending = false, clock}:
+  {width?: number; ready?: string; admin?: boolean; waiting?: boolean; stayPending?: boolean; clock?: string} = {}) {
+  const api = skillsFake({admin, waiting, stayPending});
+  const got = await open(browser, mailboxesFake({admin, me: admin ? 'ana' : 'cara'}), googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, theme: 'dark', clock,
     extra: (p, method, body, url) => api.answer(p, method, body as Json, url)});
   return {...got, api};
 }
@@ -259,6 +261,21 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         await page.locator('.toast.err').filter({hasText: 'Still not screened (2 in a row)'}).waitFor();
         await page.locator('[data-sk-screen-failures]').filter({hasText: 'Failed 2 times in a row'}).waitFor();
         assert.deepEqual(seen.errors, [], `${tag}: Re-run errors`);
+        await page.close();
+      }
+      // A Re-run still pending when its watch ends says so and keeps showing pending. The fake clock moves past 2 minutes
+      // (the watch still runs: no verdict yet) and then past the 6-minute window (the verdict shows).
+      {
+        const {page, seen} = await start(browser, '#/library/skills/proposals/p-refund', {width, ready: '[data-sk-rescreen]', stayPending: true, clock: '2026-11-18T09:00:00Z'});
+        await page.locator('[data-sk-rescreen]').click();
+        await page.locator('#proposal-screening [data-sk-screen="pending"]').waitFor();
+        await page.clock.fastForward(120e3);
+        await page.waitForTimeout(300);
+        assert.equal(await page.locator('.toast').filter({hasText: 'Still screening'}).count(), 0, `${tag}: no verdict before the window ends`);
+        await page.clock.fastForward(300e3);
+        await page.locator('.toast').filter({hasText: 'Still screening; this page shows the result when you open it again'}).waitFor();
+        await page.locator('#proposal-screening [data-sk-screen="pending"]').waitFor();
+        assert.deepEqual(seen.errors, [], `${tag}: still screening errors`);
         await page.close();
       }
       // A high-risk proposal: findings, pattern hits, the files; Approve waits for "I've read this".
@@ -379,6 +396,6 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       assert.deepEqual(seen.errors, [], 'member errors');
       await page.close();
     }
-    console.log('Skills: one list (no tabs, Waiting for OK pending only and hidden when empty, On, search, old ?tab= addresses), Suggestions (Remove, Ask to submit, Dismiss), Not in directory, approve needs the tick (and the 422), Decline, Re-run (reason, judge call, fails again), crumb, usage, coverage, files, Install for a team, Remove on the skill page, Claude Code command, member view, phone');
+    console.log('Skills: one list (no tabs, Waiting for OK pending only and hidden when empty, On, search, old ?tab= addresses), Suggestions (Remove, Ask to submit, Dismiss), Not in directory, approve needs the tick (and the 422), Decline, Re-run (reason, judge call, fails again, still screening), crumb, usage, coverage, files, Install for a team, Remove on the skill page, Claude Code command, member view, phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
