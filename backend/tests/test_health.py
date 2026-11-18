@@ -119,9 +119,7 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
     # Past ten minutes with work queued it is an outage: said on Health, nobody interrupted yet.
     heartbeat(api, runner, seconds_ago=700, runtimes=SIGNED_IN)
     issue = machine_issue(api, riley)
-    assert (
-        issue["title"] == "Owner Mac stopped checking in" and issue["severity"] == "error" and not issue["needs_person"]
-    )
+    assert issue["title"] == "Owner Mac offline" and issue["severity"] == "error" and not issue["needs_person"]
     body, checks = health_of(api)
     assert (
         checks["waiting"]["status"] == "bad"
@@ -149,7 +147,7 @@ def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(en
         lambda c, who, bots, now=None: {b: {"queued": 0, "uncertain": 0} for b in bots},
     )
     issue = machine_issue(api, person_headers(api, "riley"))
-    assert issue["title"] == "Owner Mac stopped checking in" and issue["needs_person"]
+    assert issue["title"] == "Owner Mac offline" and issue["needs_person"]
 
 
 def test_backups_are_judged_by_how_long_they_have_been_behind_not_by_the_copy_age(environment, monkeypatch):

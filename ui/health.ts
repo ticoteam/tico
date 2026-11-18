@@ -290,7 +290,9 @@ function hlFixHtml(fix: HlFix): string {
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
   if (fix.finish) return `<button class="ghost" type="button" data-stuck-finish="${esc(fix.finish.bot)}">${esc(fix.label)}</button>`;
   if (fix.click) return `<button class="ghost" type="button" data-hl-click="${esc(fix.click)}">${esc(fix.label)}</button>`;
-  return `<a class="ghost gs-link" href="${esc(fix.href)}"${fix.tab ? ` data-gs-tab="${esc(fix.tab)}"` : ''}>${esc(fix.label)}</a>`;
+  // A page outside the app (Add credit's billing page) opens in a new tab, as the credit strip's link does.
+  const away = /^https?:/.test(fix.href || '') ? ' target="_blank" rel="noopener noreferrer"' : '';
+  return `<a class="ghost gs-link" href="${esc(fix.href)}"${fix.tab ? ` data-gs-tab="${esc(fix.tab)}"` : ''}${away}>${esc(fix.label)}</a>`;
 }
 
 // Health · Tasks (S15): where the never-stuck check has the open tasks, a big number and its words on each line.

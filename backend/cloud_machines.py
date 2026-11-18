@@ -698,6 +698,20 @@ def resting(c):
     )
 
 
+def credit_stopped(c):
+    """Computer ids of cloud machines Tico stopped because the company is out of credit, only while HQ says access is
+    frozen: Health names one account-wide cause for them, not one outage per machine (task #423). Unknown, stale or
+    unfrozen access is no claim, so a machine there keeps its own diagnosis."""
+    if cloud_access.access(c) != "frozen":
+        return set()
+    return {
+        r["runner_id"]
+        for r in c.execute(
+            "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND problem='out_of_credit'"
+        )
+    }
+
+
 def label_for(c, key):
     """The name machine `key`'s computer enrolls with: the one a person gave it (`named`), else its bot's."""
     chosen = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NAME_KEY + key,)).fetchone()
@@ -3001,7 +3015,11 @@ def health(c, settings=None):
     stuck = sorted(
         bot
         for bot, machine in machines.items()
-        if bot in active and machine["problem"] and machine["problem"] != "disk_full"
+        if bot in active
+        and machine["problem"]
+        and machine["problem"] != "disk_full"
+        # Out of credit is one account-wide cause Health names once, with Add credit (health.view, task #423).
+        and not (machine["problem"] == "out_of_credit" and cloud_access.access(c) == "frozen")
     )
     lines = []
     for key, current in sorted(rows(c).items()):

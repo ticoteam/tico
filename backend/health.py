@@ -95,6 +95,20 @@ def _fix(label, href="", tab="", click=""):
     return {"label": label, "href": href, "tab": tab, "click": click}
 
 
+def _listing(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _credit_fixes(c, kind):
+    """Add credit, to the billing page HQ names (the credit strip's link, ui/app/cloud-access.ts); owners pay."""
+    from . import cloud_access
+
+    if kind != "owner":
+        return []
+    found = cloud_access.state(c) or {}
+    return [_fix("Add credit", found.get("billing_url") or "https://app.tico.dev/billing")]
+
+
 def _check(key, label, status, summary, fixes=(), items=()):
     return {
         "id": key,
@@ -3349,12 +3363,48 @@ def view(c, who, settings, auth, github, config, filing=False):
     if kind != "bot" and (plate := _plate_check(c, who, auth, full)):
         checks.append(plate)
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
-    silent = silent_computers(c) if waiting or filing else []
+    # Cloud machines Tico stopped for credit are not offline: the company is out of credit (task #423).
+    from .cloud_machines import credit_stopped
+
+    credit = credit_stopped(c)
+    # The bots waiting behind them: offline ones (waiting) and cloud ones whose machine has the problem (stuck_rows).
+    credit_bots = {row["bot"] for row in waiting + stuck_rows if row.get("runner_id") in credit}
+    # A machine stopped for credit did not drop on its own: no silent-computer finding or restart advice names it.
+    silent = [x for x in silent_computers(c) if x["id"] not in credit] if waiting or filing else []
     reported = {x["id"] for x in silent} if filing else set()  # the silent computers' own finding names their outage
     counted = [x for x in computers if x["id"] not in reported]
     named_computers = []  # the computers this check says are offline (what a filed finding describes)
+    held = [x for x in counted if not x["online"] and x["id"] in credit]
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))
+    elif held:
+        off = [x for x in counted if not x["online"] and not x["resting"] and x["id"] not in credit]
+        named_computers = [x["id"] for x in off]
+        down = [x["label"] for x in off]
+        # Computer names are shown to everyone who reads this check, as the offline line on main always did.
+        stopped_names = [x["label"] for x in held]
+        summary = (
+            "Stopped: out of credit."
+            if not online and not down
+            else f"{len(online)} of {len(counted)} online."
+            + (" Offline: " + ", ".join(down) + "." if down else "")
+            + " Stopped, out of credit: "
+            + ", ".join(stopped_names)
+            + "."
+        )
+        more = (
+            f"Tico stopped {_listing(stopped_names)} because the "
+            f"company is out of credit. {_plural(len(credit_bots), 'bot')} waiting. Add credit and they start again; "
+            "restarting them does not help."
+        )
+        computer_fixes = [_fix("Open Computers", "#/settings", "devices")] if full and down else []
+        # Agents read one cloud_credit item with the whole cause (fleet check), the person one short line.
+        items = [
+            {"bot": "", "name": "Out of credit", "text": more, "fixes": _credit_fixes(c, kind), "kind": "cloud_credit"}
+        ]
+        if down:
+            items.append({"bot": "", "name": "Computers", "text": summary, "fixes": computer_fixes})
+        checks.append(_check("computers", "Computers", "bad", summary, computer_fixes + _credit_fixes(c, kind), items))
     elif not counted:
         pass  # filing only: every computer that is offline is silent, and its own finding files the outage
     elif not online and not any(x["resting"] for x in counted) and not reported:
@@ -3723,10 +3773,15 @@ def view(c, who, settings, auth, github, config, filing=False):
     from .cloud_machines import health as cloud_health
 
     cloud = cloud_health(c, settings) if full else None
-    waiting_here = [w for w in waiting if w.get("runner_id") not in reported]
+    # Cloud bots whose machine has the problem are in stuck_rows, not waiting; a bot that is not on its own cloud
+    # machine (one on the shared machine) is in waiting, so both are counted in credit_bots and left out here.
+    waiting_here = [w for w in waiting if w.get("runner_id") not in reported and w.get("runner_id") not in credit]
     named_waiting = sorted({w["runner_id"] for w in waiting_here if w.get("reason") == "computer_offline"})
     silent_here = [x for x in silent if x["id"] not in reported]
     waiting_status, waiting_reasons = "ok", []
+    if credit_bots:
+        waiting_status = "bad"
+        waiting_reasons.append(f"{_plural(len(credit_bots), 'bot')} waiting: out of credit.")
     if waiting_here:
         names = ", ".join(w["name"] for w in waiting_here[:5])
         # Work piling up behind a computer that stopped checking in is an outage even while another computer is up.
@@ -3735,7 +3790,7 @@ def view(c, who, settings, auth, github, config, filing=False):
             f"with {_silent_words(x)}."
             for x in silent_here[:3]
         )
-        waiting_status = "bad" if silent_here or not online else "warn"
+        waiting_status = "bad" if silent_here or not online or credit_bots else "warn"
         waiting_reasons.append(
             f"{_plural(len(waiting_here), 'bot')} cannot run because their computer is offline"
             + (f": {names}." if full else ".")
@@ -3750,7 +3805,8 @@ def view(c, who, settings, auth, github, config, filing=False):
             "Bots waiting",
             waiting_status,
             " ".join(waiting_reasons) if waiting_reasons else "Every active bot has a computer that is up.",
-            [_fix("Open Computers", "#/settings", "devices")] if full and waiting_reasons else [],
+            ([_fix("Open Computers", "#/settings", "devices")] if full and (waiting_here or cloud) else [])
+            + (_credit_fixes(c, kind) if credit_bots else []),
         )
     )
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
