@@ -9,7 +9,7 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the fixture and its helper)
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.pages import page
-from backend.tests.helpers.task_privacy_reads import traced_get
+from backend.tests.helpers.task_privacy_reads import traced, traced_get
 from backend.tests.helpers.thread_rail_batches import (  # noqa: F401  (the runner fixture)
     EARLIER,
     bot_reply,
@@ -240,3 +240,97 @@ def test_catch_up_counts_a_legacy_homes_plain_unread_messages(api):
             threads.post(c, "bot:ops", home["id"], f"Plain {i}")
     [item] = get(api, "threads/catch-up", "cara-test")["items"]
     assert item["thread"]["id"] == home["id"] and item["new_count"] == 3, item["new_count"]
+
+
+REVIVAL = "AS revived_root"  # the revival query (threads._revived_roots), as the flight recorder names it
+
+
+def _revival_runs(api, token):
+    """How many times one rail load ran the revival query, and the load."""
+    page, statements = traced(api, lambda: get(api, "threads/rail", token))
+    return sum(REVIVAL in s for s in statements), page
+
+
+def test_the_rail_checks_no_finished_task_its_reader_is_not_in(api):
+    """P09 third PR: the rail's lists hold no task threads and its Catch up only those its reader is in with something
+    new, so finished tasks elsewhere in the company cost the reader's load nothing. 5 to 50 such threads, revived by a
+    bot's reply Ben may read: the revival query never runs for Ben (it ran on every load, over every finished task in
+    the company: production's 1 to 1.7 s statement), and his rail and Catch up stay the same."""
+    before = get(api, "threads/rail", "ben-test")
+    done = 0
+    for size in (5, 50):
+        seed_finished_task_replies(api, size - done, f"x{size}", owner="human:cara")
+        done = size
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET restricted=1")
+        assert len(_revived(api, "human:ben")) == size  # Ben may read them: only the rail's scope keeps them out
+        runs, page = _revival_runs(api, "ben-test")
+        assert runs == 0, (size, runs)
+        page.pop("seq", None), before.pop("seq", None)
+        assert page == before
+
+
+def test_finished_tasks_the_reader_is_in_are_checked_in_one_query_a_load(api):
+    """P09 third PR: a reader in 5 to 50 finished-task threads, each with something new for them after the finish (a
+    person's post, then a bot's), has them all checked by one revival query a load, and Catch up brings each back."""
+    done = 0
+    for size in (5, 50):
+        tasks = seed_finished_task_replies(api, size - done, f"y{size}")
+        done = size
+        with api.app.state.store.transaction() as c:
+            for task_id in tasks:
+                [root] = c.execute(
+                    "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task_id,)
+                ).fetchone()
+                threads.post(c, "human:ana", root, "Thanks")
+            c.execute("UPDATE messages SET restricted=1")
+        runs, page = _revival_runs(api, "ben-test")
+        assert runs == 1, (size, runs)
+        assert page["catch_up"] == min(size, thread_rail.CATCH_UP_SHOWN), page["catch_up"]
+
+
+def test_revived_within_answers_as_revived_roots_does(api):
+    """The scoped revival check gives each root the answer the whole-company one gives, for a reader who may read a
+    reply's run and for ones who may not, asked twice in one snapshot (the second time from the snapshot's answers)."""
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Private", "Secret", "human:ana", private=True, lint=False)
+    seed_finished_task_replies(api, 4, "w", private_input=secret["id"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET restricted=1")
+    for actor in ("human:ben", "human:ana", "human:cara"):
+        with api.app.state.store.read_transaction() as c:
+            v = threads.actor_viewer(c, actor)
+            whole = threads.revived_roots(c, v)
+            assert threads.revived_within(c, v, "1") == whole, actor
+            assert threads.revived_within(c, v, "1") == whole, actor
+            assert threads.revived_within(c, v, "0") == frozenset()
+
+
+def test_revived_within_checks_each_root_once_a_snapshot_across_chunks(api, monkeypatch):
+    """The scoped revival check splits its roots into chunks (REVIVED_CHUNK) and keeps each root's answer for the
+    snapshot: 7 roots in chunks of 3 cost three revival queries the first time and none the second, and give each root
+    the whole-company answer, for a reader who may read the replies' runs and one who may not."""
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Private", "Secret", "human:ana", private=True, lint=False)
+    seed_finished_task_replies(api, 3, "ck", private_input=secret["id"])
+    seed_finished_task_replies(api, 4, "cl")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET restricted=1")
+    monkeypatch.setattr(threads, "REVIVED_CHUNK", 3)
+    real, calls = threads._revived_roots, []
+
+    def counted(c, v, roots):
+        calls.append(None if roots is None else len(roots))
+        return real(c, v, roots)
+
+    monkeypatch.setattr(threads, "_revived_roots", counted)
+    for actor in ("human:ben", "human:ana"):
+        with api.app.state.store.read_transaction() as c:
+            v = threads.actor_viewer(c, actor)
+            whole = threads.revived_roots(c, v)
+            calls.clear()
+            assert threads.revived_within(c, v, "1") == whole, actor
+            assert calls == [3, 3, 1], (actor, calls)
+            calls.clear()
+            assert threads.revived_within(c, v, "1") == whole, actor
+            assert calls == [], (actor, calls)

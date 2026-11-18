@@ -3968,6 +3968,38 @@ def revived_roots(c, v, roots=None):
     return _revived_roots(c, v, roots)
 
 
+REVIVED_CHUNK = 400  # roots per revival query when a caller names them (revived_within)
+
+
+def revived_within(c, v, within, args=None):
+    """revived_roots for only the finished-task roots that match `within` (SQL over a conversations row `r`, with
+    `args`): the roots a caller's own query could return, so a page that lists no task threads (the rail's lists,
+    Browse) checks none, and Catch up checks only the ones its reader is in, not every finished task in the company.
+    Each root's answer is kept for the snapshot, so the rail's lists and its Catch up walk check a root once."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    roots = [
+        row[0]
+        for row in c.execute(
+            "SELECT r.id FROM conversations r WHERE r.parent_id IS NULL AND r.task_id IN "
+            f"(SELECT id FROM tasks WHERE status IN ({FINISHED_TASKS})) AND ({within})",
+            args or {},
+        )
+    ]
+    if not roots:
+        return frozenset()
+    from . import task_privacy
+
+    values = read_cache.cache(c)
+    key = ("revived_root", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
+    known = values.setdefault(key, {}) if values is not None else {}
+    missing = sorted(set(roots) - known.keys())
+    for start in range(0, len(missing), REVIVED_CHUNK):
+        part = missing[start : start + REVIVED_CHUNK]
+        found = _revived_roots(c, v, part)
+        known.update({root: root in found for root in part})
+    return frozenset(root for root in roots if known[root])
+
+
 def _revived_roots(c, v, roots):
     from . import task_privacy
 
