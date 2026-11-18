@@ -41,7 +41,7 @@ const twBody = (): HTMLElement | null => twRoot()?.querySelector<HTMLElement>('[
 // The hub's tones as tools.ts's: waiting → wait, neutral → idle.
 const TW_TONES: Record<string, string> = {ok: 'ok', waiting: 'wait', wait: 'wait', fail: 'fail', neutral: 'idle', run: 'run'};
 const twPill = (s?: {label?: string; tone?: string}) => toolsPill({tone: TW_TONES[s?.tone || ''] || 'idle', text: s?.label || ''});
-const TW_VERBS: Record<string, string> = {open: 'opened', fill: 'filled', copy: 'copied', code: 'got code', needs_you: 'asked for you',
+const TW_VERBS: Record<string, string> = {open: 'opened', type: 'typed', fill: 'filled', copy: 'copied', code: 'got code', needs_you: 'asked for you',
   control: 'took control', sign_in: 'signed in', download: 'downloaded', upload: 'uploaded'};
 const TW_SESSION: Record<string, string> = {needs_you: 'Needs you', in_use: 'In use'};
 const twVerb = (v: string) => TW_VERBS[v] || v;

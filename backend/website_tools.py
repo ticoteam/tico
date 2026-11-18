@@ -54,8 +54,9 @@ KIND = "website"
 LOGIN = "login"
 HTTP = "http://"
 MAX_SITES = 50
-# Activity verbs (`tool_calls.method`): the contract's, and the browser commands' download and upload.
-VERBS = ("open", "fill", "copy", "code", "needs_you", "control", "sign_in", "download", "upload")
+# Activity verbs (`tool_calls.method`): the contract's, and the browser commands' type, download and upload. A typed
+# action keeps only its verb and page path (browser_commands.LOGGED), never the text typed.
+VERBS = ("open", "type", "fill", "copy", "code", "needs_you", "control", "sign_in", "download", "upload")
 RESULTS = ("sent", "refused", "failed", "use")
 WHERE = ("central", "own")
 RECENT = 5
