@@ -11,7 +11,7 @@ event through its own access. Outgoing webhooks do not take these (event_catalog
 
 import logging
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from . import hubdb as _hubdb
@@ -19,6 +19,9 @@ from . import hubdb as _hubdb
 H: Any = _hubdb
 LOG = logging.getLogger("tico.calendar_events")
 ACTIONS = ("created", "changed", "cancelled")
+# A scheduled call follows its event (backend/call_prep.py): a change or cancel of a call's event, from any home, has
+# that call read again once the write commits. Keyed by the database file, so each hub's sweep hears only its own.
+CALL_FOLLOWERS: dict[str, Callable[[str], None]] = {}
 
 
 def google_detail(calendar_id: str, occurrence_id: str | None = None, **more: object) -> dict[str, object]:
@@ -46,6 +49,8 @@ def emit(
     name = "calendar.event." + action
     facts = dict(detail)
     H.event(c, actor, name, subject, facts)
+    if action != "created" and CALL_FOLLOWERS:
+        _follow_call(c, subject, facts)
     if H.NO_TRIGGERS.get():
         return
     try:
@@ -60,3 +65,19 @@ def emit(
         A.on_event(c, name, subject, facts, actor, access=hears if box else None)
     except Exception:  # noqa: BLE001 - logged, never raised into the calendar write
         LOG.warning("automations did not hear %s", name, exc_info=True)
+
+
+def _follow_call(c: sqlite3.Connection, subject: str, facts: dict[str, object]) -> None:
+    """Queue the re-read of the scheduled call this event belongs to, for after the write commits."""
+    try:
+        follow = CALL_FOLLOWERS.get(H._main_path(c))
+        hooks = getattr(c, "after_commit", None)
+        if follow is None or hooks is None:
+            return
+        from . import calendar_api as _calendar_api
+
+        call_id = _calendar_api.call_of_event(c, subject, facts)
+        if call_id:
+            hooks.append(lambda: follow(call_id))
+    except Exception:  # noqa: BLE001 - logged; the minute sweep reads the call anyway
+        LOG.warning("a scheduled call did not hear its event change", exc_info=True)

@@ -107,22 +107,42 @@ hook it does nothing. `payload` = `{"title": "<caller name>", "body": "# <thread
 ### Scheduled calls (migration `backend/migrations/20261118133337_scheduled_calls.py`)
 
 - `calls` gains `scheduled_start`, `scheduled_end` and `prepped_at` (all nullable); `calls.state` gains `scheduled`, and
-  `calendar_event_links.link_type` gains `call`.
-- `POST /api/v2/threads/{thread_id}/calls` with `starts_at` and `ends_at` stores a Tico Meet call `scheduled`, its live
-  meeting `paused`, its card and its bots, with no participant and an empty `ring`. Before the write it writes one event
-  as the caller (backend/calendar_api.py `plan_call_event`, the one exception to calendar decision 13): their Google
-  calendar when connected (event id = the call id without dashes, `extendedProperties.private.tico_call`), else their
-  Tico calendar, in the write. The link row is in the same write. A calendar refusal is `calendar_write_failed` and no
-  call; a write that fails after the Google event was made deletes the event.
+  `calendar_event_links.link_type` gains `call`. The partial index `calls_scheduled ON calls(scheduled_start) WHERE
+  state='scheduled'` serves the sweep. The two CHECK widenings share one trigger/view teardown.
+- `POST /api/v2/threads/{thread_id}/calls` with `starts_at` and `ends_at` (truncated to the minute) stores a Tico Meet
+  call `scheduled`, its live meeting `paused`, its card and its bots, with no participant and an empty `ring`. The call
+  id is a uuid5 of (actor, thread, idempotency key), and the bots are checked, before anything is written. Then one
+  private event is written as the caller (backend/calendar_api.py `plan_call_event`, the one exception to calendar
+  decision 13): their Google calendar when connected (event id = the call id without dashes,
+  `extendedProperties.private.tico_call`), else their Tico calendar, in the write. Attendees are the thread's people
+  who can read it. A Google 409, or a retryable failure, reads the event back (`gcal_live.own_event`)
+  and takes it only when its `tico_call` is this call. The link row is in the same write. A calendar refusal is
+  `calendar_write_failed` and no call; a write that fails after the Google event was made deletes the event. A start
+  with neither time hashes as before, so its replays are unchanged.
+- `PATCH /api/v2/calls/{call_id}` (`changeCall`, the booker or `threads.can_manage`; `409 call_not_scheduled` once the
+  call left `scheduled`): Google is patched first, outside the write (`calendar_api.change_call_event`, attendees only
+  when the readable set changed); the call's times change in the write after, a Tico event in that same write.
+  `POST .../end` on a scheduled call deletes the Google event first (`delete_call_event`: not found is done; a
+  retryable failure is `502 calendar_write_failed` and the call stays; a permanent refusal is logged and the cancel
+  goes on), then cancels the call (`end_reason: cancelled`).
 - A scheduled call is in no live list: not `live_call`, not ringing, not `GET /api/v2/live-meetings`, not the calls
-  sweep. `GET /api/v2/calls/upcoming` lists the viewer's.
-- The first `join` turns it `live` (started_at = now, the meeting `live`, `ring` the thread's other people), then starts
-  the recorder and rings, once. A second live call in the thread is `409 call_in_progress`.
-- The heartbeat's `call_prep` step (backend/call_prep.py, every minute): for calls due within 30 minutes and not
-  prepped, or an hour past their end, re-read the event (`calendar_api.read_call_event`); moved moves the times,
-  cancelled or gone ends the call `calendar_cancelled`; unreadable waits, three passes at most. Then one task per bot,
-  "Prepare for <title>" (skills/meeting-prep/SKILL.md), and `prepped_at`, in one write guarded by `prepped_at IS NULL`.
-  Past its end by an hour: `missed`.
+  sweep. `GET /api/v2/calls/upcoming` lists the viewer's: eligibility (booker, root owner, member, participant) is in
+  the SQL before the limit, then checked exactly; rows are compact (`id`, `title`, `thread_id`, times, `people` up to
+  8). `GET /api/v2/threads/{id}/calls` adds `next_scheduled`, one indexed read.
+- The first `join` reads the event live (`call_prep.Prep.at_join`): cancelled is `409 call_cancelled` and the call
+  ends `calendar_cancelled`; moved moves the times; unreadable lets the join go on. Then it turns `live` (started_at =
+  now, the meeting `live`, `ring` the thread's other people), starts the recorder and rings, once. A second live call
+  in the thread is `409 call_in_progress`.
+- Calendar changes Tico hears (`calendar_events.emit` for a non-create on a linked event: the Google watcher, a Tico
+  calendar write) run `Prep.follow` after the commit, on its own thread (the commit hook still holds the writer).
+- The heartbeat's `call_prep` step (backend/call_prep.py, every minute) is the fallback: calls due within 30 minutes
+  and not prepped, or an hour past their end, unprepped first, 50 at most and 20 s at most a pass (`deferred` counts
+  the rest). Each re-reads the event (`calendar_api.read_call_event`): moved moves the times (a start more than 30
+  minutes out clears `prepped_at`), cancelled or gone ends the call `calendar_cancelled`, all-day is ignored,
+  unreadable waits, three passes at most. Then one task per bot, "Prepare for <title>"
+  (skills/meeting-prep/SKILL.md), owned by exactly that bot (a reroute is rolled back), private unless the thread is
+  a company thread, none when the booker can no longer read the thread; and `prepped_at`, in one write guarded by
+  `prepped_at IS NULL`. Past its end by an hour, from an end the calendar confirmed: `missed`.
 - Change kinds: `call.scheduled`, `call.moved`, `call.prepped`.
 
 ## Google availability

@@ -122,7 +122,7 @@ async function pageNotes(): Promise<void> {
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const callNow = document.getElementById('meet-call-now');
-  if (callNow) callNow.onclick = () => meetCallNow();
+  if (callNow) callNow.onclick = () => meetCallDialog();
   const dialog: HTMLDialogElement = $('#notes-modal');
   const closeNote = () => meetShow(state, false);
   $('#notes-modal-close').onclick = closeNote;
@@ -164,44 +164,77 @@ async function pageNotes(): Promise<void> {
   state.sourcesPoll = setInterval(() => { if (!document.hidden) { meetSources(state); void meetUpcoming(state); } }, 60000);
 }
 
-// Upcoming: the scheduled calls the viewer is in, soonest first (GET /v2/calls/upcoming), each with when, who and Join.
-// Join (thread-call.ts, data-call-join) opens the meeting window, and the first join starts the call.
+// Upcoming: the scheduled calls the viewer is in, soonest first (GET /v2/calls/upcoming), each with when, who, Join and
+// its ⋯ (thread-call.ts callScheduledMenu). Join (thread-call.ts, data-call-join) opens the meeting window, and the first
+// join starts the call. A phone says only the time for a call today.
 async function meetUpcoming(state: MeetState): Promise<void> {
   const box = document.getElementById('meet-upcoming');
   if (!box || !callTicoMeet()) return;
   let calls: CallRecord[] = [];
   try { calls = (await get<CallListReply>('/v2/calls/upcoming', {fresh: true})).calls || []; } catch { return; }
   if (MEET !== state) return;
-  for (const v of calls) CALL_VIEWS.set(v.id, v);
+  for (const v of calls) CALL_VIEWS.set(v.id, {...CALL_VIEWS.get(v.id), ...v, state: 'scheduled'});
   box.hidden = !calls.length;
+  const phone = callPhone();
   patchHTML(box, calls.length ? `<h3 class="meet-upcoming-h">Upcoming</h3>${calls.map(v => {
-    const people = (v.people || []).concat((v.bots || []).map(b => 'bot:' + (typeof b === 'string' ? b : b.slug || '')));
+    const when = callWhen(v.scheduled_start);
     return `<div class="meet-upcoming-row" data-upcoming="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
-      <span class="meet-upcoming-when muted tnum">${esc(callWhen(v.scheduled_start))}</span>
-      <span class="meet-upcoming-ppl">${people.slice(0, 5).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 20)}</span>`).join('')}</span>
-      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button></div>`;
+      <span class="meet-upcoming-when muted tnum">${esc(phone ? when.replace(/^Today /, '') : when)}</span>
+      <span class="meet-upcoming-ppl">${(v.people || []).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 18)}</span>`).join('')}</span>
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button>${callMoreHTML(`data-upcoming-more="${esc(v.id)}"`)}</div>`;
   }).join('')}` : '');
+  box.onclick = ev => {
+    const more = eventElement(ev)?.closest<HTMLElement>('[data-upcoming-more]'), v = CALL_VIEWS.get(more?.dataset['upcomingMore'] || '');
+    if (more && v) callScheduledMenu(more, v, () => meetUpcoming(state));
+  };
 }
 
-// Call now: the people and bots to call, picked in the who picker (its list in the dialog's flow, open for the next
-// pick; who is chosen leaves it; their chips between the field and the list, so they stay put), and an optional title; Start makes the call (thread-call.ts callTeammates), which
-// opens its meeting window, and a refusal shows here. A tap on a chosen one's chip takes them out again.
-function meetCallNow(): void {
+// The Call dialog. A new call: the people and bots to call, picked in the who picker (its list in the dialog's flow,
+// open for the next pick; who is chosen leaves it; their chips between the field and the list, so they stay put; a tap
+// on a chip takes them out again), an optional title, and when: Now, or a time picked. Start calls now
+// (thread-call.ts callTeammates, which opens its meeting window); Schedule books it for the time picked (callSchedule:
+// the call and its calendar invite; nothing opens). The one the time points at is the filled button, and Enter's.
+// `change`: a scheduled call's Change time, the dialog filled in with it: only its time and length change (who it is
+// with is its thread's), and Save sends them (PATCH /v2/calls/{id}: its calendar event first). A refusal shows in the
+// dialog either way. Closing it gives focus back to `back` (the Call now button by default).
+function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?: () => HTMLElement | null} = {}): void {
+  const change = opts.change, back = opts.back || (() => document.getElementById('meet-call-now'));
   const chosen: string[] = [];
-  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
-    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">
-    <div class="meet-call-when"><input type="datetime-local" name="starts" aria-label="Starts" value="${meetNextHalfHour()}" required>
-      <select name="minutes" aria-label="Length">${[15, 30, 45, 60, 90].map(n => `<option value="${n}"${n === 30 ? ' selected' : ''}>${n} min</option>`).join('')}</select></div>`,
-    `<button type="button" class="ghost meet-call-schedule" disabled>Schedule</button><button type="submit" class="primary meet-call-start" disabled>${CALL_SVG}Start</button>`);
+  const begins = change?.scheduled_start ? new Date(change.scheduled_start) : null;
+  const length = begins && change?.scheduled_end ? Math.round((Date.parse(change.scheduled_end) - begins.getTime()) / 60000) : 30;
+  const lengths = [...new Set([15, 30, 45, 60, 90, length])].filter(n => n > 0).sort((a, b) => a - b);
+  let at: Date | null = begins && !Number.isNaN(begins.getTime()) ? begins : null;
+  const dialog = whDialog('Call', `${change ? '' : whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
+    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title"${change ? ` value="${esc(change.title || 'Call')}" disabled` : ''}>
+    <div class="meet-call-when"><span class="meet-call-at-box"><button type="button" class="meet-call-at" data-call-at><span class="nav-icon" aria-hidden="true">schedule</span><span data-call-at-label></span></button>
+      <input type="datetime-local" name="starts" class="meet-call-at-input" tabindex="-1" aria-label="Starts" value="${meetLocalValue(at || meetNextHalfHour())}"></span>
+      ${change ? '' : '<button type="button" class="meet-call-now-again" data-call-at-now aria-label="Now" title="Now" hidden><span class="nav-icon" aria-hidden="true">close</span></button>'}
+      <select name="minutes" aria-label="Length">${lengths.map(n => `<option value="${n}"${n === length ? ' selected' : ''}>${n} min</option>`).join('')}</select></div>`,
+    change ? '<button type="submit" class="primary meet-call-save">Save</button>'
+      : `<button type="button" class="meet-call-schedule" disabled>Schedule</button><button type="button" class="meet-call-start" disabled>${CALL_SVG}Start</button>`);
   dialog.classList.add('meet-call-dialog');
-  const who = dialog.querySelector<HTMLElement>('[data-call-who]'), start = dialog.querySelector<HTMLButtonElement>('[type=submit]');
-  const schedule = dialog.querySelector<HTMLButtonElement>('.meet-call-schedule');
+  // whDialog names its dismiss Close when nothing is a submit button; Start and Schedule are both plain buttons here.
+  const dismiss = dialog.querySelector<HTMLElement>('[data-close]');
+  if (dismiss) dismiss.textContent = 'Cancel';
+  dialog.addEventListener('close', () => back()?.focus());
+  const $d = <T extends HTMLElement>(sel: string) => dialog.querySelector<T>(sel);
+  const form = $d<HTMLFormElement>('form')!, error = $d<HTMLElement>('[data-wh-error]')!, who = $d<HTMLElement>('[data-call-who]');
+  const start = $d<HTMLButtonElement>('.meet-call-start'), schedule = $d<HTMLButtonElement>('.meet-call-schedule');
+  const input = $d<HTMLInputElement>('.meet-call-at-input')!, minutes = $d<HTMLSelectElement>('select[name="minutes"]')!;
+  input.min = meetLocalValue(new Date());
   const teammates = () => threadAddable({groups: false});
   const name = (a: string) => teammates().find(t => t.actor === a)?.label || actorName(a);
   const paint = () => {
     if (who) who.innerHTML = chosen.map(a => `<span class="nm-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(name(a))}</span><button type="button" data-remove aria-label="Remove ${esc(name(a))}">×</button></span>`).join('');
-    if (start) start.disabled = !chosen.length;
-    if (schedule) schedule.disabled = !chosen.length;
+    $d<HTMLElement>('[data-call-at-label]')!.textContent = at ? callWhen(at.toISOString()) : 'Now';
+    const again = $d<HTMLElement>('[data-call-at-now]');
+    if (again) again.hidden = !at;
+    minutes.hidden = !at;
+    // The time decides which button is the filled one.
+    for (const [button, on] of [[start, !at], [schedule, !!at]] as const) {
+      if (!button) continue;
+      button.disabled = !chosen.length; button.classList.toggle('primary', on); button.classList.toggle('ghost', !on);
+    }
   };
   // A team (the org chart's, as the meeting window's Add has them): its bots the viewer may call, in one pick.
   const team = (g: OrgGroup): string[] => {
@@ -211,7 +244,14 @@ function meetCallNow(): void {
   const teams = (): WhoCandidate[] => (S.orgGroups || []).map(g => ({g, members: team(g)})).filter(t => t.members.length).map(({g, members}) => ({
     subject: 'group:' + g.id, kind: 'group', name: g.name || g.id, face: '<span class="meet-team-ic" aria-hidden="true"><span class="nav-icon">groups</span></span>',
     trail: `<span class="meet-team-n" aria-label="${members.length}"><span class="meet-stack" aria-hidden="true">${members.slice(0, 3).map(a => actorAvatar(a, 18)).join('')}</span><span class="tnum">${members.length}</span><span class="meet-team-add" aria-hidden="true"><span class="nav-icon">add</span></span></span>`}));
-  const picker = whoPickerWire(dialog, {
+  input.addEventListener('change', () => {
+    const d = new Date(input.value);
+    at = Number.isNaN(d.getTime()) ? at : d; paint();
+  });
+  $d<HTMLButtonElement>('[data-call-at]')!.onclick = () => { try { input.showPicker(); } catch { input.focus(); } };
+  const again = $d<HTMLButtonElement>('[data-call-at-now]');
+  if (again) again.onclick = () => { at = null; paint(); $d<HTMLButtonElement>('[data-call-at]')?.focus(); };
+  const picker = change ? null : whoPickerWire(dialog, {
     candidates: () => [...teams(), ...teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
       email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)}))],
     onPick: c => {
@@ -223,24 +263,41 @@ function meetCallNow(): void {
     if (!actor) return;
     chosen.splice(chosen.indexOf(actor), 1); paint(); picker?.refresh(); picker?.input.focus();
   };
-  whSubmit(dialog, async data => { if (await callTeammates([...chosen], String(data.get('title') || '').trim())) dialog.close(); });
-  // Schedule books it for the time picked: the call and its calendar invite, and the dialog closes; nothing opens.
-  if (schedule) schedule.onclick = async () => {
-    const form = dialog.querySelector('form')!, error = dialog.querySelector('[data-wh-error]')!, data = new FormData(form);
-    const at = new Date(String(data.get('starts') || ''));
-    if (Number.isNaN(at.getTime())) { error.textContent = 'Pick a time'; return; }
-    schedule.disabled = true; error.textContent = '';
-    try {
-      if (await callSchedule([...chosen], String(data.get('title') || '').trim(), at, Number(data.get('minutes')) || 30)) {
-        dialog.close(); toast('Scheduled');
-        if (MEET) void meetUpcoming(MEET);
-      }
-    } catch (e) { error.textContent = errorMessage(e, 'Try again'); } finally { schedule.disabled = !chosen.length; }
+  paint();
+  // One action at a time, its button held, and its refusal shown here.
+  const act = async (button: HTMLButtonElement | null, fn: () => Promise<boolean>) => {
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    error.textContent = '';
+    try { if (await fn()) dialog.close(); } catch (e) { error.textContent = errorMessage(e, 'Try again'); } finally { paint(); }
   };
+  const ends = (from: Date) => new Date(from.getTime() + (Number(minutes.value) || 30) * 60000);
+  const title = () => String(new FormData(form).get('title') || '').trim();
+  const book = () => act(schedule, async () => {
+    if (!at) { $d<HTMLButtonElement>('[data-call-at]')?.click(); return false; }
+    if (!await callSchedule([...chosen], title(), at, (ends(at).getTime() - at.getTime()) / 60000)) return false;
+    toast('Scheduled');
+    if (MEET) void meetUpcoming(MEET);
+    return true;
+  });
+  const call = () => act(start, () => callTeammates([...chosen], title()));
+  const save = () => act($d<HTMLButtonElement>('.meet-call-save'), async () => {
+    if (!change || !at) return false;
+    const r: CallRecord | null = await patch(`/v2/calls/${encodeURIComponent(change.id)}`, {starts_at: at.toISOString(), ends_at: ends(at).toISOString()});
+    const v = r?.call || r;
+    if (v?.id) callViewKeep(v);
+    toast('Changed');
+    await opts.done?.();
+    return true;
+  });
+  if (schedule) schedule.onclick = () => void book();
+  if (start) start.onclick = () => void call();
+  form.onsubmit = ev => { ev.preventDefault(); void (change ? save() : at ? book() : call()); };
 }
-// The next half hour, as a datetime-local field's value in the viewer's own time.
-function meetNextHalfHour(): string {
-  const d = new Date(Math.ceil(Date.now() / 1800000) * 1800000);
+// The next half hour.
+function meetNextHalfHour(): Date { return new Date(Math.ceil(Date.now() / 1800000) * 1800000); }
+// A time as a datetime-local field's value, in the viewer's own time.
+function meetLocalValue(d: Date): string {
   const two = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`;
 }

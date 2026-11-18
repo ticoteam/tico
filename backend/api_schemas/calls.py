@@ -139,18 +139,31 @@ SCHEMAS.update(
                 "next_before": "n",
                 "available": "b",
                 "providers": items({"enum": ["google_meet", "tico"]}),
+                "next_scheduled": {
+                    "anyOf": [ref("CallSummary"), {"type": "null"}],
+                    "description": "The thread's soonest scheduled call, whatever the page; null when none",
+                },
             }
         ),
         "CallRinging": obj({"calls": items(ref("Call"))}),
         "CallUpcoming": obj(
             {
                 "calls": items(
-                    {
-                        "allOf": [
-                            ref("Call"),
-                            obj({"people": items({"type": "string", "description": "The people the call is for"})}),
-                        ]
-                    }
+                    obj(
+                        {
+                            "id": "s",
+                            "title": "s",
+                            "thread_id": "s",
+                            "scheduled_start": "s",
+                            "scheduled_end": "s",
+                            "people": items(
+                                {
+                                    "type": "string",
+                                    "description": "Up to 8 of the people the call is for, its booker first",
+                                }
+                            ),
+                        }
+                    )
                 )
             }
         ),

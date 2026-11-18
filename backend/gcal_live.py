@@ -705,6 +705,19 @@ def get_raw(c: Conn, as_mailbox: str, calendar_id: str, event_id: str) -> Json:
     )
 
 
+def own_event(c: Conn, as_mailbox: str, calendar_id: str, event_id: str) -> Json | None:
+    """An event Tico wrote, read back by its id as a write answers it (`google_sequence` included) plus `tico_call`,
+    the scheduled call its private properties name; None when Google has it cancelled. For a write whose answer was
+    lost, or that Google says already exists."""
+    raw = get_raw(c, as_mailbox, calendar_id, event_id)
+    if raw.get("status") == "cancelled":
+        return None
+    row = _written(raw, as_mailbox, calendar_id)
+    private = _dict(_dict(raw.get("extendedProperties")).get("private"))
+    row["tico_call"] = str(private.get("tico_call") or "")
+    return row
+
+
 def meeting_url(raw: Json) -> str:
     """The join link in a Google event, or ''."""
     return _meeting_url(raw) or ""

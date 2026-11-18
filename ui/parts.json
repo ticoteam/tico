@@ -739,7 +739,9 @@
    "pageLiveMeetings",
    "pageNotes"
   ],
-  "calls": [],
+  "calls": [
+   "meetCallDialog"
+  ],
   "idle": [
    "liveMeetingsStop",
    "meetStop"
