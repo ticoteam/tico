@@ -12,10 +12,10 @@ Every call goes to Tico as this run's bot (HUB_API_URL and HUB_TOKEN), and Tico'
 Slack token, reads and posts for it (backend/slack_bots.py). With the gateway off, Tico says what to start.
 
 Tico checks every call, not this script: the bot's `tools:` entry for slack (`read` to read, `post` to post or DM, an
-optional `channels:` list and `dms: false`), onboarding, the Slack channel list (Settings > Tools > Slack: readers and
-posting), Slack Connect channels (refused), 3,800 characters at most, a DM only to a person at the company who may sign
-in, the org's rules on what is sent, and screening on what is read. A post or DM shows in Tico too: a post in the bot's
-room, a DM in its chat with the person.
+optional `channels:` list or `channels: all` for any channel the gateway can see, and `dms: false`), onboarding, the
+Slack channel list (Settings > Tools > Slack: readers and posting), Slack Connect channels (refused), 3,800 characters
+at most, a DM only to a person at the company who may sign in, the org's rules on what is sent, and screening on what is
+read. A post or DM shows in Tico too: a post in the bot's room, a DM in its chat with the person.
 
 Files people share show as `[file F...] name` lines in `history` and in a message routed from Slack. `file --id`
 saves one into this user's own slack-files-<uid> folder under the temp folder (made 0700), named <id>-<name>, never

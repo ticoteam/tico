@@ -101,6 +101,7 @@ class FakeAPI:
                 "url_private": "https://files.slack.com/huge",
             },
             "F0GONE0001": {"id": "F0GONE0001", "channels": [GENERAL], "url_private": "https://files.slack.com/gone"},
+            "F0UNSEEN01": {"id": "F0UNSEEN01", "channels": ["C0NOTSEEN1"], "url_private": "https://files.slack.com/u"},
         }
         self.calls = []
 
@@ -116,8 +117,8 @@ class FakeAPI:
 
     def conversations_info(self, channel):
         self.calls.append(("conversations.info", channel))
-        if channel not in self.channels:
-            raise RuntimeError("channel_not_found")
+        if channel not in self.channels:  # what Slack says for a channel the app cannot see
+            raise SG.SlackError("conversations.info", "channel_not_found")
         return self.channels[channel]
 
     def history_range(self, channel, oldest, latest, cursor=""):
@@ -390,6 +391,41 @@ def test_a_file_is_downloaded_by_the_gateway_where_the_bot_may_read_it(slack):
     assert call(slack, "GET", "slack/files/F0DMFILE01", 403).json()["code"] == "slack_scope"
 
 
+def test_channels_all_reads_any_channel_the_gateway_can_see(slack):
+    """`channels: all` (or "*", or a list holding all): history and files of a channel the list does not name are read,
+    by id and by name. Slack Connect stays refused, and so is a file shared only where Slack cannot see its channel."""
+    for value in ("all", "*", ["all"]):
+        entry(slack, scope={"channels": value, "dms": "yes"})
+        got = call(slack, "GET", "slack/history", params={"channel": "#quiet", "oldest": 0}).json()
+        assert (got["id"], got["name"]) == (QUIET_ID, "quiet"), value
+        assert call(slack, "GET", "slack/history", params={"channel": QUIET_ID, "oldest": 0}).json()["ok"], value
+        assert call(slack, "GET", "slack/files/F0QUIET001").content == b"%PDF-1", value
+        refused = call(slack, "GET", "slack/history", 403, params={"channel": "#partners", "oldest": 0}).json()
+        assert refused["code"] == "slack_connect", value
+        assert call(slack, "GET", "slack/files/F0UNSEEN01", 403).json()["code"] == "slack_scope", value
+
+
+def test_without_channels_all_an_unlisted_channel_stays_refused(slack):
+    """The list names #general only: #quiet's history and file are refused. A list holding `#all` is a channel named
+    all, not the word, so it grants no more."""
+    refused = call(slack, "GET", "slack/history", 403, params={"channel": "#quiet", "oldest": 0}).json()
+    assert refused["code"] == "slack_scope"
+    assert call(slack, "GET", "slack/files/F0QUIET001", 403).json()["code"] == "slack_scope"
+    entry(slack, scope={"channels": ["#all"], "dms": "yes"})
+    refused = call(slack, "GET", "slack/history", 403, params={"channel": "#quiet", "oldest": 0}).json()
+    assert refused["code"] == "slack_scope"
+    assert call(slack, "GET", "slack/files/F0QUIET001", 403).json()["code"] == "slack_scope"
+
+
+def test_channels_all_is_the_word_all_or_star_and_a_channel_named_all_is_hash_all():
+    def scope(value):
+        return {"scope": {"channels": value}}
+
+    assert all(SB.reads_all_channels(scope(v)) for v in ("all", "*", ["all"], " * "))
+    assert not any(SB.reads_all_channels(scope(v)) for v in ("#all", ["#all", "#general"], "general"))
+    assert SB.scope_items(scope(["#all", "all", "#General"]), "channels") == ["all", "general"]
+
+
 # ----------------------------------------------------------------------------- posting
 def test_a_post_goes_into_the_outbox_and_the_bots_room(slack):
     made = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Release is out"}).json()
@@ -430,6 +466,15 @@ def test_post_gates_list_posting_off_unknown_id_length_and_post_verb(slack):
     refused({"channel": "#general", "text": "hi", "thread_ts": "soon"}, 422)
     entry(slack, can=["read"])
     assert refused({"channel": "#general", "text": "hi"}, 403)["code"] == "slack_access"
+
+
+def test_channels_all_never_widens_a_post(slack):
+    entry(slack, scope={"channels": "all", "dms": "yes"})
+    unlisted = call(slack, "POST", "slack/posts", 403, json={"channel": "#random", "text": "hi"}).json()
+    assert unlisted["code"] == "slack_channel" and "not on the Slack channel list" in unlisted["detail"]
+    off = call(slack, "POST", "slack/posts", 403, json={"channel": "#quiet", "text": "hi"}).json()
+    assert "off" in off["detail"]
+    assert call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "hi"}).json()["state"] == "ready"
 
 
 def test_an_onboarding_bot_sends_nothing(slack, monkeypatch):

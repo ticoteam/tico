@@ -12,10 +12,12 @@ gateway: with it off, every route here answers 503 and says what to start.
                                      their Slack DM (`originate`), unless they keep bot messages in Tico
     GET  /api/v2/slack/files/{id}    a file someone shared, downloaded by the gateway
 
-Every gate is here, not on the computer: the bot's `service: slack` entry (`read`, `post`, its `channels` and `dms`
+Every gate is here, not on the computer: the bot's `service: slack` entry (`read`, `post`, and its `channels` and `dms`
 scope), onboarding, the channel list (Settings > Tools > Slack: readers, posting on, an id), the length limit
-(slack_gateway.POST_CHARS), a recipient on the roster who may sign in, the org rule check on what is posted, and screening on what is read. The
-gateway refuses a channel shared outside the workspace (Slack Connect) for both, since only Slack can say.
+(slack_gateway.POST_CHARS), a recipient on the roster who may sign in, the org rule check on what is posted, and
+screening on what is read. The gateway refuses a channel shared outside the workspace (Slack Connect) for both, since
+only Slack can say. `channels: all` (or `"*"`) lets a bot read any channel the gateway can see; it widens reads only,
+and a post still needs its channel on the list with posting on.
 `connectors/slack.py` is a thin client of these routes.
 
 History and files wait on the gateway for up to a minute or more, so those two routes are async and hold no thread while
@@ -82,6 +84,8 @@ BUSY = "Tico is already waiting on Slack for many bots; try again in a few secon
 TS_RE = r"^\d{6,12}\.\d{1,6}$"
 FILE_RE = re.compile(r"^F[A-Z0-9]{6,}$")
 OFF = {"no", "false", "off", "0"}
+# `channels:` words that mean every channel. A channel named all is written `#all`, which is a channel.
+ALL_CHANNELS = ("all", "*")
 
 
 class SlackPost(BaseModel):
@@ -129,11 +133,24 @@ def need(c: Any, bot: str, entry: dict[str, Any], verb: str) -> None:
         )
 
 
-def scope_items(entry: dict[str, Any], key: str) -> list[str]:
+def scope_values(entry: dict[str, Any], key: str) -> list[str]:
+    """A scope key's values as written (stripped, `#` and case kept): a YAML list, or text split on commas or spaces."""
     scope: Row = entry.get("scope") or {}
     value: Any = scope.get(key)
     items: list[Any] = list(value) if isinstance(value, (list, tuple)) else re.split(r"[,\s]+", str(value or ""))  # pyright: ignore[reportUnknownArgumentType]
-    return [str(v).strip().lstrip("#").lower() for v in items if str(v).strip()]
+    return [str(v).strip() for v in items if str(v).strip()]
+
+
+def scope_items(entry: dict[str, Any], key: str) -> list[str]:
+    """A scope key's items, lowercased with no `#`. `all` and `*` are not items: under `channels` they mean every
+    channel (reads_all_channels)."""
+    return [v.lstrip("#").lower() for v in scope_values(entry, key) if v.lower() not in ALL_CHANNELS]
+
+
+def reads_all_channels(entry: dict[str, Any]) -> bool:
+    """`channels: all` (or `"*"`, or either in a list): the bot may read any channel the gateway can see, Slack Connect
+    aside. It widens reads only: posting still needs the channel on the list with posting on."""
+    return any(v.lower() in ALL_CHANNELS for v in scope_values(entry, "channels"))
 
 
 def dms_on(entry: dict[str, Any]) -> bool:
@@ -144,7 +161,8 @@ def dms_on(entry: dict[str, Any]) -> bool:
 
 def readable(c: Any, settings: Any, bot: str, entry: dict[str, Any]) -> set[str]:
     """The channels a bot may read, by lowercased id and name: those whose list entry names it as a reader, and those
-    its entry declares under `channels:` (with the listed entry's other name)."""
+    its entry declares under `channels:` (with the listed entry's other name). `channels: all` is not a name here:
+    may_read takes it as every channel."""
     declared = set(scope_items(entry, "channels"))
     row: Row = H.bot(c, bot) or {}
     me = {bot.lower(), str(row.get("slug") or "").lower()} - {""}
@@ -156,16 +174,17 @@ def readable(c: Any, settings: Any, bot: str, entry: dict[str, Any]) -> set[str]
     return allowed
 
 
-def may_read(c: Any, settings: Any, bot: str, allowed: set[str], ref: str) -> str:
+def may_read(c: Any, settings: Any, bot: str, allowed: set[str], ref: str, everywhere: bool = False) -> str:
     """The channel the gateway reads: its id when Tico knows it, else a name for the gateway to look up. Refused outside
-    the bot's channels. A ref with an id is authorized on that id alone: the name beside it in `<#C...|name>` is the
+    the bot's channels, unless `everywhere` (`channels: all`): then any channel the gateway can see, which refuses
+    Slack Connect itself. A ref with an id is authorized on that id alone: the name beside it in `<#C...|name>` is the
     caller's word, never Slack's, so it grants nothing."""
     cid, name = SC.parse_ref(ref)
     if cid:
-        target = cid if cid.lower() in allowed else ""
+        target = cid if everywhere or cid.lower() in allowed else ""
     else:
         listed = next((r for r in SC.listing(c, settings) if r["name"] == name and r["id"]), None)
-        target = (str(listed["id"]) if listed else name) if name in allowed else ""
+        target = (str(listed["id"]) if listed else name) if everywhere or name in allowed else ""
     if not target:
         names = ", ".join(sorted("#" + a for a in allowed if not SC.ID_RE.match(a.upper()))) or "none"
         raise Problem(
@@ -390,7 +409,9 @@ def install(
             with store.read() as c:
                 entry = slack_entry(c, settings, bot)
                 need(c, bot, entry, "read")
-                ref = may_read(c, settings, bot, readable(c, settings, bot, entry), channel)
+                ref = may_read(
+                    c, settings, bot, readable(c, settings, bot, entry), channel, everywhere=reads_all_channels(entry)
+                )
                 gateway_up(c)
             return bot, {"channel": ref, "oldest": f"{oldest:.6f}", "latest": f"{end:.6f}", "threads": threads}
 
@@ -454,7 +475,12 @@ def install(
             with store.read() as c:
                 entry = slack_entry(c, settings, bot)
                 need(c, bot, entry, "read")
-                params = {"file": fid, "channels": sorted(readable(c, settings, bot, entry)), "dms": dms_on(entry)}
+                params = {
+                    "file": fid,
+                    "channels": sorted(readable(c, settings, bot, entry)),
+                    "all_channels": reads_all_channels(entry),
+                    "dms": dms_on(entry),
+                }
                 gateway_up(c)
             return bot, params
 
