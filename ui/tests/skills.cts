@@ -144,7 +144,7 @@ async function shot(page: import('playwright').Page, name: string) {
     .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({animations: 'disabled', path: path.join(dir, `skills-${name}.png`), fullPage: true});
 }
-async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready, admin = true, waiting = true, stayPending = false, clock}:
+async function start(browser: import('playwright').Browser, hash: string, {width = 1440, ready, admin = true, waiting = true, stayPending = false, clock = ''}:
   {width?: number; ready?: string; admin?: boolean; waiting?: boolean; stayPending?: boolean; clock?: string} = {}) {
   const api = skillsFake({admin, waiting, stayPending});
   const got = await open(browser, mailboxesFake({admin, me: admin ? 'ana' : 'cara'}), googleFake(), {hash, width, height: width < 500 ? 844 : 900, ready, theme: 'dark', clock,
