@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The pinned shell and workflow linters and the advisory scanner, from their GitHub releases: shellcheck, actionlint and
-# OSV-Scanner (scripts/osv_gate.py). Each download is checked against the SHA-256 below before it runs, and the binary is cached under ${TICO_TOOLS_DIR:-$HOME/.cache/tico/tools},
-# so the versions never drift with whatever Homebrew or apt holds. Bump a version only after its release is two weeks old.
+# OSV-Scanner (scripts/osv_gate.py). Each download is checked against the SHA-256 below before it runs, and the binary
+# is cached under ${TICO_TOOLS_DIR:-$HOME/.cache/tico/tools}, so the versions never drift with whatever Homebrew or apt
+# holds. Bump a version only after its release is two weeks old.
 # When GitHub's release download fails (a run of 504s from Actions runners, Nov 9), the same version comes from a second
 # source: shellcheck from its PyPI wheel (SHA-256 pinned below), actionlint built by `go install` from the Go module proxy
 # (checked against sum.golang.org), and OSV-Scanner built the same way. Bump the wheel pins with the version.
