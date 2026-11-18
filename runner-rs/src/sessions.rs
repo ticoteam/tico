@@ -1788,7 +1788,8 @@ impl Runner {
             let _git = self.lanes.git_lock(path).lock_owned().await;
             crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
         }
-        if !place.task.is_empty() && !place.disposable && crate::product_files::unpushed(&place.bot) {
+        if !place.task.is_empty() && !place.disposable && crate::product_files::unpushed(&place.bot)
+        {
             let _git = self.lanes.git_lock(path).lock_owned().await;
             if self.push_checkout(path, env).await {
                 crate::product_files::pushed(&place.bot);

@@ -8399,7 +8399,10 @@ for line in sys.stdin:
         .await;
         assert_eq!(completions[0]["outcome"], "completed");
         assert_eq!(
-            repo_git(&dir.join("remote.git"), &["show", "main:memory/learnings.md"]),
+            repo_git(
+                &dir.join("remote.git"),
+                &["show", "main:memory/learnings.md"]
+            ),
             "rewritten"
         );
         let (_, _, report) = seen
@@ -8408,7 +8411,10 @@ for line in sys.stdin:
             .expect("the call turn must report its memory update");
         assert_eq!(report["commits"][0]["attempt"], "a-claude-0");
         assert_eq!(report["commits"][0]["shared"], true);
-        assert_eq!(report["commits"][0]["files"], json!(["memory/learnings.md"]));
+        assert_eq!(
+            report["commits"][0]["files"],
+            json!(["memory/learnings.md"])
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
