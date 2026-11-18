@@ -1157,6 +1157,19 @@ def test_a_task_room_reply_held_before_done_keeps_its_text_nowhere(ruled):
     assert "blue" not in api.get(f"/api/v2/turns/{aid}/steps", headers=headers()).text
 
 
+def test_a_warn_rule_leaves_its_bots_live_replies_showing(ruled):
+    """A Warn rule never holds a reply, so the replies of the bots it names still stream as they are written; a Block
+    rule's stay hidden until delivered. An everyone-wide Warn rule (a filing due date) hid every bot's live reply on
+    TIDY and Tico Team (Nov 18)."""
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    with api.app.state.store.read() as c:
+        assert K.in_force(c) and not K.watched(c, "bot:ops") and K.watched_bots(c) == []
+    color_rule(api, text="Never name a color in a chat.")
+    with api.app.state.store.read() as c:
+        assert K.watched(c, "bot:ops") and K.watched_bots(c) == ["ops"]
+
+
 def test_sql_shows_a_watched_live_run_tool_steps_but_not_its_said_text(ruled):
     from backend import hubdb
 
