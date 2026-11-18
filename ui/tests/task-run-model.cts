@@ -41,6 +41,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
     const errors: string[] = [], posted: unknown[] = [];
     let runModel: {model: string; harness: string; runtime: string; reasoning_effort: string; compact_at: number | null} | null = null;
+    let liveVersion = 1;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -66,7 +67,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
         return json({task: 't-audit', run_model: runModel, readiness: null, warning: ''});
       }
       if (p === '/api/v2/tasks/t-audit')
-        return json({task, events: [], can_comment: true, children: [], comments: [], execution: null,
+        return json({task: {...task, version: liveVersion}, events: [], can_comment: true, children: [], comments: [], execution: null,
           run_model: runModel, can_set_run_model: canSet});
       if (p.endsWith('/files')) return json({files: []});
       return json(unrouted(p));
@@ -124,7 +125,17 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     const fits = (await panel.boundingBox())!;
     assert.ok(fits.x >= 0 && fits.x + fits.width <= viewport.width, `the panel fits the ${viewport.width} px width`);
     if (shot) await page.screenshot({path: shot});
+    // A live update (a comment, a run event) while the panel is open never pulls it away or drops the pick: the
+    // redraw waits for the panel to close, then goes on.
+    liveVersion = 2;   // the task changed on the server: the newer copy is what the redraw draws
+    await page.evaluate(t => { const w = window as unknown as {redrawn: boolean}; w.redrawn = false;
+      void Promise.resolve(taskModalShow(t)).then(() => { w.redrawn = true; }); }, {...task, version: 2});
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => !!document.getElementById('sb-choice-pop')?.matches(':popover-open')), true, 'the panel stays open through a redraw');
+    assert.equal(await compact.inputValue(), '400000', 'the pick stays');
+    assert.equal(await page.evaluate(() => (window as unknown as {redrawn: boolean}).redrawn), false, 'the redraw waits');
     await applyPicker(panel);
+    await page.waitForFunction(() => (window as unknown as {redrawn: boolean}).redrawn, null, {timeout: 5000});
     await page.waitForFunction(() => document.querySelector('[data-task-run-model] .sb-pick-text')?.textContent?.trim() === 'GPT Test HIGH 400K');
     assert.deepEqual(posted.at(-1), {model: 'gpt-test', harness: 'cursor', effort: 'high', compact_at: 400000});
 

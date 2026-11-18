@@ -370,7 +370,9 @@ function settingsChoicePopover(anchor: HTMLElement) {
     made.setAttribute('role', 'dialog');
     made.addEventListener('toggle', (ev: ToggleEvent) => {
       const opener = SETTINGS_CHOICE_ANCHOR;
-      if (ev.newState !== 'closed' || !opener) return;
+      if (ev.newState !== 'closed') return;
+      made.dispatchEvent(new Event('menuclosed'));   // a task window's held redraw goes on (task-props.ts taskMenuOpen)
+      if (!opener) return;
       opener.setAttribute('aria-expanded', 'false');
       if (opener.isConnected && (made.contains(document.activeElement) || document.activeElement === document.body)) opener.focus();
     });
