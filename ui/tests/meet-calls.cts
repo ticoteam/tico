@@ -163,9 +163,12 @@ async function themed(page: Page, name: string, phone = false) {
 }
 // A change on the `threads` topic for one call, as the server sends it.
 const callEvent = (sse: {queue: unknown[]}, kind: string, c: Call) => sse.queue.push({kind, call_id: c.id, thread_id: c.thread_id});
-// The stand-in stream says `ready` only with an event: one that changes nothing lets a fresh page connect, as a real
-// server's stream does at once (the ring reads GET /calls/ringing then).
-const connect = async (sse: {queue: unknown[]}, seen: {ringing: number}, page: Page) => {
+// The rail can open a stream before the thread view subscribes. Deliver `ready` on the stream that follows the
+// open thread, so the view's subscription cannot replace the stream while this event is in flight.
+const connect = async (sse: {queue: unknown[]; latest: import('playwright').Request | null}, seen: {ringing: number}, page: Page) => {
+  const followsThread = () => sse.latest && new URL(sse.latest.url()).searchParams.get('thread') === 't-plan';
+  for (let i = 0; i < 100 && !followsThread(); i++) await page.waitForTimeout(50);
+  assert.ok(followsThread(), 'the stream follows the open thread');
   const was = seen.ringing;
   sse.queue.push({kind: 'noop'});
   for (let i = 0; i < 100 && seen.ringing === was; i++) await page.waitForTimeout(50);
