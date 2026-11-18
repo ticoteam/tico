@@ -613,7 +613,10 @@ def readers(auth):
             return []
         H.hydrate_task_tags(c, rows)
         ids = [row["id"] for row in rows]
+        from . import task_engine
         from .roadmaps import stats, EMPTY_STATS
+
+        task_engine.prime_places(c, rows)  # each row's stage and pipeline, read together for the waits below
 
         requester_stats = stats(c, ids)
         for row in rows:

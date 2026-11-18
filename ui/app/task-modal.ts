@@ -677,6 +677,30 @@ interface TaskChatState {
   reach?: ComposeReach; goalOnce?: boolean; openLines?: Set<string>; count?: number;
   /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
   shown?: number; earlier?: boolean;
+  /** When the read of the whole task drawn last began, and when the read of the run's line drawn last began
+   *  (performance.now()): of the two, the line from the later one is on screen (taskExecutionRead). */
+  wholeAt?: number; executionAt?: number;
+  /** When the whole read being drawn began (taskChatRead), for taskCommentsRender. */
+  drawing?: number | undefined;
+  /** A read of the run's line is on its way, and another was asked for meanwhile. */
+  executionReading?: boolean; executionAgain?: boolean;
+  /** The newest change seen (performance.now()): a read of the task begun after it has it. */
+  changedAt?: number;
+  /** A change came while the tab was hidden: it is read when the tab shows again. */
+  hiddenChange?: boolean;
+}
+const TASK_EXECUTION_ONLY = new WeakSet<ModalDetail>();   // a last read's copy with only its run's line read again
+// The open task's own stream (taskLiveStart) reads the whole task again on each change of it, with its files
+// (taskLiveRead, taskModalShow): the page's task events need not read it a second time. Only while that stream is
+// open: one still connecting, or one that failed (refused, not a stream) and so never reconnects, carries nothing, and
+// the page's own events (a document, an ask, a link added) are then the only word of the change.
+function taskChatFollowsItself(state: TaskChatState): boolean {
+  const live = state.dialog.taskLive;
+  return state.dialog.open && live?.shared?.source?.readyState === EventSource.OPEN && String(live.id) === String(state.id);
+}
+// A change of the open task from the page's own stream (refresh.ts): read once, unless the task's stream reads it.
+function taskChatOthersChange(state: TaskChatState): void {
+  if (!taskChatFollowsItself(state)) taskChatLive(state);
 }
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 function taskChatStop() {
@@ -688,8 +712,15 @@ function taskChatStop() {
 // its files (a new file or version, or an answer on one), once per burst.
 function taskChatLive(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.stopped) { if (TASK_CHAT === state && !state.dialog.open) taskChatStop(); return; }
+  if (document.hidden) { state.hiddenChange = true; return; }
+  state.changedAt = performance.now();
   liveSoon('task:' + state.id, () => {
     if (!taskChatCurrent(state) || state.stopped) return;
+    if (document.hidden) { state.hiddenChange = true; return; }
+    // A comment changes the task too: the task's own stream has read it since the newest change, or will once its
+    // read on the way lands.
+    const live = state.dialog.taskLive;
+    if (taskChatFollowsItself(state) && live && (live.again || (live.readStarted ?? -1) >= (state.changedAt ?? Infinity))) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});
     void taskFilesTabLoad(state.dialog, state.id);
@@ -1201,6 +1232,13 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
       if (open && taskChatCurrent(state)) { ev.preventDefault(); void taskModalOpen(open.dataset.taskWaitOpen!, state.dialog); }
     });
   }
+  if (data !== state.data && !TASK_EXECUTION_ONLY.has(data)) {
+    // A whole read begun before the run's line on screen was read keeps that newer line (a redraw of what is on
+    // screen, as "earlier" asks, is no read).
+    const began = state.drawing ?? state.dialog.taskLive?.readStarted ?? performance.now();
+    if (state.data && (state.executionAt ?? -1) > began) data = {...data, execution: state.data.execution ?? null};
+    state.wholeAt = Math.max(state.wholeAt ?? -1, began);
+  }
   state.data = data;
   taskYoursDotSync(state.dialog, data.task);
   taskDocsSync(state.dialog, data.task);
@@ -1282,11 +1320,15 @@ function taskAskSettled(taskId: string | number): void {
 async function taskChatRead(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.sending || state.reading) return;
   state.reading = true;
+  const began = performance.now();
   try {
     const data = await get<ModalDetail>(state.path);
     await taskStagesFor(data);
     if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
-    if (taskChatCurrent(state) && !state.sending) taskCommentsRender(state, data);
+    if (taskChatCurrent(state) && !state.sending) {
+      state.drawing = began;
+      try { taskCommentsRender(state, data); } finally { state.drawing = undefined; }
+    }
   } catch (e) {
     if (!taskChatCurrent(state)) return;
     if ([403, 404].includes(errorStatus(e) ?? 0)) {
@@ -1303,6 +1345,38 @@ async function taskChatRead(state: TaskChatState) {
     else state.host.innerHTML = `<p class="err" role="status">Conversation unavailable: ${esc(errorMessage(e, ''))}</p>`;
   } finally { state.reading = false; }
 }
+// A run's step moves only its line (`execution`, the run the task follows), so only that is read
+// (GET /v2/tasks/{id}/execution answers the task page's own `execution`) and drawn with the rest as last read. One is
+// on its way at a time, and one asked for meanwhile follows it, so the last step is always read. An answer is drawn
+// only when its read began after the whole read on screen. Without a whole read yet, the whole task is read.
+async function taskExecutionRead(state: TaskChatState) {
+  if (!state.data) { void taskChatRead(state); return; }
+  if (state.sending) return;
+  if (state.executionReading) { state.executionAgain = true; return; }
+  state.executionReading = true;
+  const began = performance.now();
+  try {
+    const r = await get<{execution?: ModalExecution | null}>(`${state.path}/execution`, {fresh: true});
+    if (!taskChatCurrent(state) || state.stopped || state.sending || !state.data || began <= (state.wholeAt ?? -1)) return;
+    const data = {...state.data, execution: r.execution ?? null};
+    TASK_EXECUTION_ONLY.add(data);
+    state.executionAt = began;
+    taskCommentsRender(state, data);
+  } catch (e) {
+    if (taskChatCurrent(state) && [403, 404].includes(errorStatus(e) ?? 0)) void taskChatRead(state);   // its own read says why
+  } finally {
+    state.executionReading = false;
+    if (state.executionAgain && taskChatCurrent(state) && !state.stopped) { state.executionAgain = false; void taskExecutionRead(state); }
+  }
+}
+// A change that came while the tab was hidden is read once it shows (taskChatLive); the task's own stream reads it
+// then if it follows the task (shared-edit.ts sharedPlaceStart).
+document.addEventListener('visibilitychange', () => {
+  const state = TASK_CHAT;
+  if (document.hidden || !state?.hiddenChange) return;
+  state.hiddenChange = false;
+  taskChatOthersChange(state);
+});
 async function taskChatLoad(id: string | number, dialog: ModalDialog, data: ModalDetail | null = null) {
   const state: TaskChatState = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, sending: false, reading: false};
@@ -1318,8 +1392,8 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     liveOn('runs', (d: {conversation_id?: string; output?: unknown}) => {
       if (d.conversation_id !== cid) return;
       if (!d.output) { taskChatLive(state); return; }
-      // Output moves the "Working" line on: the thread alone, at most every 1.5 s and not while the tab is hidden.
-      liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskChatRead(state); }, 1500);
+      // Output moves the "Working" line on: that run's line alone, at most every 1.5 s and not while the tab is hidden.
+      liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskExecutionRead(state); }, 1500);
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }

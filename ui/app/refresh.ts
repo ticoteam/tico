@@ -102,7 +102,8 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   // And Company's My tasks (dashboard.ts).
   dashTasksLive(events);
   const open = TASK_CHAT;   // read again: a stop above may have cleared it
-  if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatLive(open);
+  // An open task that follows its own changes reads them there, once (taskChatOthersChange).
+  if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatOthersChange(open);
 }
 /** A bot's live status line: the bot, and its status (absent when the bot has none). */
 interface LiveBotEvent { bot: string; status?: V2BotState; }

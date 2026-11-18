@@ -184,10 +184,17 @@ def _in(conn, sql, values):
 def _usable(conn, task_id, cid):
     """Whether the links can answer for `task_id` in `cid`: not when the index is not ready, the id is not
     id-shaped, or `cid` is the task's own room, where every message is about it."""
-    return (
-        SHAPE.fullmatch(task_id or "")
-        and _get(conn, READY)
-        and not conn.execute("SELECT 1 FROM conversations WHERE id=? AND task_id=?", (cid, task_id)).fetchone()
+    # One task read asks this of the same room more than once (`named`, then `candidates`): the snapshot answers again.
+    from . import read_cache
+
+    if not SHAPE.fullmatch(task_id or ""):
+        return False
+    try:
+        ready = read_cache.one(conn, "SELECT value FROM registry_metadata WHERE key=?", (READY,))
+    except sqlite3.OperationalError:
+        return False
+    return bool(ready and json.loads(ready[0])) and not read_cache.one(
+        conn, "SELECT 1 FROM conversations WHERE id=? AND task_id=?", (cid, task_id)
     )
 
 

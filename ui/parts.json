@@ -416,6 +416,7 @@
    "openPipelineEditor",
    "roadmapSettingsMount",
    "taskChatLive",
+   "taskChatOthersChange",
    "taskChatJump",
    "taskChatRead",
    "taskCommentsRender",
