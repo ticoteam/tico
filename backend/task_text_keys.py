@@ -421,14 +421,15 @@ def masked(text: str, known: "Callable[[str], bool] | None" = None) -> tuple[str
     if not hits:
         return text, []
     mapped = _spans(text)
+    cuts: list[tuple[int, int]]
     if mapped is None:
         flat = secret_drop.normalize(text)
-        cuts = [(h["start"], h["end"]) for h in hits]
+        cuts = [(int(h["start"]), int(h["end"])) for h in hits]
     else:
         flat, origin = text, mapped[1]
-        cuts = [(origin[h["start"]][0], origin[h["end"] - 1][1]) for h in hits if h["end"] > h["start"]]
+        cuts = [(origin[int(h["start"])][0], origin[int(h["end"]) - 1][1]) for h in hits if h["end"] > h["start"]]
     out: list[str] = []
-    at = 0
+    at: int = 0
     for start, end in cuts:
         if start < at:  # two hits in one source character: one mark covers both
             continue
