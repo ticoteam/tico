@@ -62,7 +62,7 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     tid = tool(api)["id"]
     key(api, tid, SECRET_RW)
     level(api, tid, "bot:ops", "read_write")
-    rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731
+    rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731 - a lookup used 3 times
     assert "api:" + tid in rows("ben-test")
     assert "api:" + tid not in rows("cara-test")
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
@@ -145,7 +145,7 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
         assert c.execute("SELECT count(*) FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0] == 0
 
 
-def test_a_webhook_or_signing_secret_of_a_known_service_is_no_tools_key_and_reaches_the_bot_as_itself(api):
+def test_a_webhook_or_signing_secret_of_a_known_service_gets_no_tool(api):
     """A bot checks a delivery's signature with the secret itself: put on GitHub's or Stripe's proxied tool, the run
     would hold a proxy token in its place and every signature would fail."""
     setup(api)

@@ -1752,6 +1752,6 @@ def test_a_github_reply_cut_short_is_retried(monkeypatch):
         return Reply()
 
     monkeypatch.setattr(rt.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(rt.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(rt, "sleep", lambda seconds: None)
     assert rt.GitHub("o/r", "t").get("actions/runs/1/jobs") == {"ok": True}
     assert len(calls) == 2

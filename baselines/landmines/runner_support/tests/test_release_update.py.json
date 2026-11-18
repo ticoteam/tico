@@ -1,6 +1,5 @@
 {
   "runner_support/tests/test_release_update.py": {
-    "no-fixed-sleep-py": 1,
-    "no-global-sleep-patch": 3
+    "no-fixed-sleep-py": 1
   }
 }

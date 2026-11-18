@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_updater_safety.py": {
-    "no-global-sleep-patch": 2
-  }
-}

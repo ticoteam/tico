@@ -126,7 +126,7 @@ def test_quiet_bot_tasks_tells_each_manager_once_for_all_its_tasks_with_no_model
     history = c.execute(
         "SELECT note FROM history_events WHERE subject_id=? AND kind='stage_rule'", (ops[0],)
     ).fetchall()
-    assert [r[0] for r in history] == ["Rule Quiet bot tasks: Chief was told"] or "Quiet bot tasks" in history[0][0]
+    assert [r[0] for r in history] == ["Rule Quiet bot tasks: chief was told"]  # no display name, so the slug
     events = c.execute("SELECT count(*) FROM events WHERE action='stage_rule.told'").fetchone()[0]
     assert events == 7
 
@@ -166,8 +166,7 @@ def test_matches_in_the_same_hour_wait_for_the_managers_next_wake(c, time_machin
 def test_a_comment_starts_the_quiet_timer_again(c, time_machine):
     task_id = _task(c, "eng", "Build", "bot:builder", "Talked about")
     time_machine.shift(timedelta(hours=5))
-    conv = H.conversation(c, H.task(c, task_id)["conversation_id"])
-    H._write_message(c, ANA, "bot:builder", "How is it going?", conv, "say", {"task": task_id}, None, None)
+    H.task_comment(c, ANA, task_id, "How is it going?")
     time_machine.shift(timedelta(hours=2))
     T.sweep(c)
     assert _told(c) == []

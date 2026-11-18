@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_replay_evals.py": {
-    "no-global-sleep-patch": 1
-  }
-}

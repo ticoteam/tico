@@ -502,7 +502,7 @@ def test_the_default_prefix_makes_exactly_the_calls_it_made_before_asset_prefix(
     if os.environ.get("TICO_GOLDEN_WRITE"):
         here = {"setup_digest": setup_digest(SETUP)}
         Path(os.environ["TICO_GOLDEN_WRITE"]).write_text(json.dumps({"_recorded_on": here, **got}, indent=1) + "\n")
-        pytest.skip("written")
+        pytest.skip("record mode: this run wrote the golden file from its own calls, so there is nothing to compare")
     want = {k: v for k, v in json.loads(GOLDEN.read_text()).items() if not k.startswith("_")}
     for step in want:
         assert got[step] == want[step], step

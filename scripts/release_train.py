@@ -304,7 +304,7 @@ class GitHub:
                 with exc:
                     raw = exc.read()
                     if exc.code >= 500 and attempt < 2:
-                        time.sleep(5 * (attempt + 1))
+                        sleep(5 * (attempt + 1))
                         continue
                     try:
                         return exc.code, json.loads(raw or b"{}"), ""
@@ -313,7 +313,7 @@ class GitHub:
             # A reply cut short (IncompleteRead) is as passing as a 502, so it is retried too.
             except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 if attempt < 2:
-                    time.sleep(5 * (attempt + 1))
+                    sleep(5 * (attempt + 1))
                     continue
                 raise Fail("GitHub %s %s: %s" % (method, path.split("?")[0], exc)) from exc
         raise Fail("GitHub %s %s did not answer" % (method, path))

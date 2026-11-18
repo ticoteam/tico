@@ -1,18 +1,13 @@
 """Helpers for the native threads e2e tests (test_threads_e2e_*.py), over the REST shapes in
 docs/dev/threads-contract.md section 10.
 
-The tests skip until the threads API is served (`require_threads_api`), so they can land before the track that builds
-it. The skip says what it waits for; after the build, every skip becomes a real check. A route the contract does not
-name yet is called through one helper here (home_id), so the gap is in one place.
+The tests use the threads API as it is served; `require_threads_api` fails a test whose sidebar route does not answer
+200. A route the contract does not name yet is called through one helper here (home_id), so the gap is in one place.
 """
 
 import uuid
 
-import pytest
-
 from backend.tests.helpers.api import headers
-
-API_NOT_BUILT = "not built yet: threads API (docs/dev/threads-contract.md section 10)"
 
 
 def home_id(api, slug):
@@ -30,11 +25,9 @@ def call(api, method, path, token="ana-test", body=None):
 
 
 def require_threads_api(api):
-    """Skip the test unless the threads sidebar is served; return the owner's sidebar otherwise."""
+    """The owner's sidebar; a route that does not answer 200 fails the test."""
     r = api.get("/api/v2/threads", headers=headers("ana-test"))
-    if r.status_code == 404:
-        pytest.skip(API_NOT_BUILT)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 200, f"GET /api/v2/threads: {r.status_code} {r.text}"
     return r.json()
 
 

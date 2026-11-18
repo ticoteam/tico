@@ -26,6 +26,12 @@ from pathlib import Path
 from . import checkout_links, release_branch
 from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 STATUS_FILE = "update-status.json"
@@ -470,7 +476,7 @@ def restart_runner(pid, wait=60, env=os.environ, run=subprocess.run):
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        time.sleep(0.5)
+        _sleep(0.5)
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -613,7 +619,7 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
                 if not said:
                     write_status(directory, state="updating", target=target, error="", at=clock())
                     said = True
-                time.sleep(1)
+                _sleep(1)
         try:
             result = update(root, version, directory, run=run, clock=clock, repair_links=True, **kw)
         finally:
@@ -866,7 +872,7 @@ def run_update(args):
     while (
         in_flight(args.state_dir) and time.time() < deadline
     ):  # the runner waits for quiet first; this is the second look
-        time.sleep(10)
+        _sleep(10)
     if in_flight(args.state_dir):
         result = defer_update(args.state_dir, args.version, "this computer still has work running", transient=True)
         print(json.dumps(result))

@@ -159,9 +159,8 @@ def test_github_connect_writes_the_manifest_page_and_finish_and_installed_take_t
     made = tool("tico_github_connect", api)
     assert api.calls[-1] == ("GET", "github/app/manifest", None)
     assert made["next"][0].startswith("Open the page in a browser signed in to GitHub as the account the App is for")
-    assert "tico_github_connect" in hubtools.BY_NAME and "org" not in hubtools.BY_NAME["tico_github_connect"].get(
-        "required", ()
-    )
+    schema = hubtools.BY_NAME["tico_github_connect"]["inputSchema"]
+    assert "org" in schema["properties"] and "org" not in schema.get("required", [])
     code, printed = cli(monkeypatch, api, "github", "connect", "--html", str(out))
     assert code == 0 and api.calls[-1] == ("GET", "github/app/manifest", None)
     assert (

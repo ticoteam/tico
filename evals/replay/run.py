@@ -30,6 +30,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import replay
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 # The BotOps runner's HTTP client; loaded by path because that file is also named run.py.
 _spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")
 botops_run = importlib.util.module_from_spec(_spec)
@@ -120,7 +126,7 @@ def run_one(server, token, me, case, quiet=60, timeout=1800, poll=5):
     deadline = time.monotonic() + timeout
     now = outcome(server, token, tid, case["bot"])
     while time.monotonic() < deadline:
-        time.sleep(poll)
+        _sleep(poll)
         now = outcome(server, token, tid, case["bot"])
         if answers and not now["running"] and answer(server, token, me, tid, now, answers[0]["text"]):
             answers.pop(0)

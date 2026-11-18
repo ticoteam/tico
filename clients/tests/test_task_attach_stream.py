@@ -72,7 +72,7 @@ def test_multipart_retry_replays_same_parts_and_key(tmp_path, monkeypatch):
                 raise urllib.error.HTTPError(request.full_url, 503, 'Down', {}, io.BytesIO(b'{}'))
             return Response(b'{"file": "done"}')
 
-    monkeypatch.setattr('clients.tico.time.sleep', lambda _: None)
+    monkeypatch.setattr('clients.tico._sleep', lambda _: None)
     client = Client('https://api.example.com', 'private-token', retries=1)
     client.opener = Opener()
     assert client.post_multipart('tasks/task/files', {'file': path}, {'name': 'draft.txt'}, key='same') == {

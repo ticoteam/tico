@@ -70,11 +70,23 @@ def test_other_routes_answer_while_needs_you_builds_wait_their_turn(api, monkeyp
         release.wait(30)
         return real(*args, **kwargs)
 
+    # Only LANES builds run at once, so count requests as they reach the lane, not builds.
+    real_run = needs_lane.run
+    seen, all_arrived, count = threading.Lock(), threading.Event(), [0]
+
+    async def counted_run(*args, **kwargs):
+        with seen:
+            count[0] += 1
+            if count[0] == 45:
+                all_arrived.set()
+        return await real_run(*args, **kwargs)
+
     monkeypatch.setattr(V, "needs_items", held)
+    monkeypatch.setattr(needs_lane, "run", counted_run)
     readers = ThreadPoolExecutor(45)
     try:
         waiting = [readers.submit(api.get, "/api/v2/needs-you", headers=headers("ben-test")) for _ in range(45)]
-        time.sleep(0.5)  # every Needs you request has arrived and waits on the held builds
+        assert all_arrived.wait(10), f"only {count[0]} of 45 Needs you requests reached the lane"
         with ThreadPoolExecutor(1) as one:
             me = one.submit(api.get, "/api/v2/me", headers=headers("ana-test"))
             answer = me.result(timeout=10)

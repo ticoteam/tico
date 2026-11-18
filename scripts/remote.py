@@ -29,6 +29,12 @@ import urllib.error
 import urllib.request
 import uuid
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
@@ -83,7 +89,7 @@ def gh(*args, capture=True, poll=False, failure=EX_NO_RESULT):
             fail(failure, f'gh {" ".join(args[:2])} failed: {error}')
         seconds = rate_limit_wait()
         print(f'remote: GitHub API rate limit hit; retrying in {seconds} s', file=sys.stderr, flush=True)
-        time.sleep(seconds)
+        _sleep(seconds)
 
 
 def git(*args):
@@ -132,7 +138,7 @@ def setup_for(command):
 
 def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
-    time.sleep(5)  # the dispatched run takes a few seconds to reach the list
+    _sleep(5)  # the dispatched run takes a few seconds to reach the list
     while time.monotonic() < deadline:
         runs = json.loads(
             gh(
@@ -152,7 +158,7 @@ def find_run(run_id, deadline):
         for run in runs:
             if run['displayTitle'] == title:
                 return run
-        time.sleep(10)
+        _sleep(10)
     fail(EX_NO_RESULT, f'dispatched, but "{title}" did not appear; see the Remote run workflow in Actions')
 
 
@@ -171,7 +177,7 @@ def wait(run):
                 EX_NO_RESULT,
                 f'run {run["databaseId"]} was still {view["status"]} after {RUN_LIMIT // 3600} hours; giving up on it',
             )
-        time.sleep(30)
+        _sleep(30)
 
 
 def remote_cap():
@@ -229,7 +235,7 @@ def wait_for_capacity(cap):
                 file=sys.stderr,
                 flush=True,
             )
-            time.sleep(min(retry, left))
+            _sleep(min(retry, left))
             retry = min(retry * 2, 60)
             continue
         failing_since, retry = None, 5
@@ -244,7 +250,7 @@ def wait_for_capacity(cap):
             )
         print(f'waiting: {busy} remote run{"" if busy == 1 else "s"} busy (cap {cap})', file=sys.stderr, flush=True)
         # Jittered, so agents that started together don't all poll and dispatch together.
-        time.sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
+        _sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
 
 
 def permit(run_id, cpus, minutes, environ=os.environ):

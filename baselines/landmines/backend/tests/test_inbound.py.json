@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_inbound.py": {
-    "no-global-sleep-patch": 1
-  }
-}
