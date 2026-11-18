@@ -325,6 +325,7 @@
  },
  "task-docs": {
   "files": [
+   "app/prop-menu.ts",
    "app/task-docs.ts"
   ],
   "deps": [],

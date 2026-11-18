@@ -467,17 +467,20 @@ function pvStageShow(state: PvState, stage: string): void {
   state.root?.querySelector('.pv-tab.on')?.scrollIntoView({inline: 'center', block: 'nearest'});
 }
 
-/** A phone swipe steps to the next (1) or the previous (-1) stage. */
+/** A phone swipe across the cards steps to the next (1) or the previous (-1) stage. */
 function pvStageStep(state: PvState, by: number): void {
   const ids = state.rec.stages.map(s => s.id ?? '');
   const to = ids[ids.indexOf(pvPhoneStage(state)) + by];
   if (to) pvStageShow(state, to);
 }
 
+/** Whether a touch that starts on `target` may swipe between stages: one on a phone's board, but not on its tab row,
+    which scrolls sideways under the finger (a drag along it to reach the last tabs is no swipe to the next stage). */
+const pvSwipeFrom = (target: Element | null): boolean => !!target?.closest('.pv-is-phone') && !target.closest('.pv-phone-head');
 let PV_SWIPE: {x: number; y: number} | null = null;
 document.addEventListener('touchstart', (ev: TouchEvent) => {
   const target = ev.target instanceof Element ? ev.target : null, first = ev.touches[0];
-  PV_SWIPE = first && target?.closest('.pv-is-phone') ? {x: first.clientX, y: first.clientY} : null;
+  PV_SWIPE = first && ev.touches.length === 1 && pvSwipeFrom(target) ? {x: first.clientX, y: first.clientY} : null;
 }, {passive: true});
 document.addEventListener('touchend', (ev: TouchEvent) => {
   const start = PV_SWIPE, end = ev.changedTouches[0];

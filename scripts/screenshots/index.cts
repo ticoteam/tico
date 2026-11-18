@@ -109,6 +109,7 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 const TASKS_UI = [
   'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
   'ui/app/stage-menu.ts',  // each stage header's ⋯: Move all to…, Close all, Assign all to…, Snooze all…
+  'ui/app/prop-menu.ts',  // a task's row menus and ⋯, and a folded document tab row's ⋯ (the task window and Flow)
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
