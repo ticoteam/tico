@@ -173,7 +173,7 @@ let browser: import('playwright').Browser | null = null;
     await liveRow.waitFor();
     assert.deepEqual([await liveRow.locator('.meet-upcoming-t').innerText(), await liveRow.locator('.meet-upcoming-when').innerText(),
       await liveRow.locator('.meet-upcoming-ppl > span').count(), await liveRow.locator('[data-call-join="cl"]').isVisible(),
-      await liveRow.locator('.call-sched-more').count()], ['Acme standup', 'Live · 12:34', 2, true, 0]);
+      await liveRow.locator('.call-sched-more').count()], ['Acme standup', '12:34', 2, true, 0]);
     assert.ok(await page.evaluate(() => { const a = document.getElementById('meet-live-calls'), b = document.getElementById('meet-upcoming');
       return !!a && !!b && !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); }), 'Live above Upcoming');
     assert.equal(await wide(page), phone ? 390 : 1280, 'nothing sideways');

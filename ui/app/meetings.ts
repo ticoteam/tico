@@ -167,7 +167,7 @@ async function pageNotes(): Promise<void> {
 }
 
 // Live: the Tico Meet calls going on now in threads the viewer can read (GET /v2/calls/live), each as an Upcoming row
-// with how long it has been going (thread-call.ts callTick moves the clock), who is in it and Join. It is read again on
+// (a gap where Upcoming's ⋯ sits, so Join lines up) with how long it has been going (thread-call.ts callTick moves the clock), who is in it and Join. It is read again on
 // the threads topic's call.* changes (below), never on a timer.
 async function meetLiveCalls(state: MeetState): Promise<void> {
   const box = document.getElementById('meet-live-calls');
@@ -180,9 +180,9 @@ async function meetLiveCalls(state: MeetState): Promise<void> {
   patchHTML(box, calls.length ? `<h3 class="meet-upcoming-h">Live</h3>${calls.map(v => {
     const since = v.started_at || '';
     return `<div class="meet-upcoming-row" data-live-call="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
-      <span class="meet-upcoming-when muted tnum">Live · <span data-call-since="${esc(since)}">${esc(callClock(since))}</span></span>
+      <span class="meet-upcoming-when muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>
       <span class="meet-upcoming-ppl">${callFaces(v).slice(0, 8).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 18)}</span>`).join('')}</span>
-      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button></div>`;
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button><span class="meet-upcoming-gap" aria-hidden="true"></span></div>`;
   }).join('')}` : '');
   if (calls.length) callTick();
 }
