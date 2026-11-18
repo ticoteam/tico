@@ -649,13 +649,15 @@ def decide(
     own=False,
     count=None,
     unseen=frozenset(),
+    wrote=None,
 ):
     """Whether `sender` may reach `receiver` with one write. Pure: the context's roster, configs, settings and lines,
     the write's facts, and `count(scope)` for what was already sent today (scope `("line", line)`, `("task",)` or
     `("chat",)`; none counted when it is None). `kind` is `task` (a task made, handed or asked on) or `chat` (a message
     or a note). Only a bot is ever refused; the owner as receiver is not exempt. A person receiver is only opened by
     `own` (a reply to their message, a conversation they wrote to the bot in, a task they handed it: person_asked):
-    `on_task` and `solicited` do not open a person."""
+    `on_task` and `solicited` do not open a person. `wrote`: the message (id, created_at) a person receiver last wrote
+    to the bot in, for the refusal to point at (wrote_lately)."""
     count = count or (lambda scope: 0)
     if not H.is_bot(sender):
         return Decision(True, "person")
@@ -685,7 +687,7 @@ def decide(
     elif eff["mode"] != "open":
         near = nearby(ctx, sender) if eff["mode"] == "nearby" else {}
         if receiver not in near:
-            return _refused(ctx, "reach_closed", sender, receiver, eff["mode"], unseen=unseen)
+            return _refused(ctx, "reach_closed", sender, receiver, eff["mode"], unseen=unseen, wrote=wrote)
         why = near[receiver]
     field = "tasks_per_day" if kind == "task" else "chats_per_day"
     if count((kind,)) >= eff[field]:
@@ -703,9 +705,13 @@ def _reached(ctx, sender, mode):
     return near
 
 
-def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=frozenset()):
+def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=frozenset(), wrote=None):
     """The refusal a bot reads: what it hit, that nothing was sent, and exactly where the work goes instead. Teammates
-    the bot may not See (`unseen`) are never named, its manager included; the receiver it named itself."""
+    the bot may not See (`unseen`) are never named, its manager included; the receiver it named itself. A person who
+    wrote to the bot lately (`wrote`) is reached on a task filed for them from that message, so the refusal sends the
+    bot there, not to its manager."""
+    if code == "reach_closed" and wrote and str(receiver).startswith("human:"):
+        return _refused_for_their_message(ctx, sender, receiver, wrote)
     boss = _managers(ctx).get(sender)
     via = boss if boss and boss != receiver and boss not in unseen else None
     reached = [
@@ -756,6 +762,21 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
         )
     again = " Do not retry: sending it again is refused the same way."
     return Decision(False, code, head + " Nothing was sent." + step + again, via, tuple(reached))
+
+
+def _refused_for_their_message(ctx, sender, receiver, wrote):
+    """A reach refusal for a person who wrote to the bot in the last SOLICITED_DAYS: a task filed for them, from their
+    message, makes them its requester, and handed() lets the bot's asks on it through while it is open."""
+    message_id, at = wrote
+    s, r = name(ctx, sender), name(ctx, receiver)
+    day = H.parse_ts(at)
+    when = f" on {day:%b} {day.day}" if day else ""
+    text = (
+        f"{r} is outside {s}'s reach here. Nothing was sent. {r} wrote to {s}{when}: file the work for them, from that "
+        f"message (tico task create --owner <you> --for {receiver} --from-message {message_id}), or use the task "
+        "already filed for them, and ask on that task. Do not retry here: sending it again is refused the same way."
+    )
+    return Decision(False, "reach_closed", text)
 
 
 def may_book(c, actor, target, ctx=None):
@@ -931,6 +952,28 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
         ).fetchone()
         is not None
     )
+
+
+def wrote_lately(c, sender, receiver, before=None):
+    """The latest message (id, created_at) the person `receiver` wrote to `sender`, to it or @mentioning it, in the
+    last SOLICITED_DAYS, anywhere; None when there is none."""
+    until = before or H.now()
+    at = H.parse_ts(until)
+    if at is None:  # pragma: no cover - H.now() and the dry-run's timestamps always parse
+        return None
+    since = (at - timedelta(days=SOLICITED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    args = [receiver, since, until, sender]
+    where = "m.sender_id=? AND m.created_at>=? AND m.created_at<? AND (m.recipient_id=?"
+    if H._has_table(c, "message_mentions"):
+        # Only a mention the bot may read: one outside the thread's audience names a message it cannot file from.
+        where += (
+            " OR EXISTS(SELECT 1 FROM message_mentions x WHERE x.message_id=m.id AND x.actor=? AND x.in_audience=1)"
+        )
+        args.append(sender)
+    row = c.execute(
+        f"SELECT m.id, m.created_at FROM messages m WHERE {where}) ORDER BY m.created_at DESC LIMIT 1", args
+    ).fetchone()
+    return (row["id"], row["created_at"]) if row else None
 
 
 def handed(c, sender, receiver, task_id, before=None):
@@ -1121,8 +1164,9 @@ def check(
     from .teammate_access import hidden
 
     unseen = hidden(c, who)
-    if unseen:
-        found = decide(ctx, sender, receiver, kind, count=count, unseen=frozenset(unseen))
+    wrote = wrote_lately(c, sender, receiver) if found.why == "reach_closed" and receiver.startswith("human:") else None
+    if unseen or wrote:
+        found = decide(ctx, sender, receiver, kind, count=count, unseen=frozenset(unseen), wrote=wrote)
     raise Refused(found, receiver)
 
 

@@ -119,7 +119,9 @@ The refusal is a 409 the bot reads once and acts on, never a retry:
 
 - `reach_closed`: the receiver is outside its reach. The detail names who it reaches and ends "Send it to <manager>, who
   can pass it on." (a bot with no manager: the owner, named as such; with no owner either, the teammates it does reach,
-  or that it needs a manager);
+  or that it needs a manager). When the receiver is a person who wrote to the bot (addressed or @mentioning it) in the
+  last 7 days, the detail names no manager instead: it says to file the work for them from that message
+  (`--for human:<id> --from-message <id>`, so they are its requester) and ask on that task, and `via` is `null`;
 - `reach_line`: a line blocks the pair (`per_day` 0) or its count for today is used;
 - `reach_cap`: its chats or tasks a day are used; the count starts again at midnight.
 
