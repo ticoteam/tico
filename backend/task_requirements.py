@@ -341,10 +341,40 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     return Standing(requirement, MET, line="Done")
 
 
-# A second review's request names "PR <url> at <commit>": the PR and the commit it reads.
-REVIEW_NAMES_RE = re.compile(
-    r"PR\s+https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)\s+at\s+([0-9a-f]{7,40})\b"
+# How a review request names the commit it reads: "<PR> at <commit>", where the PR is its GitHub link, owner/repo#N or
+# #N. A commit is 7 to 40 hex characters with at least one digit, so an English word never reads as one.
+_SHA = r"(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}"
+_PR_AT_RE = re.compile(
+    r"(?:https://github\.com/(?P<url>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/|(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#)"
+    rf"(?P<number>\d+)\s+(?:at|@)\s+(?:commit\s+)?(?P<sha>{_SHA})\b",
+    re.IGNORECASE,
 )
+_BARE_SHA_RE = re.compile(rf"\b{_SHA}\b", re.IGNORECASE)
+
+
+def requested_commits(text: str, refs: Iterable[str] = ()) -> dict[str, str]:
+    """{pr_ref: commit} a review request names. `refs` are the PRs linked to the task under review: "#N at <commit>"
+    names the one numbered N, and with exactly one PR linked a lone commit in the text names it. Anything else names
+    nothing: no commit is ever guessed."""
+    from .item_sources import github as F
+
+    refs = list(refs)
+    body = str(text or "")
+    out: dict[str, str] = {}
+    for m in _PR_AT_RE.finditer(body):
+        number, sha = int(m["number"]), m["sha"].lower()
+        repo = m["url"] or m["repo"]
+        if repo:
+            out[F.pr_ref(repo, number)] = sha
+            continue
+        same = [ref for ref in refs if ref.endswith(f"#{number}")]
+        if len(same) == 1:
+            out[same[0]] = sha
+    if not out and len(refs) == 1:
+        lone = {sha.lower() for sha in _BARE_SHA_RE.findall(body)}
+        if len(lone) == 1:
+            out[refs[0]] = lone.pop()
+    return out
 
 
 def _at_head_gate(conn: "sqlite3.Connection", task: Row) -> bool:
@@ -376,15 +406,22 @@ def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
     return [f for f in filed if f["id"] in review]
 
 
-def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, str]]:
-    """(PR ref, commit) pairs the review reads. A commit named in a message about the review ("PR <url> at <commit>",
-    whoever wrote it: the filer's request or the owner's notes) is what it was asked to read, so for that PR it is the
-    only one. A PR no message names falls back to the head saved when the review was filed (check_models.record): the
-    PR may have moved on between the request and the filing, and the saved head must not stand in for a named one."""
+def _named_commits(conn: "sqlite3.Connection", review: Row, refs: Iterable[str]) -> list[tuple[str, str]]:
+    """(PR ref, commit) pairs the review was asked to read: those its request named when it was filed
+    (check_models.record), then those named in a message about the review, whoever wrote it. Nothing else: a review
+    that names no commit reads none, and the PR's head is never taken for it."""
     from .hubdb import MESSAGE_TASK_SQL
-    from .item_sources import github as F
 
     named: list[tuple[str, str]] = []
+    for (data,) in conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
+        "AND data IS NOT NULL ORDER BY created_at, id",
+        (review["id"],),
+    ).fetchall():
+        requested = _json_object(data).get("requested")
+        if isinstance(requested, dict):
+            saved = cast("dict[str, object]", requested)
+            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
     # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
     for (body,) in conn.execute(
         "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
@@ -392,18 +429,7 @@ def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, s
         f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id",
         (review["conversation_id"], review["id"]),
     ).fetchall():
-        for repo, number, sha in REVIEW_NAMES_RE.findall(str(body or "")):
-            named.append((F.pr_ref(repo, int(number)), sha.lower()))
-    said = {ref for ref, _ in named}
-    for (data,) in conn.execute(
-        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
-        "AND data IS NOT NULL ORDER BY created_at, id",
-        (review["id"],),
-    ).fetchall():
-        heads = _json_object(data).get("heads")
-        if isinstance(heads, dict):
-            saved = cast("dict[str, object]", heads)
-            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha and ref not in said)
+        named.extend(requested_commits(str(body or ""), refs).items())
     return named
 
 
@@ -426,8 +452,8 @@ def _names_heads(named: list[tuple[str, str]], heads: dict[str, str | None]) -> 
 def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, filed: list[Row]) -> Standing:
     """The Review stage's gate. Only a second review counts (`_reviews`), and only when it is Done and reads the newest
     commit of every PR linked to the task (no PR linked: Done is enough). A Done review of the newest commit meets it
-    even while an older one is open; the gate waits only on an open review of the newest commit (or of no commit it
-    can read). Any other filed task, a review of an older commit, or an unread PR head leaves it not met."""
+    even while an older one is open; the gate waits only on an open review of the newest commit (or one naming no commit
+    yet, which can still name one). A Done review that names no commit never meets it. Any other filed task, a review of an older commit, or an unread PR head leaves it not met."""
     from .item_sources import github as F
 
     reviews = _reviews(conn, filed)
@@ -436,7 +462,7 @@ def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, file
     heads = F.heads(conn, task["id"])
     if any(head is None for head in heads.values()):
         return Standing(requirement, NOT_MET, task.get("owner_id"), "The newest commit of a linked PR is not read yet")
-    named = {f["id"]: _named_commits(conn, f) for f in reviews}
+    named = {f["id"]: _named_commits(conn, f, heads) for f in reviews}
     at_head = [f for f in reviews if _names_heads(named[f["id"]], heads)]
     if any(f["status"] == "done" for f in at_head):
         return Standing(requirement, MET, line="Done")
@@ -444,6 +470,17 @@ def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, file
     if waiting:
         first = waiting[0]
         return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
+    unbound = [f for f in reviews if f["status"] == "done" and not named[f["id"]]]
+    if unbound and heads:
+        first = unbound[0]
+        title = first.get("title") or "The second review"
+        return Standing(
+            requirement,
+            NOT_MET,
+            task.get("owner_id"),
+            f"{title} names no commit it read: file a second review that says PR <link> at <commit>",
+            first["id"],
+        )
     stale = [f for f in reviews if f["status"] in ("open", "done")]
     if stale:
         first = stale[0]

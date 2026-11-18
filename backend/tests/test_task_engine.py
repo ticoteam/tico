@@ -316,7 +316,7 @@ def test_a_review_gate_counts_only_a_second_review_check_of_the_newest_commit(c,
         row = X.new_task(
             c, ANA, f"Second review: acme/app#7 at {head['sha'][:7]}", assignee=reviewer, parent=parent["id"]
         )
-        check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"])
+        check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"], row["title"])
         return row
 
     builder = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
@@ -342,20 +342,49 @@ def test_a_review_gate_counts_only_a_second_review_check_of_the_newest_commit(c,
     assert gate().state == R.MET
 
 
-def test_a_review_gate_counts_the_commit_the_request_named_not_a_newer_head(c, general, monkeypatch):
-    # The filer picks head A and asks for a review of A; the PR moves on to B before the review is filed, so B is the
-    # head saved at filing. The review read A: finishing it never meets the gate for B.
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "PR https://github.com/acme/app/pull/7 at {a}",
+        "Please review acme/app#7 at {a}, the cart change.",
+        "Review #7 @ commit {short}",
+        "Review the cart change at {short}.",
+    ],
+)
+def test_a_review_gate_counts_the_commit_the_request_named_not_a_newer_head(c, general, monkeypatch, request_text):
+    # The filer picks head A and asks for a review of A, in any of the ways a request names it; the PR moves on to B
+    # before the review is filed. The review read A: finishing it never meets the gate for B, and B is never inferred.
     reviewer = X.bot(c, "reviewer-2")
     parent = _review_stage(c)
-    a, b = "a" * 40, "b" * 40
+    a, b = "a1" * 20, "b2" * 20
     monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": b})
     row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
-    _says(c, row, ANA, a)
-    check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"])
+    check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"], request_text.format(a=a, short=a[:7]))
     X.say_done(c, row)
     E.advance(c, row["id"])
     gate = R.standings(c, E.task(c, parent["id"]))[1]
     assert gate.state == R.NOT_MET and "did not read the newest commit" in gate.line
+
+
+def test_a_review_that_names_no_commit_never_meets_the_gate(c, general, monkeypatch):
+    # A request with no commit binds none. While open the review can still say which commit it reads; once Done with
+    # none named, the gate is not met and says why, whatever the PR's head is.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    head = "c3" * 20
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+    row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    check_models.record(
+        c, reviewer, row["id"], REVIEW_CHECK, parent["id"], "Second review\nPlease review the cart change."
+    )
+    assert (R.standings(c, E.task(c, parent["id"]))[1].state, R.standings(c, E.task(c, parent["id"]))[1].on) == (
+        R.WAITING,
+        row["id"],
+    )
+    X.say_done(c, row)
+    E.advance(c, row["id"])
+    gate = R.standings(c, E.task(c, parent["id"]))[1]
+    assert gate.state == R.NOT_MET and "names no commit" in gate.line
 
 
 def test_a_review_gate_reads_the_commit_from_the_filers_request(c, general, monkeypatch):
