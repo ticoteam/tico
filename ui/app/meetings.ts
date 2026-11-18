@@ -711,12 +711,13 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
   // Only an https link is drawn as one; the server refuses anything else, and this keeps a bad row inert.
   if (/^https:\/\//i.test(rec.media_url || '')) meta.push(`<a href="${esc(rec.media_url)}" target="_blank" rel="noopener noreferrer">Recording</a>`);
   const draft = state.noteDraft?.id === id ? state.noteDraft.value : null;
-  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea></section>`
-    : rec.note ? `<section class="mp-sec"><div class="mp-label">Notes</div><div class="mp-notes mp-notes-ro">${esc(rec.note)}</div></section>` : '';
+  // The source's summary sits under the person's own notes, so the record reads as one note.
+  const summary = rec.notes ? `<div class="mp-from"><div class="mp-label">${rec.source === 'granola' ? 'From Granola' : 'Summary'}</div><div class="md">${safeMd(rec.notes)}</div></div>` : '';
+  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea>${summary}</section>`
+    : rec.note || summary ? `<section class="mp-sec"><div class="mp-label">Notes</div>${rec.note ? `<div class="mp-notes mp-notes-ro">${esc(rec.note)}</div>` : ''}${summary}</section>` : '';
   const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me && f.id
     ? `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" download>${esc(f.name)}</a>`
     : `<span class="pill">${esc(typeof f === 'string' ? f : f.name || 'Attachment')}</span>`).join('')}</div>` : '';
-  const summary = rec.notes ? `<section class="mp-sec"><div class="mp-label">Summary</div><div class="md">${safeMd(rec.notes)}</div></section>` : '';
   const side = !typed || (rec.turns || []).length || rec.voice_text;
   el.innerHTML = `<div class="mp${side ? '' : ' mp-one'}">
     <header class="mp-head">
@@ -729,7 +730,7 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
     <div class="mp-cols">
       <div class="mp-main">
         ${typed || reviewing ? '' : '<section class="mp-sec" id="meet-sections"></section>'}
-        ${notes}${files}${summary}
+        ${notes}${files}
       </div>
       ${side ? '<aside class="mp-side" id="meet-side" aria-label="Transcript"></aside>' : ''}
     </div>
@@ -838,19 +839,21 @@ const meetMarked = (text: unknown, q?: string) => {
   return safe.replace(new RegExp(needle, 'gi'), m => `<mark>${m}</mark>`);
 };
 const meetTurnHTML = (who: string | undefined, at: string | undefined, text: unknown, q?: string) => `<div class="mp-turn"><div class="who">${who ? `<b>${esc(who)}</b>` : ''}${at ? `<span class="time">${esc(at)}</span>` : ''}</div><p class="said">${meetMarked(text, q)}</p></div>`;
+// Plain text has no times, so each line would read 0:00; a transcript with no times shows none.
+const meetTurnTime = (turns: MeetTurn[], t: MeetTurn): string => turns.some(x => x.start_ms) ? mmss(t.start_ms) : '';
 function meetTranscriptHTML(rec: MeetRec, q?: string): string {
   const turns = rec.turns || [];
-  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, mmss(t.start_ms), t.text, q)).join('')
+  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, meetTurnTime(turns, t), t.text, q)).join('')
     : rec.voice_text ? meetTurnHTML('', '', rec.voice_text, q)
     : rec.transcript_readable ? String(rec.transcript_readable).split(/\n+/).filter(l => l.trim()).map(l => `<p class="said">${meetMarked(plainMd(l), q)}</p>`).join('')
     : '<div class="mp-empty">No transcript</div>';
   const others = (rec.transcript_sources || []).filter(t => !t.primary).map(t =>
     `<details class="mp-alt"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)}${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
-      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, mmss(turn.start_ms), turn.text, q)).join('')}</details>`).join('');
+      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, meetTurnTime(t.turns || [], turn), turn.text, q)).join('')}</details>`).join('');
   return main + others;
 }
 const meetTranscriptText = (rec: MeetRec) => (rec.turns || []).length
-  ? rec.turns!.map(t => `${t.speaker ? t.speaker + ' ' : ''}[${mmss(t.start_ms)}] ${t.text}`).join('\n')
+  ? (rec.turns || []).map(t => { const at = meetTurnTime(rec.turns || [], t); return `${t.speaker ? t.speaker + ' ' : ''}${at ? `[${at}] ` : ''}${t.text}`; }).join('\n')
   : rec.voice_text || plainMd(rec.transcript_readable || '');
 const meetChatName = (m: MeetChatMessage) => m.actor ? actorLabel(m.actor) : m.role || '';
 const meetChatHTML = (chat: MeetChatMessage[]) => chat.map(m => meetTurnHTML(meetChatName(m), m.at_ms === null || m.at_ms === undefined ? '' : mmss(m.at_ms), m.text, '')).join('');
