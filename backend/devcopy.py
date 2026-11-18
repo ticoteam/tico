@@ -281,6 +281,7 @@ EMPTY = (
     "call_holds",
     "call_bot_notes",
     "call_voice_options",
+    "call_follow_ups",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links",
     "slack_link_members",

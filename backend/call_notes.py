@@ -22,6 +22,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import call_ring as _call_ring
+from . import call_follow_ups as _follow_ups
 from . import calls as _calls
 from . import live_privacy as _live_privacy
 from . import task_privacy as _privacy
@@ -136,7 +137,14 @@ def notes(c: Any, auth: Any, who: Any, call_id: str) -> Row:
     if not C.readable(c, who.actor, row["thread_id"]):
         raise Problem("not_found", "Call not found", 404)
     done = bool(row["action_items_posted_at"] or row["action_items_given_up_at"] or row["finalized_at"])
-    out: Row = {"pending": row["state"] == "live" or not done, "message_id": None, "summary": [], "items": []}
+    follow_ups = cast(list[Row], _follow_ups.notes(c, auth, who, call_id))
+    out: Row = {
+        "pending": row["state"] == "live" or not done,
+        "message_id": None,
+        "summary": [],
+        "items": [],
+        **({"follow_ups": follow_ups} if follow_ups else {}),
+    }
     found = c.execute(
         "SELECT id FROM messages WHERE conversation_id=? AND created_at>=? AND deleted_at IS NULL "
         "AND body LIKE 'Action items:%' AND json_extract(refs,'$.call.id')=? ORDER BY created_at DESC LIMIT 1",
@@ -161,7 +169,7 @@ def notes(c: Any, auth: Any, who: Any, call_id: str) -> Row:
             items.append({"title": str(item["title"]), "owner": str(item.get("owner") or "")})
     said: list[Any] = shown.get("summary") or []
     summary = [s for s in said if isinstance(s, str) and s]
-    return {"pending": False, "message_id": message["id"], "summary": summary, "items": items}
+    return {**out, "pending": False, "message_id": message["id"], "summary": summary, "items": items}
 
 
 def ring(c: Any, auth: Any, who: Any, call_id: str, actor: str) -> tuple[Row, Row]:

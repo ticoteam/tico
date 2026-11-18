@@ -1062,13 +1062,15 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
+        from . import call_follow_ups
         from .meeting_audience import participant_access_sql
 
         participant = participant_access_sql(c, me)
         # A private task's readers (hubdb.task_reader: by name or through a group) read it as its two parties do.
         audience = (
             f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-            f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}))) "
+            f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}) "
+            f"OR {call_follow_ups.reader_sql(c, who.actor)})) "
             f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))"
         )
         if who.task_actor:
@@ -1084,7 +1086,8 @@ class Auth:
             )
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own_oks})"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}) "
+                f"OR {call_follow_ups.reader_sql(c, who.task_actor)}{own_oks})"
             )
         from . import counsel
 

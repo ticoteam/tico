@@ -181,16 +181,19 @@ SCHEMAS.update(
         "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
         "CallBotNotes": obj({"text": "s"}),
         "CallBotNoteWritten": obj({"ok": "b"}),
+        "CallFollowUp": obj({"task_id": "s"}),
         # The meeting window's notes and ringing (backend/call_notes.py).
         "CallNotes": obj(
             {
                 "pending": {"type": "boolean", "description": "The call still owes its notes"},
                 "message_id": "n",
                 "summary": items({"type": "string"}),
+                "follow_ups": items(obj({"task_id": "s", "title": "s", "status": "s", "text": "n"})),
                 "items": items(
                     obj({"title": "s", "owner": {"type": "string", "description": "Who took it on; '' for nobody"}})
                 ),
-            }
+            },
+            required=["pending", "message_id", "summary", "items"],
         ),
         "CallRing": obj({"actor": "s", "added": {"type": "boolean", "description": "Added to the thread to be rung"}}),
     }

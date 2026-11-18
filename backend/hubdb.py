@@ -2400,7 +2400,11 @@ def task_private_readable(conn, actor, row):
         return True
     if "readers" not in row:
         row = _one(conn, "SELECT readers FROM tasks WHERE id=?", (row["id"],)) or {}
-    return task_reader(conn, actor, row)
+    if task_reader(conn, actor, row):
+        return True
+    from . import call_follow_ups
+
+    return call_follow_ups.thread_reader(conn, actor, row["id"])
 
 
 def stage_read_held(conn, actor, row):

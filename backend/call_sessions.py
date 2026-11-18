@@ -42,7 +42,7 @@ def primer(c: Any, row: Any, bot: str, recorded: str, *, recap: bool = False) ->
 
     profile: dict[str, Any] = H.bot(c, bot) or {}
     identity = " ".join(f"You are {profile.get('name') or bot}. {profile.get('description') or ''}".split())[:500]
-    rules = call_voice.SPOKEN_PROMPT
+    rules = call_voice.SPOKEN_PROMPT.format(call_id=row["id"])
     recent = ""
     if recap:
         chunks = c.execute(

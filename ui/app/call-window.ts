@@ -25,7 +25,8 @@ interface CwFace { actor: string; bot: boolean; on: boolean; speaking: boolean; 
 interface CwChunk { seq: number; revision?: number; speaker?: string; text: string; start_ms?: number }
 interface CwLive { chunks?: CwChunk[]; event_id?: number }
 interface CwItem { title: string; owner: string }
-interface CwNotes { pending?: boolean; summary?: string[]; items?: CwItem[] }
+interface CwFollowUp { title: string; task_id: string; status: string; text: string | null }
+interface CwNotes { pending?: boolean; summary?: string[]; items?: CwItem[]; follow_ups?: CwFollowUp[] }
 interface CwState {
   id: string; el: HTMLElement; tab: string; threadId: string; title: string; join: boolean;
   chat: ThvView | null; source: EventSource | null; meeting: string; after: number; eventId: number;
@@ -869,11 +870,17 @@ async function cwNotesRead(st: CwState): Promise<void> {
     const n = await get<CwNotes>(callPath(st.id) + '/notes', {fresh: true});
     if (CW !== st) return;
     // A call nobody spoke in owes none.
-    st.notes = n?.pending && st.chunks.size ? null : {summary: n?.summary || [], items: n?.items || []};
+    st.notes = n || null;
   } catch { if (CW === st) st.notes = st.notes || null; }
-  if (!st.notes && st.notesTries++ < 30) st.after = window.setTimeout(() => { if (CW === st) void cwNotesRead(st); }, 10000);
+  if ((!st.notes || (st.notes.pending && st.chunks.size)) && !st.after && st.notesTries++ < 30)
+    st.after = window.setTimeout(() => { st.after = 0; if (CW === st) void cwNotesRead(st); }, 10000);
   callWindowDraw();
 }
+liveOn('threads', (d: ThreadsEvent & {call_id?: string}) => {
+  const st = CW;
+  if (st?.ended && d?.kind === 'call.follow_up' && d.call_id === st.id)
+    liveSoon('call-notes:' + st.id, () => { if (CW === st) void cwNotesRead(st); }, 200);
+});
 // The transcript the call posted in its thread ("Call transcript: <title>", a line per piece), for a meeting this
 // viewer cannot read.
 async function cwSpokenRead(st: CwState): Promise<void> {
@@ -897,7 +904,7 @@ function cwAfterDraw(st: CwState): void {
   const box = st.el.querySelector<HTMLElement>('.cw-after'); if (!box) return;
   box.hidden = false;
   const notes = st.notes, items = notes?.items || [];
-  const rows = !notes ? '<p class="cw-empty muted">Notes come a little after the call</p>'
+  const rows = !notes || (notes.pending && st.chunks.size) ? '<p class="cw-empty muted">Notes come a little after the call</p>'
     : !items.length ? '<p class="cw-empty muted">No action items</p>'
     : items.map((item, i) => {
       const made = st.made.get(item.title);
@@ -910,7 +917,8 @@ function cwAfterDraw(st: CwState): void {
   let side = box.querySelector<HTMLElement>('.cw-after-side');
   if (!side) {
     box.innerHTML = `<div class="cw-after-main"><div class="cw-summary" hidden><div class="cw-label">Summary</div><ul class="cw-bullets"></ul></div>
-      <div class="cw-label">Action items</div><div class="cw-items"></div></div><aside class="cw-after-side" aria-label="Transcript"></aside>`;
+      <div class="cw-label">Action items</div><div class="cw-items"></div><div class="cw-follow-ups" hidden>
+      <div class="cw-label">Follow-ups</div><ul class="cw-bullets"></ul></div></div><aside class="cw-after-side" aria-label="Transcript"></aside>`;
     side = box.querySelector<HTMLElement>('.cw-after-side');
   }
   const summary = box.querySelector<HTMLElement>('.cw-summary'), bullets = notes?.summary || [];
@@ -921,6 +929,15 @@ function cwAfterDraw(st: CwState): void {
   }
   const list = box.querySelector<HTMLElement>('.cw-items');
   if (list) patchHTML(list, rows);
+  const follow = box.querySelector<HTMLElement>('.cw-follow-ups'), followUps = notes?.follow_ups || [];
+  if (follow) {
+    follow.hidden = !followUps.length;
+    const ul = follow.querySelector('.cw-bullets');
+    if (ul) patchHTML(ul, followUps.map(f =>
+      `<li><a href="#/task/${esc(encodeURIComponent(f.task_id))}">${esc(f.title)}</a>${f.text
+        ? `<div>${esc(f.text)}</div>` : ` <span class="muted">${f.status === 'open' ? 'In progress' : 'Finished'}</span>`}</li>`
+    ).join(''));
+  }
   if (side && !side.querySelector('.cw-side-head')) {
     side.innerHTML = `<div class="cw-side-head"><b>Transcript</b><span class="spacer"></span><button type="button" class="cw-icon" data-cw="tsearch" aria-label="Search transcript" title="Search">${cwIcon(CW_ICONS.search)}</button><button type="button" class="cw-icon" data-cw="tcopy" aria-label="Copy transcript" title="Copy">${cwIcon(CW_ICONS.copy)}</button></div>
       <label class="cw-find" hidden>${cwIcon(CW_ICONS.search)}<input type="search" data-cw-tq aria-label="Find in transcript" placeholder="Find"></label><div class="cw-after-turns"></div>`;

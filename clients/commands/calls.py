@@ -549,6 +549,23 @@ def call_retry(api, args):
 
 
 @tool(
+    "tico_call_follow_up",
+    "Hand a live call's question to the attached bot's normal task. The task returns its answer to the thread "
+    "and may speak it at a pause. An attached bot files for itself; a person in the call can choose an attached bot.",
+    {
+        "call_id": _s("The call's id"),
+        "ask": _s("What to find out or do", maxLength=4000),
+        "bot": _s("An attached bot's slug, if a person needs to choose one"),
+    },
+    required=("call_id", "ask"),
+    writes=True,
+)
+def call_follow_up(api, args):
+    body = {"ask": args["ask"], **({"bot": args["bot"]} if args.get("bot") else {})}
+    return api.post(f"calls/{quote(args['call_id'], safe='')}/follow-ups", body, key=_key(args))
+
+
+@tool(
     "tico_call_bot_add",
     "Let bots listen to a call you have joined and reply in its thread. You must be able to write to "
     "each bot; up to 10 at once.",
@@ -625,6 +642,12 @@ CALL = (
         "call retry",
         "ask again for action items the Gateway could not make",
         example="tico call retry c1",
+    ),
+    Command(
+        "call follow-up",
+        "hand a question from a live call to a normal bot task",
+        args=(Arg("call_id", flag="--call"),),
+        example="tico call follow-up --call c1 'Check the rollout date'",
     ),
     Group("call bot", "bots that listen to a call and reply in its thread"),
     Command(
