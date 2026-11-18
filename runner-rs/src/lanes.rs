@@ -519,8 +519,8 @@ mod tests {
         }
         // A server that takes fewer than the runner offers: the newest go first, until the rest fit.
         release_all();
-        let (_, current, _) = &servers()[0];
-        let (kept, tries) = negotiate(current, sendable().len() - 2, true);
+        let current = takes(&contract().join("requests.json")).0;
+        let (kept, tries) = negotiate(&current, sendable().len() - 2, true);
         let expected: Vec<String> = sendable()
             .into_iter()
             .filter(|c| !NEWEST_FIRST[..2].contains(c))
