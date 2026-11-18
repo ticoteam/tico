@@ -567,6 +567,9 @@ let browser: import('playwright').Browser | null = null;
       // A phone's meeting is this tab: it goes to the call's page, joined.
       await start.click();
       await page.waitForURL(u => u.hash === '#/call/ct?join=1');
+      // The meeting window takes the join flag off the address once its part has loaded (ui/app/call-window.ts). Going to
+      // Meetings before that write can lose the move, and the reload below then opens the call again.
+      await page.waitForURL(u => u.hash === '#/call/ct');
     } else {
       const opened = context.waitForEvent('page');
       await start.click();
