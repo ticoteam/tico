@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from backend import call_media, call_voice, calls, live_meetings, threads
+from backend import call_media, call_voice, calls, events, live_meetings, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
@@ -31,6 +31,7 @@ from backend.tests.helpers.calls import (
 )
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
+from backend.tests.helpers.task_lanes import new_task, task_bot
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
@@ -169,6 +170,40 @@ def test_in_a_one_to_one_call_the_bot_answers_every_question_aloud_one_at_a_time
     _answer(meet, machine, "ops", "Done.")
     assert "Done." in thread_texts(meet, cid) and len(media.said) == 1
     assert _states(meet, call_id) == [("ops", "listening", None)]
+
+
+def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering_a_task(meet):
+    machine = task_bot(meet, lanes=True, capacity=5)
+    rid, token = machine["runner_id"], machine["token"]
+    task = new_task(meet, "Review the launch")
+    claim = {"next_run": True, "start_places": True, "busy_bots": [], "busy_lanes": []}
+    task_run = post(meet, "jobs/claim", claim, token)["attempt"]
+    assert task_run["lane"] == "task:" + task["id"]
+    post(meet, f"attempts/{task_run['id']}/started", {"thread_id": "task-session"}, token)
+    followup = post(meet, f"tasks/{task['id']}/comments", {"text": "Check the numbers too."})["comment"]
+    inputs = post(meet, f"attempts/{task_run['id']}/inputs", {}, token)["messages"]
+    assert followup["id"] in [m["id"] for m in inputs]
+
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    store = meet.app.state.store
+    bell = events.runner_bell(store)
+    with store.read() as c:
+        cursor = events.latest(c)
+    _speak(meet, call["id"], 0, "Can we ship today?")
+    assert _turns(meet, call["meeting_id"]) == [{"bot": "ops", "status": "pending", "skip_reason": ""}]
+    with store.read() as c:
+        sent, _, reset, _ = events.runner_read(c, rid, "runner:" + rid, cursor)
+    assert not reset
+    (work_seq,) = [seq for seq, frame in sent if frame["kind"] == "work" and frame["bots"] == ["ops"]]
+    assert bell.latest >= work_seq
+
+    claim["busy_lanes"] = ["ops|" + task_run["lane"]]
+    call_run = post(meet, "jobs/claim", claim, token)["attempt"]
+    assert call_run is not None
+    assert call_run["lane"] != task_run["lane"]
+    assert call_run["message"]["refs"]["live_meeting"]["meeting_id"] == call["meeting_id"]
+    with store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (task_run["id"],)).fetchone()[0] == "running"
 
 
 def test_a_bot_that_does_not_answer_in_time_is_cut_off_and_its_late_answer_is_never_heard(meet):

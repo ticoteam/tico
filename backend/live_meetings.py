@@ -1303,7 +1303,7 @@ def _route_human_chat(app, rid, chat_id):
         )
         threshold, owner_actor = meeting["threshold"], meeting["owner_actor"]
     outcome = _decision(app, decision_input, decision_input["bots"], threshold, owner_actor)
-    with store.transaction() as c:
+    with store.transaction(notify=True) as c:
         route = c.execute(
             "SELECT status FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?", (rid, chat_id)
         ).fetchone()
@@ -1556,7 +1556,7 @@ def _run_windows(app, rid, *, final=False):
                 bots=bots,
             )
         outcome = _decision(app, decision_input, decision_input["bots"], meeting["threshold"], meeting["owner_actor"])
-        with app.state.store.transaction() as c:
+        with app.state.store.transaction(notify=True) as c:
             current = c.execute(
                 "SELECT status FROM live_meeting_windows WHERE meeting_id=? AND window_index=?", (rid, index)
             ).fetchone()
