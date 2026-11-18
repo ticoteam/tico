@@ -83,7 +83,7 @@ def test_recommended_writes_the_choices_and_the_invite_and_never_shows_the_invit
         )
     } == {
         "TICO_INSTALL_PRESET": "recommended",
-        "TICO_MODELS_PRESET": "subscriptions-gateway",
+        "TICO_MODELS_PRESET": "subscriptions",
         "TICO_SUPPORT": "on",
         "TICO_GATEWAY_INVITE": INVITE,
         "TICO_TEAM_NAME": '"My Team"',

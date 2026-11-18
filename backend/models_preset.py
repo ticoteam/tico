@@ -1,10 +1,11 @@
 """The company's models choice (Settings > Computers, the first-run step, TICO_MODELS_PRESET from the installer).
 
 Four choices, kept on the providers record (backend/providers.py) as `preset`:
-- `subscriptions-gateway` (recommended): bots' main work runs on the person's Claude and ChatGPT subscriptions; until
+- `subscriptions-gateway`: bots' main work runs on the person's Claude and ChatGPT subscriptions; until
   a bot's runtime is signed in on its computer, its turns run on the Medium tier through the Tico AI Gateway, and a
   used-up subscription falls back to the Gateway last.
-- `subscriptions`: subscriptions only; the Gateway is never spent for a bot that does not name a Tico model.
+- `subscriptions` (recommended, Nov 18): subscriptions only; the Gateway is never spent for a bot that does not name a
+  Tico model. Decide, search and the other Gateway services still run on the Gateway.
 - `gateway`: the Gateway only; a used-up login falls back to the Gateway last as well.
 - `own-keys`: the company's own API keys; as `subscriptions` for the Gateway.
 Unset is the choice as it was before presets: nothing here changes what a bot runs on.
@@ -259,14 +260,15 @@ NOT_ISOLATED_LINE = (
 
 
 def card(c, settings=None):
-    """The one Needs you card for the company's owner while the recommended choice waits for a sign-in: Claude or
+    """The one Needs you card for the company's owner while a subscriptions choice waits for a sign-in: Claude or
     ChatGPT is signed in (by subscription or API key) on no computer. One card, never one per bot or per computer.
-    It says so plainly when no computer can run Gateway work meanwhile, so bots that wait are not silently stuck."""
+    Under the Gateway choice it says so plainly when no computer can run Gateway work meanwhile, so bots that wait are
+    not silently stuck."""
     from .providers import load
     from .store import readiness_document
 
     record = load(c, settings)
-    if of(record) != RECOMMENDED:
+    if of(record) not in (RECOMMENDED, "subscriptions"):
         return None
     documents = [
         readiness_document(row[0])
@@ -274,7 +276,8 @@ def card(c, settings=None):
     ]
     if all(any(signed_in(d, runtime) for d in documents) for runtime in SUBSCRIPTION_RUNTIMES):
         return None
-    lines = [SIGN_IN_LINE] + ([] if any(runs_gateway(d) for d in documents) else [NOT_ISOLATED_LINE])
+    gateway = spends_gateway(record) and not any(runs_gateway(d) for d in documents)
+    lines = [SIGN_IN_LINE] + ([NOT_ISOLATED_LINE] if gateway else [])
     return {
         "kind": "setup",
         "id": "setup:sign-in",
