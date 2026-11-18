@@ -716,9 +716,12 @@ fn start_spent(t: &Thread, thread_id: &str) -> Option<Spent> {
 /// be read, the record is garbled, or none is within `limit` bytes of the end of a longer file.
 fn last_cost_state(path: &std::path::Path, limit: u64) -> Result<Option<Spent>, ()> {
     const CHUNK: u64 = 64 << 10;
+    // A line longer than this is not a cost-state record (a few hundred bytes a model): it is skipped, not kept whole.
+    const RECORD: usize = 256 << 10;
     let mut file = std::fs::File::open(path).map_err(|_| ())?;
     let len = file.metadata().map_err(|_| ())?.len();
-    let (mut end, mut tail) = (len, Vec::new());
+    // `tail`: the start of the line the chunks after this one began, or nothing while skipping a long line (`long`).
+    let (mut end, mut tail, mut long) = (len, Vec::new(), false);
     while end > 0 {
         if len - end >= limit {
             return Err(());
@@ -734,11 +737,16 @@ fn last_cost_state(path: &std::path::Path, limit: u64) -> Result<Option<Spent>, 
             _ if start == 0 => 0,
             Some(i) => i + 1,
             None => {
-                tail = buf;
+                long |= buf.len() > RECORD;
+                tail = if long { vec![] } else { buf };
                 continue;
             }
         };
-        for line in buf[whole..].split(|b| *b == b'\n').rev() {
+        let mut lines: Vec<&[u8]> = buf[whole..].split(|b| *b == b'\n').collect();
+        if std::mem::take(&mut long) {
+            lines.pop(); // where the long line began
+        }
+        for line in lines.into_iter().rev() {
             if !line.windows(10).any(|w| w == b"cost-state") {
                 continue;
             }
@@ -750,6 +758,10 @@ fn last_cost_state(path: &std::path::Path, limit: u64) -> Result<Option<Spent>, 
             }
         }
         tail = buf[..whole].to_vec();
+        long = tail.len() > RECORD;
+        if long {
+            tail.clear();
+        }
     }
     Ok(None)
 }
@@ -1298,6 +1310,9 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
+        // Read before the turn takes the lock: a long transcript is read back a chunk at a time.
+        let thread = self.inner().threads.get(thread_id).cloned();
+        let spent = thread.as_ref().and_then(|t| start_spent(t, thread_id));
         let (child, stderr, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
@@ -1317,7 +1332,7 @@ impl ClaudeHost {
             if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
-            inner.start_spent = start_spent(&t, thread_id);
+            inner.start_spent = spent;
             let (child, stderr, reaping) = self
                 .launch(thread_id, &t, effort, &turn)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
@@ -1888,14 +1903,20 @@ impl ClaudeHost {
         let u = inner.usage.entry(turn.into()).or_default();
         if inp + out > 0 {
             u.add_result_counts(result);
-        } else if !u.add_unsettled() {
-            // A step a "now" steer cut short ends on a result of no usage though its request ran (added above, from
-            // the stream), and a /compact's summary request is in no stream at all: only the session's count has it.
-            if let Some((_, [i, c, w, o])) = added {
-                u.input += i + c + w;
-                u.cached += c;
-                u.cache_write += w;
-                u.output += o;
+        } else {
+            // A step a "now" steer cut short ends on a result of no usage though its request ran, and a /compact's
+            // summary request is in no stream at all. The session's count has both, when its start is known; else
+            // the stream's requests since the last result do.
+            match added.filter(|(_, t)| t.iter().any(|n| *n > 0)) {
+                Some((_, [i, c, w, o])) => {
+                    u.input += i + c + w;
+                    u.cached += c;
+                    u.cache_write += w;
+                    u.output += o;
+                }
+                None => {
+                    u.add_unsettled();
+                }
             }
         }
         u.settled = u.requests.len();
@@ -1908,10 +1929,8 @@ impl ClaudeHost {
             u.texts.push(text);
         }
         if let Some(p) = inner.pipe.as_mut() {
-            if now.is_some() {
-                // This process's own count from here on, whatever it started from.
-                p.cost = now;
-            }
+            // This process's own count from here on, whatever it started from; none, and the next is unknown.
+            p.cost = now;
             let first = p.first.clone();
             p.unread.remove(&first);
             if crate::util::truthy(result.get("is_error")) {
@@ -2306,8 +2325,11 @@ impl ClaudeHost {
             }
             let mut usage = inner.usage.remove(turn);
             if let Some(u) = usage.as_mut() {
-                // Requests no `result` came after (a stopped or killed process) ran all the same.
-                u.add_unsettled();
+                // Requests no `result` came after (a stopped or killed process) ran all the same; what they cost
+                // Claude never said, so a cost from earlier results is not the turn's.
+                if u.add_unsettled() {
+                    u.cost_unknown = true;
+                }
                 // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
                 // is more than it, never less.
                 let last = u.context_tokens();
@@ -3489,9 +3511,9 @@ mod tests {
         // Claude Code 2.1.327 ends the cut-short step on a result of no usage; the steer's own result follows.
         let start = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3704, "cache_read_input_tokens": 14877, "output_tokens": 8}}}}"#;
         let delta = r#"{"type": "stream_event", "event": {"type": "message_delta", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3704, "cache_read_input_tokens": 14877, "output_tokens": 8}}}"#;
-        let cut = cost_result(0.0024, [0, 0, 0, 0], [4, 26494, 10612, 12]);
+        let cut = cost_result(0.0009, [0, 0, 0, 0], [2, 14877, 3704, 8]);
         let steer = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 79, "cache_read_input_tokens": 18556, "output_tokens": 4}}}}"#;
-        let done = cost_result(0.0026, [2, 18556, 79, 4], [6, 45050, 10691, 16]);
+        let done = cost_result(0.0011, [2, 18556, 79, 4], [4, 33433, 3783, 12]);
         let out = [start, delta, &cut, steer, &done].join("\n") + "\n";
         let got = cost_turn("new", None, &out).await;
         let tokens = tokens_of(&got);
@@ -3511,7 +3533,22 @@ mod tests {
             "{tokens}"
         );
         assert!(
-            (tokens["cost_usd"].as_f64().unwrap() - 0.0026).abs() < 1e-9,
+            (tokens["cost_usd"].as_f64().unwrap() - 0.0011).abs() < 1e-9,
+            "{tokens}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_no_result_followed_keeps_its_tokens_and_leaves_the_cost_unknown() {
+        // A priced result, then a follow-up's request the process was stopped in: what that cost Claude never said.
+        let first = cost_result(0.05, [2, 10584, 5833, 8], [2, 10584, 5833, 8]);
+        let more = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 16000, "output_tokens": 30}}}}"#;
+        let got = cost_turn("new", None, &[first.as_str(), more].join("\n")).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(tokens["cost_usd"], Value::Null, "{tokens}");
+        assert_eq!(
+            (&tokens["usage"]["input"], &tokens["usage"]["output"]),
+            (&json!(16419 + 16102), &json!(38)),
             "{tokens}"
         );
     }
@@ -3584,6 +3621,32 @@ mod tests {
         assert!(last_cost_state(&path, 4096).is_err());
         std::fs::write(&path, filler(200)).unwrap();
         assert_eq!(last_cost_state(&path, COST_STATE_SCAN), Ok(None));
+        // A line far longer than any record, between two records, is skipped over.
+        let huge = json!({"type": "assistant", "text": "y".repeat(3 << 20)}).to_string();
+        std::fs::write(
+            &path,
+            cost_state(4.0, [1, 2, 3, 4]) + "\n" + &huge + "\n" + &filler(3),
+        )
+        .unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            4.0
+        );
+        std::fs::write(
+            &path,
+            huge.clone() + "\n" + &cost_state(5.0, [1, 2, 3, 4]) + "\n" + &huge,
+        )
+        .unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            5.0
+        );
         // The first line of the file, and a file of one line with no newline.
         std::fs::write(&path, cost_state(3.0, [1, 2, 3, 4])).unwrap();
         assert_eq!(
