@@ -306,8 +306,11 @@ async function main() {
     world.meetings = [];
     await page.goto('https://tico-ui.test/#/meetings?live=live-1');
     await page.waitForURL('**/#/meetings/live/live-1');
+    // The old page's .live-finalized can still be on screen while the route remounts (state briefly null): wait for
+    // the new page's state first, then its finalized view.
+    await page.waitForFunction(() => LIVE_MEETINGS?.selected === 'live-1');
     await page.locator('.live-finalized').waitFor();
-    assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'live-1');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS?.selected), 'live-1');
     world.meetings = [makeDetail('live-1')];
     await page.goto('https://tico-ui.test/#/meetings/live/denied');
     await page.getByText('This meeting is not available to you, or it does not exist.').waitFor();

@@ -407,6 +407,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .mp-side{width:min(420px,42%);flex:none;border-left:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;min-height:0}
 .mp-one .mp-main>*{max-width:820px}
 .mp-sec{margin-bottom:24px}
+.mp-from{margin-top:16px}
 .mp-label,.mp-label-row .mp-label{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:600;margin-bottom:8px}
 .mp-label-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .mp-label-row .mp-label{margin:0}
