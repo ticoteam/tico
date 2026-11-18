@@ -231,7 +231,7 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
         if actor == "ben" and not changed:
             changed = True
             with store.transaction() as write:
-                H.task_reassign(write, H.KEEPER, private["id"], "human:ana", "Ana takes it")
+                H.task_reassign(write, H.TICO_ACTOR, private["id"], "human:ana", "Ana takes it")
         return resolved
 
     monkeypatch.setattr(H, "resolve_actor", revoke_after_owner_read)

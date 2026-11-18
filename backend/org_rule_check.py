@@ -321,7 +321,7 @@ def calls_today(c, people=False):
     return c.execute(
         "SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND target LIKE ? AND created_at>=? "
         f"AND json_extract(detail,'$.people') {flag}",
-        (H.KEEPER, RULES_TARGET, day),
+        (H.TICO_ACTOR, RULES_TARGET, day),
     ).fetchone()[0]
 
 
@@ -491,7 +491,7 @@ def _judged(store, engine, qset, level, operation, batch, questions, state, draf
     else:
         detail["broken"] = len(broken)
     with store.transaction() as c:
-        call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+        call = H.event(c, H.TICO_ACTOR, "judge.call", qset["label"], detail)
     return broken, (None if broken is not None else error or "shape"), call["id"]
 
 
@@ -1108,7 +1108,7 @@ def outside_edition(store, primary, output, to=""):
                 calls.append(
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "judge.call",
                         qset["label"],
                         {
@@ -1209,12 +1209,12 @@ def _repeats(c, author, rule_id):
 
 @SRC.scoped("rule-check")
 def _tell_bot(c, author, text):
-    """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
+    """A note on the bot's next run, as Tico (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
         return
     row = {
         "id": H.new_id(),
-        "from_actor": H.KEEPER,
+        "from_actor": H.TICO_ACTOR,
         "to_actor": author,
         "body": text[: H.NOTE_MAX],
         "created_at": H.now(),
@@ -1223,7 +1223,7 @@ def _tell_bot(c, author, text):
         "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES (:id,:from_actor,:to_actor,:body,:created_at)",
         row,
     )
-    H.event(c, H.KEEPER, "note.create", row["id"], {"to": author, "org_rule": True})
+    H.event(c, H.TICO_ACTOR, "note.create", row["id"], {"to": author, "org_rule": True})
 
 
 def _author_name(c, author):
@@ -1245,7 +1245,7 @@ def _review_task(c, hold_id, author, rule, reviewer):
 
     task = person_asks.task_for(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         REVIEW_TITLE,
         body,
         reviewer,
@@ -1865,7 +1865,7 @@ def run_late(store, primary, row):
             if H.is_bot(verdict["author"]):
                 _tell_bot(c, verdict["author"], told)
             elif H.is_human(verdict["author"]) and told:
-                H.notice(c, H.KEEPER, verdict["author"], told, refs={"org_rule": True})
+                H.notice(c, H.TICO_ACTOR, verdict["author"], told, refs={"org_rule": True})
         return gate
 
 
@@ -1883,7 +1883,9 @@ def _warn_saved(c, target, gate):
         c.execute("UPDATE messages SET body=? WHERE id=?", (warned_text(gate, found[0]), target["message"]))
         if target.get("task"):
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, target["task"]))
-        H.event(c, H.KEEPER, "message.edited", target["message"], {"task": target.get("task"), "rule_warning": True})
+        H.event(
+            c, H.TICO_ACTOR, "message.edited", target["message"], {"task": target.get("task"), "rule_warning": True}
+        )
     elif kind == "answer":
         found = c.execute("SELECT notes FROM answers WHERE id=?", (target["answer"],)).fetchone()
         if found is not None:
@@ -2252,7 +2254,7 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] == "open":
-        H.attempt(c, H.task_close, H.KEEPER, tid, "Every hold on this task is decided.")
+        H.attempt(c, H.task_close, H.TICO_ACTOR, tid, "Every hold on this task is decided.")
 
 
 def _decide(c, who, hold, state, event=""):
@@ -2321,11 +2323,11 @@ def withdraw(c, who, hold_id, auth=None):
 
 
 def expire_unreviewed(c, at, limit=HELD_EXPIRE_MAX):
-    """Keep, unsent, each held write nobody decided within HELD_HOURS. The keeper decides it as `keep` does, so its
+    """Keep, unsent, each held write nobody decided within HELD_HOURS. Tico decides it as `keep` does, so its
     review task closes, and the bot that wrote it is told it was not sent, so it can write it again within the rules or
     drop it. Nothing here delivers a held payload. Oldest first, at most `limit` per sweep."""
     cutoff = H.shift(at, hours=-HELD_HOURS)
-    keeper = SimpleNamespace(actor=H.KEEPER, via="", task_actor="")
+    tico = SimpleNamespace(actor=H.TICO_ACTOR, via="", task_actor="")
     expired = []
     rows = c.execute(
         "SELECT * FROM org_rule_holds WHERE state='held' AND created_at<? ORDER BY created_at, id LIMIT ?",
@@ -2334,7 +2336,7 @@ def expire_unreviewed(c, at, limit=HELD_EXPIRE_MAX):
     for row in rows:
         hold = dict(row)
         with isolated(c, "held_expiry", hold["id"]):
-            _decide(c, keeper, hold, "kept", "org_rule_hold.expired")
+            _decide(c, tico, hold, "kept", "org_rule_hold.expired")
             _tell_bot(
                 c,
                 hold["author"],
@@ -2849,7 +2851,7 @@ def stats(c, settings):
     checks = c.execute(
         "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action='judge.call' "
         "AND target=? AND created_at>=?",
-        (H.KEEPER, label, day),
+        (H.TICO_ACTOR, label, day),
     ).fetchone()[0]
 
     def count(*actions):
@@ -2866,7 +2868,7 @@ def stats(c, settings):
     people = c.execute(
         "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE actor=? AND "
         "action='judge.call' AND target LIKE ? AND created_at>=? AND json_extract(detail,'$.people')=1",
-        (H.KEEPER, RULES_TARGET, month),
+        (H.TICO_ACTOR, RULES_TARGET, month),
     ).fetchone()[0]
     return {
         "checks_today": checks,

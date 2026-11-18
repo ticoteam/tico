@@ -83,7 +83,7 @@ def candidates(c: Any, since: str) -> list[dict[str, Any]]:
 
 
 def _judged(c: Any, task_id: str, outcome: str) -> None:
-    H.event(c, H.KEEPER, JUDGED, task_id, {"outcome": outcome})
+    H.event(c, H.TICO_ACTOR, JUDGED, task_id, {"outcome": outcome})
 
 
 def _close(c: Any, task: dict[str, Any]) -> bool:
@@ -93,9 +93,9 @@ def _close(c: Any, task: dict[str, Any]) -> bool:
         return False
     person = H.person_name(c, H.actor_id(task["owner_id"])) or H.actor_id(task["owner_id"])
     bot = H.actor_name(c, task["requester_id"]) or H.actor_id(task["requester_id"])
-    H.task_close(c, H.KEEPER, task["id"], NOTE.format(person=person, bot=bot), row.get("version"))
+    H.task_close(c, H.TICO_ACTOR, task["id"], NOTE.format(person=person, bot=bot), row.get("version"))
     told = TOLD.format(title=task["title"], person=person, handle=H.actor_id(task["owner_id"]))
-    H.say(c, H.KEEPER, task["requester_id"], told, kind="notice", refs={"task": task["id"], "needs_action": True})
+    H.say(c, H.TICO_ACTOR, task["requester_id"], told, kind="notice", refs={"task": task["id"], "needs_action": True})
     return True
 
 

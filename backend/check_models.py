@@ -226,7 +226,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
         H._task_event(
             c,
             task_id,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "check_model",
             f"{check['runtime']}:{check['model']}",
             f"{nxt['runtime']}:{nxt['model']}",

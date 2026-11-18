@@ -187,7 +187,7 @@ def _pass(c, store, due, ids):
             or automations._no_input(c, row, settings, due, zone)
         ):
             automations._count(c, aid, "dropped")
-            H.event(c, H.KEEPER, "automation.skipped", aid, {"at": stamp, "reason": why})
+            H.event(c, H.TICO_ACTOR, "automation.skipped", aid, {"at": stamp, "reason": why})
         else:
             automations.fire(
                 c,

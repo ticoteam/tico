@@ -881,13 +881,13 @@ def operation_issues(c, who, auth):
             )
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows, unreviewed
+            from .execution import held_back, held_runs, isolation_refused, left_by_tico, stopped_rows, unreviewed
 
             runs = held_runs(c, who, auth, slug)
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
             waiting, waiting_on = held_back(c, who, auth, slug)
-            left = left_by_keeper(c, who, slug)
+            left = left_by_tico(c, who, slug)
             if isolation_refused(c, who, auth, slug):
                 # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
                 # behind the held run until a person acts.
@@ -900,7 +900,7 @@ def operation_issues(c, who, auth):
                     "Tico's Docker runner, then review its stopped run.",
                 )
             elif waiting or left:
-                # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
+                # Work is stuck behind it (the claim's own fence), or Tico settled the rest of its run and left
                 # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
                 # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
                 # retry: the detail says only why they stopped and what waits; the rows name them.
@@ -1407,7 +1407,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         else ""
     )
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
-    # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
+    # person_sent: the message is a person's, or Tico carrier of one (the sender alone is Tico).
     job = c.execute(
         f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
         "a.stop_requested_at,a.started_at AS attempt_started_at,p.wait_reason AS start_wait_reason "

@@ -67,7 +67,7 @@ def seed(store):
 def routine(c, key, title, due=None):
     """A routine of the COO's, seeded the way Tico seeds one: its schedule automation, due at `due` when given."""
     aid = routines.create(
-        c, H.KEEPER, "assistant", {"title": title, "cron": "0 9 * * *", "timezone": "UTC", "text": "Do it"}, key=key
+        c, H.TICO_ACTOR, "assistant", {"title": title, "cron": "0 9 * * *", "timezone": "UTC", "text": "Do it"}, key=key
     )["automation"]
     if due:
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (due, aid))

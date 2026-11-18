@@ -120,7 +120,7 @@ def tick(c: Any, at: datetime) -> dict[str, Any] | None:
     if found is None:
         return None
     slot, point = found
-    answer = {"at": point.isoformat(), **RS.request_now(c, H.KEEPER)}
+    answer = {"at": point.isoformat(), **RS.request_now(c, H.TICO_ACTOR)}
     fired = _fired(c)
     fired[slot] = answer
     kept = {key: fired[key] for key in sorted(fired)[-KEEP:]}

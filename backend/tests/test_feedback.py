@@ -274,7 +274,7 @@ def test_a_persons_message_and_task_take_a_rating_and_a_reason_and_nothing_tells
         "/api/v2/feedback", params={"subject_type": "message", "subject_ids": words}, headers=headers("ben-test")
     ).json()
     assert answer["items"] == [] and answer["counts"] == [{"subject_id": words, "up": 1, "down": 1}]
-    # Work with no bot or person behind it (the keeper's) still takes none.
+    # Work with no bot or person behind it (Tico's) still takes none.
     with api.app.state.store.transaction() as c:
-        keepers = H.task_create(c, "keeper", "Nightly check", "", "bot:ops")
-    assert give(api, keepers["id"], subject_type="task", expected=422)["error"]["code"] == "not_rateable"
+        tico_task = H.task_create(c, "keeper", "Nightly check", "", "bot:ops")
+    assert give(api, tico_task["id"], subject_type="task", expected=422)["error"]["code"] == "not_rateable"

@@ -60,7 +60,7 @@ def usage_turn(c, tid, computer=None, bot='ops'):
         'effort': 'high',
         'profile': 'engineering',
     }
-    H.turn_finish(c, H.KEEPER, tid, usage={**part, 'segments': [part]})
+    H.turn_finish(c, H.TICO_ACTOR, tid, usage={**part, 'segments': [part]})
     if computer:
         c.execute(
             "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",

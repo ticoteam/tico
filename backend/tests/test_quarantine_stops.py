@@ -56,14 +56,14 @@ def told(api, conversation_id):
         row = c.execute(
             "SELECT kind, body FROM messages WHERE conversation_id=? AND sender_id=? AND recipient_id='bot:ops' "
             "ORDER BY rowid DESC LIMIT 1",
-            (conversation_id, H.KEEPER),
+            (conversation_id, H.TICO_ACTOR),
         ).fetchone()
     return dict(row)
 
 
 def lift(api):
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, 'ops', state='active', reason='Cooldown over: the refusal count starts again.')
+        H.status_set(c, H.TICO_ACTOR, 'ops', state='active', reason='Cooldown over: the refusal count starts again.')
 
 
 def quarantine(api, reason="10 refusals today", context=None):

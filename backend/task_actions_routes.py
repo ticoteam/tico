@@ -810,7 +810,7 @@ def register_core(
                     )
                     H._write_message(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         owner,
                         f"{name} asked {(H.bot(c, H.actor_id(who.actor)) or {}).get('slug') or H.actor_id(who.actor)} for this, in their words:\n\n> "
                         + "\n> ".join(words[:2000].splitlines() or [""]),
@@ -841,7 +841,7 @@ def register_core(
             name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
             H._write_message(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 owner,
                 f"{name} asked the {settings.assistant_name} for this, in their words:\n\n> "
                 + "\n> ".join(words[:2000].splitlines() or [""]),

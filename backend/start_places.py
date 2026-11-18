@@ -401,8 +401,8 @@ def overdue(c):
 def from_person(c, job_id):
     """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
     Such a turn passes CPU overload and runs ahead of the turns waiting there, when memory permits: the load is the bots' own work,
-    and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
-    a rule's wake), or a bot's message, is not one, even when a person's act caused it; the keeper's carrier of a
+    and holding it left a person's message waiting behind a hundred bot turns. A Tico notice (a routine, a sweep,
+    a rule's wake), or a bot's message, is not one, even when a person's act caused it; Tico's carrier of a
     person's message is one (H.in_person_name_sql). Two primary-key reads."""
     return bool(
         c.execute(

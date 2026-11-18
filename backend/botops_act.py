@@ -59,9 +59,9 @@ LEND_MAX_DAYS = 30
 
 
 def own_run(c, auth, attempt_id):
-    """Whether this BotOps run is its own work, with its own wider rights (`Auth.botops_manages`): only a keeper wake
+    """Whether this BotOps run is its own work, with its own wider rights (`Auth.botops_manages`): only a Tico wake
     from BotOps' own schedule, the daily update or a timed automation only the owner (or the product) wrote (a converted
-    routine too, when the routine was theirs). Everything else the keeper wakes it with carries words someone else wrote: a service key's or
+    routine too, when the routine was theirs). Everything else Tico wakes it with carries words someone else wrote: a service key's or
     a watcher's task, a stopped job's request, a routine BotOps set itself while it worked for someone, a task someone
     commented on."""
     from .store import H
@@ -77,15 +77,15 @@ def own_run(c, auth, attempt_id):
     msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
     refs = (msg or {}).get("refs") or {}
     # A converted routine's task is opened by its automation as BotOps itself (backend/automation_actions.py).
-    if not msg or msg["sender_id"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
+    if not msg or msg["sender_id"] not in (H.TICO_ACTOR, "bot:" + H.FLEET_MAINTAINER):
         return False
-    if msg["sender_id"] != H.KEEPER and not refs.get("automation"):
+    if msg["sender_id"] != H.TICO_ACTOR and not refs.get("automation"):
         return False
     if any(refs.get(key) for key in OTHERS_WORDS):
         return False
     task_id = H.message_task_id(msg)
     if not task_id:
-        return msg["sender_id"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
+        return msg["sender_id"] == H.TICO_ACTOR and msg["kind"] == "notice" and refs.get("wake") == "update"
     task = H.task(c, task_id)
     if refs.get("automation"):
         return _owners_automation_task(c, auth, task, refs)
@@ -93,17 +93,17 @@ def own_run(c, auth, attempt_id):
 
 
 def _owners_routine_task(c, auth, task):
-    """A task the keeper opened for one of BotOps' timed routines, whose every word the owner or the product wrote:
+    """A task Tico opened for one of BotOps' timed routines, whose every word the owner or the product wrote:
     the routine (created and since changed only by them), the task itself, and anything said on it."""
     from .store import H
 
-    keeper, botops = H.KEEPER, "bot:" + H.FLEET_MAINTAINER
-    if not task or task["requester_id"] != keeper or task["owner_id"] != botops:
+    tico, botops = H.TICO_ACTOR, "bot:" + H.FLEET_MAINTAINER
+    if not task or task["requester_id"] != tico or task["owner_id"] != botops:
         return False
     made = c.execute(
         "SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1", (task["id"],)
     ).fetchone()
-    if not made or made["actor"] != keeper:
+    if not made or made["actor"] != tico:
         return False
     # An event routine's task carries the event's content (a meeting's notes, say), so only timed and manual runs.
     schedule = c.execute(
@@ -113,7 +113,7 @@ def _owners_routine_task(c, auth, task):
     ).fetchone()
     if not schedule or not _owners_routine(c, auth, schedule["schedule_id"]):
         return False
-    return _untouched(c, task, keeper)
+    return _untouched(c, task, tico)
 
 
 def _owners_automation_task(c, auth, task, refs):
@@ -124,7 +124,7 @@ def _owners_automation_task(c, auth, task, refs):
 
     botops = "bot:" + H.FLEET_MAINTAINER
     automation_id = str(refs.get("automation") or "")
-    if not task or task["owner_id"] != botops or task["requester_id"] not in (H.KEEPER, botops):
+    if not task or task["owner_id"] != botops or task["requester_id"] not in (H.TICO_ACTOR, botops):
         return False
     row = c.execute(
         "SELECT owner_id, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL", (automation_id,)
@@ -153,7 +153,7 @@ def _owners_automation_task(c, auth, task, refs):
         if r["via"] == "assistant" or str(r["via"] or "").startswith("token:"):
             return False
         actors.add(r["actor"])
-    if not actors or any(a != H.KEEPER and not _is_owner(c, auth, a) for a in actors):
+    if not actors or any(a != H.TICO_ACTOR and not _is_owner(c, auth, a) for a in actors):
         return False
     return _untouched(c, task, task["requester_id"])
 
@@ -169,7 +169,7 @@ def _owners_routine(c, auth, schedule_id):
     if not any(w["action"] == "routine.created" for w in writers):
         return False  # a routine from a bot.yaml: whoever pushed that file wrote it
     for w in writers:
-        if w["actor"] == H.KEEPER:
+        if w["actor"] == H.TICO_ACTOR:
             continue
         if H._json(w["detail"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
             return False
@@ -184,12 +184,12 @@ def _untouched(c, task, writer):
     if c.execute(
         "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('title','body') "
         "AND actor_id NOT IN (?,?) LIMIT 1",
-        (task["id"], writer, H.KEEPER),
+        (task["id"], writer, H.TICO_ACTOR),
     ).fetchone():
         return False
     said = c.execute(
         "SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) LIMIT 1",
-        (task["id"], H.KEEPER, botops, writer),
+        (task["id"], H.TICO_ACTOR, botops, writer),
     ).fetchone()
     return not said
 
@@ -1176,7 +1176,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                         "other comments and routed messages lend nothing",
                         403,
                     )
-            if initial and (task or str(requester).startswith("bot:")) and requester != H.KEEPER:
+            if initial and (task or str(requester).startswith("bot:")) and requester != H.TICO_ACTOR:
                 auth.conversation(c, who, initial["conversation_id"])
                 lapsed = lend_lapsed(c, task) if task and H.is_human(requester) else ""
                 if lapsed:
@@ -1194,7 +1194,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                     H.VIA.set(via)
                     return acting_as(auth.identity_for_actor(c, person["person"]), person["message_id"], "carried")
                 return acting_as(Identity(requester, "bot"))
-            if not initial or requester == H.KEEPER or requester == who.actor:
+            if not initial or requester == H.TICO_ACTOR or requester == who.actor:
                 return who
             if task and task_id and task["owner_id"] == who.actor and not task.get("request_id"):
                 if str(task["requester_id"]).startswith("human:"):
@@ -1588,7 +1588,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
             refs = (start or {}).get("refs") or {}
             if (
                 not start
-                or start["sender_id"] != H.KEEPER
+                or start["sender_id"] != H.TICO_ACTOR
                 or start["kind"] != "notice"
                 or refs.get("wake") not in FOLLOW_THROUGH_WAKES
                 or any(refs.get(k) for k in ("slack", "routing", "via", "assistant", "comment", "live_meeting"))

@@ -719,7 +719,7 @@ def report(c, runner_id, lid, body, settings=None):
     if settings is not None and terminal and state == "signed_in" and row["kind"] == "switch":
         from .execution import lift_after_login_switch
 
-        lift_after_login_switch(c, settings, H.KEEPER, runner_id, row["runtime"])
+        lift_after_login_switch(c, settings, H.TICO_ACTOR, runner_id, row["runtime"])
     return {"state": state}
 
 

@@ -561,7 +561,7 @@ def needs_value(stored):
 def _actor_may_use(c, actor, hook, name):
     """The same test as may_send, keyed by actor string: a caller that reaches publish without the API (a rule, a
     producer) still cannot aim at someone else's endpoint. Bots were checked for their send switch by the caller."""
-    if actor == H.KEEPER:
+    if actor == H.TICO_ACTOR:
         return
     if H.is_bot(actor):
         if name and not subscribed(json.loads(hook["events"]), name):
@@ -1314,14 +1314,14 @@ def auto_disable(c, now=None):
             "updated_at=? WHERE id=?",
             (now, reason, reason, now, hook["id"]),
         )
-        H.event(c, H.KEEPER, "webhook.auto_disabled", hook["id"], {"name": hook["name"], "attempts": row["n"]})
+        H.event(c, H.TICO_ACTOR, "webhook.auto_disabled", hook["id"], {"name": hook["name"], "attempts": row["n"]})
         try:
             c.execute("SAVEPOINT webhook_disable")
             from . import person_asks
 
             task = person_asks.task_for(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 f"Webhook {hook['name']} was turned off",
                 f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending. "
                 f"Fix the address, then turn it on in Tools › Webhooks or `tico webhook enable {hook['id']}`; "

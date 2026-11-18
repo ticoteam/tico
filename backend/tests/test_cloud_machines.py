@@ -881,7 +881,7 @@ def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud
         assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
     assert len(machine_cards(cloud)) == 1
     with cloud.store.transaction() as c:
-        H.task_done(c, H.KEEPER, first, "Machine replaced.")
+        H.task_done(c, H.TICO_ACTOR, first, "Machine replaced.")
         assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
 
 

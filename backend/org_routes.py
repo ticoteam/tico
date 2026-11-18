@@ -53,7 +53,7 @@ def register(app, auth, settings, settings_admin, store):
         was read for every bot in the answer."""
         row = dict(bot)
         # runtime, model and host are the bot's declaration (bot_settings); a bot with no declaration has none of them.
-        # The keeper is the only host there is, so a bot that declares none is a keeper bot.
+        # Tico is the only host there is, so a bot that declares none is a Tico bot.
         row.update({"model": "", "runtime": "", "host": "keeper"})
         config = rows.config(bot["id"])
         assignment = rows.assignments.get(bot["id"]) if level["read"] else None

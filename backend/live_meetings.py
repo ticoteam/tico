@@ -633,7 +633,7 @@ def _turn_conversation(c, rid, slug, title):
     if conv and not conv.get("closed_at") and conv.get("room_key") == room and "bot:" + slug in conv["participants"]:
         return conv
     conv = H.open_conversation(
-        c, H.KEEPER, ["bot:" + slug], kind="chat", subject="Live meeting: " + title, room_key=room
+        c, H.TICO_ACTOR, ["bot:" + slug], kind="chat", subject="Live meeting: " + title, room_key=room
     )
     c.execute("UPDATE live_meeting_bots SET conversation_id=? WHERE meeting_id=? AND bot=?", (conv["id"], rid, slug))
     return conv
@@ -779,7 +779,7 @@ def _cancel_queued_turn_job(c, turn_id, reason):
     for job in jobs:
         c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (job["id"],))
         c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job["message_id"]))
-        H.event(c, H.KEEPER, "job.suppress", job["id"], {"reason": reason, "turn_id": turn_id})
+        H.event(c, H.TICO_ACTOR, "job.suppress", job["id"], {"reason": reason, "turn_id": turn_id})
 
 
 def _finish_pass(c, rid, turn, reason):
@@ -809,7 +809,7 @@ def _finish_pass(c, rid, turn, reason):
 
 
 def _attachment_authority(c, auth, rid, bot):
-    """Check a scoped keeper delivery against the human who attached the bot."""
+    """Check a scoped Tico delivery against the human who attached the bot."""
     attachment = c.execute(
         "SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot)
     ).fetchone()
@@ -823,7 +823,7 @@ def _attachment_authority(c, auth, rid, bot):
         return "meeting_requires_human_contact"
     if not auth.bot_access(c, initiator, bot)["write"]:
         return "bot_write_access_revoked"
-    # The runner message is keeper-delivered, but contact policy belongs to the human who
+    # The runner message is Tico-delivered, but contact policy belongs to the human who
     # attached the bot. This prevents that transport from silently creating bot contact.
     if not auth.bot_contact(c, initiator, bot, kind="message"):
         return "bot_contact_policy"
@@ -953,7 +953,7 @@ def complete_runner_turn(
             "SELECT m.refs FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
             "WHERE i.attempt_id=? AND m.sender_id=? AND m.recipient_id=? "
             "AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL",
-            (attempt_id, H.KEEPER, "bot:" + bot),
+            (attempt_id, H.TICO_ACTOR, "bot:" + bot),
         ).fetchall():
             ref = (H._json(row["refs"], {}) or {}).get("live_meeting") or {}
             folded = c.execute(

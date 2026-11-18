@@ -50,9 +50,9 @@ def task_held(api, private=False):
     # parent's owner (rules.AWAITED_EVENTS), where a plain notice from Tico is only a note.
     with api.app.state.store.transaction() as c:
         H.task_comment(
-            c, H.KEEPER, task_id, 'VERDICT: changes PR #12 head ' + 'a' * 40, extra_refs={'subtask': 'review-1'}
+            c, H.TICO_ACTOR, task_id, 'VERDICT: changes PR #12 head ' + 'a' * 40, extra_refs={'subtask': 'review-1'}
         )
-        H.task_comment(c, H.KEEPER, other_id, 'The digest numbers are in.', extra_refs={'subtask': 'digest-1'})
+        H.task_comment(c, H.TICO_ACTOR, other_id, 'The digest numbers are in.', extra_refs={'subtask': 'digest-1'})
     return machine, attempt, task_id, other_id
 
 

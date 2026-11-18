@@ -42,7 +42,7 @@ def _event(c, id, action, target, detail, at=HELD):
 
 
 def _task(c, title):
-    return H.task_create(c, H.KEEPER, title, "Why.", "human:ana", lint=False)["id"]
+    return H.task_create(c, H.TICO_ACTOR, title, "Why.", "human:ana", lint=False)["id"]
 
 
 def _rows(c):
@@ -57,7 +57,7 @@ def test_start_failures_move_into_holds_and_running_it_again_changes_nothing(api
         _old_columns(c)
         item, review, closed_review = _task(c, "Couldn't start"), _task(c, "Find why"), _task(c, "Old review")
         held_task, other_task = _task(c, "Review the PR"), _task(c, "Write the docs")
-        H.task_close(c, H.KEEPER, closed_review, "Fixed.")
+        H.task_close(c, H.TICO_ACTOR, closed_review, "Fixed.")
         c.execute(
             "UPDATE jobs SET held=1,hold_until=?,hold_reason=?,hold_task_id=?,hold_streak=3 WHERE id=?",
             (LATER, MIGRATION.CLAIM_REASON, item, claimed),
@@ -107,7 +107,7 @@ def test_start_failures_move_into_holds_and_running_it_again_changes_nothing(api
 
         # The run ends: its hold ends with it. BotOps's task closes: the task's hold ends, as BotOps's doing.
         c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (claimed,))
-        H.task_close(c, H.KEEPER, review, "Fixed.")
+        H.task_close(c, H.TICO_ACTOR, review, "Fixed.")
         after = _rows(c)
     assert after[f"claim_error:job:{claimed}"]["released_how"] == "moot"
     assert after[f"cant_start:task:{held_task}:ops"]["released_how"] == "botops"
@@ -121,7 +121,7 @@ def test_a_held_task_that_closes_ends_its_cant_start_hold(api):
             "updated_at) VALUES('x','cant_start','task',?,'ops',?,'keeper',?,?)",
             (held_task, review, HELD, HELD),
         )
-        H.task_close(c, H.KEEPER, held_task, "Not needed.")
+        H.task_close(c, H.TICO_ACTOR, held_task, "Not needed.")
         row = c.execute("SELECT released_how FROM holds WHERE id='x'").fetchone()
         assert row[0] == "moot"
         assert c.execute("SELECT status FROM tasks WHERE id=?", (review,)).fetchone()[0] == "open"

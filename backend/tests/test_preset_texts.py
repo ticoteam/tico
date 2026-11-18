@@ -20,7 +20,7 @@ from backend import never_stuck as N
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend import task_requirements as R
-from backend.hubdb_core import KEEPER
+from backend.hubdb_core import TICO_ACTOR
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
@@ -132,7 +132,7 @@ def _follows(c):
     return [
         json.loads(r[0])
         for r in c.execute(
-            "SELECT detail FROM events WHERE action='pipeline.save' AND actor=? ORDER BY rowid", (KEEPER,)
+            "SELECT detail FROM events WHERE action='pipeline.save' AND actor=? ORDER BY rowid", (TICO_ACTOR,)
         )
         if "newer_preset_text" in json.loads(r[0])
     ]

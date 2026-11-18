@@ -32,7 +32,7 @@ def review_routine(api):
     with api.app.state.store.transaction() as c:
         routines.create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "strategy-owner",
             {"title": "Weekly goals review", "cron": "0 9 * * 1", "timezone": "America/Los_Angeles", "enabled": False},
             key="goals-review",
@@ -381,7 +381,7 @@ def test_with_no_chosen_level_passive_pauses_the_note_and_withdraws_what_waits_a
             "SELECT status, decision_note, decided_by FROM goal_proposals WHERE id=?", (waiting["id"],)
         ).fetchone()
     # Tico withdrew it, not the owner: no streak, an older release's after a rollback included, counts it as a no.
-    assert (status, note, by) == ("rejected", strategy_suggest.WITHDRAWN, H.KEEPER)
+    assert (status, note, by) == ("rejected", strategy_suggest.WITHDRAWN, H.TICO_ACTOR)
     with store.transaction() as c:
         strategy_bot.reconcile(c)
     assert not review_enabled(api)  # at Passive nothing starts it again
@@ -396,7 +396,7 @@ def test_a_monday_note_the_old_level_1_started_is_paused_at_passive_once(api):
     review_routine(api)
     store = api.app.state.store
     with store.transaction() as c:
-        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        routines.update(c, H.TICO_ACTOR, REVIEW, {"enabled": True})
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
             (
@@ -445,7 +445,11 @@ def test_with_regular_checks_off_a_due_kpi_pass_is_skipped(api):
     store = api.app.state.store
     with store.transaction() as c:
         routines.create(
-            c, H.KEEPER, "strategy-owner", {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"}, key="kpi-pass"
+            c,
+            H.TICO_ACTOR,
+            "strategy-owner",
+            {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"},
+            key="kpi-pass",
         )
         aid = routines.row(c, strategy_bot.PASS)["automation"]
     assert aid
@@ -484,7 +488,7 @@ def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
     review_routine(api)
     store = api.app.state.store
     with store.transaction() as c:
-        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        routines.update(c, H.TICO_ACTOR, REVIEW, {"enabled": True})
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
             (strategy_bot.KEY, json.dumps({"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})),

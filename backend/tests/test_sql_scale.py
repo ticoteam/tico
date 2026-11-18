@@ -102,7 +102,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
             shape, sender, to, reply, refs = i % 10, rng.choice(PEOPLE), bot, None, None
             if shape in (1, 2):
                 refs = "{}"
-            elif shape == 3:  # a keeper wake
+            elif shape == 3:  # a Tico wake
                 sender, refs = "keeper", json.dumps({"task": task or rng.choice(task_ids), "wake": "stalled"})
             elif shape in (4, 5):
                 refs = json.dumps({"task": task or rng.choice(task_ids)})

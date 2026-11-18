@@ -110,7 +110,7 @@ def test_expired_or_superseded_harness_events_cannot_finish_current_goal(api):
 
 
 @pytest.mark.parametrize('ruled', [False, True])
-def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api, ruled):
+def test_a_task_goal_is_set_by_the_tico_and_meeting_it_marks_the_task_done(api, ruled):
     """With a company rule in force the done note is the fixed "Goal met.": the harness's words were never checked."""
     if ruled:
         from backend.tests.helpers.org_rules import rule

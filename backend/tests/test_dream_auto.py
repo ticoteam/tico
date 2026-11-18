@@ -215,7 +215,7 @@ def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE events SET created_at=? WHERE actor=? AND action=?",
-            (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
+            (H.shift(H.now(), hours=-49), H.TICO_ACTOR, L.BOT_ACTION),
         )
     later = now() + timedelta(hours=49)
     assert verdict(api, "ops", later).status == "due"
@@ -619,7 +619,7 @@ def _waiting(api, bot):
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
             "VALUES(?,?,?,?,'say','Dream',?,?)",
-            (mid, conv, H.KEEPER, "bot:" + bot, json.dumps({"release_kind": "dream"}), H.now()),
+            (mid, conv, H.TICO_ACTOR, "bot:" + bot, json.dumps({"release_kind": "dream"}), H.now()),
         )
         c.execute(
             "INSERT INTO jobs(id,message_id,bot_id,state,created_at,held,wake_class) VALUES(?,?,?,'queued',?,1,'dream')",
@@ -642,7 +642,7 @@ def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
         c.execute("UPDATE tasks SET done_at=? WHERE id=?", (H.shift(H.now(), hours=-48), first["id"]))
         c.execute(
             "UPDATE events SET created_at=? WHERE actor=? AND action=?",
-            (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
+            (H.shift(H.now(), hours=-49), H.TICO_ACTOR, L.BOT_ACTION),
         )
     with api.app.state.store.read() as c:
         read_from = dream.since(c, owner_of(c, "ops"))
@@ -651,7 +651,7 @@ def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
     with api.app.state.store.transaction() as c:  # skipped at the deadline, as the hold closes it: no run on it
         owner = owner_of(c, "ops")
         row = dream._open(c, [owner])
-        H.task_close(c, H.KEEPER, row["id"], "Skipped: no warm window in 48 hours.")
+        H.task_close(c, H.TICO_ACTOR, row["id"], "Skipped: no warm window in 48 hours.")
     v = verdict(api, "ops", now())
     assert (v.status, v.turns) == ("due", 12), "the skipped dream's work still counts"
     with api.app.state.store.read() as c:

@@ -744,7 +744,7 @@ def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z", runtime="claude"
 def limit(api, bot="ops"):
     """The bot is limited, as a limit with a named reset leaves it."""
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, bot, state="limited", focus="Usage limit", reason="test")
+        H.status_set(c, H.TICO_ACTOR, bot, state="limited", focus="Usage limit", reason="test")
 
 
 def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):
@@ -859,7 +859,7 @@ def test_a_switch_leaves_a_bot_of_another_runtime_on_the_same_computer_alone(api
     assign(api, m, "cpo")
     limited_on(api, m, plan_a)
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "cpo", state="limited", focus="Usage limit on ChatGPT", reason="test")
+        H.status_set(c, H.TICO_ACTOR, "cpo", state="limited", focus="Usage limit on ChatGPT", reason="test")
     give(api, m, "claude", plan_b)
     # Nothing re-judged cpo: its runtime is codex, and it has no hold on its own login to lift it.
     assert status(api, "cpo")["state"] == "limited" and status(api, "cpo")["focus"] == "Usage limit on ChatGPT"
@@ -1000,7 +1000,7 @@ def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_
             },
         )
     with api.app.state.store.transaction() as c:
-        assert clear_limits(c, api.app.state.store.settings, H.KEEPER, "ops") == 1
+        assert clear_limits(c, api.app.state.store.settings, H.TICO_ACTOR, "ops") == 1
     with api.app.state.store.read() as c:
         assert login_holds.get(c, m["runner_id"], "", "codex")["until"] <= H.now()
 

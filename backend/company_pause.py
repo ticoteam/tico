@@ -186,12 +186,12 @@ def hold_task(c: sqlite3.Connection, task_id: str, found: Record) -> bool:
         return False
     try:
         _task_comment(
-            c, H.KEEPER, task_id, _held_line(found), wake=False, extra_refs={"company_held": found["paused_at"]}
+            c, H.TICO_ACTOR, task_id, _held_line(found), wake=False, extra_refs={"company_held": found["paused_at"]}
         )
     except H.Refused:
         log.info("The held line for task %s was refused; the pause still holds its work", task_id)
         return False
-    _hub_event(c, H.KEEPER, HELD, task_id, {"paused_at": found["paused_at"]})
+    _hub_event(c, H.TICO_ACTOR, HELD, task_id, {"paused_at": found["paused_at"]})
     return True
 
 

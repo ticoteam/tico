@@ -663,7 +663,7 @@ def weekly(b, s, days, runs, k, monday, people):
             )
         hubdb.say(c, "bot:" + routine["bot"], "human:ana", summary, refs={"task": ref})
         turn = hubdb.turn_start(
-            c, hubdb.KEEPER, routine["bot"], trigger="routine", message_id=job["message_id"], task_id=ref
+            c, hubdb.TICO_ACTOR, routine["bot"], trigger="routine", message_id=job["message_id"], task_id=ref
         )
         b.clock.at += timedelta(minutes=4)
         model_name, provider, billing = CONTENT["usage"]
@@ -672,7 +672,7 @@ def weekly(b, s, days, runs, k, monday, people):
         cost = providers.estimate_cost(model_name, tokens_in - cached, cached, tokens_out)
         hubdb.turn_finish(
             c,
-            hubdb.KEEPER,
+            hubdb.TICO_ACTOR,
             turn["id"],
             "completed",
             summary,
@@ -690,7 +690,7 @@ def weekly(b, s, days, runs, k, monday, people):
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job["job_id"],))
         # The turn's end, as the runner reports it: the run takes the turn's answer and cost, and its day counts.
         automations.turn_done(c, {"id": turn["id"], "job_id": job["job_id"]}, "completed", summary)
-        hubdb.status_result(c, hubdb.KEEPER, routine["bot"], last_result=summary, last_turn_at=hubdb.now())
+        hubdb.status_result(c, hubdb.TICO_ACTOR, routine["bot"], last_result=summary, last_turn_at=hubdb.now())
 
     b.write(work)
 

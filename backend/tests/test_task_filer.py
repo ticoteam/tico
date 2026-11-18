@@ -41,12 +41,12 @@ def test_a_task_a_person_or_their_assistant_files_shows_no_other_source(api):
 def test_a_health_check_task_shows_health_check(api, botops):
     with api.app.state.store.transaction() as c:
         made = check_health._task_create(c, "Watchers", "Fix the watcher.")
-    assert made["requester_id"] == H.KEEPER
+    assert made["requester_id"] == H.TICO_ACTOR
     for view in _views(api, made["id"]):
         assert view["filer"] == "check-health"
 
 
-def test_only_a_keeper_task_names_a_built_in(api):
+def test_only_a_tico_task_names_a_built_in(api):
     """A person's task filed inside a built-in's scope is still theirs: only the server's own write names one."""
     with SRC.writing_as("check-health"):
         tid = _file(api, "human:ana", "Look at the logs")

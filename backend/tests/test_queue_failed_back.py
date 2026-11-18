@@ -130,7 +130,7 @@ def _merge_failed(c, numbers=(12,), dropped=WHY):
 
 
 def _back_to_qa(c, eng, note="The queue run failed in e2e: fix it."):
-    """The Release Owner moves it back, then whatever nudges the task runs (as the keeper did 0.4 s later)."""
+    """The Release Owner moves it back, then whatever nudges the task runs (as Tico did 0.4 s later)."""
     row = E.task(c, eng)
     E.move(c, eng, "engineering-qa", row["owner_id"] or X.ANA, note, seen_version=row["version"])
     E.advance(c, eng)

@@ -235,7 +235,7 @@ def test_never_delayed_questions_approvals_and_awaited_replies(api):
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 2
 
 
-def test_the_rule_fails_open_and_never_touches_a_persons_or_the_keepers_messages():
+def test_the_rule_fails_open_and_never_touches_a_persons_or_the_tico_messages():
     class Conn:
         def execute(self, *a):
             raise RuntimeError("no database")
@@ -248,7 +248,7 @@ def test_the_rule_fails_open_and_never_touches_a_persons_or_the_keepers_messages
     assert B.can_wait(conn, "bot:a", "bot:b", "say", {}, "fyi", in_reply_to="m1") is False
     assert B.can_wait(conn, "bot:a", "bot:b", "say", {"something_new": 1}, "fyi") is False
     assert B.can_wait(conn, "human:ana", "bot:b", "say", {}, "fyi") is False
-    assert B.can_wait(conn, H.KEEPER, "bot:b", "notice", {}, "New task") is False
+    assert B.can_wait(conn, H.TICO_ACTOR, "bot:b", "notice", {}, "New task") is False
     assert B.can_wait(conn, "bot:a", "human:ana", "say", {}, "fyi") is False
     for kind in ("ask", "answer", "steer"):
         assert B.can_wait(conn, "bot:a", "bot:b", kind, {}, "fyi") is False

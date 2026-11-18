@@ -363,7 +363,7 @@ def stale_comments(api, task, n):
     these reminders carry no stale-check flag."""
     with api.app.state.store.transaction() as c:
         for i in range(n):
-            H.task_comment(c, H.KEEPER, task["id"], f"Still waiting on review {i}.")
+            H.task_comment(c, H.TICO_ACTOR, task["id"], f"Still waiting on review {i}.")
 
 
 def finished_requests(api, task, n):

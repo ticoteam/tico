@@ -353,7 +353,7 @@ def test_who_may_read_a_stored_body(api):
         H.notice(c, "human:ben", "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
     get(api, path, token="assistant-test", expected=404)
     with api.app.state.store.transaction() as c:
-        H.notice(c, H.KEEPER, "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
+        H.notice(c, H.TICO_ACTOR, "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
     assert get(api, path, token="assistant-test")["delivery"]["part"] == 1
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE trigger_bodies SET expires_at='2000-01-01T00:00:00.000000Z'")

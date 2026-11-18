@@ -419,7 +419,7 @@ def leads_follow(c, cause):
     for gid in gone:
         roster["org_groups"][gid]["lead"] = ""
     _save(c, roster)
-    _audit(c, H.KEEPER, before, cause)
+    _audit(c, H.TICO_ACTOR, before, cause)
     from .proposals import decider
 
     top = decider(c)
@@ -428,7 +428,7 @@ def leads_follow(c, cause):
             who = task_caps.actor(lead) or lead
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 top,
                 f"{task_caps._name(c, who)} left {roster['org_groups'][gid]['name']}; it has no lead now.",
                 kind="notice",
@@ -757,7 +757,7 @@ def migrate(c, settings):
     refresh_teams(c)
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "groups.migrated",
         "",
         {"groups": len(groups), "new": len(groups) - before, "bots": sum(1 for g in placed.values() if g)},

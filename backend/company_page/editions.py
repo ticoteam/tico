@@ -850,7 +850,7 @@ def run_draft(store, edition_id, primary=None):
         if failure:
             _record(c, row, "draft", "failed", {"reason": failure})
             c.execute("UPDATE editions SET status='held', updated_at=? WHERE id=?", (at, edition_id))
-            H.event(c, H.KEEPER, "edition.draft_failed", edition_id, {"reason": failure})
+            H.event(c, H.TICO_ACTOR, "edition.draft_failed", edition_id, {"reason": failure})
             return full_view(c, edition_id)
         for source in sources:
             text = source["body"]
@@ -863,14 +863,14 @@ def run_draft(store, edition_id, primary=None):
             "UPDATE editions SET status='held', title=?, body=?, updated_at=? WHERE id=?",
             (title, json.dumps({"sections": sections}, ensure_ascii=False), at, edition_id),
         )
-        H.event(c, H.KEEPER, "edition.drafted", edition_id, {"sources": len(sources)})
+        H.event(c, H.TICO_ACTOR, "edition.drafted", edition_id, {"sources": len(sources)})
     return check(store, edition_id, primary)
 
 
 def draft(store, audience_id, author, period_start, period_end, primary=None):
     """Open and write one edition. The unique index makes it once per audience, source and period, however it's called."""
     with store.transaction() as c:
-        claimed = claim(c, H.KEEPER, audience_id, author, period_start, period_end)
+        claimed = claim(c, H.TICO_ACTOR, audience_id, author, period_start, period_end)
     if claimed["fresh"]:
         return run_draft(store, claimed["edition_id"], primary)
     with store.read() as c:
@@ -975,7 +975,7 @@ def check(store, edition_id, primary=None):
                 "UPDATE editions SET status='held', approval_id=NULL, payload_hash=NULL, updated_at=? WHERE id=?",
                 (at, edition_id),
             )
-        H.event(c, H.KEEPER, "edition.checked", edition_id, {"outcome": outcome, "reasons": reasons})
+        H.event(c, H.TICO_ACTOR, "edition.checked", edition_id, {"outcome": outcome, "reasons": reasons})
         return full_view(c, edition_id)
 
 

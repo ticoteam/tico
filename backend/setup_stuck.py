@@ -65,7 +65,7 @@ def held_for(since, at=None):
 
 
 def nudge(c, at=None):
-    """Tell each stuck bot's person once (a keeper event marks it): the same person the "Finish onboarding"
+    """Tell each stuck bot's person once (a Tico event marks it): the same person the "Finish onboarding"
     reminder goes to (hubdb `_setup_person`), and nobody while that reminder is still open, so one bot never makes
     two asks. Returns {bot: [actors told]}."""
     told = {}
@@ -73,7 +73,8 @@ def nudge(c, at=None):
         if (
             H._open_setup_reminder(c, row["bot"])
             or c.execute(
-                "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1", (H.KEEPER, NUDGED, row["bot"])
+                "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1",
+                (H.TICO_ACTOR, NUDGED, row["bot"]),
             ).fetchone()
         ):
             continue
@@ -85,9 +86,9 @@ def nudge(c, at=None):
             "Finish its setup on its page, or choose Finish with defaults on Settings > Health."
         )
         for actor in people:
-            H.say(c, H.KEEPER, actor, text, kind="notice")
+            H.say(c, H.TICO_ACTOR, actor, text, kind="notice")
         # Marked even with nobody to tell, so a roster change later does not bring an old bot back as news.
-        H.event(c, H.KEEPER, NUDGED, row["bot"], {"told": people, "since": row["since"]})
+        H.event(c, H.TICO_ACTOR, NUDGED, row["bot"], {"told": people, "since": row["since"]})
         told[row["bot"]] = people
     return told
 

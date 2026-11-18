@@ -64,7 +64,7 @@ EXCERPT_MAX = 1_200  # of the diff kept as the evidence's quote
 LINES_MAX = 3_000  # lines compared; a longer page is cut before the diff
 STATUSES = ("ok", "error", "blocked")
 DAY_KEY = "market.watch.checked"
-ACTOR = H.KEEPER  # who writes what a check finds
+ACTOR = H.TICO_ACTOR  # who writes what a check finds
 GITHUB = re.compile(r"github:([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})")
 
 # Test seams: the name resolver and socket the fetch uses, and how the check thread is started.

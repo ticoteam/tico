@@ -331,7 +331,7 @@ def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, o
             f"{name} answers people in chat and takes no tasks (its profile is Responder), so it never "
             "sees tasks. Write to it in its chat, or give this task to a bot that works tasks.",
         )
-    if actor == H.KEEPER or routine:
+    if actor == H.TICO_ACTOR or routine:
         return None
     if takes == "review":
         if is_review_task(c, {"id": task, "title": title, "owner_id": owner}, parent_id=parent, labels=labels):
@@ -588,7 +588,7 @@ def migrate(c, tell=True):
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row["bot"],))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
             materialise(c, row["bot"], source)
-        H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
+        H.event(c, H.TICO_ACTOR, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
         if row["state"] == "archived":
             continue
         owner = row["owner_id"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
@@ -599,7 +599,7 @@ def migrate(c, tell=True):
         more = f"\n...and {len(bots) - 40} more." if len(bots) > 40 else ""
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             H.human_actor(owner),
             "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n"
             + "\n".join(lines)

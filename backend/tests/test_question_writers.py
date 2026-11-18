@@ -131,7 +131,7 @@ def test_an_open_question_from_before_is_taken_back_and_its_bot_woken_to_ask_aga
     note = c.execute(
         "SELECT actor_id, old, note FROM history_events WHERE subject_id=? AND kind='requirement_withdrawn'", (asked,)
     ).fetchall()
-    assert [(row[0], row[1], row[2]) for row in note] == [(H.KEEPER, open_rid, OQ.NOTE)]
+    assert [(row[0], row[1], row[2]) for row in note] == [(H.TICO_ACTOR, open_rid, OQ.NOTE)]
     [wake] = _wakes(c, asked)
     assert "Which tone?\n- A\n- B\n" in wake and f"tico task ask {asked}" in wake
     assert [tuple(r) for r in _queued(c, asked)] == [("builder",)]

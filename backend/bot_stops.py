@@ -50,7 +50,7 @@ def raise_item(c, settings, bot, title, body):
 
         return person_asks.task_for(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             H.human_actor(person["id"]),
@@ -68,7 +68,7 @@ def close_item(c, task_id, note):
     row = H.task(c, task_id) if task_id else None
     if not row or row["status"] != "open":
         return
-    if H.attempt(c, H.task_close, H.KEEPER, task_id, note) is None:
+    if H.attempt(c, H.task_close, H.TICO_ACTOR, task_id, note) is None:
         log.warning("Could not close the Needs-you task %s", task_id)
 
 
@@ -105,7 +105,7 @@ def hold_job(c, settings, job_id, error):
         holds.CLAIM_ERROR,
         "job",
         job_id,
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         bot_id=bot,
         reason=CLAIM_REASON,
         details={"error": error},
@@ -113,14 +113,16 @@ def hold_job(c, settings, job_id, error):
         until_at=retry,
         upkeep_task_id=item,
     )
-    H.event(c, H.KEEPER, "job.claim_failed", job_id, {"bot": bot, "error": error, "tries": tries, "retry_at": retry})
+    H.event(
+        c, H.TICO_ACTOR, "job.claim_failed", job_id, {"bot": bot, "error": error, "tries": tries, "retry_at": retry}
+    )
     if tries == 1:
         task_id = H.message_task_id(H.message(c, job["message_id"]), H.conversation(c, job["conversation_id"]))
         if task_id:
             try:
                 H.task_comment(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     task_id,
                     "Tico could not start this run: an error happened while its claim prepared it, so the run is "
                     "held. Tico retries it on its own after a wait that doubles with each failed try, up to an "
@@ -158,7 +160,9 @@ def clear_job(c, hold, note, how="moot"):
     longer needed. An open hold is released; one its run's end released already (holds_job_ends) is not. Either way its
     Needs-you item closes once no other held run of its bot names it."""
     if hold["released_at"] is None:
-        holds.release(c, holds.CLAIM_ERROR, "job", hold["holdable_id"], actor=H.KEEPER, how=how, bot_id=hold["bot_id"])
+        holds.release(
+            c, holds.CLAIM_ERROR, "job", hold["holdable_id"], actor=H.TICO_ACTOR, how=how, bot_id=hold["bot_id"]
+        )
     item = hold["upkeep_task_id"]
     if item and item not in {r[0] for r in c.execute(CLAIM_ITEM_SQL, (hold["bot_id"],)).fetchall()}:
         close_item(c, item, note)
@@ -215,7 +219,7 @@ def check_failed(c, bot, exc, was=None):
         holds.CLAIM_ERROR,
         "bot",
         bot,
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         reason=f"Its claim check raised {error}",
         details={"error": error, "failed_at": H.now()},
         streak=tries,
@@ -282,18 +286,18 @@ def cant_start(c, row, why, computer, lapses=0):
     review = c.execute(
         f"SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title=? AND status='open' AND {H.TASK_SAYS_SQL} "
         "ORDER BY created_at DESC LIMIT 1",
-        (owner, H.KEEPER, title, H.BOT_REVIEW_ID.format(id=bot)),
+        (owner, H.TICO_ACTOR, title, H.BOT_REVIEW_ID.format(id=bot)),
     ).fetchone()
     try:
         if review:
             review_id = review["id"]
             held = task and c.execute(holds.OPEN_SQL, (holds.CANT_START, "task", task["id"], bot)).fetchone()
             if not held or held["upkeep_task_id"] != review_id:
-                H.task_comment(c, H.KEEPER, review_id, said + ". Tico stopped retrying it too.")
+                H.task_comment(c, H.TICO_ACTOR, review_id, said + ". Tico stopped retrying it too.")
         else:
             made = H.task_create(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 title,
                 f"{said}.\n\nTico stopped retrying: a wait will not clear this. The task waits on {name}, paused, "
                 f"until you close this one. Fix the cause on {name}'s computer or in its repository (its Runs show "
@@ -312,7 +316,7 @@ def cant_start(c, row, why, computer, lapses=0):
             holds.CANT_START,
             "task",
             task["id"],
-            actor=H.KEEPER,
+            actor=H.TICO_ACTOR,
             bot_id=bot,
             reason=why,
             details={"job": row["job_id"], "computer": computer},

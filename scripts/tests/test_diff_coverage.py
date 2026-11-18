@@ -210,7 +210,7 @@ def test_code_a_change_only_moves_is_not_new_but_a_copy_still_counts(tmp_path, m
 
 def test_a_rename_made_on_many_lines_is_not_new_code_but_a_one_off_name_change_is():
     removed = Counter(
-        ["actor = H.KEEPER", "H.event(c, H.KEEPER, 'a')", "if who == H.KEEPER:", "return load(1, keeper)"]
+        ["actor = H.OLD_ACTOR", "H.event(c, H.OLD_ACTOR, 'a')", "if who == H.OLD_ACTOR:", "return load(1, actor)"]
     )
     added = {
         "backend/a.py": [
@@ -218,7 +218,7 @@ def test_a_rename_made_on_many_lines_is_not_new_code_but_a_one_off_name_change_i
             (2, "H.event(c, H.TICO_ACTOR, 'a')"),
             (3, "if who == H.TICO_ACTOR:"),
         ],
-        # One line renames `keeper` to `owner`: that is a change to what the call is given, so it still counts.
+        # One line renames `actor` to `owner`: that is a change to what the call is given, so it still counts.
         "backend/b.py": [(7, "return load(1, owner)"), (8, "return load(2, H.TICO_ACTOR)")],
     }
     assert dc.unmoved(added, removed) == {"backend/b.py": [7, 8]}
@@ -227,6 +227,6 @@ def test_a_rename_made_on_many_lines_is_not_new_code_but_a_one_off_name_change_i
 
 
 def test_a_line_that_differs_by_more_than_a_name_still_counts():
-    removed = Counter(["x = KEEPER", "y = KEEPER", "z = KEEPER", "go(KEEPER, 1)"])
+    removed = Counter(["x = OLD_ACTOR", "y = OLD_ACTOR", "z = OLD_ACTOR", "go(OLD_ACTOR, 1)"])
     added = {"backend/a.py": [(1, "x = TICO"), (2, "y = TICO"), (3, "z = TICO"), (4, "go(TICO, 2)")]}
     assert dc.unmoved(added, removed) == {"backend/a.py": [4]}

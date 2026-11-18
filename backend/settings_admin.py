@@ -2290,7 +2290,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     # Tico gives each open task it owns to the heir, as any reassign is made. One it cannot give stays where it is and
     # says Paused ("was removed") in the list of whoever can fix it.
     for task in c.execute("SELECT id FROM tasks WHERE owner_id=? AND status='open'", (gone,)).fetchall():
-        H.attempt(c, H.task_reassign, H.KEEPER, task["id"], heir, why)
+        H.attempt(c, H.task_reassign, H.TICO_ACTOR, task["id"], heir, why)
     # Who asked for a task is not the engine's: it changes here, with its line in the task's history.
     for task in c.execute("SELECT id FROM tasks WHERE requester_id=? AND status='open'", (gone,)).fetchall():
         H._task_event(c, task["id"], actor, "requester", gone, heir, why)

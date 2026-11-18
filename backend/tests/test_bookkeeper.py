@@ -185,7 +185,7 @@ def test_an_older_install_gets_the_view_once_and_its_open_ask_is_closed_for_the_
         FA.ensure_setup(c, store.settings.owner_email)
         BK.grant_defaults(c)
         owner = "human:" + api.app.state.auth.owner_id(c)
-        ask = H.task_create(c, H.KEEPER, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
+        ask = H.task_create(c, H.TICO_ACTOR, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
     ensure(api)
     ensure(api)
     with store.read() as c:

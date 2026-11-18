@@ -105,10 +105,10 @@ def observe(c, settings, value=None, *, detailed=True):
         value = {**snapshot(c, settings), **value}
     if value['at_warning'] and not old.get('active'):
         incident = {'id': H.new_id(), 'opened_at': H.now(), 'active': True, 'counts': value}
-        H.event(c, H.KEEPER, 'turns.warning_crossed', incident['id'], value)
+        H.event(c, H.TICO_ACTOR, 'turns.warning_crossed', incident['id'], value)
     elif not value['at_warning'] and old.get('active'):
         incident.update(active=False, resolved_at=H.now(), counts=value)
-        H.event(c, H.KEEPER, 'turns.warning_cleared', incident['id'], value)
+        H.event(c, H.TICO_ACTOR, 'turns.warning_cleared', incident['id'], value)
     incident['at_stop'] = value['at_stop']
     if incident != old:
         save(c, INCIDENT, incident)

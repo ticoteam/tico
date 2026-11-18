@@ -234,7 +234,7 @@ def file_bill(c, files, row, blob_id, digest, size):
         "UPDATE bills_inbound SET state=?, file_id=?, action_id=?, code=?, updated_at=? WHERE id=?",
         (state, made["id"], action_id, code[:80], H.now(), row["id"]),
     )
-    H.event(c, H.KEEPER, "bills.received", row["id"], {"state": state, "file": made["id"]})
+    H.event(c, H.TICO_ACTOR, "bills.received", row["id"], {"state": state, "file": made["id"]})
     return state
 
 

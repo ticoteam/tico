@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from . import hubdb_core, idea_checks, stage_effects, stage_pick, task_effects
 from . import task_requirements as R
 from . import task_depends, task_wakes, validate_gate
-from .hubdb_core import KEEPER as SYSTEM
+from .hubdb_core import TICO_ACTOR as SYSTEM
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1703,7 +1703,7 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
         hub = _h()
         for standing in unmet:
             conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (hub.now(), standing.requirement["id"]))
-            _event(conn, task_id, hub.KEEPER, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
+            _event(conn, task_id, hub.TICO_ACTOR, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
         unmet = []
     if not target or unmet or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None

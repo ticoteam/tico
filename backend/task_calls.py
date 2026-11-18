@@ -37,7 +37,7 @@ Row = dict[str, Any]
 _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
-SYSTEM: str = _core.KEEPER
+SYSTEM: str = _core.TICO_ACTOR
 
 # The engine's words for where a move goes (task_engine.NEXT and the rest), spelled out so that loading this module
 # never depends on the engine being loaded first.

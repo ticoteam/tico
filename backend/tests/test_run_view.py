@@ -174,7 +174,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
         )
     assert "events_action_target" in plan, plan
     assert (earlier["id"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
-    assert earlier["next"]["kind"] == "resumed" and earlier["next"]["by"] == H.KEEPER
+    assert earlier["next"]["kind"] == "resumed" and earlier["next"]["by"] == H.TICO_ACTOR
     # A lapsed lease on a runner that continues its own work (every rc.1 runner advertises capacity_continue_v1) says
     # the computer lost the run, then names what the run only read.
     note = earlier["next"]["note"]
@@ -184,7 +184,9 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     # A resume recorded before the hub kept a line for people still shows only its first paragraph.
     from backend.run_view import decision_note
 
-    assert decision_note(H.KEEPER, {"note": "Check first.\n\nWhat the stopped run saved:\nArchived"}) == "Check first."
+    assert (
+        decision_note(H.TICO_ACTOR, {"note": "Check first.\n\nWhat the stopped run saved:\nArchived"}) == "Check first."
+    )
     assert (later["id"], later["try"], later["tries"], later["next"]) == (second["id"], 2, 2, None)
 
 
@@ -394,7 +396,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
 
 
 def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
-    """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
+    """A person's message to a bot that neither owns nor asked the task reaches that bot as a Tico carrier. The task's
     line reads it as the person's: CPU overload does not stand for it, but a memory hold still does."""
     from backend import views
     from backend.tests.helpers.scheduler import _wake_by_hand
@@ -587,11 +589,11 @@ def test_a_persons_resume_with_a_note_names_them_and_a_run_without_one_has_no_la
         "Resumed by Ana at " + earlier["decision"]["at"][11:16] + "Z, Nothing was renamed yet; run it again."
     )
     # Tico's own auto-reconcile is named as such.
-    assert decided_by(H.KEEPER) == "tico"
+    assert decided_by(H.TICO_ACTOR) == "tico"
     assert decision_label(
         {
             "decision": "resume",
-            "by": H.KEEPER,
+            "by": H.TICO_ACTOR,
             "by_kind": "tico",
             "state": "completed",
             "at": "2026-10-26T07:05:00Z",

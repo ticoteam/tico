@@ -405,7 +405,9 @@ def comment_rights(c, auth, who, task_id):
             )
     origin = None if H.task_private(c, row) else H.task_origin(c, row)
     others = [
-        a for a in dict.fromkeys([row["owner_id"], row["requester_id"], origin]) if a and a not in (who.actor, H.KEEPER)
+        a
+        for a in dict.fromkeys([row["owner_id"], row["requester_id"], origin])
+        if a and a not in (who.actor, H.TICO_ACTOR)
     ]
     target = next((a for a in others if H.is_bot(a)), None)
     if target and not H.task_represents(c, who.actor, row["owner_id"]):

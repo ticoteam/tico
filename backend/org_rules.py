@@ -1250,8 +1250,8 @@ def ensure_builtin(c):
         "where_terms": ASKS_ONLY,
         "if_broken": "block",
         "status": "active",
-        "suggested_by": H.KEEPER,
-        "decided_by": H.KEEPER,
+        "suggested_by": H.TICO_ACTOR,
+        "decided_by": H.TICO_ACTOR,
         "decided_at": now,
         "version": 1,
         "created_at": now,
@@ -1267,7 +1267,7 @@ def ensure_builtin(c):
     c.execute(
         "INSERT INTO registry_metadata VALUES(?,?)", (ASKS_TO_A_PERSON_ADDED, _json({"rule": row["id"], "at": now}))
     )
-    _event(c, H.KEEPER, "added", row["id"], {"kind": "internal", "status": "active", "built_in": True})
+    _event(c, H.TICO_ACTOR, "added", row["id"], {"kind": "internal", "status": "active", "built_in": True})
     return row["id"]
 
 

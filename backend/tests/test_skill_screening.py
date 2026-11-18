@@ -133,7 +133,7 @@ def test_no_engine_is_unavailable_or_the_cap_and_nothing_is_asked(api):
 
     store_of(api).settings.decisions_monthly_usd = 1.0
     with store_of(api).transaction() as c:
-        H.event(c, H.KEEPER, "judge.spend", "earlier", {"cost_usd": 1.5})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "earlier", {"cost_usd": 1.5})
     decide(api, pid, "rescreen", token="ana-test")
     assert S.drain(store_of(api), engine_for=lambda store, c: None) == ["not_screened"]
     assert latest(api, pid)["reason"] == "cap"

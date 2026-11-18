@@ -115,7 +115,7 @@ def test_a_plan_the_provider_refuses_counts_as_gone(api):
     [claude] = [s for s in _subs(api) if s["kind"] == "claude_token"]
     with api.app.state.store.transaction() as c:
         MS._status(c, claude["id"], "needs_reconnect", "refused")
-        PM.follow(c, api.app.state.store.settings, H.KEEPER)
+        PM.follow(c, api.app.state.store.settings, H.TICO_ACTOR)
     assert on(api, "ops")[2] == "codex" and tasks_on(api, "ops") == CHATGPT_TASKS
 
 
@@ -135,7 +135,7 @@ def test_a_bot_a_person_set_stays_until_the_change_is_undone(api):
     assert not [m for m in plan_moves(api) if m["from"] == "claude-sonnet-5-5"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE settings_changes SET undone_at=? WHERE id='x1'", (H.now(),))
-        PM.follow(c, api.app.state.store.settings, H.KEEPER)
+        PM.follow(c, api.app.state.store.settings, H.TICO_ACTOR)
     assert on(api, "ops")[2] == "codex" and tasks_on(api, "ops") == CHATGPT_TASKS
 
 
@@ -149,7 +149,7 @@ def test_a_company_with_a_plan_already_converges_on_start_and_nothing_moves_twic
     assert on(api, "cpo")[2] == "codex" and tasks_on(api, "cpo") == CHATGPT_TASKS
     assert len(plan_moves(api)) == before + 1
     with api.app.state.store.transaction() as c:
-        assert PM.follow(c, api.app.state.store.settings, H.KEEPER) == []
+        assert PM.follow(c, api.app.state.store.settings, H.TICO_ACTOR) == []
 
 
 def test_no_plan_moves_nothing_and_an_api_key_is_not_a_plan(api):
@@ -214,10 +214,10 @@ def test_a_task_model_keeps_its_context_length_and_leaves_with_the_role(api):
         config = BS.read(c, second)
         config[TM.KEY] = {**config[TM.KEY], "model": "claude-opus-5-5", "harness": "claude", "runtime": "claude"}
         BS.write(c, second, config)
-        PM.follow(c, api.app.state.store.settings, H.KEEPER)
+        PM.follow(c, api.app.state.store.settings, H.TICO_ACTOR)
         assert TM.stored(BS.read(c, second))["model"] == ""
         assert TM.stored(BS.read(c, second))["compact_at"] == 300_000
-        assert PM.follow(c, api.app.state.store.settings, H.KEEPER) == []
+        assert PM.follow(c, api.app.state.store.settings, H.TICO_ACTOR) == []
 
 
 def test_the_assistant_keeps_the_strong_model_and_no_task_model():

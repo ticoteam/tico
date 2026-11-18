@@ -146,7 +146,7 @@ def _send_one(store, send, actor):
         return 0
     with store.transaction() as c:
         _mark_sent(c, actor, plan["marks"])
-        H.event(c, H.KEEPER, "thread.digest", actor, {"threads": len(plan["items"]), "unread": plan["unread"]})
+        H.event(c, H.TICO_ACTOR, "thread.digest", actor, {"threads": len(plan["items"]), "unread": plan["unread"]})
     return 1
 
 

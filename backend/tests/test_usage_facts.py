@@ -45,7 +45,7 @@ def test_a_finished_run_keeps_one_fact_per_segment_and_a_late_finish_adds_none(a
     with api.app.state.store.transaction() as c:
         turn(c, "r1")
         usage = {**TICO, "input_tokens": 1500, "segments": [SONNET, TICO]}
-        H.turn_finish(c, H.KEEPER, "r1", usage=usage)
+        H.turn_finish(c, H.TICO_ACTOR, "r1", usage=usage)
         rows = facts(c, "r1")
         assert [(r["model"], r["billing"], r["cost_nano"]) for r in rows] == [
             ("claude-sonnet-5-5", "subscription", 4_500_000),
@@ -55,7 +55,7 @@ def test_a_finished_run_keeps_one_fact_per_segment_and_a_late_finish_adds_none(a
         assert rows[0]["meter_key"] is None and rows[1]["meter_key"] == f"gateway:{month}:tico-medium-1.0"
         assert rows[0]["family"] == "anthropic" and rows[0]["bot_id"] == "ops"
         # A late result for the same attempt reports again: the first report stands, nothing is counted twice.
-        H.turn_finish(c, H.KEEPER, "r1", usage={**TICO, "segments": [TICO]})
+        H.turn_finish(c, H.TICO_ACTOR, "r1", usage={**TICO, "segments": [TICO]})
         assert len(facts(c, "r1")) == 2
         assert usage_limits.spent(c, "ops", "2000-01-01", "2999-01-01", True) == pytest.approx(0.0065)
         assert usage_limits.spent(c, "ops", "2000-01-01", "2999-01-01", False) == pytest.approx(0.002)
@@ -64,17 +64,17 @@ def test_a_finished_run_keeps_one_fact_per_segment_and_a_late_finish_adds_none(a
 def test_a_run_that_counted_nothing_keeps_no_fact_until_a_late_result_measures_it(api):
     with api.app.state.store.transaction() as c:
         turn(c, "r2")
-        H.turn_finish(c, H.KEEPER, "r2", exit_code="interrupted", usage_reason="no_result")
+        H.turn_finish(c, H.TICO_ACTOR, "r2", exit_code="interrupted", usage_reason="no_result")
         assert facts(c, "r2") == []
         assert c.execute("SELECT usage_reason FROM attempts WHERE id='r2'").fetchone()[0] == "no_result"
-        H.turn_finish(c, H.KEEPER, "r2", usage={**TICO, "segments": [TICO]})
+        H.turn_finish(c, H.TICO_ACTOR, "r2", usage={**TICO, "segments": [TICO]})
         assert [r["model"] for r in facts(c, "r2")] == ["tico-medium-1.0"]
 
 
 def test_facts_refuse_change_and_removal(api):
     with api.app.state.store.transaction() as c:
         turn(c, "r3")
-        H.turn_finish(c, H.KEEPER, "r3", usage={**TICO, "segments": [TICO]})
+        H.turn_finish(c, H.TICO_ACTOR, "r3", usage={**TICO, "segments": [TICO]})
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             c.execute("UPDATE usage_facts SET cost_nano=0 WHERE run_id='r3'")
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -84,7 +84,7 @@ def test_facts_refuse_change_and_removal(api):
 def test_the_meter_adds_what_moved_and_is_preferred_over_the_estimate(api):
     with api.app.state.store.transaction() as c:
         turn(c, "r4")
-        H.turn_finish(c, H.KEEPER, "r4", usage={**TICO, "segments": [TICO]})
+        H.turn_finish(c, H.TICO_ACTOR, "r4", usage={**TICO, "segments": [TICO]})
         month = facts(c, "r4")[0]["metered_at"][:7]
         model = TICO["model"]
         assert usage_facts.reconciled(c, month)[model] == {
@@ -126,7 +126,7 @@ def meter_total(c, month, model):
 def test_a_first_meter_reading_of_zero_is_kept_and_preferred_over_the_estimate(api):
     with api.app.state.store.transaction() as c:
         turn(c, "r5")
-        H.turn_finish(c, H.KEEPER, "r5", usage={**TICO, "segments": [TICO]})
+        H.turn_finish(c, H.TICO_ACTOR, "r5", usage={**TICO, "segments": [TICO]})
         month = facts(c, "r5")[0]["metered_at"][:7]
         model = TICO["model"]
         assert usage_facts.record_meter(c, month, f"{month}-02T00:00:00.000000Z", {model: 0}, H.now()) == 1
@@ -163,9 +163,9 @@ def test_a_late_report_leaves_the_runs_own_usage_columns_as_its_facts_have_them(
     """The first measured report stands for the turn's columns too, so they never disagree with its facts."""
     with api.app.state.store.transaction() as c:
         turn(c, "r6")
-        H.turn_finish(c, H.KEEPER, "r6", usage={**TICO, "input_tokens": 1500, "segments": [TICO]})
-        H.turn_finish(c, H.KEEPER, "r6", usage={**SONNET, "segments": [SONNET]})
-        H.turn_finish(c, H.KEEPER, "r6", exit_code="interrupted", usage_reason="no_result")
+        H.turn_finish(c, H.TICO_ACTOR, "r6", usage={**TICO, "input_tokens": 1500, "segments": [TICO]})
+        H.turn_finish(c, H.TICO_ACTOR, "r6", usage={**SONNET, "segments": [SONNET]})
+        H.turn_finish(c, H.TICO_ACTOR, "r6", exit_code="interrupted", usage_reason="no_result")
         row = c.execute(
             "SELECT input_tokens, usage_model, est_cost_usd, usage_reason FROM attempts WHERE id='r6'"
         ).fetchone()

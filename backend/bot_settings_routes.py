@@ -487,7 +487,7 @@ def register(
                         (H.now(), bot),
                     )
                     execution.expire(c)
-                H.status_set(c, H.KEEPER, bot, state="paused" if body.action == "pause" else "idle")
+                H.status_set(c, H.TICO_ACTOR, bot, state="paused" if body.action == "pause" else "idle")
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
             H.event(c, who.actor, "bot." + body.action, bot)
             return {"bot": bot, "action": body.action, "revision": config["revision"] + 1}

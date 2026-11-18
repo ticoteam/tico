@@ -92,7 +92,7 @@ def test_hourly_sweep_retires_a_replaced_offline_computer_and_it_can_enroll_agai
             ("computer-repositories:" + rid, "computer-enrolled-as:" + rid),
         ).fetchone()
         events = list(c.execute("SELECT actor,detail FROM events WHERE action='runner.revoked' AND target=?", (rid,)))
-        assert len(events) == 1 and events[0]["actor"] == H.KEEPER
+        assert len(events) == 1 and events[0]["actor"] == H.TICO_ACTOR
         assert json.loads(events[0]["detail"])["reason"] == (
             f"No bots assigned and offline for over 24 hours; replaced by Acme Mac ({current['runner_id']})"
         )

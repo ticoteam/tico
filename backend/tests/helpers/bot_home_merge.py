@@ -235,7 +235,9 @@ def _home(c, bot, summary):
     now = H.now()
     for h in extra:
         c.execute("UPDATE conversations SET archived_at=?, updated_at=? WHERE id=?", (now, now, h["id"]))
-        H.event(c, H.KEEPER, "conversation.archived_for_home_merge", h["id"], {"home": pick["id"], "bot": bot["id"]})
+        H.event(
+            c, H.TICO_ACTOR, "conversation.archived_for_home_merge", h["id"], {"home": pick["id"], "bot": bot["id"]}
+        )
         summary["homes_archived"] += 1
     found = threads.home(c, actor, create=False)
     if not found or found["id"] != pick["id"]:
@@ -278,7 +280,7 @@ def _home_file_moves(c, bot_id):
     c.execute(
         "INSERT INTO bot_file_activity(file_id, actor, action, created_at, detail) "
         "SELECT id, ?, 'moved_to_home', ?, json_object('from', was, 'to', scope) FROM temp.home_file_moves",
-        (H.KEEPER, H.now()),
+        (H.TICO_ACTOR, H.now()),
     )
 
 
@@ -397,7 +399,7 @@ def _move(c, room, home, bot, summary):
         "VALUES(?,?,?,?,?,?,?)",
         (rid, hid, bot["id"], person, room["room_key"], n, now),
     )
-    H.event(c, H.KEEPER, EVENT, rid, {"home": hid, "bot": bot["id"], "owner": person, "messages": n})
+    H.event(c, H.TICO_ACTOR, EVENT, rid, {"home": hid, "bot": bot["id"], "owner": person, "messages": n})
     summary["rooms"] += 1
     summary["messages"] += n
 

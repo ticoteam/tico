@@ -36,9 +36,9 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     post(api, f"attempts/{live['id']}/started", {"thread_id": "t-live"}, machine["token"])  # a live run
     with api.app.state.store.transaction() as c:
         for slug, state in (("cpo", "idle"), ("finance", "idle"), ("assistant", "crashed"), ("inbox", "idle")):
-            H.status_set(c, H.KEEPER, slug, state=state, focus="Checked the queue")
+            H.status_set(c, H.TICO_ACTOR, slug, state=state, focus="Checked the queue")
         holds.put(
-            c, holds.RUNAWAY, "bot", "cpo", actor=H.KEEPER, details={"window": "hour", "runs": 301, "budget": 300}
+            c, holds.RUNAWAY, "bot", "cpo", actor=H.TICO_ACTOR, details={"window": "hour", "runs": 301, "budget": 300}
         )
         failing(c, "finance", 2, until_at=H.shift(H.now(), seconds=600))
         usage_limits.save_own(c, "assistant", {"daily_usd": 0.000001}, "human:ana")
@@ -92,7 +92,7 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
                 ("last-stop:" + slug, encode({"attempt_id": run, "at": H.now()})),
             )
         for slug in ("ops", "cpo", "assistant", "finance"):
-            H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
+            H.status_set(c, H.TICO_ACTOR, slug, state="crashed", focus="Checked the queue")
     each = lines(api, ["assistant", "cpo", "finance", "ops"], primed=False)[0]
     together, primed = lines(api, ["assistant", "cpo", "finance", "ops"], primed=True)
     assert together == each and lines(api, ["cpo", "ops"], primed=True)[1] == primed
@@ -136,7 +136,7 @@ def finish_private(store, slug):
         for tid, owner in c.execute(
             f"SELECT id, owner_id FROM tasks WHERE id IN ({','.join('?' * len(ids))})", tuple(ids)
         ).fetchall():
-            E.move(c, tid, E.DONE if owner == "bot:" + slug else E.CLOSED, H.KEEPER, "Finished")
+            E.move(c, tid, E.DONE if owner == "bot:" + slug else E.CLOSED, H.TICO_ACTOR, "Finished")
     return ids
 
 
@@ -216,7 +216,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
                 "bot:" + slugs[(n + 1) % 6],
                 private=False,
             )
-            E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.KEEPER, "Finished")
+            E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.TICO_ACTOR, "Finished")
     after, more = read()
     # Seeks move a step or two with the random ids of new rows; reading the 40 finished tasks costs far more than 5.
     assert after == before and abs(more - steps) <= 5 and steps
@@ -229,7 +229,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
         c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (shared["id"],))
         H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)  # requester only
         done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
-        E.move(c, done["id"], E.DONE, H.KEEPER, "Finished")
+        E.move(c, done["id"], E.DONE, H.TICO_ACTOR, "Finished")
     actors = [f"bot:busy-{n}" for n in range(4)]
     marks = " IN (" + ",".join("?" * len(actors)) + ")"
 
@@ -294,7 +294,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
 
 
 def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(api, monkeypatch):
-    # A bot with a stopped run costs its own queries on the status page (held runs, the keeper's leftovers, the
+    # A bot with a stopped run costs its own queries on the status page (held runs, Tico's leftovers, the
     # queued work behind them). Its runs are read for all bots together, so each further bot adds fewer statements
     # than before (about ten, now about seven); the bot's own checks still read per bot.
     machine = setup(api, monkeypatch, tasks=4)
@@ -372,7 +372,7 @@ def test_a_bots_open_asks_count_in_its_needs_human_only_on_tasks_the_reader_may_
     # reader cannot open is not counted for them, so the number never hints that the task is there.
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
-        H.status_set(c, H.KEEPER, "ops", state="idle", focus="")
+        H.status_set(c, H.TICO_ACTOR, "ops", state="idle", focus="")
         shared = H.task_create(c, "human:ana", "Check the vendor list", "Compare them.", "bot:ops", private=False)
         secret = H.task_create(c, "human:ana", "Acme acquisition", "Look into it.", "bot:ops", private=True)
         for task in (shared, secret):
