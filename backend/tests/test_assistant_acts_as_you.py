@@ -10,12 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from backend import assistant
-from clients import hubtools
 from backend import hubdb as H
+from backend.store import Problem
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
-from backend.store import Problem
+from clients import hubtools
 
 
 def set_rule(api, **rules):
@@ -88,7 +89,7 @@ def test_the_never_list_stays_the_persons_own_tap(api):
         ("POST", "/api/v2/access/owner", {"person": "human:ben"}),
         ("POST", "/api/v2/sql", {"query": "SELECT body FROM messages"}),
         ("POST", "/api/v2/support/tickets", {"subject": "Help", "body": "Please"}),
-        ("DELETE", "/api/v2/people/ben", None),
+        ("DELETE", "/api/v2/humans/ben", None),
         ("DELETE", "/api/v2/company/server-connection", None),
         ("PUT", "/api/v2/assistant/settings", {"enabled": False}),
     ]
@@ -139,7 +140,14 @@ def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
         asked = H.task_ask(
-            c, "bot:finance", made["id"], "human:ana", "Spend $1,200?", kind="ok", seen_version=made["version"]
+            c,
+            "bot:finance",
+            made["id"],
+            "human:ana",
+            "Spend $1,200?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=made["version"],
         )
     tid, rid = made["id"], asked["requirement_id"]
 
@@ -175,7 +183,7 @@ def test_admits_on_turn_refuses_what_the_person_alone_decides():
     assert admits_on_turn("POST", "/api/v2/bots/ops/archive", {"expected_revision": 1})
     assert not admits_on_turn("POST", "/api/v2/me/tokens", {})
     assert not admits_on_turn("POST", "/api/v2/sql", {"query": "select 1"})
-    assert not admits_on_turn("DELETE", "/api/v2/people/ben", None)
+    assert not admits_on_turn("DELETE", "/api/v2/humans/ben", None)
     assert not admits_on_turn("PUT", "/api/v2/access/rules", {"assistant_direct": False})
     assert not admits_on_turn("GET", "/api/v2/tasks", None)
     assert not admits_on_turn("POST", "/api/v2/tasks/t1", {"status": "done", "api_key": "x"})
@@ -230,7 +238,14 @@ def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
     with api.app.state.store.transaction() as c:
         ads = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops")
         ok = H.task_ask(
-            c, "bot:ops", ads["id"], "human:ana", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+            c,
+            "bot:ops",
+            ads["id"],
+            "human:ana",
+            "Spend $500 on ads?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=ads["version"],
         )
     give = f"/api/v2/tasks/{ads['id']}/asks/{ok['requirement_id']}/ok"
     for path, body in (("/api/v2/assistant/batch", {"actions": [{"path": give, "body": {}}]}), (give, {})):
@@ -362,7 +377,7 @@ def test_the_assistants_chat_turn_never_sends_the_morning_message(api):
 def test_a_morning_message_is_only_for_an_active_person(api):
     coo = setup_attempt(api, "assistant")[2]["token"]
     morning(api, coo, for_person="human:ghost", expected=404)
-    post(api, "access/people/cara", {"sign_in": False})
+    post(api, "access/humans/cara", {"sign_in": False})
     morning(api, coo, for_person="human:cara", expected=404)
 
 
@@ -440,7 +455,7 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
 REVIEWED = {
     "POST /api/v2/finance/ad-imports": "turns Finance's ad spend import on or off and picks, by id, which saved keys it reads with; reads or writes no secret",
     "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
-    "POST /api/v2/people/{pid}": "a profile edit; 'login' is a last-login field",
+    "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
     "POST /api/v2/runners/heartbeat": "the runner's own heartbeat; 'provider' is a field name",
     "POST /api/v2/bots/{bot}/go-live": "switches a bot live on credentials the person already granted; writes none",
     "POST /api/v2/grokbot/sync": "syncs a bot's state from its provider; writes no credential",
@@ -448,13 +463,12 @@ REVIEWED = {
     "POST /api/v2/bots/{bot}/limit/retry": "retries a bot's limit; writes no sign-in",
     "POST /api/v2/lenses/{lens_id}/runs": "runs a lens on the model provider the company already set",
     "POST /api/v2/files/links": "a file link; 'provider' names the file's host",
-    "POST /api/v2/connectors/calendar/actions/claim": "claims a calendar card the person taps; 'invite' is a calendar invite",
     "POST /api/v2/calendar/appointments": "books a calendar event; its invites go out through the calendar (see the report)",
     "POST /api/v2/imports/transcripts": "imports a transcript; 'provider' is its source field",
     "POST /api/v2/credential-requests": "asks the person for a credential; they enter it in Settings, which is NEVER",
     "POST /api/v2/credential-requests/{rid}/cancel": "cancels that ask; writes no credential",
     "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
-    "POST /api/v2/judge": "asks the LLM judge; 'provider' is the model provider",
+    "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
     "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
     "POST /api/v2/market/ask": "reads the market graph and asks the company's already-set model provider; writes no credential or provider setting",
     "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
@@ -470,7 +484,7 @@ REVIEWED = {
     "PATCH /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "DELETE /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
-    "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
+    "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
 
 
@@ -478,6 +492,7 @@ def _template_tools():
     """Every command the Assistant template tells it to run, as the tool it runs: the hubcli command tree walked for each
     `hub ...` span (clients/remotecli.tool_name names the tool), not a pattern."""
     import argparse
+
     from clients import hubcli, remotecli
 
     def fn_of(words):
@@ -509,7 +524,7 @@ def _template_tools():
 
 def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
     """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
-    small enough for the model (about 185 KB today; the cliff is past 200 KB)."""
+    small enough for the model (187,363 bytes at this commit; the cap is 200,000)."""
     everything = {t["name"] for t in hubtools.TOOLS}
     offered = hubtools.listing(local=True, kind="assistant")
     names = {t["name"] for t in offered}
@@ -517,5 +532,7 @@ def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the
     assert len(template) >= 40, sorted(template)
     assert template - names == set(), sorted(template - names)
     assert not set(hubtools.ASSISTANT_HIDDEN) & names and set(hubtools.ASSISTANT_HIDDEN) <= everything
+    # 187,363 bytes (default json.dumps) at this commit, about 13 KB under the cap. Keep room by compacting the text at
+    # source (see `listing()` and ASSISTANT_HIDDEN in clients/commands/_access.py), not by hiding a tool the template runs.
     assert len(json.dumps(offered)) <= 200_000, len(json.dumps(offered))
     assert "tico_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}

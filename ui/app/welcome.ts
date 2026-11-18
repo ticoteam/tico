@@ -655,8 +655,10 @@ async function onbCompleted(state: OnbState, record: Partial<OnbRecord> | null |
   await refresh(true);                      // the new bots in the sidebar, behind the modal
 }
 // Done: Tasks. The model plan is a default (Settings > Models), not a step.
+// Setup goes on in Flow: each bot an open setup area waits on asks the person its first ❓ (backend/flow_ping.py `setup`).
 function onbDone(state: OnbState) {
   state.dialog?.close();
+  post('/v2/flow/ping', {scope: 'setup'}).catch(() => {});
 }
 
 // ----------------------------------------------------------------- Welcome (a team from the company file)

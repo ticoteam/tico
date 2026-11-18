@@ -7,14 +7,12 @@ Not commands, so never run them: --json on task, goal or kpi commands, proposal 
 with --all, kpi readings, and any `--help` or `--version` probe of a name not listed here. Use the lines below instead.
 
 ## Read the strategy
-- `tico strategy show`: the published strategy: summary, vision, the sections, bets (id, statement, wrong-if), their goals and
+- `tico strategy show`: the live strategy: summary, vision, the sections, bets (id, statement, wrong-if), their goals and
   health, and `proof_since` (when How we know they want it last changed; null when empty).
-- `tico strategy versions`: published versions, newest first. `tico strategy diff --from <n> --to <n>`: what changed between two.
+- `tico strategy versions`: the versions, newest first (each save is one). `tico strategy diff --from <n> --to <n>`: what changed between two.
 - `tico goal strategy-bot`: your level, whether the regular checks run, and `asked_today` per person.
 - Level 3 only: `tico goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`: creates or reorders bot tasks
   (`playbooks/acts-on-its-own.md`).
-- Level 2 and up: `tico goal strategy-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`: one item for
-  the same question several bots ask one person (`playbooks/recoveries.md`).
 - `tico goal company`: the vision and description (read only).
 - `tico strategy vision --task <id> "<vision>"`: only on the server's vision question, the vision the owner sent there, in
   their words (`playbooks/vision-question.md`).
@@ -49,7 +47,7 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 - `tico task list [--owner <bot-or-person>]`: tasks, optionally one owner's. Look here for an open task before you file one.
 - `tico task done <id> -m "<the result, in a few plain sentences>" --version N`: finishes a task you own.
   Every task you are given ends with this command.
-- `tico task create --owner <person> --title "<question>" --body "<the facts and what you need>"`: a question or a source
+- `tico task create --owner <person> --title "<question>" --message "<the facts and what you need>"`: a question or a source
   request to a person, only as `playbooks/check-ins.md` and `playbooks/owner-chat.md` say.
 
 ## Questions and messages
@@ -75,7 +73,7 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 
 ## Never run these
 They belong to the owner or to the server. Do not run them, not even with `--help`.
-- `tico strategy draft`, `tico strategy bet`, `tico strategy publish`.
+- `tico strategy draft`, `tico strategy bet`.
 - `tico goal status` (colours are never set by hand), `tico kpi create`, `tico kpi update`, `tico kpi target`, `tico kpi link`,
   `tico kpi unlink`. A change to a goal, a KPI or a target is a `tico proposal create`.
 - `tico proposal decide`: a person's own decision; a bot is refused.

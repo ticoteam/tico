@@ -4,11 +4,11 @@ the background shells and monitors still running, and the checkpoint. Nothing fr
 import json
 
 from backend.store import H
-from backend.tests.helpers.shared_logins import queued_login  # noqa: F401
 from backend.tests.helpers.api import assign, claim, expire, get, post, put, ready, runner  # noqa: F401
 from backend.tests.helpers.execution_review import aged, sweep
 from backend.enqueue import enqueue_stored
 from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides, events, task_attempt
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
 
 def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api):
@@ -140,7 +140,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
 def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     machine = runner(api, "ana")
     assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
     tid, first = task_attempt(api, machine, "Archive the bots")
     events(
         api,
@@ -159,7 +159,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     assert view["runs"][0]["reason"] == "Computer lost or heartbeat stopped (attempt lease expired)"
     aged(api, first["id"], grace=True)
     assert [d["state"] for d in sweep(api)] == ["queued"]
-    ready(api, machine, ["ops"])
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
     second = claim(api, machine)
     assert second["job_id"] == first["job_id"]
     later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
@@ -174,13 +174,19 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
         )
     assert "events_action_target" in plan, plan
     assert (earlier["id"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
-    assert earlier["next"]["kind"] == "resumed" and earlier["next"]["by"] == H.KEEPER
-    assert earlier["next"]["note"].startswith("Resumed automatically: the interrupted run only read (Read)")
+    assert earlier["next"]["kind"] == "resumed" and earlier["next"]["by"] == H.TICO_ACTOR
+    # A lapsed lease on a runner that continues its own work (every rc.1 runner advertises capacity_continue_v1) says
+    # the computer lost the run, then names what the run only read.
+    note = earlier["next"]["note"]
+    assert note.startswith("You were interrupted at ") and "lost lease" in note, note
+    assert "Resumed automatically: the interrupted run only read (Read)" in note, note
     assert "Archived one bot" not in json.dumps(earlier), "the hub's own words, never what the stopped run saved"
     # A resume recorded before the hub kept a line for people still shows only its first paragraph.
     from backend.run_view import decision_note
 
-    assert decision_note(H.KEEPER, {"note": "Check first.\n\nWhat the stopped run saved:\nArchived"}) == "Check first."
+    assert (
+        decision_note(H.TICO_ACTOR, {"note": "Check first.\n\nWhat the stopped run saved:\nArchived"}) == "Check first."
+    )
     assert (later["id"], later["try"], later["tries"], later["next"]) == (second["id"], 2, 2, None)
 
 
@@ -390,7 +396,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
 
 
 def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
-    """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
+    """A person's message to a bot that neither owns nor asked the task reaches that bot as a Tico carrier. The task's
     line reads it as the person's: CPU overload does not stand for it, but a memory hold still does."""
     from backend import views
     from backend.tests.helpers.scheduler import _wake_by_hand
@@ -491,168 +497,6 @@ def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(a
     assert not any(c['id'] == 'runner_load:' + rid for c in get(api, 'health')['checks'])
 
 
-def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):
-    from backend.tests.helpers.api import as_member, restrict
-
-    as_member(api, "ben@acme.example")
-    with api.app.state.store.transaction() as c:  # finance is Ana's alone: Ben may not even learn it is busy
-        restrict(c, "finance", people=["ana"])
-    machine = runner(api, "ana")
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    tid, attempt = task_attempt(api, machine)
-    aid = attempt["id"]
-    line = "Waiting for this computer's ChatGPT login to be free (busy with finance)"
-    events(
-        api,
-        machine,
-        aid,
-        [("status", {"waiting": line, "login": "this computer's ChatGPT login", "holder": "finance"})],
-    )
-    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
-    assert (run["state"], run["waiting"], run["moved"]) == ("running", line, None)
-    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["runs"]
-    assert run["waiting"] == "Waiting for this computer's ChatGPT login to be free (busy with another bot)"
-    # A runner that knows the queue names the holder's run, since when, and the place. The holder's task is looked up
-    # from its run, only for a reader who may read that run, and is never stored with the wait: every event goes out
-    # raw to whoever reads the waiting run (the changes feed, the run's events), so neither the task an old runner
-    # sends nor its worded line is kept. A holder that is no live run is flagged for Health.
-    from backend import login_waits
-
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET title='Close the books', number=12 WHERE id=?", (tid,))
-    held = "#12 Close the books"
-    worded = f"Waiting for this computer's ChatGPT login (held by finance on {held} since 19:06Z; position 2)"
-    place = {
-        "waiting": worded,
-        "login": "this computer's ChatGPT login",
-        "holder": "finance",
-        "holder_attempt": aid,
-        "holder_task": held,
-        "since": 1_760_900_760,
-        "position": 2,
-    }
-    events(api, machine, aid, [("status", place)], first=2)
-    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
-    assert run["waiting"] == worded
-    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["runs"]
-    assert run["waiting"] == "Waiting for this computer's ChatGPT login (held by another bot since 19:06Z; position 2)"
-    with api.app.state.store.read() as c:
-        kept = " ".join(r[0] for r in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (aid,)))
-    assert "Close the books" not in kept and "held by" not in kept
-    # Held by another turn of the same bot: a reader who may see that run still learns its task.
-    events(api, machine, aid, [("status", {**place, "holder": "ops"})], first=3)
-    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
-    assert run["waiting"] == worded.replace("held by finance", "held by another turn of this bot")
-    events(api, machine, aid, [("status", place)], first=4)
-    with api.app.state.store.read() as c:
-        assert not login_waits.unknown_holder(c, aid)
-    # The bot's status says it waits and on whom; Health counts it as busy, not stuck.
-    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
-    assert status["focus"] == status["waiting"] == worded
-    assert not [r for r in get(api, "health")["stuck"] if r["bot"] == "ops"]
-    events(api, machine, aid, [("status", {**place, "holder_attempt": "gone"})], first=5)
-    [row] = [r for r in get(api, "health")["stuck"] if r["bot"] == "ops"]
-    assert row["reason"] == "login_holder_unknown"
-    # Once the login is its own the wait is over; a turn that ran on its fallback instead says where and why.
-    events(
-        api,
-        machine,
-        aid,
-        [
-            ("status", {"waiting": ""}),
-            (
-                "diagnostic",
-                {
-                    "text": "ChatGPT login busy with finance; running this turn on claude",
-                    "fallback": "claude",
-                    "busy": {"login": "this computer's ChatGPT login", "holder": "finance"},
-                },
-            ),
-        ],
-        first=6,
-    )
-    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
-    assert (run["waiting"], run["moved"]) == (None, "ChatGPT login busy with finance; ran this turn on claude")
-    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["runs"]
-    assert run["moved"] == "ChatGPT login busy with another bot; ran this turn on claude"
-
-
-def test_an_opt_in_login_queue_shows_the_wait_as_the_chat_label_not_a_failure(api, queued_login):
-    machine = runner(api, "ana")
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    msg = post(api, "chat/ops", {"text": "Please count."})
-    attempt = claim(api, machine)
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "count"}, machine["token"])
-    events(
-        api,
-        machine,
-        attempt["id"],
-        [
-            (
-                "status",
-                {
-                    "waiting": "Waiting for ChatGPT login \"work\" to be free (busy with ops)",
-                    "login": "ChatGPT login \"work\"",
-                    "holder": "ops",
-                },
-            )
-        ],
-    )
-    execution = get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
-    line = "Waiting for ChatGPT login \"work\" to be free (busy with another turn of this bot)"
-    assert (execution["state"], execution["label"], execution["waiting"]) == ("running", line, line)
-    events(api, machine, attempt["id"], [("status", {"waiting": ""})], first=2)
-    execution = get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
-    assert "waiting" not in execution and execution["label"] != line
-
-
-def test_codex_ignores_old_login_wait_events_in_tasks_chat_status_and_health(api):
-    from backend import login_waits
-
-    machine = runner(api, "ana")
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    tid, attempt = task_attempt(api, machine)
-    aid = attempt["id"]
-    # An old runner's final wait must not survive as a current label after the queue is disabled.
-    events(
-        api,
-        machine,
-        aid,
-        [
-            (
-                "status",
-                {
-                    "waiting": 'Waiting for ChatGPT login "work" to be free',
-                    "login": 'ChatGPT login "work"',
-                    "holder": "finance",
-                    "holder_attempt": "gone",
-                    "position": 1,
-                },
-            )
-        ],
-    )
-    with api.app.state.store.read() as c:
-        assert login_waits.wait(c, aid) is None
-        assert not login_waits.unknown_holder(c, aid)
-    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
-    assert run["waiting"] is None and run["state"] == "running"
-    execution = get(api, f"tasks/{tid}")["execution"]
-    assert "waiting" not in execution and "Waiting for" not in execution["label"]
-    conversation = attempt["conversation"]["id"]
-    execution = get(api, f"conversations/{conversation}/snapshot")["execution"]
-    assert "waiting" not in execution and "Waiting for" not in execution["label"]
-    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
-    assert not status.get("waiting") and "Waiting for" not in status["focus"]
-    assert not [
-        row
-        for row in get(api, "health")["stuck"]
-        if row["bot"] == "ops" and row.get("reason") == "login_holder_unknown"
-    ]
-
-
 def held_run(api, title):
     """A task's run cut at its time limit and held for review (the Dev 563 shape): the job stays uncertain."""
     machine = runner(api, "ana")
@@ -745,11 +589,11 @@ def test_a_persons_resume_with_a_note_names_them_and_a_run_without_one_has_no_la
         "Resumed by Ana at " + earlier["decision"]["at"][11:16] + "Z, Nothing was renamed yet; run it again."
     )
     # Tico's own auto-reconcile is named as such.
-    assert decided_by(H.KEEPER) == "tico"
+    assert decided_by(H.TICO_ACTOR) == "tico"
     assert decision_label(
         {
             "decision": "resume",
-            "by": H.KEEPER,
+            "by": H.TICO_ACTOR,
             "by_kind": "tico",
             "state": "completed",
             "at": "2026-10-26T07:05:00Z",

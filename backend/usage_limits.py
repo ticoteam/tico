@@ -697,10 +697,10 @@ def notify(c, bot, level, label_, amount, cap, owner_email=""):
         else f"{name} reached its {word} limit ({money}, estimated) and takes no new work until it resets or the limit is raised."
     )
     if person:
-        H.say(c, H.KEEPER, H.human_actor(person["id"]), text, kind="notice")
+        H.say(c, H.TICO_ACTOR, H.human_actor(person["id"]), text, kind="notice")
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "usage.limit",
         H.bot_actor(bot),
         {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap},
@@ -720,7 +720,11 @@ def notify_pool(c, scope, level, label_, amount, cap, owner_email="", default=No
         "until it resets or the limit is raised."
     )
     if person:
-        H.say(c, H.KEEPER, H.human_actor(person["id"]), text, kind="notice")
+        H.say(c, H.TICO_ACTOR, H.human_actor(person["id"]), text, kind="notice")
     H.event(
-        c, H.KEEPER, "usage.limit", scope, {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap}
+        c,
+        H.TICO_ACTOR,
+        "usage.limit",
+        scope,
+        {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap},
     )

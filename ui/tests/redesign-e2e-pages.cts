@@ -1,7 +1,7 @@
 // Pages and Library › Files on a real hub (docs/pages.md): the Engineering Lead published a weekly page that replaced
 // an older one, a launch plan on Dana's task and a signup funnel CSV (seed `pages`). Library › Files lists them, a kind
 // filter and a search narrow it, a page opens full size with Tico's status line, a replaced page links on, the task
-// shows the pages pinned to it at the top, the search box finds a file by its words, and the owner deletes a page for good. This hub
+// shows linked pages in Files, the search box finds a file by its words, and the owner deletes a page for good. This hub
 // has no visual address, so pages are plain rows; one framed page (its address faked) takes the height it reports in
 // the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
 import type {Page} from 'playwright';
@@ -50,8 +50,14 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   if (phone) assert.ok(h >= 48 && h <= 76, `${tag}: two lines a row (${h}px)`);
   else assert.ok(h >= 36 && h <= 44, `${tag}: one line a row (${h}px)`);
   assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
-  const bots = await page.locator(phone ? '.lf-meta' : '.lf-by-n').allInnerTexts();
-  assert.ok(bots.every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
+  const listed = await ok<{files: {id: string; title: string; writers?: {name: string}[]}[]}>(page, 'GET', 'files');
+  for (const file of listed.files) {
+    const row = rows.filter({has: page.locator('.lf-title', {hasText: file.title})}).filter({
+      has: page.locator(`a[href="#/page/${file.id}"], a[data-id="${file.id}"]`),
+    });
+    const by = (file.writers || []).map(w => w.name).join(', ') || 'Engineering Lead';
+    assert.ok((await row.locator(phone ? '.lf-meta' : '.lf-by-n').innerText()).includes(by), `${tag}: ${file.title} names its writers`);
+  }
   assert.deepEqual(await page.locator('.lf-pin').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Pinned', 'Pinned'], `${tag}: one pin mark each, no count`);
   // The search and the filter button share the top row.
   const q = (await page.locator('.lf-q').boundingBox())!, f = (await page.locator('.lf-fbtn').boundingBox())!;
@@ -104,7 +110,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // One header line: back, title, the status line and ⋯; no sharing row or version picker; the page right below.
   assert.equal(await page.locator('#pg-view .pg-head .pg-headline .pg-status').count(), 1, `${tag}: the status line is on the header line`);
   assert.equal(await page.locator('#pg-view .pg-access, #pg-view .pg-ver, #pg-view .pg-body .pg-status').count(), 0, `${tag}: no sharing row, version picker or second status line`);
-  assert.equal(await page.locator('#pg-view > .pg-head + .pg-body').count(), 1, `${tag}: the page starts below the header`);
+  assert.equal(await page.locator('#pg-view > .pg-head + .pg-links + .pg-body').count(), 1, `${tag}: link chips sit above the page body`);
   // One frame: no border, corner or white backdrop around the page.
   const bare = await page.locator('#pg-view .pg-preview').evaluate(box => [box, box.querySelector('iframe')!].map(el => {
     const c = getComputedStyle(el);
@@ -114,16 +120,17 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // ⋯ stays at the header's right edge.
   const head = (await page.locator('#pg-view .pg-head').boundingBox())!, more = (await page.locator('#pg-view .pg-menu summary').boundingBox())!;
   assert.ok(Math.abs(head.x + head.width - (more.x + more.width)) < 4, `${tag}: ⋯ on the right`);
-  // A manager's first item is who can see it, with the audience under it; a page of one version has no history or diff.
+  // A writer can edit. The owner can also manage the page's audience.
   await page.locator('#pg-view .pg-menu summary').click();
   const menuNames = () => page.locator('#pg-view .pg-menu-list [role^=menuitem]').evaluateAll(els => els.map(el => (el.querySelector('.pg-mi-name') || el).textContent!.trim()));
-  assert.deepEqual(await menuNames(), ['Who can see it', 'Archive', 'Download', 'Delete for good'], `${tag}: the owner's menu`);
+  assert.deepEqual(await menuNames(), ['Edit', 'Who can see it', 'Archive', 'Download', 'Delete for good'], `${tag}: the owner's menu`);
   assert.equal(await page.locator('#pg-view [data-pg-act=access] .pg-mi-sub').innerText(), "Everyone who can see where it's filed");
   await page.locator('#pg-view .pg-menu summary').click();
   // Keyboard: Enter on ⋯ opens the menu at its first item, the arrows walk it, Esc closes it and returns to ⋯.
   await page.locator('#pg-view .pg-menu summary').focus();
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement?.matches('#pg-view .pg-menu-list [data-pg-act=access]'), null, {timeout: t(5000)});
+  await page.waitForFunction(() => document.activeElement?.matches('#pg-view .pg-menu-list [data-pg-act=edit]'), null, {timeout: t(5000)});
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Archive', `${tag}: the arrows move through the menu`);
   await page.keyboard.press('Escape');
@@ -156,7 +163,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(10000)});
   await page.locator('#pg-view .pg-menu summary').click();
   await page.waitForFunction(() => document.querySelector('#pg-view [data-pg-act=history]'), null, {timeout: t(5000)});
-  assert.deepEqual(await menuNames(), ['Who can see it', "What's changed?", 'Version history', 'Archive', 'Download', 'Delete for good'], `${tag}: a paged page's menu`);
+  assert.deepEqual(await menuNames(), ['Edit', 'Who can see it', "What's changed?", 'Version history', 'Archive', 'Download', 'Delete for good'], `${tag}: a paged page's menu`);
   await page.locator('#pg-view [data-pg-act=history]').click();
   assert.deepEqual(await menuNames(), ['Version history', 'v5 · latest', 'v4', 'v3', 'v2', 'v1'], `${tag}: every version, newest first`);
   assert.equal(await page.locator('#pg-view [data-pg-v="3"] .pg-mi-sub').innerText(), 'Nov 3 · Engineering Lead', `${tag}: a version's date and publisher`);
@@ -213,30 +220,24 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await replaced.click();
   await page.waitForFunction((id: string) => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
 
-  // A page filed on the task is one row in its Pages (task #409), its icon and name; the old weekly, filed there too, is
-  // left out as replaced. The row opens its page, which says where it is pinned.
+  // Files lists the pages on the task. A page row opens its page and the link chip returns to the task.
   await go(page, '#/task/' + launch.task_id);
-  // The pages are the first part of the Details tab.
-  const tab = page.locator('#task-modal[open] [data-task-tab="details"]');
-  await tab.waitFor({state: 'attached', timeout: t(10000)});
-  await tab.click();
-  const cards = page.locator('.task-pages .tp-row');
-  await cards.first().waitFor({timeout: t(10000)})
-    .catch(() => assert.fail(`${tag}: a page row on the task (${JSON.stringify(page.errors)})`));
-  assert.deepEqual(await cards.locator('.tp-name').allInnerTexts(), ['Launch plan']);
-  assert.equal(await page.locator('.task-pages .pg-status').count(), 0, `${tag}: no Updated … · v1 line on the row`);
+  await page.locator('#task-modal[open] [data-task-tab="files"]').click();
+  const card = page.locator(`[data-tft-page="${launch.file_id}"]`);
+  await card.waitFor({timeout: t(10000)});
+  assert.equal(await card.locator('.tft-t').innerText(), 'Launch plan');
+  assert.equal(await card.locator('.tft-chip').innerText(), 'related');
   await shot(page, `${tag}-04-task`);
-  await cards.filter({hasText: 'Launch plan'}).click();
+  await card.click();
   await page.waitForFunction((id: string) => location.hash === '#/page/' + id, launch.file_id, {timeout: t(5000)});
-  const pinned = page.locator('#pg-view .pg-pinned a');
-  await pinned.waitFor({timeout: t(5000)});
-  assert.equal(await pinned.innerText(), 'Q3 launch');
-  assert.equal(await pinned.getAttribute('href'), '#/task/' + launch.task_id);
+  const linked = page.locator(`#pg-view .pg-chip-link[href="#/task/${launch.task_id}"]`);
+  await linked.waitFor({timeout: t(5000)});
+  assert.match(await linked.innerText(), /Q3 launch/);
 
   // The search box finds files by their words.
   // On a phone with threads, Threads takes Search's place in the bottom bar (ui/app/threads.ts): open it as the menu does.
-  if (phone && await page.locator('#mobile-search').isHidden()) await page.evaluate(() => searchOpen());
-  else await page.locator(phone ? '#mobile-search' : '#search-open').click();
+  if (phone) await page.evaluate(() => searchOpen());
+  else await page.locator('#search-open').click();
   await page.locator('#search-input').fill('funnel');
   const hit = page.locator('#search-results li', {hasText: 'Signup funnel'});
   await hit.waitFor({timeout: t(5000)});

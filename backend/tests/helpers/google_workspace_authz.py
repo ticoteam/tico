@@ -1,4 +1,4 @@
-"""Helpers that other tests share, moved out of test_google_workspace_authz.py so they import no test file."""
+"""A connected Google Workspace for tests: its key sealed on the server, and Google's token endpoint replaced."""
 
 import json
 import pytest
@@ -6,7 +6,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from backend import google_workspace as workspace
 from backend.store import H
-from backend.tests.helpers.api import post
 
 
 BOX = "ana@acme.example"
@@ -53,32 +52,3 @@ def place(api, machine, bot="inbox"):
             "INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,0,?,'ana')",
             (bot, machine["runner_id"], H.now()),
         )
-
-
-def revoke(api, machine):
-    """The computer is revoked: it is no host and no holder any more."""
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), machine["runner_id"]))
-
-
-def publish(api, token, mailbox=BOX, expected=200):
-    return post(
-        api,
-        "connectors/mail/messages",
-        {"mailbox": mailbox, "messages": [], "deleted": [], "synced_at": H.now()},
-        token,
-        expected=expected,
-    )
-
-
-def token(api, token_, mailbox=BOX, service="gmail", expected=200):
-    return post(
-        api, "connectors/mail/workspace/token", {"mailbox": mailbox, "service": service}, token_, expected=expected
-    )
-
-
-def health(api, token_, failing=(), ok=None, service="mail", expected=200):
-    body = {"service": service, "failing": [{"account": a, "reason": r} for a, r in failing]}
-    if ok is not None:
-        body["ok_accounts"] = list(ok)
-    return post(api, "connectors/health", body, token_, expected=expected)

@@ -55,7 +55,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     back = claim(api, machine)
     assert back["task"]["id"] == parent["id"]
     assert back["config"]["runtime"] == "claude" and "check" not in back["task"]
-    # The engine wakes the parent's owner once with how the sub-task ended (docs/pipelines-v3.md "A task waits a day on
+    # The engine wakes the parent's owner once with how the sub-task ended (docs/dev/pipelines-v3.md "A task waits a day on
     # a sub-task"); the review's note is on the sub-task itself. v3 has no verdict fields.
     assert "The tasks this one filed have ended: Review PR 700 with another model: Done" in back["message"]["body"]
     with api.app.state.store.read() as c:
@@ -210,7 +210,9 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     )
     with api.app.state.store.read() as c:
         status = H.status(c, "ops")
-        assert status["state"] != "limited" and not cooling_off(c, "ops"), "Grok's limit is not the bot's"
+        assert status["state"] != "limited" and not cooling_off(c, api.app.state.store.settings, "ops"), (
+            "Grok's limit is not the bot's"
+        )
         assert "grok usage limit on a check" in status["focus"] and "claude" not in status["focus"]
         assert limit_streak(c, "ops") == 0 and last_limit(c, "ops") is None, "a check's limits are not the bot's"
     person = post(
@@ -282,7 +284,7 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, "ops")
+        assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, api.app.state.store.settings, "ops")
         assert "grok usage limit on a check" in H.status(c, "ops")["focus"]
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'check-attempt:%'").fetchone()
 
@@ -585,7 +587,7 @@ def queue_on(api, sub, sender, to="bot:ops", hours=0):
 def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_gets_past_it(api, monkeypatch):
     machine, sub, check = limited_check(api)
     # An older notice the claim has not handed out yet waits beside the job that keeps stopping.
-    queue_on(api, sub, H.KEEPER, hours=20)
+    queue_on(api, sub, H.TICO_ACTOR, hours=20)
     assert check_held(api, check, hours=11) == []
     [found] = check_held(api, check, hours=13)
     with api.app.state.store.read() as c:

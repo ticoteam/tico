@@ -11,10 +11,10 @@
  "anyio==4.15.1": [
   "py3-none-any"
  ],
- "boto3==1.43.114": [
+ "boto3==1.44.5": [
   "py3-none-any"
  ],
- "botocore==1.43.114": [
+ "botocore==1.44.5": [
   "py3-none-any"
  ],
  "certifi==2026.10.23": [
@@ -360,10 +360,11 @@
   "pp311-pypy311_pp80-macosx_11_0_arm64",
   "pp311-pypy311_pp80-win_amd64"
  ],
- "dnspython==2.9.0": [
+ "dkimpy==1.1.8": [],
+ "dnspython==2.9.2": [
   "py3-none-any"
  ],
- "fastapi==0.141.1": [
+ "fastapi==0.163.2": [
   "py3-none-any"
  ],
  "h11==0.16.0": [
@@ -574,6 +575,9 @@
   "cp315-cp315t-win_amd64",
   "cp315-cp315t-win_arm64"
  ],
+ "opentelemetry-api==1.45.2": [
+  "py3-none-any"
+ ],
  "orjson==3.13.0": [
   "cp310-cp310-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2",
   "cp310-cp310-manylinux2014_armv7l.manylinux_2_17_armv7l",
@@ -727,7 +731,7 @@
   "cp310-abi3-win_amd64",
   "py3-none-any"
  ],
- "psycopg-binary==3.3.6": [
+ "psycopg-binary==3.3.9": [
   "cp310-cp310-macosx_10_9_x86_64",
   "cp310-cp310-macosx_11_0_arm64",
   "cp310-cp310-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
@@ -798,16 +802,16 @@
  "pycparser==3.0": [
   "py3-none-any"
  ],
- "pydantic-core==2.50.1": [
+ "pydantic-core==2.50.4": [
   "cp310-cp310-macosx_10_12_x86_64",
   "cp310-cp310-macosx_11_0_arm64",
-  "cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp310-cp310-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp310-cp310-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp310-cp310-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp310-cp310-manylinux1_i686.manylinux_2_5_i686",
+  "cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp310-cp310-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp310-cp310-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp310-cp310-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp310-cp310-manylinux_2_31_riscv64",
-  "cp310-cp310-manylinux_2_5_i686.manylinux1_i686",
   "cp310-cp310-musllinux_1_1_aarch64",
   "cp310-cp310-musllinux_1_1_armv7l",
   "cp310-cp310-musllinux_1_1_x86_64",
@@ -815,13 +819,13 @@
   "cp310-cp310-win_amd64",
   "cp311-cp311-macosx_10_12_x86_64",
   "cp311-cp311-macosx_11_0_arm64",
-  "cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp311-cp311-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp311-cp311-manylinux1_i686.manylinux_2_5_i686",
+  "cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp311-cp311-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp311-cp311-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp311-cp311-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp311-cp311-manylinux_2_31_riscv64",
-  "cp311-cp311-manylinux_2_5_i686.manylinux1_i686",
   "cp311-cp311-musllinux_1_1_aarch64",
   "cp311-cp311-musllinux_1_1_armv7l",
   "cp311-cp311-musllinux_1_1_x86_64",
@@ -830,13 +834,13 @@
   "cp311-cp311-win_arm64",
   "cp312-cp312-macosx_10_12_x86_64",
   "cp312-cp312-macosx_11_0_arm64",
-  "cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp312-cp312-manylinux1_i686.manylinux_2_5_i686",
+  "cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp312-cp312-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp312-cp312-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp312-cp312-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp312-cp312-manylinux_2_31_riscv64",
-  "cp312-cp312-manylinux_2_5_i686.manylinux1_i686",
   "cp312-cp312-musllinux_1_1_aarch64",
   "cp312-cp312-musllinux_1_1_armv7l",
   "cp312-cp312-musllinux_1_1_x86_64",
@@ -845,13 +849,13 @@
   "cp312-cp312-win_arm64",
   "cp313-cp313-macosx_10_12_x86_64",
   "cp313-cp313-macosx_11_0_arm64",
-  "cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp313-cp313-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp313-cp313-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp313-cp313-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp313-cp313-manylinux1_i686.manylinux_2_5_i686",
+  "cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp313-cp313-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp313-cp313-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp313-cp313-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp313-cp313-manylinux_2_31_riscv64",
-  "cp313-cp313-manylinux_2_5_i686.manylinux1_i686",
   "cp313-cp313-musllinux_1_1_aarch64",
   "cp313-cp313-musllinux_1_1_armv7l",
   "cp313-cp313-musllinux_1_1_x86_64",
@@ -860,13 +864,13 @@
   "cp313-cp313-win_arm64",
   "cp314-cp314-macosx_10_12_x86_64",
   "cp314-cp314-macosx_11_0_arm64",
-  "cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp314-cp314-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp314-cp314-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp314-cp314-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp314-cp314-manylinux1_i686.manylinux_2_5_i686",
+  "cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp314-cp314-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp314-cp314-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp314-cp314-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp314-cp314-manylinux_2_31_riscv64",
-  "cp314-cp314-manylinux_2_5_i686.manylinux1_i686",
   "cp314-cp314-musllinux_1_1_aarch64",
   "cp314-cp314-musllinux_1_1_armv7l",
   "cp314-cp314-musllinux_1_1_x86_64",
@@ -876,13 +880,13 @@
   "cp314-cp314-win_arm64",
   "cp314-cp314t-macosx_10_12_x86_64",
   "cp314-cp314t-macosx_11_0_arm64",
-  "cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp314-cp314t-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp314-cp314t-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp314-cp314t-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp314-cp314t-manylinux1_i686.manylinux_2_5_i686",
+  "cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp314-cp314t-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp314-cp314t-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp314-cp314t-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp314-cp314t-manylinux_2_31_riscv64",
-  "cp314-cp314t-manylinux_2_5_i686.manylinux1_i686",
   "cp314-cp314t-musllinux_1_1_aarch64",
   "cp314-cp314t-musllinux_1_1_armv7l",
   "cp314-cp314t-musllinux_1_1_x86_64",
@@ -891,13 +895,13 @@
   "cp314-cp314t-win_arm64",
   "cp315-cp315-macosx_10_12_x86_64",
   "cp315-cp315-macosx_11_0_arm64",
-  "cp315-cp315-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp315-cp315-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp315-cp315-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp315-cp315-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp315-cp315-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp315-cp315-manylinux1_i686.manylinux_2_5_i686",
+  "cp315-cp315-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp315-cp315-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp315-cp315-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp315-cp315-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp315-cp315-manylinux_2_31_riscv64",
-  "cp315-cp315-manylinux_2_5_i686.manylinux1_i686",
   "cp315-cp315-musllinux_1_1_aarch64",
   "cp315-cp315-musllinux_1_1_armv7l",
   "cp315-cp315-musllinux_1_1_x86_64",
@@ -906,40 +910,43 @@
   "cp315-cp315-win_arm64",
   "cp315-cp315t-macosx_10_12_x86_64",
   "cp315-cp315t-macosx_11_0_arm64",
-  "cp315-cp315t-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "cp315-cp315t-manylinux_2_17_armv7l.manylinux2014_armv7l",
-  "cp315-cp315t-manylinux_2_17_ppc64le.manylinux2014_ppc64le",
-  "cp315-cp315t-manylinux_2_17_s390x.manylinux2014_s390x",
-  "cp315-cp315t-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp315-cp315t-manylinux1_i686.manylinux_2_5_i686",
+  "cp315-cp315t-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "cp315-cp315t-manylinux2014_armv7l.manylinux_2_17_armv7l",
+  "cp315-cp315t-manylinux2014_ppc64le.manylinux_2_17_ppc64le",
+  "cp315-cp315t-manylinux2014_s390x.manylinux_2_17_s390x",
+  "cp315-cp315t-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "cp315-cp315t-manylinux_2_31_riscv64",
-  "cp315-cp315t-manylinux_2_5_i686.manylinux1_i686",
   "cp315-cp315t-musllinux_1_1_aarch64",
   "cp315-cp315t-musllinux_1_1_armv7l",
   "cp315-cp315t-musllinux_1_1_x86_64",
   "cp315-cp315t-win32",
   "cp315-cp315t-win_amd64",
   "cp315-cp315t-win_arm64",
-  "graalpy311-graalpy242_311_native-macosx_10_12_x86_64",
-  "graalpy311-graalpy242_311_native-macosx_11_0_arm64",
-  "graalpy311-graalpy242_311_native-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "graalpy311-graalpy242_311_native-manylinux_2_17_x86_64.manylinux2014_x86_64",
   "graalpy312-graalpy250_312_native-macosx_10_12_x86_64",
   "graalpy312-graalpy250_312_native-macosx_11_0_arm64",
-  "graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64",
-  "graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "graalpy312-graalpy250_312_native-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "graalpy312-graalpy250_312_native-manylinux2014_x86_64.manylinux_2_17_x86_64",
+  "graalpy313-graalpy253_313_native-macosx_11_0_arm64",
+  "graalpy313-graalpy253_313_native-manylinux2014_aarch64.manylinux_2_17_aarch64",
+  "graalpy313-graalpy253_313_native-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "pp311-pypy311_pp73-macosx_10_12_x86_64",
   "pp311-pypy311_pp73-macosx_11_0_arm64",
-  "pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64",
-  "pp311-pypy311_pp73-manylinux_2_5_i686.manylinux1_i686",
+  "pp311-pypy311_pp73-manylinux1_i686.manylinux_2_5_i686",
+  "pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64",
   "pp311-pypy311_pp73-musllinux_1_1_aarch64",
   "pp311-pypy311_pp73-musllinux_1_1_armv7l",
   "pp311-pypy311_pp73-musllinux_1_1_x86_64",
-  "pp311-pypy311_pp73-win_amd64"
+  "pp311-pypy311_pp73-win_amd64",
+  "pp311-pypy311_pp80-macosx_10_12_x86_64",
+  "pp311-pypy311_pp80-macosx_11_0_arm64",
+  "pp311-pypy311_pp80-manylinux_2_28_x86_64",
+  "pp311-pypy311_pp80-win_amd64"
  ],
- "pydantic==2.14.1": [
+ "pydantic==2.14.3": [
   "py3-none-any"
  ],
- "pymongo==4.19.0": [
+ "pymongo==4.20.0": [
   "cp311-cp311-macosx_10_9_x86_64",
   "cp311-cp311-macosx_11_0_arm64",
   "cp311-cp311-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686",
@@ -1011,7 +1018,7 @@
   "cp315-cp315t-win_amd64",
   "cp315-cp315t-win_arm64"
  ],
- "pymysql==1.2.3": [
+ "pymysql==1.2.4": [
   "py3-none-any"
  ],
  "pypdf==6.21.4": [
@@ -1020,7 +1027,7 @@
  "python-dateutil==2.9.0.post0": [
   "py2.py3-none-any"
  ],
- "python-multipart==0.0.32": [
+ "python-multipart==0.0.34": [
   "py3-none-any"
  ],
  "pyyaml==6.0.3": [
@@ -1103,16 +1110,16 @@
  "s3transfer==0.19.2": [
   "py3-none-any"
  ],
- "sentry-sdk==2.69.2": [
+ "sentry-sdk==2.75.0": [
   "py3-none-any"
  ],
  "six==1.17.0": [
   "py2.py3-none-any"
  ],
- "slack-sdk==3.45.0": [
+ "slack-sdk==3.47.0": [
   "py2.py3-none-any"
  ],
- "starlette==1.8.0": [
+ "starlette==1.10.0": [
   "py3-none-any"
  ],
  "types-protobuf==7.35.1.20260906": [

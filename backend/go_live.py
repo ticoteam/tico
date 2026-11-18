@@ -41,16 +41,20 @@ def fail(c, key, bot, record, code, notice):
         "UPDATE registry_metadata SET value=? WHERE key=?",
         (encode({**record, "failed": {"code": code, "at": H.now()}}), key),
     )
-    H.event(c, H.KEEPER, "bot.go_live_failed", bot, {"code": code})
+    H.event(c, H.TICO_ACTOR, "bot.go_live_failed", bot, {"code": code})
     actor = str(record.get("actor") or "")
     if H.is_human(actor):
         try:
             label = (H.bot(c, bot) or {}).get("slug", bot)
             H.say(
-                c, H.KEEPER, actor, notice + f" Run `tico bot go-live {label}` again once that is fixed.", kind="notice"
+                c,
+                H.TICO_ACTOR,
+                actor,
+                notice + f" Run `tico bot go-live {label}` again once that is fixed.",
+                kind="notice",
             )
         except H.Refused as exc:
-            H.event(c, H.KEEPER, "bot.go_live_notice_refused", bot, {"reason": str(exc)[:300]})
+            H.event(c, H.TICO_ACTOR, "bot.go_live_notice_refused", bot, {"reason": str(exc)[:300]})
 
 
 def expire_notice(bot, record):

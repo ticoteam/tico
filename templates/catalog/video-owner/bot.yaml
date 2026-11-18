@@ -3,14 +3,11 @@ display_name: "Video Owner"
 labels: [owner:video-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
 # No routines: it never makes video on a schedule. Each project starts when a person asks for it on a task.
 
-# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential arrives in, never the
-# value. Store a Credential in Tico and grant it to this bot; the runner delivers it during a run. Declaring access
-# here does not create a grant. Both are optional: without them the bot says what a person must record or pick instead.
+# What this bot may touch. Both are optional: without them the bot says what a person must record or pick instead.
 tools:
   - service: elevenlabs
     identity: "the team's ElevenLabs account"

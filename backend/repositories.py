@@ -17,6 +17,7 @@ from . import read_cache
 from .auth import validate_identity
 from .store import Problem
 from . import bot_settings as BS
+from .api_contract import KEYLESS, api_v2
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -89,31 +90,6 @@ def release_cleared_overrides(c):
         "UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
         "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''"
     )
-
-
-def migrate(c):
-    if metadata(c, 'repositories-access-migrated').get('done'):
-        return
-    for bot, repos in metadata(c, 'github-extra-repos').items():
-        if not repos:
-            continue
-        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-        if row:
-            config = json.loads(row[0] or '{}')
-            config['repo_access_mode'] = 'chosen'
-            BS.write(c, bot, config)
-        for repo in repos:
-            c.execute(
-                'INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
-                'ON CONFLICT(full_name) DO UPDATE SET enabled=1',
-                (uuid.uuid4().hex, repo, H.now()),
-            )
-            c.execute(
-                "INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
-                (bot, repo),
-            )
-
-    save_metadata(c, 'repositories-access-migrated', {'done': True})
 
 
 def unreachable(c):
@@ -207,16 +183,34 @@ def note_asked(c, repository):
         save_metadata(c, ASKED, asked)
 
 
+def _owner(c, default_owner=''):
+    """The owner a bare bot repo name is under: the App's organization, else the configured one."""
+    try:
+        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    return (row['org'] if row else '') or default_owner
+
+
 def note_chosen(c, repo, default_owner=''):
     """A person pointed a bot at `repo` (a stored bot repo: name, owner/name or URL): Tico uses it from now on,
     even if someone else made it (home)."""
     from .github_app import repo_of
 
-    try:
-        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    note_repository(c, CHOSEN, repo_of(repo, (row['org'] if row else '') or default_owner))
+    note_repository(c, CHOSEN, repo_of(repo, _owner(c, default_owner)))
+
+
+def note_named(c, repo, defaults, default_owner=''):
+    """A bot is made with `repo`. When it is not one of the names Tico gives a bot unasked (`defaults`, such as
+    `bot-<slug>`, which a form fills in by itself), someone named it, so it is chosen, as Settings > Bots records a
+    repository a person sets there. A default name is not: one GitHub had before the bot may be another company's
+    (Homes)."""
+    from .github_app import repo_of
+
+    owner = _owner(c, default_owner)
+    name = str(repo_of(repo, owner) or '').lower()
+    if '/' in name and name not in {str(repo_of(d, owner) or '').lower() for d in defaults if d}:
+        note_repository(c, CHOSEN, name)
 
 
 def made_here(c, repository):
@@ -605,6 +599,10 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     lost = stopped(before, after)
     detail = {'before': before, 'after': after, **lost, **({'default': True} if default else {})}
     H.event(c, actor, 'bot.repos_changed', bot, detail)
+    # An access request for a repository this bot reaches now closes itself (backend/access_requests.py).
+    from . import access_requests
+
+    access_requests.settled(c, subject='bot:' + bot, resource_type='repository', actor=actor)
     return {**after, **lost}
 
 
@@ -1300,18 +1298,26 @@ def install(app, store, service):
                 'github_installed': bool(github_row and github_row['installation_id']),
             }
 
-    @app.get('/api/v2/repositories')
+    @app.get(
+        '/api/v2/repositories', **api_v2("Repositories", "listRepositories", "Team repositories", "RepositoryList")
+    )
     def repo_list(request: Request):
         human(request)
         return listing()
 
-    @app.post('/api/v2/repositories/refresh')
+    @app.post(
+        '/api/v2/repositories/refresh',
+        **api_v2("Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
+    )
     def refresh(request: Request):
         human(request, True)
         sync(service)
         return listing()
 
-    @app.put('/api/v2/repositories/settings')
+    @app.put(
+        '/api/v2/repositories/settings',
+        **api_v2("Repositories", "setRepositoryDefaults", "New bot repository default", idempotency=KEYLESS),
+    )
     def settings(request: Request, body: RepoSettings):
         who = human(request, True)
         with store.transaction() as c:
@@ -1320,7 +1326,10 @@ def install(app, store, service):
             H.event(c, who.actor, 'repositories.changed', 'settings', {'before': before, 'after': body.model_dump()})
         return body.model_dump()
 
-    @app.put('/api/v2/repositories/{owner}/{repo}')
+    @app.put(
+        '/api/v2/repositories/{owner}/{repo}',
+        **api_v2("Repositories", "updateRepository", "Tick or edit a repository", idempotency=KEYLESS),
+    )
     def update(request: Request, owner: str, repo: str, body: RepoUpdate):
         who = human(request, True)
         name = owner + '/' + repo
@@ -1340,6 +1349,10 @@ def install(app, store, service):
             c.execute('UPDATE repositories SET updated_at=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
+            if body.enabled:  # bots on All ticked repos reach it now
+                from . import access_requests
+
+                access_requests.settled(c, who, resource_type='repository', resource_id=after['full_name'])
         return after
 
     def botops(request, bot):
@@ -1356,7 +1369,10 @@ def install(app, store, service):
             validate_identity(c, who)
         return who if who.role == 'bot' and who.actor == 'bot:' + bot else None
 
-    @app.get('/api/v2/bots/{bot}/repositories')
+    @app.get(
+        '/api/v2/bots/{bot}/repositories',
+        **api_v2("Repositories", "getBotRepositories", "Bot repository access", "BotRepositories"),
+    )
     def bot_get(request: Request, bot: str):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
@@ -1367,7 +1383,12 @@ def install(app, store, service):
             row = service.row(c)
             return access(c, bot, row['org'] if row else store.settings.github_owner)
 
-    @app.put('/api/v2/bots/{bot}/repositories')
+    @app.put(
+        '/api/v2/bots/{bot}/repositories',
+        **api_v2(
+            "Repositories", "setBotRepositories", "Set bot repository access", "BotRepositories", idempotency=KEYLESS
+        ),
+    )
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)

@@ -570,7 +570,6 @@ class Stub(BaseHTTPRequestHandler):
                 "/api/v2/webhooks",
                 "/api/v2/release/now",
                 "/oks",
-                "/thumbs",
             )
         ):
             return self.reply(200, {"ok": True})
@@ -643,9 +642,7 @@ class AgainstAStub(unittest.TestCase):
         code, out = run_hub("task", "list", "--status", "closed", env=self.env)
         self.assertEqual(code, 0, out)
         self.assertEqual(out, [{"id": "T1", "status": "closed"}])
-        self.assertEqual(
-            [(m, p) for m, p, _, _ in Stub.seen], [("GET", "/api/v2/me"), ("GET", "/api/v2/tasks?status=closed")]
-        )
+        self.assertEqual([(m, p) for m, p, _, _ in Stub.seen], [("GET", "/api/v2/tasks?status=closed")])
 
     def test_task_child_on_a_check_model_is_the_bots_own_subtask(self):
         code, out = run_hub(
@@ -668,6 +665,7 @@ class AgainstAStub(unittest.TestCase):
             (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
             ("bot:assistant", "grok", "review", "T1"),
         )
+        self.assertEqual(posted["message"], "https://github.com/ticoteam/tico/pull/700")
         # With no value, the server picks the company's check model.
         code, out = run_hub(
             "task", "child", "T1", "--check-model", "--role", "review", "--title", "Review PR 701", env=self.env
@@ -759,8 +757,6 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(code, 0, out)
         used = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/oks/r-1/use"]
         self.assertEqual(used, [{"subject": "budget_raise:launch", "content": {"project": "launch", "usd": "10.00"}}])
-        code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
-        self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
 
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):
@@ -977,7 +973,6 @@ def test_create_sends_its_pipeline_and_parent_the_same_from_the_cli_and_mcp(monk
 
 
 def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
-    from clients import remotecli
     from clients.hubtools import BY_NAME
 
     sent = []
@@ -987,7 +982,8 @@ def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
         ['bot', 'turns-at-once', 'ops', 'unlimited'],
         ['bot', 'turns-at-once', 'ops', '3'],
     ):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args)
     assert 'limit' not in sent[0]
     assert [row['limit'] for row in sent[1:]] == [None, 3]
 
@@ -1754,6 +1750,11 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
         "growth/channels/door",
         {"stage": "paused", "owner_ref": None},
     )  # "" clears
+    assert run("growth", "channel", "update", "door", "--input-kpi", "kpi_new") == (
+        "PATCH",
+        "growth/channels/door",
+        {"input_kpi_id": "kpi_new"},
+    )
     assert run("growth", "channel", "retire", "door") == ("POST", "growth/channels/door/retire", {})
     assert run(
         "growth",
@@ -1836,6 +1837,7 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     )
     assert run("growth", "economics", "--month", "2026-10") == ("GET", "growth/economics", {"month": "2026-10"})
     assert run("growth", "numbers", "--months", "6") == ("GET", "growth/numbers", {"months": 6})
+    assert run("growth", "numbers", "--month", "2026-10") == ("GET", "growth/numbers", {"month": "2026-10"})
     assert run("growth", "kpis") == ("GET", "growth/kpis", {})
     assert run("growth", "settings") == ("GET", "growth/settings", {})
     assert run("growth", "settings", "--set", "margin_pct=40", "--set", "unit=orders") == (
@@ -1876,7 +1878,7 @@ def test_the_retired_gtm_lines_run_their_new_commands_with_a_notice(monkeypatch,
     assert '"tico gtm show" is now "tico strategy show --section how"' in capsys.readouterr().err
 
 
-def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):
+def test_strategy_show_section_how_prints_the_section_or_says_there_is_no_strategy(monkeypatch, capsys):
     from clients import remotecli
 
     published = {"current": {"sections": {"how": "- Motion: self serve", "serve": "SMBs"}}}
@@ -1900,7 +1902,7 @@ def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_publish
     }  # the tool's answer
     published["current"] = None
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
-    assert capsys.readouterr().out == "Nothing published yet.\n"
+    assert capsys.readouterr().out == "No strategy yet.\n"
 
 
 def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):

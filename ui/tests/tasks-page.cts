@@ -1,9 +1,10 @@
-// The Tasks page (docs/pipelines-v3.md S2, S7), offline, and the fake server the other task scripts open the app with.
+// The Tasks page (docs/dev/pipelines-v3.md S2, S7), offline, and the fake server the other task scripts open the app with.
 // Every request is answered from the fixtures below, in the shapes backend/openapi_v2.py gives them (ui/types/api.d.ts):
 // GET /api/v2/pipelines, /needs-you (NeedsYou), /tasks (TaskBrief rows), /tasks/{id} (TaskDetail), and the writes on a
 // task (edit with its version, done, move, owner, snooze, an ask's answer, a comment). Checks here:
-//  - You: Needs you under Answer, Review and Do, each row its task's title (an Answer row the question under it); a question with two choices answers in
-//    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
+//  - You: Needs you under Answer, Review and Do, each row its task's title (an Answer row, a bot's ❓, the question under
+//    it); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
+//  - You: the person's own open tasks (nothing asked of them, so not in Needs you or its count) at the end of Do, kept live;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
 //    the address and reads its open tasks, snoozed ones too, drawn last in their stage and dimmed;
 //  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
@@ -26,7 +27,7 @@ interface Stage {id: string; name: string; kind: 'work' | 'done' | 'closed'; by_
 export interface Task {
   id: string;
   title: string;
-  body?: string;
+  note?: string;
   status?: 'open' | 'done' | 'closed';
   number?: number | null;
   pipeline_id?: string | null;
@@ -54,7 +55,7 @@ export interface Task {
 // One item of Needs you (NeedsYouItem).
 export interface Need {
   id: string;
-  kind: 'task' | 'ask' | 'paused' | 'mention';
+  kind: 'task' | 'ask' | 'paused' | 'mention' | 'question';
   line: string;
   since: string | null;
   task_id?: string | null;
@@ -76,7 +77,8 @@ export interface OpenOptions {
   mover?: boolean;
   tasks?: Task[];
   needs?: Need[];
-  /** A task's comments, by task id, as GET /api/v2/tasks/{id} sends them. */
+  /** A task's comments, by task id, as GET /api/v2/tasks/{id} sends them; also its chat's timeline (c-<id>), and a
+      direct chat's messages by its conversation id (GET /api/v2/threads/{id}/timeline). */
   comments?: Record<string, unknown[]>;
   /** A task's history events, by task id, as GET /api/v2/tasks/{id} sends them. */
   events?: Record<string, unknown[]>;
@@ -184,11 +186,11 @@ const turn = (state: Wait['state'], who: string | null, line: string, more: Part
 /** A task in a stage ('done' and 'closed' finish it), as GET /api/v2/tasks/{id} sends it. */
 function task(id: string, title: string, at_: string, over: Partial<Task> = {}): Task {
   const where = STAGES.get(at_), finished = at_ === 'done' || at_ === 'closed';
-  return {id, title, body: 'Details.', number: Number(id.replace(/\D/g, '')) || null, status: finished ? at_ as 'done' | 'closed' : 'open',
+  return {id, title, number: Number(id.replace(/\D/g, '')) || null, status: finished ? at_ as 'done' | 'closed' : 'open',
     pipeline_id: where?.pipeline.id ?? 'product', pipeline: where ? {id: where.pipeline.id, name: where.pipeline.name} : {id: 'product', name: 'Product'},
     stage_id: where?.stage.id ?? at_, stage: where?.stage ?? (at_ === 'done' ? DONE : CLOSED), owner_id: 'bot:pm', requester_id: 'human:ana',
     assignee_id: null, due_at: null, late: null, snoozed: false, snooze: null, turn: finished ? null : turn('bot', 'bot:pm', 'PM is on it'),
-    labels: [], lane: 'company', links: [], private: false, created_at: at(60 * 30), updated_at: at(30), version: 3, ...over};
+    labels: [], lane: 'company', links: [], private: false, created_at: at(60 * 30), updated_at: at(30), version: 3, conversation_id: 'c-' + id, ...over};
 }
 /** A list row (TaskBrief): what GET /api/v2/tasks?brief=1 sends. */
 function brief(t: Task) {
@@ -198,9 +200,8 @@ function brief(t: Task) {
     // a finished task's own time, as the server's list rows carry it
     ...(t['done_at'] ? {done_at: t['done_at']} : {}), ...(t['closed_at'] ? {closed_at: t['closed_at']} : {})};
 }
-const ask = (rid: string, kind: 'ok' | 'answer', line: string, choices: string[] | null = null): Requirement => ({requirement_id: rid, kind, line,
-  who: 'human:ana', asked_by: 'bot:pm', choices, may: kind === 'ok' ? ['ok', 'no', 'thumbs'] : ['answer', 'thumbs'], met: false, shows: [],
-  standing: 'waiting', answer: null});
+const ask = (rid: string, line: string): Requirement => ({requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm',
+  may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null});
 function fixtures(): Task[] {
   return [
     task('t-1', 'Checkout flow', 'spec', {turn: turn('person', 'human:ana', 'Waiting on Ana', {ask: true, requirement_id: 'r1'})}),
@@ -214,14 +215,14 @@ function fixtures(): Task[] {
     task('t-7', 'Old pricing test', 'closed', {updated_at: at(5), closed_at: at(60 * 70)}),
   ];
 }
-/** Needs you for these tasks: an OK, a question with two choices, and a task Ana owns. */
+/** Needs you for these tasks: an OK, a bot's ❓ in a task's chat (backend/question_marks.py), and a task Ana owns. */
 function needsOf(tasks: Task[]): Need[] {
   const of = (id: string) => brief(tasks.find(t => t.id === id)!);
   return [
     {kind: 'ask', id: 'r1', task_id: 't-1', requirement_id: 'r1', line: 'Approve the spec for Checkout flow', since: at(90), task: of('t-1'),
-      ask: ask('r1', 'ok', 'Approve the spec for Checkout flow')},
-    {kind: 'ask', id: 'r2', task_id: 't-2', requirement_id: 'r2', line: 'Which plan do new signups get?', since: at(60), task: of('t-2'),
-      ask: ask('r2', 'answer', 'Which plan do new signups get?', ['Free', 'Pro trial'])},
+      ask: ask('r1', 'Approve the spec for Checkout flow')},
+    {kind: 'question', id: 'r2', mark_id: 'q2', task_id: 't-2', message_id: 'm-q2', conversation_id: 'c-t-2', root_id: 'c-t-2',
+      from_id: 'bot:pm', requirement_id: null, line: 'Which plan do new signups get?', since: at(60), task: of('t-2')},
     {kind: 'task', id: 'task:t-3', task_id: 't-3', line: 'Book the team offsite', since: at(300), task: of('t-3')},
   ];
 }
@@ -255,7 +256,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/me') return json({...me, config: CONFIG});
     if (p === '/api/v2/config') return json(CONFIG);
     if (p === '/api/employees') return json(bots);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}], teams: {}});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -264,6 +265,8 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (onePipeline && method === 'GET') return json({pipeline: PIPELINES.find(x => x.id === onePipeline[1]) || {}});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
+    // A stage's OK: no grant, so Approve answers ok (decide.ts decideOkLoad).
+    if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found', detail: 'Not found'}, 404);
     if (p === '/api/v2/tasks' && method === 'GET') {
       reads.push(url);
       const q = url.searchParams, status = q.get('status'), snoozed = q.get('snoozed') || 'hide', ids = q.get('ids')?.split(',');
@@ -342,6 +345,22 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       return json({task: t, children: [], comments: comments[t.id] || [], events: events[t.id] || [], runs: runs[t.id] || [], messages: [], has_more: false, mover});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
+    // A chat (thread-view.ts): a task's chat is c-<task id>, its comments; a direct chat, the messages kept by its id.
+    const thread = p.match(/^\/api\/v2\/threads\/([^/]+)\/(timeline|messages)$/);
+    if (thread) {
+      const cid = decodeURIComponent(thread[1]!), t = find(cid.replace(/^c-/, '')), list = (comments[t ? t.id : cid] ||= []);
+      if (thread[2] === 'messages' && method === 'POST') {
+        const body = (req.postDataJSON() || {}) as Posted['body']; posts.push({p, body});
+        const m = {id: 'm' + (list.length + 1), seq: list.length + 1, kind: 'say', sender_id: 'human:ana', body: body.text, conversation_id: cid,
+          created_at: new Date().toISOString(), refs: t ? {task: t.id} : {}};
+        list.push(m);
+        return json({message: m});
+      }
+      // A direct chat is with whoever else wrote in it.
+      const dmWith = t ? {} : {kind: 'dm', dm_with: [...new Set(list.map(m => String((m as {sender_id?: string}).sender_id)))].filter(a => a !== 'human:ana').map(actor => ({actor}))};
+      if (thread[2] === 'timeline') return json({thread: {id: cid, root_id: cid, title: t?.title || '', task_id: t?.id || null, me: {can_post: true}, ...dmWith},
+        messages: list.map((m, i) => ({seq: i + 1, conversation_id: cid, ...(m as object)})), next_cursor: null});
+    }
     if (p.endsWith('/messages')) return json({messages: []});
     return json(unrouted(p));
   });
@@ -383,15 +402,75 @@ async function you(browser: Browser) {
     await page.locator('#task-body .empty', {hasText: 'No matches'}).waitFor();
     await page.locator('#task-q').press('Escape');
     await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-row').length === 3);
-    // A question with two choices answers in place, with the task's version, and leaves the list (a phone opens it instead).
-    if (viewport.width < 640) { assert.equal(await page.locator('[data-need-answer]:visible').count(), 0); await page.close(); continue; }
-    await page.locator('[data-need="r2"] [data-need-answer="Pro trial"]').click();
-    await page.locator('[data-need="r2"]').waitFor({state: 'detached'});
-    assert.deepEqual(posts, [{p: '/api/v2/tasks/t-2/asks/r2/answer', body: {value: 'Pro trial', version: 3}}]);
+    assert.deepEqual(posts, [], 'a row answers nothing in place');
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('You: Answer, Review and Do; rows by task title; search; a two-choice answer in place: ok');
+  console.log('You: Answer, Review and Do; rows by task title; search: ok');
+}
+
+/** A person's own open tasks, with nothing asked of them, are not in Needs you (its count, ▶, the badge) but are in You:
+ * after Needs you's rows, at the end of Do, each once, kept live from the stream; their snoozed ones are in the archive. */
+async function youOwnTasks(browser: Browser) {
+  const tasks = [...fixtures(),
+    task('t-8', 'Call the landlord', 'doing', {owner_id: 'human:ana', requester_id: 'human:ana', turn: turn('person', 'human:ana', 'Waiting on Ana')}),
+    task('t-9', 'File the permit', 'todo', {owner_id: 'human:ana', snoozed: true, snooze: {by: 'human:ana', until: new Date(NOW + 86400e3).toISOString(), why: null},
+      turn: turn('snoozed', null, 'Snoozed')})];
+  const of = (id: string) => brief(tasks.find(t => t.id === id)!);
+  // Needs you as the server gives it now: the asks, and a bot's private task Ana must let someone see (a Do row); t-3 and
+  // t-8 are Ana's own, with nothing asked of her, so Needs you leaves them out.
+  const needs: Need[] = [...needsOf(tasks).filter(n => n.kind !== 'task'),
+    {kind: 'task', id: 'task:t-4', task_id: 't-4', line: 'Let Sam see this task', since: at(120), task: of('t-4')}];
+  for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
+    const {page, errors, reads} = await open(browser, {viewport, tasks, needs});
+    await page.locator('#task-body [data-task="t-8"]').waitFor();
+    const own = reads.find(u => u.searchParams.get('owner'))!.searchParams;
+    assert.deepEqual([own.get('owner'), own.get('status'), own.get('snoozed')], ['human:ana', 'open', 'hide'], 'You reads her own open tasks');
+    assert.deepEqual(await groups(page), ['Answer', 'Review', 'Do']);
+    assert.deepEqual(await rowTitles(page), ['Signup plans', 'Checkout flow', 'Rounding in the API', 'Book the team offsite', 'Call the landlord'],
+      'Needs you first, then her own tasks at the end of Do; a snoozed one is not here');
+    assert.deepEqual(await page.locator('#task-body .tk-row').evaluateAll(els => els.map(e => { const d = (e as HTMLElement).dataset; return d['need'] || 'task:' + d['task']; })),
+      ['r2', 'r1', 'task:t-4', 'task:t-3', 'task:t-8'], 'an own task is a task row, not a Needs you item');
+    assert.equal(await page.locator('#task-body [data-task="t-3"] .tk-mark').count(), 0, 'your own row has no mark');
+    // Needs you, its count and ▶ stay what someone asks of her.
+    assert.equal(await page.locator('#task-play .tl-review-n').innerText(), '3');
+    assert.deepEqual(await page.evaluate(() => TASKS_ST.needs.map(n => n.id)), ['r1', 'r2', 'task:t-4']);
+    assert.ok(await sideways(page) <= 1, `nothing scrolls sideways at ${viewport.width}px`);
+    // Search narrows her own tasks too.
+    await page.locator('#task-q').fill('landlord');
+    await page.waitForFunction(() => !TASKS_ST.loading && document.querySelectorAll('#task-body .tk-row').length === 1);
+    assert.deepEqual(await rowTitles(page), ['Call the landlord']);
+    await page.locator('#task-q').press('Escape');
+    await page.waitForFunction(() => !TASKS_ST.loading && document.querySelectorAll('#task-body .tk-row').length === 5);
+    // Live, with nothing read: a task given to her comes in, one she finished leaves, a bot's never shows.
+    const before = reads.length;
+    const given = brief(task('t-10', 'Sign the lease', 'todo', {owner_id: 'human:ana', created_at: at(1)}));
+    const finished = {...of('t-3'), status: 'done', stage_id: 'done', turn: null, version: 4};
+    const bots = brief(task('t-11', 'Draft the newsletter', 'spec', {owner_id: 'bot:writer'}));
+    await page.evaluate(([a, b, c]) => tasksLiveApply([{id: 't-10', task: a}, {id: 't-3', task: b}, {id: 't-11', task: c}]), [given, finished, bots] as const);
+    await page.waitForFunction(() => document.querySelector('#task-body [data-task="t-10"]') && !document.querySelector('#task-body [data-task="t-3"]'));
+    assert.deepEqual((await rowTitles(page)).slice(-2), ['Call the landlord', 'Sign the lease']);
+    assert.equal(await page.locator('#task-body [data-task="t-11"]').count(), 0);
+    assert.equal(reads.length, before, 'live changes read nothing');
+    assert.equal(await page.locator('#task-play .tl-review-n').innerText(), '3', 'her own tasks never count in Needs you');
+    // Her own task opens in its window.
+    await page.locator('#task-body [data-task="t-8"]').click();
+    await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Call the landlord'}).waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  // Task #389: an OK filed by a bot is titled by its kind alone ("Send an email"); its row says what it is about.
+  {
+    const tasks = [...fixtures(), task('t-8', 'Send an email', 'todo', {owner_id: 'bot:ops', turn: turn('person', 'human:ana', 'Waiting on Ana', {ask: true, requirement_id: 'r8'})})];
+    const needs = [...needsOf(tasks), {kind: 'ask', id: 'r8', task_id: 't-8', requirement_id: 'r8', line: 'Send this email?', since: at(30),
+      task: brief(tasks.find(t => t.id === 't-8')!), ask: ask('r8', 'Send this email?'), about: 'Send email: November product update'} as Need];
+    const {page, errors} = await open(browser, {tasks, needs});
+    assert.ok((await rowTitles(page)).includes('Send email: November product update'), 'the OK says what it is about');
+    assert.ok(!(await rowTitles(page)).includes('Send an email'), 'not the kind alone');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log("You: a person's own open tasks after Needs you, not in it; live; search: ok");
 }
 
 /** Rows with the same ask read by their tasks' titles; a Paused cause and a mention outside a task by their own line. */
@@ -579,6 +658,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
+    for (const run of [you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

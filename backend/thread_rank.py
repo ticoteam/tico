@@ -211,7 +211,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
         with store.read() as c:
             if calls_this_hour(c, at, label) >= CALLS_PER_HOUR:
                 return "hourly_cap"
-            if used_today(c, H.KEEPER, at) >= DAILY_SHARE * daily_cap(settings, "bot"):
+            if used_today(c, H.TICO_ACTOR, at) >= DAILY_SHARE * daily_cap(settings, "bot"):
                 return "daily_cap"
         if clock() - started > PASS_SECONDS - CHAIN_SECONDS:
             return "time"
@@ -237,7 +237,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
                         summary["cost_usd"] = round(summary["cost_usd"] + float(call.result.get("cost_usd") or 0), 6)
                         route = route_of(call.result)
                         summary["routes"][route] = summary["routes"].get(route, 0) + 1
-                    H.event(c, H.KEEPER, "judge.call", label, detail)
+                    H.event(c, H.TICO_ACTOR, "judge.call", label, detail)
                 for n, reply in zip(run, replies, strict=True):
                     row = rows[n][0]
                     level = None

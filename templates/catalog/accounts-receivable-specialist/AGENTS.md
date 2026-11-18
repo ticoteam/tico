@@ -52,7 +52,7 @@ Always:
 - `skills/write-a-payment-reminder/SKILL.md`: read before you write any reminder text.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/ladder.md`, `knowledge/customers.md`,
    `knowledge/voice.md` and the playbook the task names. A resumed turn already has them.
 3. Find the newest aging export. Note its as-of date. If it is more than 3 days old, say so first.
@@ -73,8 +73,8 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. To see the last thread with a customer, where the sender's mailbox is
-connected, `$HUB_DIR/scripts/mail.sh search "<customer email>"`. Leave a draft only with `mail.sh draft --reply-to`; never `send`.
-To learn what was promised on a call: `tico meeting search "<customer>"`. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. A
+connected, `tico email search <address> "<customer email>"`. Leave a draft only with `tico email draft <address> --reply-to <thread>`; never `send`.
+To learn what was promised on a call: `tico meeting search "<customer>"`. Ask the requester one question with `tico task ask <id> --to <person> "<question>"`. A
 call that a human should make is `tico task create --owner <person>`. Month-end receivable checks arrive from the Finance Owner. A billing
 error goes to the Billing Specialist (`billing-specialist`). A dispute belongs to whoever owns the customer. Keep `tico bot status set` to one
 factual line. Finish every task, quiet week or not.

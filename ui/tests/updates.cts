@@ -379,7 +379,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Assistant', 'Tasks', 'More']);
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Flow', 'Assistant', 'Tasks', 'More']);
     // Five items; Assistant (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
     // side evenly.
     const nav = () => p.locator('#mobile-nav .mobile-nav-item:not([hidden])').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));

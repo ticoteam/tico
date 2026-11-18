@@ -82,6 +82,27 @@ def _build():
         "Task moved",
         _change("stage", "general-todo", "general-done", "done", status="done", stage="general-done"),
     )
+    add(
+        "task.moved",
+        "A task moved to another pipeline: the same task, with its number and history.",
+        "Task changed pipeline",
+        _task(
+            actor="human:ana",
+            pipeline="backlog",
+            stage="backlog-on-ice",
+            change={
+                "field": "pipeline",
+                "from": "general",
+                "to": "backlog",
+                "from_pipeline": "general",
+                "from_stage": "general-todo",
+                "to_pipeline": "backlog",
+                "to_stage": "backlog-on-ice",
+                "by": "human:ana",
+                "batch_id": None,
+            },
+        ),
+    )
     add("task.commented", "Someone commented on a task.", "Task commented", _task(actor="human:ana", comment_id="c1"))
     add(
         "task.done",
@@ -204,7 +225,7 @@ def _build():
     )
     add(
         "strategy.published",
-        "A new version of the strategy was published.",
+        "The strategy changed: every save is a new version, live at once.",
         "Strategy published",
         {"version": 3, "note": "Focus on Acme's renewals.", "published_by": "human:ana"},
     )
@@ -244,6 +265,34 @@ def _build():
             "title": "A computer has not reported for an hour",
         },
     )
+    # A calendar event added, changed or cancelled, in Tico's own calendar or in Google (backend/calendar_events.py),
+    # ids only: whoever acts reads the event through its own access. Automations hear them; no endpoint does.
+    calendar = {
+        "calendar_id": "google:ana@acme.example",
+        "home": "google",
+        "occurrence_id": "google:ana@acme.example:e1",
+    }
+    add(
+        "calendar.event.created",
+        "A calendar event was added.",
+        "Calendar event added",
+        calendar,
+        outbound=False,
+    )
+    add(
+        "calendar.event.changed",
+        "A calendar event was moved or changed.",
+        "Calendar event changed",
+        calendar,
+        outbound=False,
+    )
+    add(
+        "calendar.event.cancelled",
+        "A calendar event was cancelled.",
+        "Calendar event cancelled",
+        calendar,
+        outbound=False,
+    )
     # Rules take these two as they happen (backend/triggers.py, backend/tico_notices.py); no endpoint hears them.
     add(
         "webhook.received",
@@ -269,6 +318,16 @@ def _build():
             "body": "Version 1.4.1 fixes a mail sync bug.",
             "url": "https://tico.team/notices/1",
         },
+        sourceless=True,
+        outbound=False,
+    )
+    # A Growth channel crossed a line the team set (backend/growth_brief.py): its KPI went red or came back, its
+    # guardrail went over or back under, or its source started or stopped failing. Ids only, as Finance's.
+    add(
+        "growth.channel.crossed",
+        "A Growth channel crossed a line: its KPI went red or back, its guardrail over its max, or its source failed.",
+        "Growth channel crossed a line",
+        {"channel_id": "ch1", "kind": "kpi", "kpi_id": "k1", "source_id": None, "crossing_id": "x1"},
         sourceless=True,
         outbound=False,
     )

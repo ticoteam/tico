@@ -113,28 +113,13 @@ import httpx
 from clients import gateway as G
 from clients.gateway import user_agent
 
-from . import cloud_access, outbound_tls, releases
+from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
+from .api_contract import api_v2, error
 
 log = logging.getLogger(__name__)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS cloud_machines(
- bot TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'cloud', placement TEXT NOT NULL DEFAULT 'shared',
- size TEXT NOT NULL DEFAULT 'default',
- always_on INTEGER NOT NULL DEFAULT 0, pause_minutes INTEGER, machine_id TEXT, runner_id TEXT,
- state TEXT NOT NULL DEFAULT 'none',
- machine_size TEXT, started_at TEXT, stopped_at TEXT, cost_month_usd REAL NOT NULL DEFAULT 0,
- starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
- active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
- problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
- start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
- grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL, move_drain REAL);
-CREATE TABLE IF NOT EXISTS cloud_machine_codes(
- code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
-"""
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"  # the shared machine's row and HQ key: no bot id has an underscore
@@ -537,13 +522,11 @@ def replacement_runner(c, key, old_id):
 
 def visible_rows(c):
     """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
-    from .getting_started import ONLINE_SECONDS
-
     online = {
         r["id"]
         for r in c.execute(
             "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-ONLINE_SECONDS),),
+            (runner_online.cutoff(),),
         )
     }
     return {
@@ -601,7 +584,7 @@ def default_placement(c, bot):
     return "own" if OWN_NAME.fullmatch(name) else "shared"
 
 
-def adopt(c, bot, actor=H.KEEPER):
+def adopt(c, bot, actor=H.TICO_ACTOR):
     """A bot of a cloud company with no computer and no choice yet: a cloud machine (the default), shared or its own by
     its role. Returns whether it is in cloud mode now. A bot someone moved to a computer keeps that; an external agent's
     has no computer at all."""
@@ -625,7 +608,7 @@ def adopt(c, bot, actor=H.KEEPER):
 def ensure_shared(c):
     c.execute(
         "INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
-        (SHARED, "cloud", "shared", H.KEEPER, H.now()),
+        (SHARED, "cloud", "shared", H.TICO_ACTOR, H.now()),
     )
 
 
@@ -713,6 +696,20 @@ def resting(c):
         },
         shared=True,
     )
+
+
+def credit_stopped(c):
+    """Computer ids of cloud machines Tico stopped because the company is out of credit, only while HQ says access is
+    frozen: Health names one account-wide cause for them, not one outage per machine (task #423). Unknown, stale or
+    unfrozen access is no claim, so a machine there keeps its own diagnosis."""
+    if cloud_access.access(c) != "frozen":
+        return set()
+    return {
+        r["runner_id"]
+        for r in c.execute(
+            "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND problem='out_of_credit'"
+        )
+    }
 
 
 def label_for(c, key):
@@ -941,7 +938,7 @@ def enrolled(c, execution, runner_id, key):
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
-    H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
+    H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
     from . import model_subscriptions as MS
@@ -1165,7 +1162,7 @@ def facts(c, settings, current, at):
         restarted = c.execute(
             "SELECT created_at FROM events WHERE actor=? AND action='cloud_machine.stopped' AND target=? "
             "AND detail LIKE ? ORDER BY created_at DESC LIMIT 1",
-            (H.KEEPER, key, f"%{OFFLINE_REASON}%"),
+            (H.TICO_ACTOR, key, f"%{OFFLINE_REASON}%"),
         ).fetchone()
         out["restarted_at"] = epoch(restarted["created_at"]) if restarted else None
     if current["problem"] == "out_of_credit" and not out["frozen"]:
@@ -1280,8 +1277,6 @@ def signin_wake(c, settings):
     for as long as the page keeps asking. Returns whether it is on its way: never out of credit, off a cloud company,
     after machines that never enrolled, once it is up (it is online and still cannot run the sign-in), or SIGNIN_START
     after the first ask."""
-    from .getting_started import ONLINE_SECONDS
-
     if not offered(c, settings) or cloud_access.frozen(c):
         return False
     ensure_shared(c)
@@ -1292,7 +1287,7 @@ def signin_wake(c, settings):
         current["runner_id"]
         and c.execute(
             "SELECT 1 FROM runners_with_state WHERE id=? AND revoked_at IS NULL AND last_seen_at>?",
-            (current["runner_id"], H.shift(H.now(), seconds=-ONLINE_SECONDS)),
+            (current["runner_id"], runner_online.cutoff()),
         ).fetchone()
     ):
         return False
@@ -1656,7 +1651,7 @@ class Manager:
                 with self.store.transaction() as c:
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "cloud_machine.list_refused",
                         "",
                         {"code": str(refused.code)[:60], "status": refused.status},
@@ -1818,7 +1813,7 @@ class Manager:
             if intent["reason"] == "never_enrolled":
                 self.never_enrolled(current, c)
             else:
-                deleted(c, current, H.KEEPER)
+                deleted(c, current, H.TICO_ACTOR)
         c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
 
     def reconcile_delete(self, hq, machine_id):
@@ -1977,7 +1972,7 @@ class Manager:
             if not live or live["problem"] != OFFLINE_RESTARTING or live["problem_at"] != current["problem_at"]:
                 return live  # it checked in, or something else happened, meanwhile
             save(c, key, problem="", problem_at=None)
-            H.event(c, H.KEEPER, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
+            H.event(c, H.TICO_ACTOR, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
             if live["state"] in ON:
                 file_health_card(c, key, None, epoch(live["problem_at"]) or at)
             return row(c, key)
@@ -2021,7 +2016,7 @@ class Manager:
                 )
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "cloud_machine.grew",
                     key,
                     {"from": live["machine_size"], "to": target, "disk_pct": full},
@@ -2030,7 +2025,11 @@ class Manager:
                 save(c, key, problem="disk_full", problem_at=live["problem_at"] or H.now(), grow_note=why)
                 if live["problem"] != "disk_full":
                     H.event(
-                        c, H.KEEPER, "cloud_machine.grow_blocked", key, {"size": live["machine_size"], "disk_pct": full}
+                        c,
+                        H.TICO_ACTOR,
+                        "cloud_machine.grow_blocked",
+                        key,
+                        {"size": live["machine_size"], "disk_pct": full},
                     )
             return row(c, key)
 
@@ -2176,7 +2175,7 @@ class Manager:
                 )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                 key,
                 {
@@ -2198,7 +2197,7 @@ class Manager:
         fails = live["enroll_fails"]
         # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
         # answers with that one (act), which is not the new machine.
-        deleted(c, live, H.KEEPER, details={"reason": "never_enrolled", "tries": fails})
+        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails})
 
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
@@ -2210,7 +2209,7 @@ class Manager:
         elif refused.status == 404 and action != "create":
             # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
             with self.store.transaction() as c:
-                deleted(c, row(c, key), H.KEEPER)
+                deleted(c, row(c, key), H.TICO_ACTOR)
             return
         else:
             failures = current["failures"] + 1
@@ -2288,7 +2287,7 @@ class Manager:
             ):
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "cloud_machine.refused",
                     key,
                     {
@@ -2343,7 +2342,7 @@ class Manager:
         save(c, key, **fields)
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "cloud_machine.refused",
             key,
             {"action": action, "code": code, "size": refused_size, "fallback": target},
@@ -2358,7 +2357,7 @@ class Manager:
         key, refused_size = current["bot"], current["size"]
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "cloud_machine.size_fallback",
             key,
             {"from": refused_size, "to": runs_at, "code": code, "at": at},
@@ -2383,7 +2382,7 @@ class Manager:
         name = "The shared cloud machine" if key == SHARED else f"{bot_name(c, key)}'s cloud machine"
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             chooser,
             f"{name} couldn't start at {cloud_size_name(refused_size)} ({fallback_words(sizes(c), refused_size, code)}), "
             f"so it runs at {cloud_size_name(runs_at)}. Its work isn't waiting. To change it, pick another size in "
@@ -3016,7 +3015,11 @@ def health(c, settings=None):
     stuck = sorted(
         bot
         for bot, machine in machines.items()
-        if bot in active and machine["problem"] and machine["problem"] != "disk_full"
+        if bot in active
+        and machine["problem"]
+        and machine["problem"] != "disk_full"
+        # Out of credit is one account-wide cause Health names once, with Add credit (health.view, task #423).
+        and not (machine["problem"] == "out_of_credit" and cloud_access.access(c) == "frozen")
     )
     lines = []
     for key, current in sorted(rows(c).items()):
@@ -3113,6 +3116,21 @@ class CloudSupportView(BaseModel):
     machines: list[CloudSupportMachine] = Field(max_length=1000)
 
 
+CLOUD_SUPPORT_DESCRIPTION = (
+    "HQ is the source of the switch and helper states; no local copy is kept. "
+    "GET returns available false, on null and an empty machines list off Tico Cloud "
+    "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+    "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+    "Core assigns an increasing revision and keeps it for retries of the same "
+    "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+    "on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+)
+CLOUD_SUPPORT_ERRORS = {
+    "403": error("People only; changing the switch needs the owner"),
+    "502": error("Didn't reach Tico HQ, or HQ's answer could not be used"),
+}
+
+
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
@@ -3141,7 +3159,17 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("not_cloud", "Tico support on cloud machines is not available here", 404)
         return {"available": False, "on": None, "machines": []}
 
-    @app.get("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.get(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "getCloudMachineSupport",
+            "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses=CLOUD_SUPPORT_ERRORS,
+        ),
+    )
     def cloud_machine_support(request: Request):
         """The switch and each machine's helper state, read from HQ every time. Unavailable off Tico Cloud.
         Signed-in people only; demo and rehearsal never contact HQ."""
@@ -3151,7 +3179,20 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("forbidden", "Only people see Tico support on cloud machines", 403)
         return support_state()
 
-    @app.put("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.put(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "setCloudMachineSupport",
+            "Let Tico support reach the company's cloud machines, or stop it; owner only",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses={
+                **CLOUD_SUPPORT_ERRORS,
+                "404": error("not_cloud: cloud-machine support is not available"),
+            },
+        ),
+    )
     def cloud_machine_support_set(request: Request, body: CloudSupportChange):
         """Let Tico support reach this company's cloud machines, or stop it, at HQ. Owner only; support sessions
         cannot change their own access. Retries keep the same revision; HQ refuses a change older than its latest."""

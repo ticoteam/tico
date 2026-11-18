@@ -576,14 +576,14 @@ pub struct Tree {
 }
 
 /// Credentials that can turn up in git's or the hub's words whoever's they are: a URL's user part, GitHub's
-/// token formats, Authorization headers and `name=value` credential pairs (redact.py _CREDENTIAL_SHAPES).
+/// token formats (a stateless installation token is `ghs_<app id>_<JWT>`, with dots and dashes), Authorization headers and `name=value` credential pairs (redact.py _CREDENTIAL_SHAPES).
 fn credential_shapes() -> &'static [(regex::Regex, &'static str)] {
     static SHAPES: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
     SHAPES.get_or_init(|| {
         [
             (r#"(?i)([a-z][a-z0-9+.-]*://)[^/\s@'"]+@"#, "${1}••••@"),
             (
-                r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})",
+                r"\b(?:gh[pousr]_[A-Za-z0-9._-]{16,}|github_pat_[A-Za-z0-9_]{16,})",
                 "••••",
             ),
             (
@@ -889,6 +889,25 @@ pub fn scrub_log(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_github_token_formats_are_masked_in_gits_words() {
+        // A stateless installation token (`ghs_<app id>_<JWT>`, the default since Oct 2026) and a classic one, synthetic.
+        let stateless = format!(
+            "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9.{}",
+            "S1g-n_aTuRe".repeat(40)
+        );
+        let classic = format!("ghs_{}", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8");
+        let said = format!("error: {stateless} and {classic} were refused");
+        let scrubbed = scrub_credentials(&said, &[]);
+        assert!(!scrubbed.contains("ghs_"), "{scrubbed}");
+        assert!(!scrubbed.contains("S1g-n_aTuRe"), "{scrubbed}");
+        let failure = git_failure(&format!("fatal: {stateless} refused"), &[], 300);
+        assert!(
+            !failure.contains("eyJ") && !failure.contains("S1g-n"),
+            "{failure}"
+        );
+    }
 
     #[test]
     fn browser_values_include_codes_without_changing_their_text_matching() {

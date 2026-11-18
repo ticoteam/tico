@@ -96,7 +96,7 @@ async function run(browser: Browser, phone: boolean) {
   const viewport = phone ? {width: 390, height: 844} : {width: 1440, height: 900};
   const {page, errors} = await open(browser, {viewport, hash: '#/task/t-3'});
   const task = page.locator('#task-modal .task-chat .p-pill');
-  await page.locator('#task-modal[open] [data-task-tab="chat"]').click();   // the box is on the Chat tab
+  // a task opens on its chat, where the box is
   await task.waitFor();
   await check(page, 'task', task, phone);
   await page.keyboard.press('Escape');

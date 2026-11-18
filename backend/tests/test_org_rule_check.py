@@ -1,4 +1,4 @@
-"""Org rule checks (backend/org_rule_check.py, docs/rules-plan.md §3): a bot's output is checked against the rules that
+"""Org rule checks (backend/org_rule_check.py, docs/dev/rules-plan.md §3): a bot's output is checked against the rules that
 apply to it before it lands. One Decide call outside the write's transaction; a held write answers 200 with `held`
 and writes nothing but its hold; Escalate files one review task for a person; Warn delivers with a line; any
 failure lets the output through with `rules.unchecked`, except an output too large to check, which is held.
@@ -12,18 +12,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import call_slots as CS
 from backend import org_rule_check as K
-from backend import thread_attention
-from backend import threads
-from backend import updates
+from backend import thread_attention, threads, updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 from backend.tests.helpers.org_rule_check import LAUNCH, hand_over
-from backend import bot_settings as BS
+from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -200,7 +199,14 @@ def test_an_all_bots_rule_covers_a_bot_made_later(ruled):
 
 
 def task_for_ops(api, title="Write the launch note"):
-    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Draft it."})
+    return post(api, "tasks", {"owner": "ops", "title": title, "message": "Draft it."})
+
+
+def asked(api, task_id, words=False):
+    """What the task's creator asked: its request (its first message). `words`: and any instructions Tico gave its
+    bot (H.task_words)."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, task_id) if words else H.task_request_text(c, task_id)
 
 
 def test_a_safe_comment_then_a_forbidden_edit_keeps_the_old_text(ruled):
@@ -220,19 +226,20 @@ def test_a_safe_comment_then_a_forbidden_edit_keeps_the_old_text(ruled):
     assert held["held"] and bodies(api, "Fun fact") == []
 
 
-def test_a_task_body_done_note_or_hand_off_why_held_leaves_the_task_unchanged(ruled):
+def test_a_task_title_done_note_or_hand_off_why_held_leaves_the_task_unchanged(ruled):
     api, _ = ruled
     color_rule(api)
     task = task_for_ops(api)
     for path, change in (
-        (f"tasks/{task['id']}", {"body": "Note: our favorite color is red."}),
+        (f"tasks/{task['id']}", {"title": "Note: our favorite color is red."}),
         (f"tasks/{task['id']}/done", {"note": "Done; favorite color is red"}),
         (f"tasks/{task['id']}/owner", {"owner": "ana", "why": "Over to you: our favorite color is red"}),
     ):
         got = post(api, path, {"version": task["version"], **change}, token="ops-test")
         assert got["held"], got
-    row = sql(api, "SELECT body, status, owner_id, version FROM tasks WHERE id=?", (task["id"],))[0]
-    assert row["body"] == "Draft it." and row["status"] != "done" and row["owner_id"] == "bot:ops"
+    row = sql(api, "SELECT title, status, owner_id, version FROM tasks WHERE id=?", (task["id"],))[0]
+    assert row["title"] == task["title"] and row["status"] != "done" and row["owner_id"] == "bot:ops"
+    assert asked(api, task["id"]) == "Draft it."
     assert row["version"] == task["version"]
 
 
@@ -317,8 +324,9 @@ def test_escalate_goes_to_the_person_above_when_ops_reports_to_a_bot(ruled):
     got = say(api, "Our favorite color is gold")
     hold = hold_row(api, got["held"]["id"])
     assert hold["reviewer"] == "human:ben"
-    task = sql(api, "SELECT owner_id, body FROM tasks WHERE id=?", (hold["task_id"],))[0]
-    assert task["owner_id"] == "human:ben" and hold["id"] in task["body"] and "gold" not in task["body"]
+    task = sql(api, "SELECT owner_id FROM tasks WHERE id=?", (hold["task_id"],))[0]
+    words = asked(api, hold["task_id"], words=True)
+    assert task["owner_id"] == "human:ben" and hold["id"] in words and "gold" not in words
 
 
 def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
@@ -328,35 +336,6 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert outcomes == ["blocked", "blocked", "escalated", "escalated"]
     tasks = {row["task_id"] for row in sql(api, "SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL")}
     assert len(tasks) == 1
-
-
-def test_an_old_rule_review_row_takes_the_plain_title_and_no_other_held_row_does(ruled):
-    api, _ = ruled
-    color_rule(api)
-    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
-    [review] = sql(
-        api,
-        "SELECT id, conversation_id FROM tasks WHERE id IN "
-        "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)",
-    )
-    with api.app.state.store.transaction() as c:
-        # Rows as main wrote them: the review's thread took the task's "Held: ..." title, and a screening hold keeps its own.
-        c.execute(
-            "UPDATE conversations SET subject=? WHERE id=?", ("Held: ops and the rule 'old'", review["conversation_id"])
-        )
-        screening = c.execute(
-            "INSERT INTO conversations(id, kind, subject, participants, scope, created_at) "
-            "VALUES('screen-held', 'task', 'Held: Order', '[]', 'task', '2026-11-01')"
-        ).rowcount
-        assert screening == 1
-        assert threads.rename_rule_reviews(c) == 1
-    subjects = {
-        r["id"]: r["subject"]
-        for r in sql(
-            api, "SELECT id, subject FROM conversations WHERE id IN (?, 'screen-held')", (review["conversation_id"],)
-        )
-    }
-    assert subjects == {review["conversation_id"]: "Rule review", "screen-held": "Held: Order"}
 
 
 def test_cache_hits_count_toward_repeats(ruled):
@@ -645,7 +624,7 @@ def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     assert "nonce" not in get(api, f"rule-holds/{held['id']}", token="ops-test")
     # The held text is in no conversation, comment or inbox, and makes no work.
     assert bodies(api, "gold") == [] and sql(api, "SELECT id FROM jobs WHERE bot_id='ana'") == []
-    assert "gold" not in api.get("/api/v2/inbox", headers=headers()).text
+    assert "gold" not in api.get("/api/v2/messages?unread=1", headers=headers()).text
     kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
     assert kept["state"] == "kept"
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
@@ -660,7 +639,7 @@ def read_by_run(c, aid, task):
     ).fetchone()[0]
     note = H._write_message(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "bot:ops",
         "Plan notes",
         H.conversation(c, room),
@@ -697,11 +676,11 @@ def test_a_held_write_nobody_decides_for_a_day_is_kept_unsent_and_its_bot_is_tol
     age_holds(api, 25)
     assert sweep_holds(api) == [held["id"]]
     row = hold_row(api, held["id"])
-    assert (row["state"], row["decided_by"]) == ("kept", H.KEEPER)
+    assert (row["state"], row["decided_by"]) == ("kept", H.TICO_ACTOR)
     assert ben_needs_you(api) == []
     assert bodies(api, "gold") == []  # the held text is written nowhere
     # The bot that wrote it is told, not the person it was for.
-    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.KEEPER,))
+    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.TICO_ACTOR,))
     assert len(told) == 1 and "was not sent" in told[0]["body"] and "24 hours" in told[0]["body"]
     assert sweep_holds(api) == []  # decided once
 
@@ -855,7 +834,7 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
     elif how == "budget":
         api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
+            H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = say(api, "Our favorite color is gold")
@@ -900,7 +879,7 @@ def test_a_spent_decisions_cap_stops_rule_checks(ruled):
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
     with store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     got = say(api, "Our favorite color is gold")
     assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
     assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
@@ -913,7 +892,7 @@ def test_a_decisions_cap_spent_while_a_check_waits_its_turn_is_the_budget_too(ru
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
     with store.transaction() as c:  # under the cap, but with no room for one more call's most
-        H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
     got = say(api, "Our favorite color is gold")
     assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
     assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
@@ -953,9 +932,9 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
 
 
 def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
+    from backend.tests.helpers.automation_cli import Client  # noqa: F401
     from backend.tests.helpers.org_rules_surfaces import cli, mcp  # noqa: F401
     from clients import cli_spec, hubcli
-    from backend.tests.helpers.automation_cli import Client  # noqa: F401
 
     api, judge = ruled
     color_rule(api, reviewer="ben")
@@ -1021,12 +1000,12 @@ def test_a_task_change_warning_rides_on_the_change_itself(ruled):
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     got = post(
-        api, f"tasks/{task['id']}", {"version": task["version"], "body": "Our favorite color is red."}, token="ops-test"
+        api, f"tasks/{task['id']}", {"version": task["version"], "note": "Our favorite color is red."}, token="ops-test"
     )
     assert got["rule_warning"]
-    row = sql(api, "SELECT body FROM tasks WHERE id=?", (task["id"],))[0]
-    assert row["body"].startswith("Warning:") and row["body"].endswith("Our favorite color is red.")
-    assert sql(api, "SELECT id FROM messages WHERE sender_id=? AND body LIKE 'Warning:%'", (H.KEEPER,)) == []
+    row = sql(api, "SELECT note FROM tasks WHERE id=?", (task["id"],))[0]
+    assert row["note"].startswith("Warning:") and row["note"].endswith("Our favorite color is red.")
+    assert sql(api, "SELECT id FROM messages WHERE sender_id=? AND body LIKE 'Warning:%'", (H.TICO_ACTOR,)) == []
 
 
 def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_people(ruled):
@@ -1450,11 +1429,11 @@ def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
 
     with api.app.state.store.transaction() as c:
         for _ in range(3):
-            H.event(c, H.KEEPER, "judge.call", "rule-check@1", {})
-        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@1", {})
+            H.event(c, H.TICO_ACTOR, "judge.call", "rule-check@1", {})
+        H.event(c, H.TICO_ACTOR, "judge.call", "person-ask-ingest@1", {})
     with api.app.state.store.read() as c:
         assert K.calls_today(c) == 3
-        assert B.used_today(c, H.KEEPER) == 1
+        assert B.used_today(c, H.TICO_ACTOR) == 1
 
 
 # ---- Send anyway: privacy, snapshot, full inputs, a new Warn ------------------------------------------------------
@@ -1496,20 +1475,21 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
 def test_send_anyway_refuses_once_the_task_changed(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
-    # A hand-off is checked on the task it hands over: its body breaks the rule.
+    # A hand-off is checked on the task it hands over: its request breaks the rule.
     task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
     held = post(api, f"tasks/{task['id']}/owner", {"version": task["version"], "owner": "ana"}, token="ops-test")[
         "held"
     ]
-    post(api, f"tasks/{task['id']}", {"version": task["version"], "body": "Launch is Tuesday."})
+    post(api, f"tasks/{task['id']}", {"version": task["version"], "title": "Palette, launch Tuesday"})
     r = send_anyway(api, held["id"], expected=409)
     assert r["error"]["code"] == "changed"
     assert hold_row(api, held["id"])["state"] == "held"
     assert sql(api, "SELECT owner_id FROM tasks WHERE id=?", (task["id"],))[0]["owner_id"] == "bot:ops"
 
 
-def edit_after_check(api, monkeypatch, task_id, body, times=1):
-    """The automation's check of its step runs, then the task changes (version bumped) before the step's write."""
+def edit_after_check(api, monkeypatch, task_id, text, times=1):
+    """The automation's check of its step runs, then the task's request says `text` (version bumped) before the
+    step's write."""
     from backend import automations as AU
 
     real, left = AU.HubServices._rule_check, [times]
@@ -1519,7 +1499,12 @@ def edit_after_check(api, monkeypatch, task_id, body, times=1):
         if left[0]:
             left[0] -= 1
             with api.app.state.store.transaction() as c:
-                c.execute("UPDATE tasks SET body=?, version=version+1 WHERE id=?", (body, task_id))
+                c.execute(
+                    "UPDATE messages SET body=? WHERE json_extract(refs, '$.task')=? "
+                    "AND json_extract(refs, '$.request')=1",
+                    (text, task_id),
+                )
+                c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
         return verdict
 
     monkeypatch.setattr(AU.HubServices, "_rule_check", then_edit)
@@ -1693,8 +1678,8 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
     title = ("Our favorite color is red, " + "x" * 300)[:299] + "Z"
     got = post(api, f"tasks/{task['id']}", {"version": task["version"], "title": title}, token="ops-test")
     assert got["rule_warning"]
-    row = sql(api, "SELECT title, body, note FROM tasks WHERE id=?", (task["id"],))[0]
-    assert row["title"] == title and row["body"] == "Draft it."
+    row = sql(api, "SELECT title, note FROM tasks WHERE id=?", (task["id"],))[0]
+    assert row["title"] == title and asked(api, task["id"]) == "Draft it."
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     made = post(
@@ -1709,11 +1694,11 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
         },
         token="ops-test",
     )
-    made = sql(
-        api, "SELECT title, body, public_title, public_summary FROM tasks WHERE id=?", (made.get("task", made)["id"],)
-    )[0]
+    made_id = made.get("task", made)["id"]
+    made = sql(api, "SELECT title, public_title, public_summary FROM tasks WHERE id=?", (made_id,))[0]
     assert made["public_title"] == "Our favorite color is red" and made["title"] == "Ship the palette"
-    assert made["body"].startswith("Warning:") and made["body"].endswith("Internal draft.")
+    words = asked(api, made_id)
+    assert words.startswith("Warning:") and words.endswith("Internal draft.")
     # Published with no summary, the public roadmap shows the line as its summary, the title kept whole.
     assert made["public_summary"].startswith("Warning:")
 
@@ -1748,8 +1733,8 @@ def test_automation_warnings_land_on_the_posted_text_and_the_hand_off_note(ruled
     task = task.get("task", task)
     aid = hand_over(api)
     post(api, f"automations/{aid}/run", {"input": {"task": {"id": task["id"]}}})
-    row = sql(api, "SELECT owner_id, body, note FROM tasks WHERE id=?", (task["id"],))[0]
-    assert row["owner_id"] == "human:ana" and row["body"] == "Our favorite color is red."
+    row = sql(api, "SELECT owner_id, note FROM tasks WHERE id=?", (task["id"],))[0]
+    assert row["owner_id"] == "human:ana" and asked(api, task["id"]) == "Our favorite color is red."
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
 
 
@@ -2241,7 +2226,8 @@ def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkey
 
 
 def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch):
-    from backend import automation_actions as AA, hubdb
+    from backend import automation_actions as AA
+    from backend import hubdb
 
     api, _ = ruled
     color_rule(api, if_broken="warn")
@@ -2257,7 +2243,9 @@ def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch)
 def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeypatch, if_broken):
     # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
     import base64
-    from backend import email_sending as S, mailbox_access as MA
+
+    from backend import email_sending as S
+    from backend import mailbox_access as MA
     from backend.tests.helpers.email_sending import BOX, mime  # noqa: F401
 
     api, judge = ruled
@@ -2287,9 +2275,8 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
 
 
 def test_a_rule_check_whose_jev_fails_is_unchecked_and_never_asks_the_company_model(ruled, monkeypatch):
-    from clients import judge as J
-
     from backend import judge as B
+    from clients import judge as J
 
     api, judge = ruled
     color_rule(api)
@@ -2314,8 +2301,9 @@ def test_a_rule_checks_judge_call_names_the_rules_it_asked(ruled):
 
 
 def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
-    """docs/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
-    asks; an ask a rule covers is refused back to the bot with the rule's words (tick list 49)."""
+    """docs/dev/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
+    asks (here an OK of what it shows); an ask a rule covers is refused back to the bot with the rule's words (tick
+    list 49)."""
     api, judge = ruled
     color_rule(api)
     task = task_for_ops(api)
@@ -2324,8 +2312,9 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
         json={
             "to": "ana",
             "line": "May I say our favorite color is blue?",
+            "kind": "ok",
+            "show": X.shown_on(api),
             "version": task["version"],
-            "why": "It sets what goes out on launch day.",
         },
         headers=headers("ops-test"),
     )
@@ -2341,8 +2330,9 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
         json={
             "to": "ana",
             "line": "May I say our favorite color is green?",
+            "kind": "ok",
+            "show": X.shown_on(api),
             "version": task["version"],
-            "why": "It sets what goes out on launch day.",
         },
         headers=headers("ops-test"),
     )

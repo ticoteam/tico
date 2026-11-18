@@ -138,25 +138,20 @@ def normalize_fallback(value):
     return out
 
 
-def backfill_config(config, slug=None, runtime=None):
-    """Set missing `harness` from runtime; seed Tico's Gemini CLI fallback. Returns (config, changed)."""
-    config = dict(config or {})
-    changed = False
-    harness = resolve_harness(config, runtime)
-    if harness and config.get("harness") != harness:
-        config["harness"] = harness
-        changed = True
-    if harness and not config.get("runtime"):
-        config["runtime"] = runtime_of(harness)
-        changed = True
-    # A bot on a runtime's second host (Antigravity) falls back to that runtime's own CLI.
-    if slug == "assistant" and harness and runtime_of(harness) != harness and "fallback" not in config:
-        from .providers import PROVIDER_BY_RUNTIME, recommended
+# Claude Code's built-in output styles, its `outputStyle` setting (backend/models.py OutputStyle); none saved is its own
+# Default. Codex's `model_verbosity` levels; none saved is the model's own. A bot keeps either on any harness, and the
+# runner passes each only to its own harness (runner-rs/src/hosts/claude.rs and codex.rs).
+OUTPUT_STYLES = ("Concise", "Explanatory", "Learning", "Proactive")
+VERBOSITIES = ("low", "medium", "high")
 
-        config["fallback"] = {
-            "harness": runtime_of(harness),
-            "model": config.get("model") or recommended(PROVIDER_BY_RUNTIME[runtime_of(harness)]["id"])["id"],
-            "reasoning_effort": config.get("reasoning_effort") or config.get("effort") or "low",
-        }
-        changed = True
-    return config, changed
+
+def output_style(config):
+    """The bot's saved Claude Code output style, or None for Default (nothing saved, or a value not offered)."""
+    value = (config or {}).get("output_style")
+    return value if value in OUTPUT_STYLES else None
+
+
+def verbosity(config):
+    """The bot's saved Codex verbosity, or None for the model's own."""
+    value = (config or {}).get("verbosity")
+    return value if value in VERBOSITIES else None

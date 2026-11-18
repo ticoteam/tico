@@ -24,7 +24,6 @@ interface MessagingBot {
   sources: MessagingSource[];
   last_run?: string | null;
   next_run?: string | null;
-  slack_interval_minutes?: number | null;
 }
 interface MessagingListItem {
   bot: string;
@@ -51,14 +50,6 @@ interface MessagingSlackPost {
   error?: string | null;
   text?: string | null;
 }
-interface MessagingDigest {
-  id: string;
-  created_at: string;
-  channels: string[];
-  count: number;
-  skipped?: number | null;
-  run?: { state?: string | null } | null;
-}
 interface MessagingInstructions {
   published: boolean;
   updated_at?: string | null;
@@ -69,7 +60,6 @@ interface MessagingDetail {
   mail?: MailPageMessage[];
   slack?: MessagingSlackMessage[];
   slack_posts?: MessagingSlackPost[];
-  slack_digests?: MessagingDigest[];
   instructions: MessagingInstructions;
 }
 
@@ -118,15 +108,7 @@ function messagingEvidence(data: MessagingDetail): string {
       </button>`})),
   ];
   events.sort((a, b) => b.at - a.at);
-  return events.length ? events.slice(0, 70).map(e => e.html).join('') : '<div class="empty">No synced messages for these sources yet.</div>';
-}
-// The Slack checks this bot ran; its schedules and other triggers are automations (#/automations, searched by its name).
-function messagingRuns(data: MessagingDetail): string {
-  return (data.slack_digests || []).map(d => `<div class="msg-run">
-    <div class="msg-run-top"><strong>Slack channel check</strong><span class="spacer"></span><span class="muted">${esc(ago(d.created_at))}</span></div>
-    <div class="msg-run-meta"><span>${esc(d.channels.join(' · '))}</span><span>${d.count} message${d.count === 1 ? '' : 's'}</span>${d.skipped ? `<span>${d.skipped} skipped in high volume</span>` : ''}<span>${esc(d.run?.state || 'Queued')}</span></div>
-    <button class="ghost" type="button" data-msg-digest="${esc(d.id)}" style="margin-top:8px">View messages reviewed</button>
-  </div>`).join('');
+  return events.length ? events.slice(0, 70).map(e => e.html).join('') : '<div class="empty">No messages for these sources yet.</div>';
 }
 function messagingDetail(data: MessagingDetail): void {
   const b = data.bot, state = messagingParams();
@@ -137,7 +119,6 @@ function messagingDetail(data: MessagingDetail): void {
     ? `<div class="msg-source-picker"><select id="msg-source-select" aria-label="Choose a messaging source"><option value="">All ${b.sources.length} sources</option>${b.sources.map(s => `<option value="${esc(s.id)}"${state.source === s.id ? ' selected' : ''}>${s.kind === 'email' ? 'Email' : 'Slack'} · ${esc(s.name)}</option>`).join('')}</select><details><summary>Show all sources</summary><div class="msg-sources ph-seg" role="group" aria-label="Sources covered by ${esc(b.name)}">${sources}</div></details></div>`
     : `<div class="msg-sources ph-seg" role="group" aria-label="Sources covered by ${esc(b.name)}">${sources}</div>`;
   const shownSources = state.source ? b.sources.filter(s => s.id === state.source) : b.sources.length > 8 ? [] : b.sources;
-  const checks = messagingRuns(data);
   const more = `<a href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>`
     + (b.can_manage && ['active', 'paused'].includes(b.state) ? `<button type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : '');
   const updated = data.instructions.published && data.instructions.updated_at ? `Updated ${ago(data.instructions.updated_at)}` : '';
@@ -148,12 +129,11 @@ function messagingDetail(data: MessagingDetail): void {
       <section class="msg-panel" aria-labelledby="msg-instructions-title">
         <div class="msg-panel-title"><h2 id="msg-instructions-title"${updated ? ` title="${esc(updated)}"` : ''}>Instructions</h2></div>
         <div class="msg-panel-body">
-          <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.slack_interval_minutes ? `Slack every ${b.slack_interval_minutes} minutes when new` : 'not scheduled'}</strong></span></div>
-          ${shownSources.length ? `<div class="msg-facts msg-facts-sources">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? 'sync error' : s.synced_at ? 'synced ' + ago(s.synced_at) : 'not synced'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
+          <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.sources.some(s => s.kind === 'slack') ? 'Slack hourly when new' : 'not scheduled'}</strong></span></div>
+          ${shownSources.length ? `<div class="msg-facts msg-facts-sources">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? esc(s.error) : s.synced_at ? 'checked ' + ago(s.synced_at) : 'not checked yet'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
           <div class="msg-instructions">${esc(data.instructions.content || 'No instructions have been published.')}</div>
         </div>
       </section>
-      ${checks ? `<section class="msg-section msg-scheduled"><h2>Slack checks</h2>${checks}</section>` : ''}
     </div>
     <section class="msg-example-inbox" aria-labelledby="msg-examples-title">
       <header class="msg-example-head"><h2 id="msg-examples-title">Example messages</h2></header>
@@ -186,15 +166,6 @@ async function messagingOpenSlack(bot: string, channel: string, thread: string):
       <pre>${esc(m.deleted ? '(message removed)' : m.text)}</pre></article>`).join('');
   } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
 }
-async function messagingOpenDigest(bot: string, digest: string): Promise<void> {
-  const {d, body, title} = messagingMessageDialog();
-  title.textContent = 'Slack check'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
-  try {
-    const data = await get<MessagingDigest & {messages?: MessagingSlackMessage[] | null}>(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-digests/${encodeURIComponent(digest)}`);
-    body.innerHTML = `<p class="muted">${data.count} message${data.count === 1 ? '' : 's'} delivered to the bot${data.skipped ? ` · ${data.skipped} skipped in high volume` : ''} · ${esc(fmt(data.created_at))}</p>` +
-      ((data.messages || []).map(m => `<article class="mail-msg"><div class="meta"><strong>${esc(m.author)}</strong><span class="muted">${esc(mailWhen('', Number(m.ts)))}</span><a href="${esc(m.url)}" target="_blank" rel="noopener">Open in Slack</a></div><pre>${esc(m.deleted ? '(message removed)' : m.text)}</pre></article>`).join('') || '<div class="empty">The delivered message records are unavailable.</div>');
-  } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
-}
 async function pageMessaging(): Promise<void> {
   if (S.me && !S.me.mail_access && S.me.role !== 'owner') { location.hash = TASKS; return; }
   const main = $('#main')!;
@@ -211,7 +182,6 @@ async function pageMessaging(): Promise<void> {
       const bot = messagingParams().bot;
       const mail = hit.closest<HTMLElement>('[data-msg-mail]'); if (mail) { messagingOpenMail(mail.dataset.msgMailbox!, mail.dataset.msgMail!); return; }
       const slack = hit.closest<HTMLElement>('[data-msg-slack]'); if (slack) { messagingOpenSlack(bot, slack.dataset.msgChannel!, slack.dataset.msgSlack!); return; }
-      const digest = hit.closest<HTMLElement>('[data-msg-digest]'); if (digest) { messagingOpenDigest(bot, digest.dataset.msgDigest!); return; }
       const pause = hit.closest<HTMLButtonElement>('[data-msg-pause]');
       if (!pause) return;
       pause.disabled = true;

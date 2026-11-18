@@ -9,7 +9,7 @@
 // What a computer reports about itself (machines[] of GET /v2/operations) and what this pop-up reads from it.
 type DetailUsage = {used_percent?: number; resets_at?: string};
 type DetailKey = MachineKey;
-type DetailShared = {name?: string; every?: boolean; computers?: {label?: string}[]};
+type DetailShared = {name?: string; computers?: {label?: string}[]};
 type DetailRuntime = {installed?: boolean; version?: string; authenticated?: string; account?: MachineAccount | null; weekly?: DetailUsage | null; five_hour?: DetailUsage | null; profiles?: Record<string, Partial<DetailRuntime>>; key?: DetailKey | null; data_problem?: string; rejected_at?: string; rejected_reason?: string; credential_source?: string; turn_user?: string};
 type DetailHarness = {runtime: string; name?: string; installed?: boolean; version?: string; managed?: boolean; state?: string; pinned?: boolean; update_available?: boolean; latest?: string; wanted?: boolean; detail?: string};
 type DetailLink = {bot: string; runtime: string; warning?: string; problem?: string; signed_in?: boolean};
@@ -24,7 +24,8 @@ type DetailAddStep = {at?: string | undefined; runtime?: string | undefined};
 type DetailDialog = HTMLDialogElement & {restoreOpener?: () => void};
 type DetailExitUsage = import('../types/api').BrowserExitUsage;
 
-const machineOnline = (machine: DetailMachine) => !machine.revoked_at && !!machine.last_seen_at && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen_at).getTime() < 60000;
+// The server decides online (backend/runner_online.py) and says so on each machine in /v2/operations.
+const machineOnline = (machine: DetailMachine) => !machine.revoked_at && machine.online === true;
 const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = (machine: DetailMachine) => machine.revoked_at ? 'revoked'
@@ -79,7 +80,7 @@ function machineConnections(machine: DetailMachine): DetailConnection[] {
     const value = selected ? {...reported, ...selected} : reported;
     const bots = links.filter(b => b.runtime === runtime).map(b => b.bot);
     const auth = value?.authenticated;
-    // A shared key that serves this computer (`shared_with`, backend/computer_keys.py serving) is a connection here
+    // A shared key that serves this computer (`shared_with`, backend/model_subscriptions.py key_listing) is a connection here
     // even before the tool reports it signed in; until it does, the line says so and claims no reading.
     const shared = machine.shared_with?.[runtime] || null;
     const blocked = value?.data_problem || reported?.data_problem || '';
@@ -126,10 +127,9 @@ function machineAttentionWords(conn: DetailConnection) {
   const what = conn.keyCleared ? 'No key' : 'Signed out';
   return conn.bots.length ? `${what}; bots use it` : what;
 }
-// "Shared with Alpha, Bravo", or "Shared with every computer (…)" for the "Every computer" key in Credentials.
+// "Shared with Alpha, Bravo": every computer the key given to this one signs in (Settings > Models).
 function machineSharedWords(shared: DetailShared) {
-  const names = (shared.computers || []).map(c => c.label).join(', ');
-  return shared.every ? `Shared with every computer${names ? ` (${names})` : ''}` : `Shared with ${names}`;
+  return `Shared with ${(shared.computers || []).map(c => c.label).join(', ')}`;
 }
 // On a Docker runner, whether this tool's turns each run as their own user or share the bot user (readiness `turn_user`).
 const machineTurnUserWords = (conn: DetailConnection): string => {
@@ -171,39 +171,31 @@ function machineConnectionHTML(machine: DetailMachine, conn: DetailConnection, o
     + (conn.auth === 'ready' ? machineKeyHTML(machine, conn.runtime, conn.value?.key) : '');
   const offline = online ? '' : ' disabled title="Computer is offline"';
   const sep = '<span class="computer-conn-sep" aria-hidden="true"> · </span>';
-  // "No key · Add key" for a key cleared from here: adding one is the way back (a sign-in or the shared key also are).
-  // Not on a shared key's line: Replace key / Clear key act on it there.
-  const addKey = manage && !conn.blocked && !conn.shared && conn.state.signed_in !== true;
-  let action = addKey && conn.keyCleared ? sep + machineKeyActions(machine, online, conn.runtime, null, false).trimStart() : '';
+  // Keys are added, replaced and taken off in Settings > Models; a key taken off reads "No key", and a sign-in or Use the
+  // shared key is the way back here.
+  let action = '';
   if (manage && conn.state.signed_in !== true && !conn.blocked) {
     // "Signed out · Sign in": the way back sits next to what is wrong.
-    if (harnessCaps(conn.runtime).browser_sign_in) action += `${conn.state.signed_in === false && !conn.keyCleared ? sep : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${offline}>Sign in</button>`;
+    if (harnessCaps(conn.runtime).browser_sign_in) action += `${conn.state.signed_in === false ? sep : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${offline}>Sign in</button>`;
     else action += machineTerminalSignInHTML(machine, conn.runtime);
   }
-  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.ts; disabled offline. On the
-  // computer's own login a key signs in, Replace key / Clear key stand in for them.
+  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.ts; disabled offline. A login a
+  // key from Settings > Models signs in has neither: the key is changed there.
   const key = (conn.value?.key || conn.shared) && harnessCaps(conn.runtime).api_keys === 'computer';
   const signedIn = conn.auth === 'ready' || !!conn.blocked;
-  action += !manage ? ''
-    : conn.shared && key ? machineKeyActions(machine, online, conn.runtime, conn.value?.key || {name: '', source: 'shared'}, true)
-    : signedIn && key ? machineKeyActions(machine, online, conn.runtime, conn.value?.key, true)
-    : machineLoginActions(machine, online, conn.runtime, '', signedIn);
-  // Add key: a key of the computer's own, for a tool that takes one (Dev 97).
-  if (addKey && !conn.keyCleared) action += machineKeyActions(machine, online, conn.runtime, null, false);
+  action += !manage || (key && (conn.shared || signedIn)) ? '' : machineLoginActions(machine, online, conn.runtime, '', signedIn);
   const value: DetailRuntime = conn.value || {};
   const rejected = conn.auth === 'rejected'
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(agoSaid(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
   const usage = conn.state.signed_in === false ? '' : machineUsageHTML(conn.runtime, conn.state, `${conn.tool} ${conn.name}`, 'this computer');
   const bots = conn.bots.length ? `Bots: ${conn.bots.map(settingsBotName).join(', ')}` : 'No bots run on it';
-  // Bots that take turns on one sign-in say so.
-  const shared = machineSharedLoginHTML(machine, conn.runtime);
   return `<div class="computer-conn${conn.attention ? ' attention' : ''}" data-connection="${esc(conn.key)}" data-machine-tool="${esc(conn.runtime)}">
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong>${kind ? `<span>${esc(kind)}</span>` : ''}${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
     ${conn.warning ? `<p class="computer-conn-warning" role="note" data-login-warning="${esc(conn.runtime)}">${esc(conn.warning)}</p>` : ''}
     ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}
-    <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
+    <div class="computer-conn-bots muted">${esc(bots)}</div>
   </div>`;
 }
 // A tool with no sign-in in the browser: the command to run in a terminal on the computer (Tico need not reach it), or
@@ -253,16 +245,13 @@ function computerAddStepHTML(machine: DetailMachine, step: DetailAddStep) {
       ${terminal ? `<p class="muted computer-add-terminal" data-add-terminal="${esc(runtime)}">Or sign the computer's login in from a terminal there:${terminal}</p>` : ''}</div>`;
   }
   if (step.at === 'api_key') {
-    // A key of this computer's own (Dev 97, ui/model-login.ts replaceKey), for a tool that takes one; a login its key
-    // already signs in keeps Replace key on its line. Any other tool's key goes in Tools, under its Keys.
-    const line = machineConnections(machine).find(conn => conn.runtime === runtime && conn.own);
-    const keyed = line?.auth === 'ready' && line.value?.key;
-    const add = keyed ? '' : machineKeyActions(machine, true, runtime, null, false);
-    const body = keyed ? `${esc(tool)} already signs in with a key on ${esc(machine.label)}: Replace key is on its line.`
-      : add ? `Add a key that ${esc(machine.label)} uses for ${esc(tool)}.`
+    // A tool that takes a key per computer (`api_keys = "computer"`) is given one in Settings > Models; any other
+    // tool's key goes in Tools, under its Keys.
+    const models = caps.api_keys === 'computer';
+    const body = models ? `Add the key in Settings > Models and give it to ${esc(machine.label)} there.`
       : `${esc(tool)} takes its key from Tools; it is used on the computers it is shared with.`;
-    const go = add ? `<span class="computer-add-terminal" data-add-key="${esc(runtime)}">${add}</span>`
-      : keyed ? '' : '<a class="primary" href="#/tools?show=keys" data-add-credentials>Add key</a>';
+    const go = models ? `<a class="primary" href="#/settings/models" data-add-credentials data-add-key="${esc(runtime)}">Open Models</a>`
+      : '<a class="primary" href="#/tools?show=keys" data-add-credentials>Add key</a>';
     return `${head(`Add ${esc(tool)} with an API key`, 'kind')}<div data-add-step="api_key"><p class="model-login-body">${body}</p>
       <div class="model-login-actions"><button class="ghost" type="button" data-add-close>Cancel</button>${go}</div></div></div>`;
   }
@@ -299,8 +288,6 @@ function computerAddOpen(id: string) {
     if (!(target instanceof Element)) return;
     if (target === dialog || target.closest<HTMLElement>('[data-add-close]')) { dialog.close(); return; }
     if (target.closest<HTMLElement>('[data-add-credentials]')) { dialog.close(); $('#set-machines dialog.computer-detail')?.close(); return; }
-    // Add key opens its own pop-up (ui/model-login.ts listens on the document); this one gives way to it.
-    if (target.closest<HTMLElement>('[data-model-key-add]')) { dialog.close(); return; }
     const copy = target.closest<HTMLElement>('[data-machine-copy-login]');
     if (copy) { void copyText(copy.dataset.machineCopyLogin ?? '').then(() => toast('Command copied')); return; }
     const back = target.closest<HTMLElement>('[data-add-back]');
@@ -346,9 +333,8 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const names = [...new Set([...Object.keys(runtimes), ...tools.filter(tool => tool.installed).map(tool => tool.runtime)])]
     .filter(name => !needed || needed.has(name) || runtimes[name]?.installed || toolFor(name).installed);
   const choices = machine.harness_choices || {};
-  // What its bots run on, fallbacks included, stays on (the server refuses an off for it); an older server sends
-  // no bot_runtimes, only its bots' own runtimes.
-  const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
+  // What its bots run on, fallbacks included, stays on (the server refuses an off for it).
+  const botRuntimes = new Set(machine.bot_runtimes || []);
   const rows = names.map(name => {
     const tool = toolFor(name), value: DetailRuntime = runtimes[name] || {};
     const installed = value.installed || tool.installed, version = installed ? (tool.version || value.version || '') : '';
@@ -389,7 +375,7 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const facts = [`Tico ${release || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
   return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, release) || ''}
-    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
+    ${table}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine: DetailMachine, online: boolean) {
   return screenControlHTML(machine, online);
@@ -499,7 +485,7 @@ async function machineGatewayFallbackSave(box: HTMLInputElement) {
   const id = box.dataset.gatewayFallback || '', on = box.checked;
   box.disabled = true;
   try {
-    await post(`/v2/runners/${encodeURIComponent(id)}/gateway-fallback`, {on});
+    await post(`/v2/computers/${encodeURIComponent(id)}/gateway-fallback`, {on});
     toast(on ? 'Falls back to Tico Gateway' : 'Waits for a plan');
     await loadSettings();
   } catch (error) {
@@ -514,7 +500,7 @@ async function machineBrowserHostSave(box: HTMLInputElement) {
   const id = box.dataset.browserHost || '', on = box.checked;
   box.disabled = true;
   try {
-    await post(`/v2/runners/${encodeURIComponent(id)}/browser-host`, {on});
+    await post(`/v2/computers/${encodeURIComponent(id)}/browser-host`, {on});
     toast(on ? 'Browser host' : 'Not the browser host');
     await loadSettings();
   } catch (error) {

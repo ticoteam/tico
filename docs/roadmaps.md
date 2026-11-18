@@ -1,7 +1,7 @@
 # Public roadmaps
 
 The public roadmap is off in 0.6.0-rc.1. It comes back with the Product pipeline, built on its stages
-([Product](pipelines-v3.md#product)).
+([Product](dev/pipelines-v3.md#product)).
 
 Until then:
 

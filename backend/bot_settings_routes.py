@@ -7,6 +7,7 @@ from . import (
     company_billing,
     company_pause,
     gateway_connection,
+    holds,
     login_holds,
     model_login,
     models as M,
@@ -18,6 +19,7 @@ from .harnesses import resolve_harness, runtime_of
 from .providers import MODEL_BY_ID
 from .readiness import absolute as absolute_link, can_run
 from .store import H, Problem
+from .api_contract import api_v2
 
 
 def register(
@@ -222,7 +224,14 @@ def register(
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_fallback(c, request.state.identity, bot, body))
 
-    @app.post("/api/v2/bots/{bot}/turns-at-once")
+    @app.post(
+        "/api/v2/bots/{bot}/turns-at-once",
+        **api_v2(
+            "Bots",
+            "setBotTurnsAtOnce",
+            "Set the most turns the bot runs at once on every computer: null is no limit, 1 to 256 otherwise",
+        ),
+    )
     def bot_turns_at_once(request: Request, bot: str, body: M.BotTurnsAtOnce):
         """How many turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
         with store.read() as c:
@@ -243,7 +252,14 @@ def register(
 
         return mutate(request, body, settings_admin.as_report_manager(who, bot, "task_model", work))
 
-    @app.post("/api/v2/bots/{bot}/manages-reports")
+    @app.post(
+        "/api/v2/bots/{bot}/manages-reports",
+        **api_v2(
+            "Bots",
+            "setBotManagesReports",
+            "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it",
+        ),
+    )
     def bot_manages_reports(request: Request, bot: str, body: M.BotManagesReports):
         """Whether this bot changes its direct reports (backend/report_managers.py). A person who manages this bot sets
         it; with the owner's team rule `managers_manage_reports` off, no bot does, whatever this says."""
@@ -256,6 +272,22 @@ def register(
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_compact_at(c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/output-style")
+    def bot_output_style(request: Request, bot: str, body: M.BotOutputStyle):
+        """Claude Code's output style for the bot's turns (Concise, Explanatory, Learning, Proactive); null or Default
+        is Claude Code's own. Only a Claude Code turn uses it."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+        return mutate(request, body, lambda c: settings_admin.set_output_style(c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/verbosity")
+    def bot_verbosity(request: Request, bot: str, body: M.BotVerbosity):
+        """Codex's verbosity for the bot's turns (low, medium, high); null is the model's own. Only a Codex turn uses
+        it."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+        return mutate(request, body, lambda c: settings_admin.set_verbosity(c, request.state.identity, bot, body))
 
     @app.get("/api/v2/wake-presets/measures")
     def wake_preset_measures(request: Request, since: str | None = None, until: str | None = None):
@@ -292,14 +324,6 @@ def register(
     def transition(request: Request, transition_id: str):
         with store.read() as c:
             return settings_admin.get(c, request.state.identity, transition_id)
-
-    @app.post("/api/v2/settings/transitions/{transition_id}/apply-without-checkpoint")
-    def force_transition(request: Request, transition_id: str, body: M.BotTransitionApply):
-        return mutate(request, body, lambda c: settings_admin.force(c, request.state.identity, transition_id))
-
-    @app.post("/api/v2/settings/transitions/{transition_id}/cancel")
-    def cancel_transition(request: Request, transition_id: str, body: M.Empty):
-        return mutate(request, body, lambda c: settings_admin.cancel(c, request.state.identity, transition_id))
 
     @app.get("/api/v2/settings/history")
     def settings_history(request: Request, limit: int = 100, bot: str = "", before: str = ""):
@@ -343,7 +367,14 @@ def register(
             request, body, lambda c: execution.stop(c, request.state.identity, bot, body.run_id, body.redirect)
         )
 
-    @app.get("/api/v2/bots/{bot}/pause-state")
+    @app.get(
+        "/api/v2/bots/{bot}/pause-state",
+        **api_v2(
+            "Bots",
+            "getBotPauseState",
+            "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts",
+        ),
+    )
     def bot_pause_state(request: Request, bot: str):
         """The public pause banner, without billing amounts or unreadable task counts."""
         who = request.state.identity
@@ -354,16 +385,12 @@ def register(
             row = H.bot(c, bot)
             config = c.execute("SELECT owner_id,revision FROM bot_config WHERE bot=?", (bot,)).fetchone()
             operator = (H.human(c, config["owner_id"]) or {}) if config else {}
-            record = c.execute(
-                "SELECT actor,created_at,action FROM events WHERE target=? "
-                "AND action IN ('bot.pause','bot.resume') ORDER BY created_at DESC,rowid DESC LIMIT 1",
-                (bot,),
-            ).fetchone()
+            hold = holds.get(c, holds.PAUSED, "bot", bot)  # its own pause, by whom and since when
             paused_by = None
-            if row["state"] == "paused" and record and record["action"] == "bot.pause":
-                person = H.human(c, H.actor_id(record["actor"])) if record["actor"].startswith("human:") else None
+            if row["state"] == "paused" and hold and hold["created_by_id"].startswith("human:"):
+                person = H.human(c, H.actor_id(hold["created_by_id"]))
                 if person:
-                    paused_by = {"name": person["name"], "at": record["created_at"]}
+                    paused_by = {"name": person["name"], "at": hold["created_at"]}
             tasks = H._rows(
                 c.execute(
                     "SELECT * FROM tasks WHERE owner_id=? AND status='open'",
@@ -464,16 +491,19 @@ def register(
                 (bot, int(body.action in ("drain", "pause"))),
             )
             if body.action != "drain":
-                c.execute(
-                    "UPDATE bots SET state=? WHERE id=?", ("active" if body.action == "resume" else "paused", bot)
-                )
+                # The bot's own pause is a hold, with bots.state kept in step (company_pause.pause_bot).
+                if body.action == "pause":
+                    company_pause.pause_bot(c, who.actor, bot)
+                else:
+                    company_pause.resume_bot(c, who.actor, bot)
+                    c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
                 if body.action == "pause":
                     c.execute(
                         "UPDATE attempts SET lease_until=? WHERE bot_id=? AND state IN ('leased','running')",
                         (H.now(), bot),
                     )
                     execution.expire(c)
-                H.status_set(c, H.KEEPER, bot, state="paused" if body.action == "pause" else "idle")
+                H.status_set(c, H.TICO_ACTOR, bot, state="paused" if body.action == "pause" else "idle")
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
             H.event(c, who.actor, "bot." + body.action, bot)
             return {"bot": bot, "action": body.action, "revision": config["revision"] + 1}

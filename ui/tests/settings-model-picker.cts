@@ -2,9 +2,10 @@
 //  - closed it reads model, effort and window ("Opus 5.5 400K"; the model's default effort is not named, "Opus 5.5 HIGH
 //    400K" is): no harness, dots or "(default)"; no window for a harness that does not compact; a task model on Same
 //    as bot reads "Same as bot", or "Same as bot 150K";
-//  - open it is one panel: Harness, Model, Effort (its Default first) and a Compact select starting on Default, then
-//    only the sizes the model can hold; a lowered size and a default that follows the model say so before Apply; a
-//    harness that compacts on its own keeps the row with Default alone and says so;
+//  - open it is one panel: Harness, Model, Effort (its Default first), then More, folded unless something in it is set,
+//    with a Compact select starting on Default, then only the sizes the model can hold; a lowered size and a default
+//    that follows the model say so before Apply; a harness that compacts on its own keeps the row with Default alone
+//    and says so; a bot's Output style on Claude Code and Verbosity on Codex, each saved alone;
 //  - each place saves its own: the bots table (the bot's window, the task window), the bot editor, new bot and bulk
 //    change; a window alone never starts a model change;
 //  - arrows move within a row and Enter applies; 390px wide without sideways scroll; read-only for a person who may
@@ -14,12 +15,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
-const {openPicker, choose, chosen, offered, applyPicker, closedText} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
+const {openPicker, moreOpen, choose, chosen, offered, applyPicker, closedText} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 type Page = import('playwright').Page;
 type TaskModel = {harness: string; model: string; reasoning_effort: string; runtime: string; compact_at: number | null};
 type Bot = {id: string; name: string; slug: string; display_name: string; description: string; status: string; owner_id: string; repo: string;
   can_manage: boolean; users: unknown[]; bot_owners: unknown[]; revision: number; model: string; harness: string; runtime: string;
-  reasoning_effort: string; compact_at?: number; task_model: TaskModel | null; thread_mode: string; bot_contact: string;
+  reasoning_effort: string; compact_at?: number; output_style?: string | null; verbosity?: string | null; task_model: TaskModel | null; thread_mode: string; bot_contact: string;
   machine: {runner_id: string; label: string; owner_id: string; generation: number}};
 type Body = Record<string, unknown> & {expected_revision?: number; compact_at?: number; task_model?: Record<string, unknown> | null};
 declare const S: {emps: {name: string; revision: number}[]; route: string};
@@ -74,6 +75,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
           if (body.expected_revision !== e.revision) return json({error: {detail: 'Bot configuration changed; refresh before saving'}}, 409);
           e.revision++;
           if (what === 'compact-at') { e.compact_at = body.compact_at; return json({bot: e.id, compact_at: body.compact_at, revision: e.revision}); }
+          if (what === 'output-style') { e.output_style = body.output_style as string | null; return json({bot: e.id, output_style: e.output_style, revision: e.revision}); }
           if (what === 'transitions') { Object.assign(e, {model: body.model, harness: body.harness, runtime: body.harness, reasoning_effort: body.effort}); return json({id: 't1', state: 'applied'}); }
           if (what === 'task-model') {
             const t = body.task_model as {harness?: string; model?: string | null; effort?: string | null; compact_at?: number | null} | null;
@@ -82,7 +84,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
           }
           return json({name: e.id, revision: e.revision});
         }
-        if (p === '/api/v2/settings/transitions/t1') return json({id: 't1', kind: 'model', state: 'applied', bot: 'researcher', progress: {prepared: 1, total: 1}});
+        if (p === '/api/v2/settings/transitions/t1') return json({id: 't1', kind: 'model', state: 'applied', bot: 'researcher'});
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
         if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
         if (p === '/api/employees') return json(role === 'owner' ? bots : bots.map(b => ({...b, can_manage: false})));
@@ -92,7 +94,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
         if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.id)}], services: []});
         if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['openai', 'anthropic']});
         if (p === '/api/v2/usage/limits') return json({bots: {}});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
       });
@@ -180,6 +182,33 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await panel.locator('[data-choice-note]').innerText(), 'Plain compacts on its own.');
     await panel.locator('[data-choice-cancel]').click();
 
+    // More: folded while everything in it is at its default, so Compact is out of sight until it is opened.
+    panel = await openPicker(cell(page, 'researcher'), false);
+    assert.equal(await moreOpen(panel), false, 'More starts folded');
+    assert.equal(await compact.isVisible(), false, 'Compact is under More');
+    assert.equal(await panel.locator('[data-choice-more] summary').innerText(), 'More');
+    await panel.locator('[data-choice-cancel]').click();
+    // A saved window opens it by itself. On Claude Code it holds Output style (no Verbosity), saved alone, keeping the session.
+    panel = await openPicker(cell(page, 'analyst'), false);
+    assert.equal(await moreOpen(panel), true, 'a saved 600K opens More');
+    assert.equal(await panel.locator('[data-choice-verbosity-row]').isVisible(), false, 'no Verbosity on Claude Code');
+    assert.deepEqual(await panel.locator('[data-choice-style] option').allInnerTexts(), ['Default', 'Concise', 'Explanatory', 'Learning', 'Proactive']);
+    assert.equal(await panel.locator('[data-choice-style]').inputValue(), '', 'none saved: Default');
+    calls = [];
+    await panel.locator('[data-choice-style]').selectOption('Concise');
+    await applyPicker(panel);
+    await reloaded(page, 'analyst', 5);
+    assert.deepEqual(calls.map(c => [c.what, c.body]), [['output-style', {output_style: 'Concise', expected_revision: 4}]]);
+    assert.equal(await closedText(cell(page, 'analyst')), 'Opus 5.5 600K');
+    // On Codex, Verbosity instead; the output style is kept but not shown.
+    panel = await openPicker(cell(page, 'analyst'), false);
+    assert.equal(await panel.locator('[data-choice-style]').inputValue(), 'Concise');
+    await choose(panel, 'harness', 'codex');
+    await choose(panel, 'model', 'gpt-5-6-sol');
+    assert.equal(await panel.locator('[data-choice-style-row]').isVisible(), false, 'no Output style on Codex');
+    assert.deepEqual(await panel.locator('[data-choice-verbosity] option').allInnerTexts(), ['Default', 'low', 'medium', 'high']);
+    await panel.locator('[data-choice-cancel]').click();
+
     // AC-13: the keyboard. Enter opens; arrows move within a row; Enter applies.
     calls = [];
     await cell(page, 'researcher').locator('[data-choice-open]').focus();
@@ -192,6 +221,10 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await chosen(panel, 'effort'), 'low', 'an arrow moves within Effort (Default, then low)');
     await page.keyboard.press('ArrowLeft');
     assert.equal(await chosen(panel, 'effort'), 'medium');
+    await page.keyboard.press('Tab');   // More, folded: Enter opens it and applies nothing
+    assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'SUMMARY');
+    await page.keyboard.press('Enter');
+    assert.equal(await moreOpen(panel), true);
     await page.keyboard.press('Tab');   // Compact
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-choice-compact')), true);
     await page.keyboard.press('ArrowDown');

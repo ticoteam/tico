@@ -60,7 +60,7 @@ Always:
 - `skills/check-a-talk-track-against-calls/SKILL.md`: read before a talk track or objection answer becomes the team standard.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/win-loss.md` and the playbook the task
    names. A resumed turn already has them.
 3. List the calls you will read before reading them, so the note says what was and was not covered.
@@ -82,7 +82,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks and the weekly routine. Calls: `tico meeting search "<customer>"`, `tico meeting
 read <id>`. The team: `tico team show --team sales`. Closed deals: the Account Executive's and the Sales
-Operations Manager's reports, or a CRM read. One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set` to one line.
+Operations Manager's reports, or a CRM read. One question per task with `tico task ask <id> --to <person> "<question>"`. Keep `tico bot status set` to one line.
 
 ## Quality standards
 - **Answer first.** The notes open with the one thing the team should change or repeat next week.

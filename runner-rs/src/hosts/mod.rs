@@ -5,7 +5,6 @@
 //! status {state}, tokens {input, output, total, usage{input, cached, output}}, rate_limits, error, diagnostic.
 
 pub mod antigravity;
-pub mod appdriver;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
@@ -223,6 +222,32 @@ pub struct Settings {
     /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
     /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).
     pub memory_dir: Option<String>,
+    /// The bot's Claude Code output style (`output_style` in its config: Concise, Explanatory, Learning, Proactive),
+    /// given to Claude as `outputStyle` in the turn's one `--settings`. None is Claude Code's own Default; every other
+    /// harness ignores it.
+    pub output_style: Option<String>,
+    /// The bot's Codex verbosity (`verbosity`: low, medium, high), Codex's `model_verbosity`. None is the model's own;
+    /// every other harness ignores it.
+    pub verbosity: Option<String>,
+}
+
+/// The bot's `output_style` from its run config, or None for Default: nothing saved (an older server sends none), or
+/// "Default". Claude Code runs an unknown name at its default, so any other name is passed as it is.
+pub fn output_style(config: &Value) -> Option<String> {
+    config["output_style"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("default"))
+        .map(String::from)
+}
+
+/// The bot's `verbosity` from its run config: low, medium or high, else None. Codex refuses a thread with any other
+/// `model_verbosity`, so nothing else is passed.
+pub fn verbosity(config: &Value) -> Option<String> {
+    config["verbosity"]
+        .as_str()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| matches!(s.as_str(), "low" | "medium" | "high"))
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.
@@ -262,6 +287,20 @@ pub fn hub_mcp_server(env: &Env) -> Option<Value> {
     Some(
         json!({"command": crate::env::python().display().to_string(), "args": [script.display().to_string()], "env": vars}),
     )
+}
+
+/// `hub_mcp_server` with each env value as its `${VAR}` placeholder, for a host that expands placeholders from the
+/// turn's own environment: the run token and the other HUB_* values never go on a command line.
+pub fn hub_mcp_server_by_name(env: &Env) -> Option<Value> {
+    let mut hub = hub_mcp_server(env)?;
+    let vars: Map<String, Value> = hub["env"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
+        .collect();
+    hub["env"] = Value::Object(vars);
+    Some(hub)
 }
 
 /// An event dict: `kind`, `thread_id`, `turn_id`, then its own fields.
@@ -1016,8 +1055,6 @@ pub enum Host {
     Pi(pi::PiHost),
     Cursor(cursor::CursorHost),
     Grok(grok::GrokHost),
-    /// A bot in another platform's app on this Mac, through tico-appdriver (crate::appdriver).
-    AppDriver(appdriver::AppDriverHost),
 }
 
 impl Host {
@@ -1031,11 +1068,17 @@ impl Host {
             Host::Pi(h) => h.track_allocation(turn),
             Host::Cursor(h) => h.track_allocation(turn),
             Host::Grok(h) => h.track_allocation(turn),
-            Host::AppDriver(h) => h.track_allocation(turn),
         }
     }
 
     /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
+    /// The run this host's turn belongs to: a Claude host marks its own process spawn, `system/init` and `result`.
+    pub fn set_attempt(&self, aid: &str) {
+        if let Host::Claude(h) = self {
+            h.set_attempt(aid);
+        }
+    }
+
     pub fn set_capture(&self, capture: &std::sync::Arc<crate::capture::Capture>) -> bool {
         match self {
             Host::Claude(h) => h.set_capture(capture.clone()),
@@ -1072,10 +1115,6 @@ impl Host {
                 h.start();
                 Ok(())
             }
-            Host::AppDriver(h) => {
-                h.start();
-                Ok(())
-            }
         }
     }
 
@@ -1089,24 +1128,6 @@ impl Host {
             Host::Pi(h) => h.stop().await,
             Host::Cursor(h) => h.stop().await,
             Host::Grok(h) => h.stop().await,
-            Host::AppDriver(h) => h.stop().await,
-        }
-    }
-
-    /// Whether the host's process may still be running. Codex, the one CLI that serves one turn per login
-    /// (crate::login_turns), says until its process is reaped; the others say `alive`.
-    pub fn running(&self) -> bool {
-        match self {
-            Host::Codex(h) => h.running(),
-            _ => self.alive(),
-        }
-    }
-
-    /// `stop`, and for Codex wait until its process has been reaped, even after an earlier stop was cut off.
-    pub async fn stop_and_reap(&self) {
-        match self {
-            Host::Codex(h) => h.stop_and_reap().await,
-            _ => self.stop().await,
         }
     }
 
@@ -1120,7 +1141,6 @@ impl Host {
             Host::Pi(h) => h.alive(),
             Host::Cursor(h) => h.alive(),
             Host::Grok(h) => h.alive(),
-            Host::AppDriver(h) => h.alive(),
         }
     }
 
@@ -1135,7 +1155,6 @@ impl Host {
             Host::Pi(_) => ("pi", ""),
             Host::Cursor(_) => ("cursor", ""),
             Host::Grok(_) => ("grok", ""),
-            Host::AppDriver(_) => ("grokbot", ""),
         }
     }
 
@@ -1160,7 +1179,6 @@ impl Host {
             Host::Pi(h) => Ok(h.start_thread(settings)),
             Host::Cursor(h) => h.start_thread(settings).await,
             Host::Grok(h) => h.start_thread(bot, settings).await,
-            Host::AppDriver(h) => Ok(h.start_thread(settings)),
         }
     }
 
@@ -1192,7 +1210,6 @@ impl Host {
             Host::Pi(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Cursor(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Grok(h) => h.resume_thread(thread_id, settings).await,
-            Host::AppDriver(h) => Ok(h.resume_thread(thread_id, settings)),
         }
     }
 
@@ -1211,7 +1228,6 @@ impl Host {
             Host::Pi(h) => h.start_turn(thread_id, text, effort).await,
             Host::Cursor(h) => h.start_turn(thread_id, text, effort),
             Host::Grok(h) => h.start_turn(thread_id, text).await,
-            Host::AppDriver(h) => h.start_turn(thread_id, text, effort),
         }
     }
 
@@ -1227,7 +1243,6 @@ impl Host {
             Host::Pi(h) => h.steer(thread_id, turn_id, text).await,
             Host::Cursor(_) => Err(failed("Cursor runtime cannot steer a running turn")),
             Host::Grok(_) => Err(failed("grok agent cannot steer a running turn")),
-            Host::AppDriver(_) => Err(failed("a turn in a Mac app cannot be steered")),
         }
     }
 
@@ -1259,10 +1274,6 @@ impl Host {
                 Ok(())
             }
             Host::Grok(h) => h.interrupt(thread_id).await,
-            Host::AppDriver(h) => {
-                h.interrupt(turn_id);
-                Ok(())
-            }
         }
     }
 
@@ -1335,23 +1346,6 @@ impl Host {
         }
     }
 
-    /// Whether the session a resumed thread continues is saved on this computer. Claude says only when a turn runs, so
-    /// it is asked here; every other harness refuses the resume of one it does not have (crate::continuity::missing).
-    pub fn session_saved(&self, thread_id: &str) -> bool {
-        match self {
-            Host::Claude(h) => h.session_saved(thread_id),
-            _ => true,
-        }
-    }
-
-    /// The next turn makes one model turn and no more (a keep-warm turn, crate::prompt::keep_warm). Claude Code only
-    /// (`--max-turns 1`); the other harnesses take no such limit and rely on the turn's words.
-    pub fn one_turn(&self, thread_id: &str) {
-        if let Host::Claude(h) = self {
-            h.one_turn(thread_id);
-        }
-    }
-
     /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
     /// that does not confirm threads.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {
@@ -1404,6 +1398,40 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_style_and_verbosity_read_from_the_config_and_default_is_none() {
+        assert_eq!(
+            output_style(&json!({"output_style": "Concise"})).as_deref(),
+            Some("Concise")
+        );
+        assert_eq!(
+            verbosity(&json!({"verbosity": "low"})).as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            verbosity(&json!({"verbosity": "HIGH"})).as_deref(),
+            Some("high")
+        );
+        // An older server sends neither; Default, null, empty and anything Codex would refuse pass nothing.
+        for none in [
+            json!({}),
+            json!({"output_style": null}),
+            json!({"output_style": "Default"}),
+            json!({"output_style": " "}),
+            json!({"output_style": 3}),
+        ] {
+            assert_eq!(output_style(&none), None, "{none}");
+        }
+        for none in [
+            json!({}),
+            json!({"verbosity": null}),
+            json!({"verbosity": "loud"}),
+            json!({"verbosity": 1}),
+        ] {
+            assert_eq!(verbosity(&none), None, "{none}");
+        }
+    }
 
     #[test]
     fn a_shell_line_reads_only_when_every_run_of_it_reads() {
@@ -1518,6 +1546,18 @@ mod tests {
             command_program("tico-computer restart all"),
             "tico-computer"
         );
+    }
+
+    #[test]
+    fn page_link_hub_paths_are_write_commands() {
+        for action in ["link", "unlink"] {
+            let command = format!("tico page {action} file-1 --task T1 --as Spec");
+            assert_eq!(command_program(&command), format!("tico page {action}"));
+            assert!(!shell_reads_only(&command));
+        }
+        assert!(shell_reads_only(
+            "tico page list --linked task:T1 --role Spec"
+        ));
     }
 
     #[test]
@@ -2038,8 +2078,8 @@ mod tests {
 // Per-host answers behind a capability: generic code reads the manifest's capability and asks here, so the adapters
 // stay the one place that knows a CLI by name.
 
-/// Native goals and built-in commands of one installed harness (goals.capabilities): Claude Code by version, Codex by
-/// the protocol its app-server describes; every other host has none.
+/// Native goals and built-in commands of one installed harness (goals.capabilities): Claude Code by its own version
+/// line, Codex by the protocol its app-server describes; every other host has none.
 pub async fn probe_goals(
     runtime: &str,
     exe: &std::path::Path,
@@ -2049,7 +2089,7 @@ pub async fn probe_goals(
     match runtime {
         "claude" => {
             supported =
-                crate::hosts::claude::version_tuple(version).is_some_and(|v| v >= (2, 1, 212));
+                crate::hosts::claude::own_version(version).is_some_and(|v| v >= (2, 1, 212));
             if supported {
                 commands = vec![
                     crate::goals::command("compact", "Compact this conversation", "[instructions]"),

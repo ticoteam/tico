@@ -163,7 +163,7 @@ def test_a_failed_run_leaves_its_note_waiting_and_starts_no_loop(api):
     assert len(waiting(api)) == 1  # not lost
     assert claim(api, r, "cpo") is None  # the bot waits out the failure, as any failed run makes it
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE run_backoff SET fails=0,wait_until=NULL")
+        c.execute("DELETE FROM holds WHERE kind='failing'")
     runs = drain(api, r)
     assert sum("Zebrawire" in text for run in runs for text in run["notes"]) == 1 and waiting(api) == []
 

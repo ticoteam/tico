@@ -28,7 +28,7 @@ larger runs are the point.
   - share of runs that did nothing (`did_nothing`).
 - **Cache:** cache-write share of the total; cold resumes, meaning a resume more than an hour after the last turn.
 - **Model mix:** share of input-equivalent tokens by model and by run purpose (`purpose`: work a task, PR checks,
-  comments, keep warm).
+  comments).
 - **Guards that must not get worse:** review rounds per PR, QA bounces, and time from Build to merge.
 
 **Data:** `GET /api/v2/bots/{bot}/turns?since=` returns each run's tokens:
@@ -96,15 +96,17 @@ hard-coded; delete our own machinery before adding more; when unsure, run the mo
 | 5 | **Developer tool list:** code bots see 35 Tico tools (about 11.6k tokens), not 456. Other tools still work if called. | #3730 |
 | 6 | **Haiku subagents line** in code bots' AGENTS.md: Haiku 5.5 extra-high for simple work, Opus for complex or UI work. | #3731 |
 | 7 | **Bot model and task model:** heavy roles run their own turns on Haiku 5.5 xhigh and their tasks on Opus 5.5 medium (with ChatGPT only: terra medium and sol high). The Assistant stays on Opus, because Haiku halves its eval score. Hand-set bots keep their settings. | #3730 |
-| 8 | **Reviews start from the diff**, the spec and failing checks. Review 2 always runs and effort is unchanged. | #3731 |
-| 9 | **Keep warm:** a pipeline setting (per-stage override, default 8 h, 0 is off). An idle task session whose bot still owns a current or later stage gets a hidden one-line ping every 45–55 min, which holds its cache. The ping is skipped when no session is saved or the model or plan changed. | #3736 |
+| 8 | **Reviews start from the diff**, the spec and failing checks. Both reviews still run at the same effort as before. | #3731 |
 
 **Considered and not done:**
 
 - **Routing new tasks into warm sessions or forks:** a fork carries the parent's whole context into every later call
   and pays only under about 60k.
 - **Bigger tasks by policy:** they grow context, which is the main cost.
-- **Review 2 only on risky paths, and lower effort:** rejected by Chris.
+- **Run the second review only on risky paths, and lower effort:** rejected by Chris.
+- **Pinging idle task sessions to hold their cache:** shipped in rc.38 as item 9 and removed. Over three days on one
+  company, about 2.5% of 1,579 pings were followed by real work within the hour, and each ping's reply showed in the
+  task's chat.
 
 ## Open follow-ups
 
@@ -115,7 +117,6 @@ Tracked as Tico tasks:
 - **c99a4b8c** (UI Owner): custom bots (UI Owner, Code Hygiene Owner) need the read-once rule and the subagents line in
   their own AGENTS.md.
 - **28434211** (Performance Owner): owns this page and the weekly review routine.
-- **Keep-warm pings on Codex** rely on wording alone, because Codex has no per-turn limit.
 - **Cache audit:** measure cache writes on back-to-back warm resumes, including an effort change.
 
 ## Weekly review (Performance Owner)
@@ -129,7 +130,6 @@ Once a week:
 3. Check that the changes above still hold:
    - no Claude context above its model's `compact_at` plus about 10%;
    - heavy bots' own turns on their bot model;
-   - keep-warm pings under 5% of spend;
    - did-nothing runs under 5%.
 4. File each clear opportunity as a task with its numbers, and update this page: the baseline table if it moved, what
    changed, and the open follow-ups.

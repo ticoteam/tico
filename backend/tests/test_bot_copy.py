@@ -34,7 +34,7 @@ def scribe(api):
             "display_name": "Scribe",
             "description": "Takes meeting notes",
             "status": "planned",
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "effort": "high",
             "harness": None,
             "runner_id": None,
@@ -64,7 +64,7 @@ def test_a_copy_is_an_independent_bot_owned_by_whoever_asked(api, scribe):
     row, config = config_of(api, "cara-scribe")
     assert (row["created_by"], row["owner_id"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
     assert row["description"] == "Takes meeting notes" and config["copied_from"] == {"bot": scribe_id, "sha": SHA}
-    assert (config["model"], config["reasoning_effort"]) == ("gpt-6.1-sol", "high")  # the original's model settings
+    assert (config["model"], config["reasoning_effort"]) == ("gpt-6.2-sol", "high")  # the original's model settings
     # Nothing is linked: the original is as it was, and the copy is a bot of its own (its owner may change it, Ana's original she may not).
     assert config_of(api, "scribe")[0]["owner_id"] == "ana" and "copied_from" not in config_of(api, "scribe")[1]
     current = get(api, "bots", "cara-test")
@@ -100,7 +100,7 @@ def test_who_may_copy_what_and_how_many(api, botops, scribe):
     assert call(api, "put", "access/limits", "ben-test", {"member_bot_limit": 1}).status_code == 200
     copy(api)
     assert copy(api, expected=409)["error"]["code"] == "bot_limit"
-    assert call(api, "post", "access/people/cara", "ben-test", {"create_bots": False}).status_code == 200
+    assert call(api, "post", "access/humans/cara", "ben-test", {"create_bots": False}).status_code == 200
     copy(api, expected=403)
 
 

@@ -4,8 +4,7 @@
    also tell the bot or make a rule of it (backend/feedback.py).
    A message's row under it holds Copy, 👍 and 👎: with a pointer it shows on hover, and the chosen thumb stays there,
    filled; a chosen 👎 opens what happened to it. On touch a long press on the item opens them, with Copy.
-   Every control stays hidden until the server answers the batched read with a list: an older server without these
-   routes (404, or a fixture's empty object) never shows them.
+   Every control stays hidden until the server answers the batched read with a list (a fixture's empty object shows none).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -67,7 +66,6 @@ function fbMarkInner(key: string): string {
   const r = fbMine(key)?.rating;
   return r ? `<span class="fb-mark-i" role="img" aria-label="${r === 'up' ? 'You said good' : 'You said not good'}">${r === 'up' ? FB_ICON.up : FB_ICON.down}</span>` : '';
 }
-const fbMarkHTML = (key: string | null | undefined): string => key ? `<span class="fb-mark" data-fb-mark="${esc(key)}">${fbMarkInner(key)}</span>` : '';
 
 // ---- the batched read: one request per subject type for everything drawn and not yet read
 function fbSync() {
@@ -90,8 +88,7 @@ async function fbLoad() {
       const part = ids.slice(i, i + 200);
       let j: FbPage | undefined;
       try { j = await get<FbPage>(`/v2/feedback?subject_type=${encodeURIComponent(type)}&subject_ids=${part.map(encodeURIComponent).join(',')}`); }
-      catch (e) {
-        if (errorStatus(e) === 404) { fbTurn(false); return; }
+      catch {
         for (const id of part) FB.asked.delete(fbKey(type, id));     // read again with the next drawing
         continue;
       }
@@ -167,8 +164,7 @@ async function fbReasons() {
   try {
     const j = await get<FbReasons>('/v2/feedback/recent-reasons');
     FB.reasons = (Array.isArray(j?.reasons) ? j.reasons : []).filter(r => r?.text).slice(0, 5);
-  } catch (e) {
-    if (errorStatus(e) === 404) fbTurn(false);
+  } catch {
     FB.reasons = [];
   }
   return FB.reasons;

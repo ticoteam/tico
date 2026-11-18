@@ -2,21 +2,14 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// What this file reads on a bot row beyond Employee: its external agent and the desktop app it is delivered through.
+// What this file reads on a bot row beyond Employee: its external agent.
 interface DeviceAgent extends BotAgent {
   harness?: string;
   profile?: string;
   detail?: string;
 }
-interface DeviceAppDelivery {
-  computer?: string | null;
-  computer_label?: string;
-  app_label?: string;
-  app?: string;
-}
 interface DeviceBot extends Employee {
   agent?: DeviceAgent | null;
-  app_delivery?: DeviceAppDelivery | null;
 }
 // POST /v2/bots/<bot>/agent-credential: the token, shown once, and how the profile installs it.
 interface AgentSetup {
@@ -70,13 +63,6 @@ interface MachineKey {
   name?: string;
   source: string;
 }
-interface MachineApp {
-  ready?: boolean;
-  state?: string;
-  installed?: boolean;
-  version?: string;
-  detail?: string;
-}
 interface MachineUpdate {
   release?: string;
   kind?: string;
@@ -88,7 +74,6 @@ interface MachineUpdate {
 // The readiness fields this file reads (settings.ts SettingsMachine.readiness carries them).
 interface DeviceReadiness {
   runtimes?: Record<string, {account?: MachineAccount | null}>;
-  appdriver?: {apps?: Record<string, MachineApp>} | null;
   bots?: Record<string, {ready?: boolean}>;
 }
 // One computer: what this file and the pop-up (computer-detail.ts DetailMachine) read from it.
@@ -102,7 +87,6 @@ interface DeviceMachine extends SettingsMachine {
   key_cleared?: string[];
   keys?: Record<string, {preview?: string}>;
   shared_keys?: Record<string, {preview?: string}>;
-  shared_logins?: {runtime: string; profile?: string; bots?: string[]; count: number}[];
   turn_counts?: Record<string, number>;
   turn_limit?: number | null | undefined;
   bots?: string[];
@@ -127,17 +111,11 @@ function settingsAgentCell(e: DeviceBot) {
   const name = agentKind(a);
   const manage = settingsCanManageBot(e);
   if (a.synced) return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
-    <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${agoSaid(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span>${settingsAppDeliveryNote(e)}</div>`;
+    <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${agoSaid(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span></div>`;
   const seen = a.last_seen_at ? `last seen ${agoSaid(a.last_seen_at)}` : a.credential ? 'credential issued · no heartbeat yet' : 'no credential yet';
   return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
     <span class="settings-cell-note">${esc(seen)}</span>
     ${manage ? `<span class="settings-agent-actions">${agentPairButton(e)}<button class="ghost" type="button" data-agent-credential="${esc(e.id)}">${a.credential ? 'Rotate credential' : 'Create credential'}</button>${a.credential ? `<button class="ghost" type="button" data-agent-revoke="${esc(e.id)}">Revoke</button>` : ''}</span>` : ''}</div>`;
-}
-// Where a synced bot's messages go when it is delivered through its desktop app (settings-bot-editor.js).
-function settingsAppDeliveryNote(e: DeviceBot) {
-  const d = e.app_delivery; if (!d?.computer) return '';
-  const where = SETTINGS_DATA.machines.find(machine => machine.id === d.computer)?.label || d.computer_label || 'a computer';
-  return `<span class="settings-cell-note" data-app-delivery-note>through the ${esc(d.app_label || machineAppName(d.app))} app on ${esc(where)}</span>`;
 }
 // Pair: the code a Hermes profile printed, typed here; approving hands the profile its credential (backend/agents.py).
 const agentPairButton = (e: DeviceBot) => ['hermes', 'openclaw'].includes(String(e.agent?.harness)) ? `<button class="ghost" type="button" data-agent-pair="${esc(e.id)}">Pair</button>` : '';
@@ -430,7 +408,7 @@ function machineUsageHTML(runtime: string, state: MachineUsageState | null | und
 // when the computer last reported).
 function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string, auth: string | undefined, value: {account?: MachineAccount | null; detail?: string}) {
   const checked = machine.last_seen_at ? ` · last checked ${agoSaid(machine.last_seen_at)}` : '';
-  if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was cleared from Tico: the company\'s shared key does not sign it back in by itself">No key</span>';
+  if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was taken off this computer in Tico: give it one in Settings > Models, or sign it in">No key</span>';
   if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
   if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
   if (auth === 'rejected') return `<span class="pill fail" title="${esc(value.detail || '')}">Login expired or rejected</span>`;
@@ -441,55 +419,19 @@ function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string
 }
 // A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
 const machineSignedOut = (machine: DeviceMachine, runtime: string, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
-// Of those, the computer's own login whose key a person cleared (Clear key, not Sign out): it reads "No key · Add key".
+// Of those, the computer's own login whose key was taken off or deleted (not Sign out): it reads "No key".
 const machineKeyCleared = (machine: DeviceMachine, runtime: string) => machineSignedOut(machine, runtime) && (machine.key_cleared || []).includes(runtime);
-// Sign out / Switch account (or Use the shared key, or Switch to subscription for the computer's login on an API key)
-// for one login, from the shared sign-in module (ui/model-login.ts).
+// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.ts).
 const machineLoginActions = (machine: DeviceMachine, online: boolean, runtime: string, profile: string, signedIn: boolean) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
-  platform: machine.platform || '', onKey: !profile && machine.readiness?.runtimes?.[runtime]?.account?.kind === 'api_key'}) || '';
-// The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
-// the company's shared one (backend/computer_keys.py), or one set on the computer itself.
+  platform: machine.platform || ''}) || '';
+// The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: one given to this computer
+// alone or to several in Settings > Models (backend/model_subscriptions.py key_listing), or one set on the computer.
 function machineKeyHTML(machine: DeviceMachine, runtime: string, key: MachineKey | null | undefined) {
   if (!key) return '';
   const stored = key.source === 'computer' ? machine.keys?.[runtime] : key.source === 'shared' ? machine.shared_keys?.[runtime] : null;
   const whose = ({computer: 'this computer\'s key', shared: 'the company\'s shared key', terminal: 'a key set on the computer'} as Record<string, string>)[key.source] || 'a key';
   return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
-}
-// Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.ts).
-const machineKeyActions = (machine: DeviceMachine, online: boolean, runtime: string, key: MachineKey | null | undefined, signedIn: boolean) => (window.TicoModelLogin?.keyActionsHTML({
-  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
-  + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
-    platform: machine.platform || ''}) || '' : '');
-// A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
-// login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
-function machineSharedLoginHTML(machine: DeviceMachine | null | undefined, runtime: string, profile = '') {
-  const row = (machine?.shared_logins || []).find(r => r.runtime === runtime && (r.profile || '') === profile);
-  if (!row) return '';
-  const names = (row.bots || []).map(settingsBotName), more = row.count - names.length;
-  const who = names.length ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
-  return `<span class="muted machine-shared-login" data-shared-login="${esc(runtime)}:${esc(profile)}">${row.count} bots share this sign-in${esc(who)}. They take turns: one ${esc(harnessWords(runtime))} run at a time.</span>`;
-}
-// Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
-// one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
-// computer without a driver reports no `appdriver`, so it shows nothing here.
-const MACHINE_APP_STATES: Record<string, string> = {no_permission: 'Needs Accessibility permission', not_signed_in: 'Not signed in',
-  not_installed: 'Not installed', needs_foreground: 'Can\'t work in the background', ui_changed: 'Layout changed',
-  no_driver: 'Driver not installed', error: 'Problem'};
-const machineAppName = (id: unknown) => String(id).replace(/^./, c => c.toUpperCase());
-// `ready` is what the server checks before it delivers through the app; a state it does not know reads Problem.
-const machineAppState = (app: MachineApp | null | undefined) => app?.ready === true ? 'Ready' : MACHINE_APP_STATES[String(app?.state)] || 'Problem';
-function machineAppsHtml(machine: DeviceMachine) {
-  const driver = machine.readiness?.appdriver;
-  if (!driver || typeof driver !== 'object') return '';
-  const apps = Object.entries(driver.apps || {});
-  const rows = apps.map(([id, app]) => `<div class="machine-tool" role="row" data-machine-app="${esc(id)}">
-      <span role="cell" class="machine-tool-name">${esc(machineAppName(id))}</span>
-      <span role="cell" class="machine-tool-version"${app.version ? ` title="${esc(app.version)}"` : ''}>${app.installed ? esc(app.version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
-      <span role="cell" class="machine-tool-signin"><span class="pill ${app.ready === true ? 'ok' : 'fail'}" data-app-state="${esc(app.ready === true ? 'ready' : app.state || 'error')}">${esc(machineAppState(app))}</span>${app.detail ? `<span class="muted machine-app-detail">${esc(app.detail)}</span>` : ''}</span></div>`).join('');
-  if (!rows) return '';
-  return `<div class="machine-tools machine-apps" role="table" aria-label="Desktop apps on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
-    <span role="columnheader">Desktop apps</span><span role="columnheader">Installed</span><span role="columnheader">State</span></div>${rows}</div>`;
 }
 // The row's sign that the screen is on: a link to it for whoever may open it.
 function machineScreenHTML(machine: DeviceMachine) {
@@ -675,7 +617,7 @@ function renderSettingsMachines() {
     if (inbox) {
       inbox.disabled = true;
       try {
-        await post(`/v2/runners/${encodeURIComponent(String(inbox.dataset.inboxOnly))}/inbox-only`, {enabled: inbox.checked});
+        await post(`/v2/computers/${encodeURIComponent(String(inbox.dataset.inboxOnly))}/inbox-only`, {enabled: inbox.checked});
         toast(inbox.checked ? 'Kept for inbox bots' : 'No longer kept for inbox bots');
         await loadSettings();
       } catch (error) { toast(errorMessage(error, ''), true); inbox.checked = !inbox.checked; inbox.disabled = false; }
@@ -839,10 +781,10 @@ function settingsSetupPrompt(slug?: string) {
     const machine = e.machine?.label || `not assigned (reserved for ${settingsPersonName(e.owner_id)})`;
     return `- ${e.display_name} [${e.slug}]: humans=${owners}; model=${e.model || 'not set'}; effort=${e.reasoning_effort || e.effort || 'not set'}; computer=${machine}`;
   });
-  return `Help me update the ${appName()} bot setup.\n\nCurrent cloud state:\n${rows.join('\n')}\n\nAsk me what I want to change, then use the formal owner-admin API. Do not edit the production SQLite database directly. Bot definitions in the ${appName()} backend are authoritative after the one-time bootstrap: create a bot with POST /api/v2/bots and update its name, description, hierarchy, status, repository, or room type with POST /api/v2/bots/{bot}/definition. No ${appName()} application deploy or registry publish is required. Provision the bot's repository on any computer that will run it, and verify computer readiness. Preserve tasks and conversation history. Change a bot's model, reasoning effort, or registered computer through POST /api/v2/bots/{bot}/transitions so ${appName()} checkpoints every current session before applying it. If the transition is blocked because the old computer is unavailable, explain what continuity will be lost and ask me before calling apply-without-checkpoint. Use revision and assignment-generation checks. Humans are still managed separately from bot definitions.`;
+  return `Help me update the ${appName()} bot setup.\n\nCurrent cloud state:\n${rows.join('\n')}\n\nAsk me what I want to change, then use the formal owner-admin API. Do not edit the production SQLite database directly. Bot definitions in the ${appName()} backend are authoritative after the one-time bootstrap: create a bot with POST /api/v2/bots and update its name, description, hierarchy, status, repository, or room type with POST /api/v2/bots/{bot}/definition. No ${appName()} application deploy or registry publish is required. Provision the bot's repository on any computer that will run it, and verify computer readiness. Preserve tasks and conversation history. Change a bot's model, reasoning effort, or registered computer through POST /api/v2/bots/{bot}/transitions: it applies at once, and the bot starts a fresh session with its history kept. Use revision and assignment-generation checks. Humans are still managed separately from bot definitions.`;
 }
 function settingsEnrollmentPrompt(operator: string, filename: string) {
-  return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico-computer doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot so existing sessions are checkpointed before the move.`;
+  return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico-computer doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot.`;
 }
 function settingsCopyPrompt(slug?: string) {
   void copyText(settingsSetupPrompt(slug)).then(() => toast(`${slug ? settingsBotName(slug) + ' ' : ''}setup prompt copied`)).catch(() => toast('Could not copy the setup prompt', true));

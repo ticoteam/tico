@@ -1,6 +1,5 @@
 import json
 
-from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend.auth import Auth
 from backend.backup import restore_snapshot, snapshot
 from backend.config import Settings
@@ -8,45 +7,6 @@ from backend.store import H, Problem, Store, encode
 from backend.tests.helpers.api import post, setup_attempt
 
 import pytest
-
-
-def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_path):
-    settings = Settings(db_path=tmp_path / "old-queue.sqlite")
-    store = Store(settings)
-    store.initialize()
-    with store.transaction() as c:
-        H.sync_registry(c, {"assistant": {"name": "assistant", "status": "active"}}, {"people": []})
-        c.execute("DELETE FROM cloud_migrations WHERE version=8")
-        # A database as an older release left it: it never recorded migration 0052 (nor any later one, which would run
-        # again after it), and still has the trigger.
-        restore_config(c)
-        forget_from(c, "0052")
-        c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-        c.execute(
-            "CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
-            "WHEN NEW.recipient_id LIKE 'bot:%' BEGIN "
-            "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-            "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END"
-        )
-        conversation = H.open_conversation(c, "bot:assistant", ["bot:assistant"], kind="chat")
-        self_message = H._write_message(
-            c, "bot:assistant", "bot:assistant", "legacy loop", conversation, "say", {}, None, None
-        )
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (self_message["id"],)).fetchone()[0] == "queued"
-    store.initialize()
-    with store.transaction() as c:
-        # The start ran 0052 again (it was not recorded): the trigger is gone, and cloud step 8 drained the self message.
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
-        assert (
-            c.execute("SELECT state FROM jobs WHERE message_id=?", (self_message["id"],)).fetchone()[0] == "completed"
-        )
-        H._write_message(c, "bot:assistant", "bot:assistant", "ignored by enqueue", conversation, "say", {}, None, None)
-        assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
-        assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=8").fetchone()
-    store.initialize()
-    with store.read() as c:
-        # A later start recreates nothing: backend/enqueue.py queues in Python.
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
 
 
 def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_path):
@@ -179,29 +139,6 @@ def test_a_server_that_boots_again_while_a_run_is_live_flags_that_run_once(api):
     with api.app.state.store.transaction() as c:
         assert flag_cut(c, "update", "0.4.18") == 1
     assert flags() == 2
-
-
-def test_every_cloud_migration_number_is_used_once_and_in_order():
-    """Two branches picked the same migration number twice on 2026-09-24 (#493): the second block
-    then never runs on a database that already recorded the number. With no CI, this is the check
-    that fails before such a merge ships."""
-    import re
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[1] / "store.py").read_text()
-    blocks = re.split(r'(?=if not c\.execute\("SELECT 1 FROM cloud_migrations WHERE version=)', source)[1:]
-    pairs = [
-        (
-            int(re.match(r'if not c\.execute\("SELECT 1 FROM cloud_migrations WHERE version=(\d+)', b).group(1)),
-            [int(v) for v in re.findall(r"INSERT INTO cloud_migrations VALUES\((\d+)", b)],
-        )
-        for b in blocks
-    ]
-    checked = [v for v, _ in pairs]
-    assert len(checked) == len(set(checked)), f"a migration number is used twice: {sorted(checked)}"
-    assert all(inserted == [v] for v, inserted in pairs), "each block records exactly its own number"
-    # Numbers may skip: some company-specific migrations were removed.
-    assert checked == sorted(checked), "migration blocks run in number order"
 
 
 @pytest.mark.parametrize("sweep", ["claim", "scheduler"])

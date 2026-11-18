@@ -15,7 +15,7 @@
 # --local runs Tico on this computer only (http://127.0.0.1:8765, the owner signs in with a token): no domain, no DNS, no
 # OIDC client. The domain and sign-in are added later in .env (docs/install.md, "Add a domain and sign-in later").
 #
-# --recommended is the quick start with the recommended choices made: the sample company, models on your
+# --recommended is the quick start with the recommended choices made: models on your
 # Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on, and a computer on this server that runs the bots
 # (a runner on the server's Docker network). What is left for the person is signing in to Claude and ChatGPT from
 # Settings > Computers. The Gateway invite comes from the environment (TICO_GATEWAY_INVITE, set by whoever runs the
@@ -110,7 +110,7 @@ Usage: install.sh [options] [-- tico-setup flags]
   --version vX.Y.Z   install this release (default: the release this script came from)
   --dir PATH         install directory (default /opt/tico; ~/tico on a Mac)
   --yes, -y          do not ask for confirmation
-  --recommended      the recommended setup on this computer: the quick start plus the sample company, your
+  --recommended      the recommended setup on this computer: the quick start plus your
                      Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on this server
                      (the Gateway invite comes from TICO_GATEWAY_INVITE in the environment, never a flag)
   --local            quick start on this computer only: no domain and no sign-in setup (add them later in .env)
@@ -120,7 +120,7 @@ Usage: install.sh [options] [-- tico-setup flags]
   --owner-name NAME  with --local: prefill your name in Finish setup
   --team-name NAME   with --local: prefill the team name (default: My Team); --company is an alias
   --company-file PATH  the company file (tico.company.yaml) to start with: with --local its team is loaded on first start,
-                     with --recommended it replaces the sample company; a team install passes it to the setup wizard
+                     with --recommended too; a team install passes it to the setup wizard
   --port PORT        server host port (default: 8765; kept on upgrades unless given)
   --tunnel           Cloudflare Tunnel: no public ports needed, so ports 80 and 443 are not checked
   --docker-only      only make sure Docker and Compose are installed (used for runner boxes)
@@ -196,7 +196,7 @@ case " $* " in *" --no-support "*) TICO_SUPPORT=off; export TICO_SUPPORT ;; esac
 # Without a terminal nothing is asked and the install does what it always did.
 if [ "$ARGC" -eq 0 ] && [ -z "$LOCAL$RUNNER$DOCKER_ONLY$TUNNEL$YES" ] && [ ! -f "$DIR/.env" ] && ( : </dev/tty ) 2>/dev/null; then
   say "How should Tico be set up?"
-  say "  1) Recommended: Tico on this computer with a sample company, your Claude and ChatGPT subscriptions plus"
+  say "  1) Recommended: Tico on this computer with your Claude and ChatGPT subscriptions plus"
   say "     Tico Gateway, and Tico Support on. No domain or sign-in setup; you sign in to Claude and ChatGPT afterwards."
   say "  2) Quick start: Tico on this computer only; you choose the team and the models yourself."
   say "  3) Team install: your own domain and sign-in (Google, Microsoft or Cloudflare Access)."
@@ -616,10 +616,7 @@ run_local() {
     else die 2 "--local needs --owner-email (there is no terminal to ask on)."; fi
   fi
   printf '%s' "$OWNER_EMAIL" | grep -Eq '^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$' || die 2 "--owner-email must be a plain email address."
-  if [ -z "$COMPANY" ]; then
-    # With a company file the team is the file's, so the sample company's name would be wrong.
-    if [ -n "$RECOMMENDED" ] && [ -z "$COMPANY_FILE" ]; then COMPANY="Sample Co"; else COMPANY="My Team"; fi
-  fi
+  [ -n "$COMPANY" ] || COMPANY="My Team"
   printf '%s' "$COMPANY" | grep -Eq '^[^"$`\\]{1,80}$' || die 2 "--team-name is 1 to 80 characters without quotes, dollar signs, backticks or backslashes."
   env_tmp=$(mktemp)
   ( umask 077
@@ -631,10 +628,8 @@ run_local() {
       printf 'COMPOSE_PROFILES=updater\nTICO_UPDATER_URL=http://updater:8080\nTICO_TAG=%s\n' "$VERSION"
       [ -z "$SUPPORT" ] || printf 'TICO_SUPPORT=%s\n' "$SUPPORT"
       if [ -n "$RECOMMENDED" ]; then
-        # The recommended choices, read by the server on its first start (sample company, models preset, Gateway enrollment).
-        # A company file is the team instead of the sample company, so the sample is not switched on.
+        # The recommended choices, read by the server on its first start (models preset, Gateway enrollment).
         printf 'TICO_INSTALL_PRESET=recommended\n'
-        [ -n "$COMPANY_FILE" ] || printf 'TICO_SAMPLE_COMPANY=on\n'
         printf 'TICO_MODELS_PRESET=subscriptions-gateway\n'
         [ -z "$GATEWAY_INVITE" ] || printf 'TICO_GATEWAY_INVITE=%s\n' "$GATEWAY_INVITE"
       fi
@@ -653,7 +648,7 @@ run_local() {
   [ -z "$COMPANY_FILE" ] || say "If the team does not load, Health in the app says why."
   if [ -n "$RECOMMENDED" ]; then
     if [ -n "$COMPANY_FILE" ]; then say "Your team from $COMPANY_FILE is loaded, and Tico Support is ${SUPPORT}."
-    else say "The sample company is loaded and Tico Support is ${SUPPORT}."; fi
+    else say "Tico Support is ${SUPPORT}. Set up your team in the app."; fi
     if [ -n "$GATEWAY_INVITE" ]; then say "Tico Gateway: it connects on the first start, from the invite this install was given."
     else say "Tico Gateway: not set up (this install was given no invite). Bots use your Claude and ChatGPT subscriptions."; fi
     say "One step is left: in the app, Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT."

@@ -31,29 +31,13 @@ from . import visuals
 from .media import upload_contract
 from . import rooms
 from .store import H, Problem, digest
+from .api_contract import api_v2
 
 RUNNING_TTL_S = 120  # a confirm that has not settled in two minutes failed
 CONFIRM_TTL_H = 24  # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
 MAX_BACKGROUND_PER_DAY = 5  # cards the Assistant's own background run may put in one person's chat a day
 MORNING_KEY = "morning"  # the message's refs key: the company day it was sent for (one a day per person)
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS assistant_actions (
-  id TEXT PRIMARY KEY, owner TEXT NOT NULL, conversation_id TEXT, summary TEXT NOT NULL,
-  method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL, proposed_via TEXT, created_at TEXT NOT NULL, decided_at TEXT, result TEXT);
-CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, status);
-"""
-
-
-def ensure_schema(c):
-    c.executescript(SCHEMA)
-    have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
-        if column not in have:
-            c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
-
 
 # ------------------------------------------------------------------ what the assistant may write directly
 # What an assistant turn may write on its own is what stays inside the team: creating a task (for its person, a bot or
@@ -107,6 +91,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return True
     # Reversible Gmail labels; the route checks the person's mailbox level and the company organize switch.
     if path == "/api/v2/mail/messages/organize":
+        return True
+    # A Gmail draft delivers nothing: sending it is the send gate's, which the Assistant's queueing already meets.
+    if path == "/api/v2/mail/drafts":
         return True
     # An org rule check of a draft changes nothing: a person's own mail is never checked (backend/org_rule_check.py),
     # and the send itself meets every check in the send queue.
@@ -190,12 +177,12 @@ def _fields(body):
 
 
 def canonical(path):
-    """The canonical spelling of a request path (`route_renames`): an old spelling (`/runners/{id}/...`) is checked as the
-    route it answers, so no gate check is skipped by using the old name. None when the path is not one."""
-    from .route_renames import new_path
+    """The canonical spelling of a request path (`legacy_spellings`): a kept old spelling (`/api/v2/runners/{id}/inbox-only`)
+    is checked as the route it answers, so no gate check is skipped by using the old name. None when the path is not one."""
+    from .legacy_spellings import canonical as canonical_of
 
     p = normalize_path(path)
-    return (new_path(p) or p) if p else None
+    return (canonical_of(p) or p) if p else None
 
 
 def catalogue_setting(method, path, body=None):
@@ -253,6 +240,8 @@ NEVER = [
         (None, r"/api/v2/credential-set"),
         # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
         # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
+        # The Tools changes the person asks for in their chat (a bot's key or level, a tool's settings) are admitted
+        # before this list (`admits_on_turn`, backend/tools_delegation.py).
         (None, r"/api/v2/api-tools(/[^/]+(/(keys|access)(/.*)?)?)?"),
         # HQ's cloud-machine support switch grants access just like the support_access team rule.
         ("PUT", r"/api/v2/cloud-machines/support"),
@@ -267,13 +256,14 @@ NEVER = [
         (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
         (None, r"/api/v2/github/app/replace-lost-key"),
         (None, r"/api/v2/triggers/[^/]+/signing"),
-        # A computer's sign-in and its keys: its logins, logouts, shared key and keys (`model_login`, `computer_keys`), and a
+        # A computer's sign-in: its logins, logouts and shared key (`model_login`; `keys` only refuses now, D11-5), and a
         # model subscription's connect. Its enrollment and pairing codes are the person's own tap too.
         (None, r"/api/v2/computers/[^/]+/(shared-key|logins(/.*)?|logouts(/.*)?|keys(/.*)?)"),
         (None, r"/api/v2/runner-logins/[^/]+/(report|subscription)"),
         (None, r"/api/v2/model-subscriptions(/.*)?"),
         (None, r"/api/v2/computer-subscriptions"),
         (None, r"/api/v2/runner-model-subscription-refresh"),
+        (None, r"/api/v2/runner-claude-logins(/.*)?"),
         # A browser's push subscription is the person's own tap in that browser (backend/web_push.py).
         (None, r"/api/v2/push/subscriptions"),
         ("POST", r"/api/v2/enrollments"),
@@ -315,11 +305,6 @@ NEVER = [
         (None, r"/api/v2/letters/(settings|outboxes/.*|bots/.*/settings)"),
         (None, r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
         ("PUT", r"/api/v2/postal/settings"),
-        # Dispatch leases and permits belong to the authenticated computer, never a chat.
-        (None, r"/api/v2/connectors/email(/.*)?"),
-        # A computer's part of a Connect Google sign-in and its Workspace tokens: computers only, never a chat's.
-        (None, r"/api/v2/connectors/mail/google/.*"),
-        (None, r"/api/v2/connectors/mail/workspace/token"),
         ("POST", r"/api/v2/live-meetings"),
         ("POST", r"/api/v2/meeting-importers/[^/]+"),
         (None, r"/api/v2/postal/intake"),
@@ -437,10 +422,16 @@ def admits_on_turn(method, path, body=None):
     path = canonical(path)
     if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
-    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
-    if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
-        return False
     parsed = _json(body)
+    # A Tools change the person asked for (backend/tools_delegation.py): giving a bot a key or a level, taking one back,
+    # adding or changing a tool. The route checks their rights; a value never goes through here (`secret_in_request`
+    # below), and a person's own access stays their tap.
+    from . import tools_delegation
+
+    tools = tools_delegation.route(method, path) and tools_delegation.for_bots_only(method, path, parsed)
+    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
+    if not tools and any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
+        return False
     # The team's rules: a turn may change the ordinary ones (`{"stale_review": false}`), never the ones that grant access to
     # credentials, tokens, the SQL page or support, nor the Assistant's own (backend/team_rules.py).
     if (
@@ -1059,8 +1050,9 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide",
             lambda g: str(body.get("decision") or "Decide").title() + " a goal proposal",
         ),
-        # Only a preview: the card lists the whole message among its fields, and what is sent is exactly that.
-        (r"/api/v2/support/tickets", lambda g: "Send this to the Tico team: " + preview(body.get("message"))),
+        # A plain title only: the card shows the whole message under it, and what is sent is exactly that. "Tico
+        # support", never "the Tico team", which reads as a company's own team (or the company named Tico Team).
+        (r"/api/v2/support/tickets", lambda g: "Report a bug to Tico support"),
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
         (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)/delete", lambda g: "Remove a requester from this task"),
@@ -1334,7 +1326,7 @@ def runnable(c, method, path, body):
     without it is refused, never given the task's version now, or a change made from an older read would pass over
     changes made since."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)(/move|/owner|/done)?", path or "")
-    if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
+    if method != "POST" or not m or m.group(1) in ("dry-run", "move") or not isinstance(body, dict):
         return path, body
     if body.get("version") is None:
         raise Problem(
@@ -1629,8 +1621,10 @@ def ensure_room(c, actor, bot):
 # helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Owner
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
-# (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
-HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER)
+# (`move_strategy_room`). Up to v0.6.0-rc.1 each start moved the cards still waiting in it to the owner's Assistant room,
+# so none is left there.
+# The Tools Owner works a Tools change it was handed with the person's rights (backend/tools_delegation.py).
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER, H.TOOLS_OWNER)
 
 
 def strategy_on(c):
@@ -1677,39 +1671,6 @@ def move_strategy_room(c, actor, to):
     )
     H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
     return H.conversation(c, room["id"])
-
-
-def migrate(c, settings):
-    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Owner chat moves
-    to its owner's Assistant room, with its card posted there, so it stays where they look and its result lands there.
-    Moving is safe: a card runs only on its owner's own click, as them, whichever room it sits in, and a card of an
-    earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
-    move none is left in that room."""
-    moved = 0
-    for row in c.execute(
-        "SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
-        "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
-        "AND a.owner=v.owner_id ORDER BY a.created_at",
-        (rooms.STRATEGY_ROOM,),
-    ).fetchall():
-        room = ensure_room(c, row["owner"], settings.assistant_bot)
-        c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
-        H._write_message(
-            c,
-            "bot:" + settings.assistant_bot,
-            row["owner"],
-            "Needs your OK: " + row["summary"],
-            room,
-            "say",
-            {"assistant": True, "action": row["id"]},
-            None,
-            None,
-            delivered_at=H.now(),
-        )
-        moved += 1
-    if moved:
-        H.event(c, H.KEEPER, "assistant.strategy_cards_moved", "", {"cards": moved})
-    return moved
 
 
 def earlier_chat(c, settings, who):
@@ -1940,7 +1901,15 @@ def install(app, store, auth, mutate, onboarding):
             "earlier": earlier,
         }
 
-    @app.get("/api/v2/assistant")
+    @app.get(
+        "/api/v2/assistant",
+        **api_v2(
+            "Assistant",
+            "getAssistant",
+            "The caller's Assistant (the Strategy Owner, for the owner): their private room id, whether it is on, the recent messages and what waits for their OK",
+            "Assistant",
+        ),
+    )
     def assistant(request: Request):
         """The caller's own chat: their Assistant room, the owner's included."""
         who = own(request)
@@ -2055,7 +2024,15 @@ def install(app, store, auth, mutate, onboarding):
             replay.get("titles") or [],
         )
 
-    @app.post("/api/v2/assistant/messages")
+    @app.post(
+        "/api/v2/assistant/messages",
+        **api_v2(
+            "Assistant",
+            "sendAssistantMessage",
+            "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` is handed the recent updates the caller may read",
+            "AssistantSent",
+        ),
+    )
     async def assistant_message(request: Request, body: M.AssistantMessage):
         who = own(request)
 
@@ -2069,7 +2046,15 @@ def install(app, store, auth, mutate, onboarding):
         rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, rc)
 
-    @app.post("/api/v2/tasks/{tid}/make-page")
+    @app.post(
+        "/api/v2/tasks/{tid}/make-page",
+        **api_v2(
+            "Tasks",
+            "makeTaskPage",
+            "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins",
+            "AssistantSent",
+        ),
+    )
     async def make_page(request: Request, tid: str, body: M.MakePage):
         from .pages import Pages
 
@@ -2103,7 +2088,15 @@ def install(app, store, auth, mutate, onboarding):
 
         return await asyncio.to_thread(mutate, request, body, work)
 
-    @app.get("/api/v2/tasks/{tid}/make-page")
+    @app.get(
+        "/api/v2/tasks/{tid}/make-page",
+        **api_v2(
+            "Tasks",
+            "getTaskMakePage",
+            "The caller's latest Make page request: making, made, failed or update_required",
+            "TaskMakePage",
+        ),
+    )
     def make_page_status(request: Request, tid: str):
         """Only the requester's latest Make page request, including after a reconnect or another chat turn."""
         who = own(request)
@@ -2136,16 +2129,6 @@ def install(app, store, auth, mutate, onboarding):
                 and str(row["lease_until"] or "") > H.now()
             )
             state = "made" if made else "making" if active else "failed"
-            if not made and row["state"] == "queued":
-                from .execution import MAKE_PAGE, capability_set
-
-                computer = c.execute(
-                    "SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-                    "WHERE a.bot=?",
-                    (row["bot_id"],),
-                ).fetchone()
-                if computer and MAKE_PAGE not in capability_set(computer["capabilities"]):
-                    state = "update_required"
             return {"make_page": {"message_id": row["id"], "conversation_id": row["conversation_id"], "state": state}}
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
@@ -2169,7 +2152,14 @@ def install(app, store, auth, mutate, onboarding):
         rc = await asyncio.to_thread(assistant_checks, who, bot, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, uploads, rc)
 
-    @app.post("/api/v2/assistant/turn-on")
+    @app.post(
+        "/api/v2/assistant/turn-on",
+        **api_v2(
+            "Assistant",
+            "turnOnAssistant",
+            "Owner only: restore the archived assistant, or add it from the catalog, and activate it",
+        ),
+    )
     def turn_on(request: Request, body: M.Empty):
         who = person(request)
         if who.via and not who.confirmed:  # the owner's own click, or their tap on a Confirm card
@@ -2178,7 +2168,15 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("forbidden", "Only the owner turns the " + settings.assistant_name + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_assistant(c, who))
 
-    @app.post("/api/v2/assistant/actions")
+    @app.post(
+        "/api/v2/assistant/actions",
+        **api_v2(
+            "Assistant",
+            "proposeAssistantAction",
+            "Propose one operation for the caller to confirm (what the assistant's `tico assistant propose` calls)",
+            "AssistantActionResult",
+        ),
+    )
     def propose(request: Request, body: M.AssistantAction):
         caller = request.state.identity
         # The Assistant's own background run (its daily sweep: a routine of the Assistant bot, so `via` is never
@@ -2258,7 +2256,14 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/assistant/morning")
+    @app.post(
+        "/api/v2/assistant/morning",
+        **api_v2(
+            "Assistant",
+            "sendAssistantMorning",
+            "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today",
+        ),
+    )
     def morning(request: Request, body: M.AssistantMorning):
         """The Assistant's one morning message to a person: what they can do today to move their goals, in their own
         Assistant chat, as the Assistant. No card and nothing to confirm. Only the Assistant bot's background run may
@@ -2367,7 +2372,10 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("not_found", "No such proposal", 404)  # nobody else's is visible
         return dict(row)
 
-    @app.get("/api/v2/assistant/actions/{aid}")
+    @app.get(
+        "/api/v2/assistant/actions/{aid}",
+        **api_v2("Assistant", "getAssistantAction", "One proposal and how it ended", "AssistantActionResult"),
+    )
     def action_show(request: Request, aid: str):
         who = person(request)
         with store.read() as c:
@@ -2396,7 +2404,10 @@ def install(app, store, auth, mutate, onboarding):
                 )
             return {"action": action_view(row, c)}
 
-    @app.post("/api/v2/assistant/actions/{aid}/cancel")
+    @app.post(
+        "/api/v2/assistant/actions/{aid}/cancel",
+        **api_v2("Assistant", "cancelAssistantAction", "Drop a proposal; it never runs", "AssistantActionResult"),
+    )
     def action_cancel(request: Request, aid: str, body: M.Empty):
         who = own(request)
 
@@ -2410,7 +2421,15 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/assistant/actions/{aid}/withdraw")
+    @app.post(
+        "/api/v2/assistant/actions/{aid}/withdraw",
+        **api_v2(
+            "Assistant",
+            "withdrawAssistantAction",
+            "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. Only the owner confirms it; the owner cancels it instead",
+            "AssistantActionResult",
+        ),
+    )
     def action_withdraw(request: Request, aid: str, body: M.AssistantWithdraw):
         """Any signed-in teammate (a person or a bot) takes back a card that is still waiting: it never runs, and the
         card owner's chat says who withdrew it, with the reason if given. Confirming stays the owner's own click."""
@@ -2463,7 +2482,14 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/assistant/proposals")
+    @app.get(
+        "/api/v2/assistant/proposals",
+        **api_v2(
+            "Assistant",
+            "listAssistantProposals",
+            "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner",
+        ),
+    )
     def proposals(request: Request, proposer: str = "", owner: str = ""):
         """The Confirm cards still waiting, newest first, so a teammate can find one to withdraw: summary and what it
         does, with its id, owner and proposer. Filter by `proposer` (botops, assistant) and/or `owner` (a person's id)."""
@@ -2498,7 +2524,15 @@ def install(app, store, auth, mutate, onboarding):
                 ]
             }
 
-    @app.post("/api/v2/assistant/actions/{aid}/confirm")
+    @app.post(
+        "/api/v2/assistant/actions/{aid}/confirm",
+        **api_v2(
+            "Assistant",
+            "confirmAssistantAction",
+            "The person's own click: runs the proposal as them, once. Never callable by the assistant or a personal token",
+            "AssistantActionResult",
+        ),
+    )
     async def action_confirm(request: Request, aid: str, body: M.AssistantConfirm | None = None):
         who = own(request)
         if who.via_token:

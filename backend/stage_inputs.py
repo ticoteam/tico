@@ -1,5 +1,5 @@
 # pyright: strict
-"""What earlier stages handed on to the one a task is in (docs/pipelines-v3.md, "What a stage is handed").
+"""What earlier stages handed on to the one a task is in (docs/dev/pipelines-v3.md, "What a stage is handed").
 
 A stage's bot works from what came before it: the Spec page, the pull request, each Review page, what the Builder said
 it fixed. Those live on other visits (and, for the Spec, on the task that filed this one), so a stage's own
@@ -224,7 +224,7 @@ def _missing(conn: "sqlite3.Connection", task: Row, attached: set[str]) -> list[
     from . import task_engine
     from . import task_requirements as R
 
-    work = [s for s in task_engine.stages(conn, task["pipeline_id"]) if s["kind"] == "work"]
+    work = task_engine.main_work(task_engine.stages(conn, task["pipeline_id"]))
     at = next((i for i, s in enumerate(work) if s["id"] == task.get("stage_id")), 0)
     out: list[Row] = []
     for stage in work[:at]:
@@ -286,8 +286,6 @@ def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[s
     filed that `readable(task_id)` allows. With none linked, on a pipeline whose stages read PRs (Engineering), every
     repository In use (docs/repositories.md), from the moment the task is filed: a Builder woken on a filed task once
     worked in its own checkout and asked a person which repository to use. Empty otherwise."""
-    import sqlite3
-
     from .item_sources import github as G
 
     found: dict[str, str] = {}
@@ -300,6 +298,14 @@ def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[s
         return list(found.values())
     if not conn.execute(_CODE, (task_id,)).fetchone():
         return []
+    return in_use(conn)
+
+
+def in_use(conn: "sqlite3.Connection") -> list[str]:
+    """Every repository In use (docs/repositories.md), `owner/name`: where a code pipeline's work goes before any PR
+    is linked. Empty when GitHub was never set up here."""
+    import sqlite3
+
     try:
         return [str(row[0]) for row in conn.execute(_IN_USE).fetchall()]
     except sqlite3.OperationalError:

@@ -1,7 +1,8 @@
 // The sidebar's Calendar row (ui/app/calendar-row.ts; spec "Next event on Home's Calendar row" v3): one line, "Calendar"
 // then the next event in plain text ("Sales call · in 3 min"), its name opening the event; › steps to the one after and ‹
 // back; a new page resets it to the very next; an event under way reads "now", without a reload; no events in the next 7
-// days read "n/a" (named "Nothing scheduled") with no arrows; and at 360px the line stays one line, the name cut with "…".
+// days (no calendar connected, or an empty one) leave just "Calendar", no "n/a" and no arrows; and at 360px the line
+// stays one line, the name cut with "…".
 // Fixtures only, no network, at a fixed Wednesday 10:00, in a 24-hour locale.
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -145,19 +146,17 @@ async function oneLine(page: Page) {
       await context.close();
     }
     {
-      // AC-3: nothing in the next 7 days: "n/a", no arrows, and "Clear" nowhere.
+      // AC-3: nothing in the next 7 days: just "Calendar", no "n/a", no arrows, and "Clear" nowhere.
       const {page, errors, context} = await open(browser, {width: 1360, height: 900}, [event('ev-far', 'Far away', at(20, 10), at(20, 11))]);
       await page.goto('https://tico-ui.test/#/home');
       const row = page.locator('#nav-calendar');
-      await row.locator('.cal-nx').waitFor();
-      const none = page.locator('#nav-calendar .cal-none');
-      assert.equal(await none.locator('[aria-hidden]').innerText(), 'n/a', 'AC-3: the row shows n/a');
-      assert.equal(await none.locator('.sr-only').textContent(), 'Nothing scheduled', 'AC-3: named Nothing scheduled');
+      await row.waitFor();
+      await page.waitForFunction('CAL_ROW.at > 0 && !CAL_ROW.loading');   // the week read: nothing in it
+      assert.equal(await row.locator('.cal-nx').count(), 0, 'AC-3: no event line');
+      assert.equal(await row.evaluate(r => (r.querySelector('[data-cal-next]')?.textContent ?? '').trim()), '', 'AC-3: nothing after the name, no n/a');
       assert.equal(await page.locator('#nav-calendar .cal-step').count(), 0, 'AC-3: no arrows');
       assert.equal(await row.locator('[data-cal-step]').count(), 0, 'AC-3: no arrows');
-      assert.doesNotMatch(await row.innerText(), /Clear/, 'AC-3: no "Clear"');
       assert.equal(await oneLine(page), true, 'AC-3: one line');
-      assert.equal(await row.locator('.cal-none').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'AC-3: in full at the sidebar\'s default width');
       await shot(page, 'row-nothing');
       assert.deepEqual(errors, []);
       await context.close();
@@ -179,6 +178,6 @@ async function oneLine(page: Page) {
       assert.deepEqual(errors, []);
       await context.close();
     }
-    console.log('Calendar row: next event (soon, today, tomorrow, weekday), name opens it, › and ‹ stepping, reset on return, "now" without reload, Nothing scheduled, one line at 360px');
+    console.log('Calendar row: next event (soon, today, tomorrow, weekday), name opens it, › and ‹ stepping, reset on return, "now" without reload, nothing ahead just "Calendar", one line at 360px');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

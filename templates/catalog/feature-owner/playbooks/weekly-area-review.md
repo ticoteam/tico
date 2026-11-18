@@ -2,7 +2,7 @@
 
 Schedule: Mondays at 08:00 team time (routine `weekly-area-review`), after setup. The hour is set so your manager reads
 it at its 09:00 summary. Also run by hand. Budget 30 minutes. The outcome is one page: the area's number against target,
-its ranked problems, the pitches filed, the features in flight and the decisions waiting. Nothing is built, shared or
+its ranked problems, the features filed, the features in flight and the decisions waiting. Nothing is built, shared or
 changed by the review itself.
 
 ---
@@ -22,7 +22,7 @@ retention cohorts with `skills/read-an-area-retention-cohort/SKILL.md`. Write ea
 its cohort dates, and say "not yet" for a cohort too young to read.
 
 If no export is attached, say which one is missing and for which dates, ask once with
-`tico task ask <id> --to <person> "<question>" --version N`, and finish the rest of the review. Never fill the gap from
+`tico task ask <id> --to <person> "<question>"`, and finish the rest of the review. Never fill the gap from
 last week's reading.
 
 ## 3. Read the problems since the last review
@@ -44,21 +44,22 @@ reason and where it went.
 ## 5. Check the features already filed
 
 For each task in `knowledge/pitches.md`, read it with `tico task show <id>`: its stage and what is missing to leave it.
-Record each decision a person made, with its date. A pitch turned down keeps its reason and its date to look again. For
-each feature past Pitch, write one line: its stage, what it waits on and who owes it, and the launch lines due within
+Record each decision a person made, with its date. A feature turned down keeps its reason and its date to look again. For
+each feature, write one line: its stage, what it waits on and who owes it, and the launch lines due within
 four weeks (`skills/run-a-launch-readiness-check/SKILL.md`).
 
-## 6. Pitch at most two
+## 6. File at most two
 
-A problem earns a pitch when it meets the threshold in `knowledge/product-practice.md` and no task for it is open. Write
-each with `playbooks/write-a-pitch.md`. At most two new pitches a week. Any further problem waits for the next review,
+A problem earns a feature when it meets the threshold in `knowledge/product-practice.md` and no task for it is open. File
+each in Product, where it starts in Spec, with the problem, who has it and the fix in its first comment, then write its
+Spec (`playbooks/write-a-spec-page.md`). At most two new features a week. Any further problem waits for the next review,
 and the review says so.
 
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-area-review.md` in the shape of `knowledge/examples/area-review.md`, then
 `tico file publish reports/YYYY-MM-DD-area-review.md`. Update `knowledge/pitches.md`, commit this repository, and finish
-with `tico task done <id> -m "..." --version N`: the headline, the path, the pitches filed and what you could not read.
+with `tico task done <id> -m "..." --version N`: the headline, the path, the features filed and what you could not read.
 
 Done when: the review is published with the number against target and its window; each problem has its accounts and its
-sources; every pitch filed has its task id; and each decision waiting is named with who owes it.
+sources; every feature filed has its task id; and each decision waiting is named with who owes it.

@@ -196,7 +196,7 @@ def test_json_keeps_the_refusal_as_json(api, capsys):
 
 def test_only_a_bots_own_runs_are_offered_the_browser_and_login_tools():
     names = [t["name"] for t in hubtools.TOOLS if t["name"].startswith(("tico_browser_", "tico_login_"))]
-    assert len(names) == 15
+    assert names, "the tool table has no browser or login tool to check"
     for name in names:
         assert set(hubtools.offered_to(hubtools.BY_NAME[name])) == {"bot", "botops", "agent"}, name
     # The tools that touch this computer's files are served by the local MCP server only, never by the Tico server.

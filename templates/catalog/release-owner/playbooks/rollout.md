@@ -45,7 +45,7 @@ to repeat. `status` prints what every install runs now.
 
 Stop and report; do not retry a failed update or try another version. The updater has already rolled that install
 back on its own. Comment on the release task with the step, the install, the updater's message and the before and
-after versions of every install, and `tico task ask <id> --to <person> "<question>" --version N` the owner what to do. A canary failure means no other install
+after versions of every install, and `tico task ask <id> --to <person> "<question>"` the owner what to do. A canary failure means no other install
 was touched.
 
 ## 3. Report

@@ -6,7 +6,8 @@
 // Styles: ui/styles/page-head.css, linked after every page stylesheet so it wins ties with the old page rules.
 'use strict';
 
-type PageTab = {label: string; href?: string | undefined; count?: number | string | undefined; cur?: boolean | undefined; attrs?: string | undefined};
+type PageTab = {label: string; href?: string | undefined; count?: number | string | undefined; cur?: boolean | undefined; attrs?: string | undefined;
+  mark?: string | undefined};   // a setup area of it waits on the person: the Flow mark beside its name (needsMarkHTML)
 type PageHeadPart = 'title' | 'tabs' | 'tools' | 'more' | 'primary';
 type PageHeadOptions = {
   title: string;                           // plain text, escaped here
@@ -39,9 +40,10 @@ function pageHeadTab(t: PageTab): string {
   const n = t.count === undefined || t.count === '' ? '' : `<span class="ph-n">${esc(String(t.count))}</span>`;
   const extra = t.attrs ? ' ' + t.attrs : '';
   const cls = 'ph-tab' + (t.cur ? ' cur' : '');
+  const mark = t.mark ? needsMarkHTML(12, t.mark) : '';
   return t.href !== undefined
-    ? `<a class="${cls}" href="${esc(t.href)}"${t.cur ? ' aria-current="page"' : ''}${extra}>${esc(t.label)}${n}</a>`
-    : `<button type="button" class="${cls}" role="tab" aria-selected="${t.cur ? 'true' : 'false'}"${extra}>${esc(t.label)}${n}</button>`;
+    ? `<a class="${cls}" href="${esc(t.href)}"${t.cur ? ' aria-current="page"' : ''}${extra}>${esc(t.label)}${mark}${n}</a>`
+    : `<button type="button" class="${cls}" role="tab" aria-selected="${t.cur ? 'true' : 'false'}"${extra}>${esc(t.label)}${mark}${n}</button>`;
 }
 function pageHeadTabs(tabs: PageTab[]): string { return tabs.map(pageHeadTab).join(''); }
 

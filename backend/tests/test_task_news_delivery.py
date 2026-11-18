@@ -1,6 +1,6 @@
-"""Task news never reaches a person (hubdb.task_news): a keeper message about a task (refs.task) is written to the task's
+"""Task news never reaches a person (hubdb.task_news): a Tico message about a task (refs.task) is written to the task's
 conversation, but no person gets a delivery for it, so it is not unread, not in the Inbox, and not in a digest or a push.
-A bot owner still gets it as before, and a keeper notice without a task (a budget alert) still reaches the person. An
+A bot owner still gets it as before, and a Tico notice without a task (a budget alert) still reaches the person. An
 old delivery already made for such a notice stops counting as unread without a migration.
 Fictional people only: ana (owner), ben (a person); the bot ops comes from the api fixture.
 """
@@ -13,7 +13,9 @@ from backend.tests.helpers.task_news_delivery import budget_thread, delivery, ro
 
 def task_notice(api, thread_id, body="Started task: Budget review", kind="notice"):
     with api.app.state.store.transaction() as c:
-        return H.say(c, H.KEEPER, "human:ben", body, conversation_id=thread_id, kind=kind, refs={"task": "tsk-budget"})
+        return H.say(
+            c, H.TICO_ACTOR, "human:ben", body, conversation_id=thread_id, kind=kind, refs={"task": "tsk-budget"}
+        )
 
 
 def test_a_task_notice_to_a_person_is_in_the_task_but_reaches_no_one(api):
@@ -31,7 +33,7 @@ def test_a_task_notice_still_wakes_its_bot_owner_as_before(api):
         direct = threads.dm(c, "human:ana", ["bot:ops"])
         notice = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "New task from human:ana: Budget review",
             conversation_id=direct["id"],
@@ -42,12 +44,12 @@ def test_a_task_notice_still_wakes_its_bot_owner_as_before(api):
     assert row is not None and row["mode"] == "queue" and row["state"] == "pending"
 
 
-def test_a_keeper_notice_without_a_task_still_reaches_the_person(api):
+def test_a_tico_notice_without_a_task_still_reaches_the_person(api):
     thread_id = budget_thread(api)
     with api.app.state.store.transaction() as c:
         alert = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "human:ben",
             "The team is at 80% of its budget",
             conversation_id=thread_id,
@@ -64,7 +66,7 @@ def test_an_old_task_delivery_to_a_person_no_longer_counts_as_unread(api):
         # A notice written before the rule: its delivery row exists, as the old trigger made it.
         notice = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "human:ben",
             "Finished: Budget review",
             conversation_id=thread_id,

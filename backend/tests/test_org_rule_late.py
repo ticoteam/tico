@@ -8,8 +8,8 @@ import threading
 import time
 
 from backend import org_rule_check as K
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers, post
-from backend.tests.helpers.org_rules import rule
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     color_rule,
@@ -19,6 +19,7 @@ from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     sql,
     task_for_ops,
 )
+from backend.tests.helpers.org_rules import rule
 
 EVERYONE = {"everyone": True}
 SAFE = "Draft is in progress."
@@ -65,7 +66,9 @@ def test_writes_under_a_warn_rule_answer_without_waiting_for_the_judge(ruled, mo
     try:
         started = time.monotonic()
         comment(api, task, SAFE)
-        asked = post(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "Which day suits you?", "version": 1})
+        asked = post(
+            api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "OK the draft?", "kind": "ok", "version": 1}
+        )
         version = sql(api, "SELECT version FROM tasks WHERE id=?", (task["id"],))[0]["version"]
         done = api.post(
             f"/api/v2/tasks/{task['id']}/done",
@@ -108,7 +111,11 @@ def test_a_late_warning_reaches_a_done_note_and_a_persons_ask(ruled):
     api, _ = ruled
     everyone_rule(api)
     task = task_for_ops(api)
-    post(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "Is our favorite color is red okay?", "version": 1})
+    post(
+        api,
+        f"tasks/{task['id']}/asks",
+        {"to": "ben", "line": "Is our favorite color is red okay?", "kind": "ok", "version": 1},
+    )
     settle(api)
     note = sql(api, "SELECT note FROM tasks WHERE id=?", (task["id"],))[0]["note"]
     assert note.startswith("Warning:")
@@ -140,7 +147,7 @@ def test_a_block_rule_or_a_mix_with_one_still_holds_before_anything_is_saved(rul
 
 
 def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
-    """A warn rule refuses a bot's ask it covers (task_rule_gate `covering`), so that ask is never left for later."""
+    """A warn rule refuses a bot's ask (here an OK of what it shows) it covers (task_rule_gate `covering`), so that ask is never left for later."""
     api, _ = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
@@ -149,10 +156,8 @@ def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
         json={
             "to": "ana",
             "line": "Is our favorite color is red okay?",
-            "why": "The launch note needs one color before it goes out.",
-            "choices": ["Yes", "No"],
-            "details": ["The note ships in red.", "The note waits for another color."],
-            "recommend": "Yes",
+            "kind": "ok",
+            "show": X.shown_on(api),
             "version": task["version"],
         },
         headers=headers("ops-test"),
@@ -219,7 +224,11 @@ def test_a_late_warning_skips_a_task_note_changed_since_the_ask(ruled):
     task = task_for_ops(api)
     judge.hold = threading.Event()  # the check answers only once the note has changed
     try:
-        post(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "Is our favorite color is red okay?", "version": 1})
+        post(
+            api,
+            f"tasks/{task['id']}/asks",
+            {"to": "ben", "line": "Is our favorite color is red okay?", "kind": "ok", "version": 1},
+        )
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET note='Rewritten since.' WHERE id=?", (task["id"],))
     finally:

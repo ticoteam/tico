@@ -30,10 +30,10 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 hound = "3.5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rtrb = "0.3"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "=0.41.1", features = ["bundled", "fallible_uint"] }
 # The window. Cargo.lock keeps its runtime crates (tauri-runtime 2.12.2, tauri-runtime-wry
 # 2.12.3, tauri-utils 2.10.2, wry 0.57.1, tao 0.37.2) at the versions 2.12.5 builds with.
-tauri = { version = "=2.12.5", optional = true, features = ["custom-protocol"] }
+tauri = { version = "=2.12.6", optional = true, features = ["custom-protocol"] }
 # Self-updates from the signed release feed (src/app/update.rs). The same version the Tico desktop app locks.
 tauri-plugin-updater = { version = "=2.14.1", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
 # Realtime streaming transcription: a blocking websocket on its own thread, TLS through the
@@ -66,7 +66,7 @@ dispatch2 = "0.3"
 
 [build-dependencies]
 cc = "1"
-tauri-build = { version = "=2.7.4", optional = true }
+tauri-build = { version = "=2.7.5", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

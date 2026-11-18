@@ -19,7 +19,7 @@ MAX_FRAMES = 5_200_000
 # Credential shapes masked again here, whatever the runner missed: provider keys, GitHub and Slack tokens,
 # AWS access key ids and bearer headers.
 TOKEN_RE = re.compile(
-    r"\b(?:sk-ant-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"\b(?:sk-ant-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9._-]{20,}"
     r"|github_pat_[A-Za-z0-9_]{20,}|xox[abeprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})"
     r"|(?i:bearer)\s+[A-Za-z0-9._~+/-]{16,}=*"
 )

@@ -18,6 +18,7 @@ from . import mailbox_access as MA
 from . import people as P
 from .models import MailboxAccessCreate, MailboxAccessUpdate, MailboxCreate, MailboxContactsUpdate
 from .store import Problem
+from .api_contract import api_v2
 
 PATH = "/api/v2/mailboxes"
 PROVIDER = "google_workspace"
@@ -84,22 +85,20 @@ def _table(c, name):
 
 
 def _failing(c):
-    """{address: {reason, error}} for each mailbox a computer reports it cannot read (google_rights.counted)."""
-    from . import google_rights
-
-    out = {}
-    if not _table(c, "connector_reports"):
-        return out
-    for row in google_rights.counted(c, "mail", H.now()):
-        try:
-            reason = json.loads(row["failing"] or "{}").get("reason") or ""
-        except ValueError:
-            reason = ""
-        address = row["account"].lower()
-        # One computer refusing the sign-in outranks another's passing network error: only a person fixes it.
-        if address not in out or reason == "signin":
-            out[address] = {"reason": "signin" if reason == "signin" else "failed", "error": row["error"][:300]}
-    return out
+    """{address: {reason, error}} for each mailbox whose last Gmail check failed (backend/gmail_watch.py): `signin`
+    while Google refuses its sign-in (reconnects keeps that refusal), else `failed`."""
+    refused = (
+        {r[0] for r in c.execute("SELECT lower(account) FROM google_signin_refusals WHERE service='mail'")}
+        if _table(c, "google_signin_refusals")
+        else set()
+    )
+    return {
+        row["address"]: {
+            "reason": "signin" if row["address"] in refused else "failed",
+            "error": row["check_error"][:300],
+        }
+        for row in c.execute("SELECT address, check_error FROM mailboxes WHERE coalesce(check_error,'')<>''")
+    }
 
 
 def _state(c, box, live):
@@ -124,11 +123,6 @@ class _Reader:
         self.c, self.who, self.roster = c, who, roster(c)
         self.live, self.routines = _live_mailboxes(c), _routines(c)
         self.facts, self.principal = MA._Facts(c), MA.principal(c, who)
-        self.synced = (
-            {r["address"]: r for r in c.execute("SELECT address, synced_at, newest_epoch FROM mail_mailboxes")}
-            if _table(c, "mail_mailboxes")
-            else {}
-        )
         self.failing = _failing(c)
         self.grants = {}
         for row in c.execute("SELECT mailbox_id, grantee_type, grantee_id FROM mailbox_accesses ORDER BY created_at"):
@@ -152,13 +146,12 @@ class _Reader:
         return {"people": len(people), "bots": len(bots), "names": (people + bots)[:USED_BY_NAMES]}
 
     def sync(self, box):
-        """The last successful read of `box` and, while a computer reports it failing, why: `signin` when Google
-        refused the sign-in (only a person signing in again fixes it), else `failed`."""
-        seen = self.synced.get(box["address"])
+        """The server's last good read of `box` from Gmail (backend/gmail_watch.py) and, while it fails, why: `signin`
+        when Google refused the sign-in (only a person signing in again fixes it), else `failed`."""
         failing = self.failing.get(box["address"])
         return {
-            "synced_at": seen["synced_at"] if seen else None,
-            "newest_epoch": seen["newest_epoch"] if seen else None,
+            "synced_at": box.get("checked_at"),
+            "newest_epoch": None,
             "sync": (failing or {}).get("reason") or "",
             "sync_error": (failing or {}).get("error") or "",
         }
@@ -322,14 +315,30 @@ def detail(c, who, mid):
 def install(app, store):
     """The Mailboxes routes. Reads go through store.read(); writes check their own rights in one transaction."""
 
-    @app.get(PATH)
+    @app.get(
+        PATH,
+        **api_v2(
+            "Mailboxes",
+            "listMailboxes",
+            "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them",
+            "MailboxList",
+        ),
+    )
     def list_mailboxes(request: Request):
         """Tools for whoever is signed in: the admin's table, or your own mailbox and what is shared
         with you."""
         with store.read() as c:
             return listing(c, request.state.identity)
 
-    @app.post(PATH)
+    @app.post(
+        PATH,
+        **api_v2(
+            "Mailboxes",
+            "connectMailbox",
+            "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person",
+            "MailboxResult",
+        ),
+    )
     def connect_mailbox(request: Request, body: MailboxCreate):
         """An admin adds a mailbox for Tico to use. The address of a person on the roster is that person's own; any
         other is a shared inbox when `shared`, else it waits for its person (private, nobody has access)."""
@@ -371,13 +380,26 @@ def install(app, store):
         with store.read() as c:
             return {"mailbox": _Reader(c, who).row(_box(c, mid))}
 
-    @app.get(PATH + "/{mid}")
+    @app.get(
+        PATH + "/{mid}",
+        **api_v2(
+            "Mailboxes",
+            "getMailbox",
+            "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)",
+            "MailboxDetail",
+        ),
+    )
     def get_mailbox(request: Request, mid: str):
         """One mailbox: who can use it, its routines, and (for whoever manages it) who could be added."""
         with store.read() as c:
             return detail(c, request.state.identity, mid)
 
-    @app.post(PATH + "/{mid}/share")
+    @app.post(
+        PATH + "/{mid}/share",
+        **api_v2(
+            "Mailboxes", "shareMailbox", "An admin makes a mailbox that has no person a shared inbox", "MailboxDetail"
+        ),
+    )
     def share_mailbox(request: Request, mid: str):
         """An admin makes a mailbox that has no person a shared inbox: admins get Read and write on it."""
         who = request.state.identity
@@ -387,7 +409,15 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.post(PATH + "/{mid}/accesses")
+    @app.post(
+        PATH + "/{mid}/accesses",
+        **api_v2(
+            "Mailboxes",
+            "addMailboxAccess",
+            "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)",
+            "MailboxDetail",
+        ),
+    )
     def add_mailbox_access(request: Request, mid: str, body: MailboxAccessCreate):
         """Give a person or a bot Read, or Read and write, on this mailbox."""
         from .views import roster
@@ -418,7 +448,12 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.patch(PATH + "/{mid}/accesses/{access_id}")
+    @app.patch(
+        PATH + "/{mid}/accesses/{access_id}",
+        **api_v2(
+            "Mailboxes", "changeMailboxAccess", "Change one access between Read and Read and write", "MailboxDetail"
+        ),
+    )
     def change_mailbox_access(request: Request, mid: str, access_id: str, body: MailboxAccessUpdate):
         """Change one access between Read and Read and write."""
         who = request.state.identity
@@ -434,7 +469,10 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.delete(PATH + "/{mid}/accesses/{access_id}")
+    @app.delete(
+        PATH + "/{mid}/accesses/{access_id}",
+        **api_v2("Mailboxes", "removeMailboxAccess", "Take one person's or bot's access away", "MailboxDetail"),
+    )
     def remove_mailbox_access(request: Request, mid: str, access_id: str):
         """Take one person's or bot's access away."""
         who = request.state.identity
@@ -456,7 +494,15 @@ def install(app, store):
         with store.read() as c:
             return {**detail(c, who, mid), "feeds_directory": MA.feeds_directory(c, MA.row_by_id(c, mid))}
 
-    @app.delete(PATH + "/{mid}")
+    @app.delete(
+        PATH + "/{mid}",
+        **api_v2(
+            "Mailboxes",
+            "stopMailbox",
+            "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)",
+            "MailboxResult",
+        ),
+    )
     def stop_mailbox(request: Request, mid: str):
         """Stop using this mailbox in Tico: an admin, or the person whose mailbox it is."""
         who = request.state.identity

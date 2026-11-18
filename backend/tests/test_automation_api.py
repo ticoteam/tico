@@ -229,7 +229,7 @@ def test_the_answers_match_the_published_contract(api):
     check("restoreAutomationVersion", post(api, f"automations/{aid}/versions/1/restore", {}))
     check("listQuestionSets", get(api, "automations/question-sets"))
     check("getInboxSend", get(api, "inboxes/ana@acme.example"))
-    check("getPersonAssistant", get(api, "people/ana/assistant"))
+    check("getPersonAssistant", get(api, "humans/ana/assistant"))
     check("deleteAutomationPost", post(api, f"automations/{aid}/delete", {}))
 
 

@@ -1,0 +1,50 @@
+name: Decide Low evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Pinned Gateway version for the current Decide Low
+        type: string
+        default: tico-decide-low-1.1
+      candidate:
+        description: Dated OpenRouter Decisions model ID (empty runs the baseline alone)
+        type: string
+      endpoint:
+        description: Paid OpenRouter endpoint slug for the candidate
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.15"
+      - name: Install
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+      - name: Compare pinned decision models
+        env:
+          BASELINE: ${{ inputs.baseline }}
+          CANDIDATE: ${{ inputs.candidate }}
+          ENDPOINT: ${{ inputs.endpoint }}
+          TICO_GATEWAY_KEY: ${{ secrets.TICO_GATEWAY_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.DECIDE_EVAL_OPENROUTER_KEY }}
+        run: |
+          set -o pipefail
+          args=()
+          if [ -n "$CANDIDATE$ENDPOINT" ]; then args+=(--candidate "$CANDIDATE" --endpoint "$ENDPOINT"); fi
+          python -m evals.pipeline_judge.run --models "$BASELINE" "${args[@]}" --out decide-results | tee "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: decide-eval
+          path: decide-results/

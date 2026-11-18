@@ -1,6 +1,6 @@
 """Inside the runner image, after its entrypoint prepared the volume, as the supervisor (ticorun, 10002) with the runner's
 capabilities: it owns a mirror and the bot user (10003) clones and fetches it over file://, the way
-runner_support/repositories.py does. Prints one JSON line."""
+runner-rs/src/repositories.rs does. Prints one JSON line."""
 
 import json
 import os

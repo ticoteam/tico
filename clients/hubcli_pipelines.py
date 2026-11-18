@@ -3,7 +3,7 @@ you, and following a task (clients/commands/pipelines.py holds the tools, and th
 and `requirement` command lines as specs). Stdlib only: hubcli.parser() calls `add` on every `tico` start, so nothing
 heavy is imported here.
 
-    tico task request <pipeline> "<title>" [--body "..."] [--owner X] [--private]
+    tico task request <pipeline> "<title>" [--message "..."] [--owner X] [--private]
                                            file a request into a pipeline's first stage, given to its holder
     tico task approve <id> [-m "note"] [--requirement R] [--version N]   your OK on what waits on you
     tico task send-back <id> -m "what to change" [--requirement R] [--version N]   your no, with a note
@@ -42,11 +42,13 @@ def add(task):
         "task request",
         "file a request into a pipeline's first stage, given to whoever holds that stage",
         "A person or a bot may run it.",
-        'tico task request product "Add a negate(x) function" --body "Why"',
+        'tico task request product "Add a negate(x) function" --message "Why"',
     )
     s.add_argument("pipeline", help="its id or name")
     s.add_argument("title")
-    s.add_argument("--body", help="why, and what done looks like; default the title")
+    s.add_argument(
+        "--message", "--body", dest="message", help="the first message on its chat: why, and what done looks like"
+    )
     s.add_argument("--owner", help="who works it first instead of the stage's holder: a bot slug, a person id, me")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
     for verb, help_, example in (

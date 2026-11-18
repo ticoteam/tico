@@ -67,14 +67,14 @@ def _flush(c, task_id):
     return bool(row[1]), bool(refs.get("quiet"))
 
 
-def _ran_since(c, task_id, seconds=1, purpose=None):
+def _ran_since(c, task_id, seconds=1):
     """A run of the Builder's on the task began `seconds` after now."""
     at = H.shift(H.now(), seconds=seconds)
     run = H.new_id()
     c.execute(
-        "INSERT INTO attempts (id, bot_id, state, created_at, started_at, finished_at, task_id, purpose) "
-        "VALUES (?, 'builder', 'completed', ?, ?, ?, ?, ?)",
-        (run, at, at, at, task_id, purpose),
+        "INSERT INTO attempts (id, bot_id, state, created_at, started_at, finished_at, task_id) "
+        "VALUES (?, 'builder', 'completed', ?, ?, ?, ?)",
+        (run, at, at, at, task_id),
     )
 
 
@@ -109,7 +109,7 @@ def test_checks_that_pass_on_a_head_the_bots_last_run_already_had_start_no_run(c
     ]
 
 
-@pytest.mark.parametrize("case", ["failed", "run_before_result", "new_head", "keep_warm_since", "no_run_since"])
+@pytest.mark.parametrize("case", ["failed", "run_before_result", "new_head", "no_run_since"])
 def test_a_failure_or_a_pass_the_bot_has_not_seen_wakes_it(c, caplog, case):
     _pipeline(c)
     task_id = _task(c)
@@ -118,8 +118,6 @@ def test_a_failure_or_a_pass_the_bot_has_not_seen_wakes_it(c, caplog, case):
     _queue(c, task_id, result="fail" if case == "failed" else "pass", head="b" * 40 if case == "new_head" else HEAD)
     if case in ("failed", "new_head"):
         _ran_since(c, task_id)
-    if case == "keep_warm_since":
-        _ran_since(c, task_id, purpose="keep warm")  # a keep-warm turn looked at nothing
     with caplog.at_level(logging.INFO, logger="tico.task_engine"):
         assert _flush(c, task_id) == (True, False)
     assert _skips(caplog) == []

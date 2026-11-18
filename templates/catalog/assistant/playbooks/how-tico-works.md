@@ -4,9 +4,10 @@ Read this when a person asks why something is on their queue, or how to make it 
 
 ## What puts an item on Needs you
 - **A task the person owns.** Bots file these when they need real work from them. Most are routine output, not decisions.
-- **An ask**: a bot or a stage asks the person a question or for an OK, on a task. A question is answered on its task:
-  `tico task answer <id> <requirement> "<reply>" --version N`. An OK to send, spend or publish waits for the person's own tap
-  on its preview.
+- **A ❓**: a bot's message that needs the person's reply, on a task or in a chat. Their reply in that chat clears it;
+  for them, on their word: `tico task comment <id> "<reply>" --on-behalf-of turn` on its task.
+- **An ask**: a bot or a stage asks the person for an OK, on a task. An OK to send, spend or publish waits for the
+  person's own tap on its preview.
 - **A paused bot** the person can fix, such as a sign-in to reconnect. One item per cause.
 - **An @mention** from a person, until they reply.
 
@@ -16,6 +17,7 @@ Read this when a person asks why something is on their queue, or how to make it 
   pile up. The fix is the automation, not the tasks.
 - **Health Monitor**: findings about bots and computers, including test pings. Repeated test pings are a source to stop.
 - **BotOps**: support and health tasks, and questions about bot setup.
+- **Tools Owner**: a task for each tool whose key is rejected, expiring or stored twice, and cards to type or grant a key.
 - **PR Reviewer**: a review task per pull request.
 - **General Manager**: tasks it created while routing work.
 - **Routines and automations**: any task filed on a schedule or a trigger.

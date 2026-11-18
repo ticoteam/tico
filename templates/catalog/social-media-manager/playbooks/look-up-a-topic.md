@@ -14,7 +14,7 @@ Done when: the note is on the task with the answer first, the coverage line (ret
     tico task show <id>
 
 Name the topic, the window (default: the last 14 days) and who will read the answer. Ask once with
-`tico task ask <id> --to <person> "<question>" --version N` if the topic is ambiguous, and stop.
+`tico task ask <id> --to <person> "<question>"` if the topic is ambiguous, and stop.
 
 ## 2. Query the sources
 

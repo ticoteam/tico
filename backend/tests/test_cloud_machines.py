@@ -839,8 +839,8 @@ def with_botops(cloud):
 def machine_cards(cloud):
     with cloud.store.read() as c:
         return [
-            dict(r)
-            for r in c.execute("SELECT title,body,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            for r in c.execute("SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
         ]
 
 
@@ -881,7 +881,7 @@ def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud
         assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
     assert len(machine_cards(cloud)) == 1
     with cloud.store.transaction() as c:
-        H.task_done(c, H.KEEPER, first, "Machine replaced.")
+        H.task_done(c, H.TICO_ACTOR, first, "Machine replaced.")
         assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
 
 
@@ -2821,7 +2821,7 @@ def sign_in_report(cloud, computer, authenticated):
         {
             "version": "test",
             "platform": "linux",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {"claude": {"installed": True, "authenticated": authenticated}},
@@ -2941,7 +2941,7 @@ def test_a_plan_an_owner_took_off_a_computer_is_not_brought_back_by_a_later_chan
 def test_a_claude_bot_with_a_codex_task_model_gets_the_codex_plan_too(cloud):
     sid = plan_company(cloud, "ops")
     csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
-    task_on(cloud.api, "ops", "gpt-6.1-sol", "codex")
+    task_on(cloud.api, "ops", "gpt-6.2-sol", "codex")
     computer = own_computer(cloud, "ops")
     assert given(cloud, computer["runner_id"]) == {"claude": sid, "codex": csid}
 
@@ -3657,7 +3657,7 @@ def codex_heartbeat(cloud, computer):
         {
             "version": "test",
             "platform": "linux",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {
@@ -3676,7 +3676,7 @@ def test_a_codex_bot_moved_onto_a_running_shared_machine_takes_the_chatgpt_plan(
     shared = shared_for(cloud, "cpo", token="ben-test")
     codex_heartbeat(cloud, shared)
     csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
-    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
     box = runner(cloud.api, label="Box")
     assign(cloud.api, box, "ops")
     idle(cloud)
@@ -3698,7 +3698,7 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     plan_company(cloud, "cpo")
     shared = shared_for(cloud, "cpo")
     codex_heartbeat(cloud, shared)
-    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
     change_as(cloud, "ops", mode="cloud", placement="shared")
     checks = health_of(cloud)
     assert "Codex" in checks["computer_signin"]["summary"] and "Claude" not in checks["computer_signin"]["summary"]
@@ -3710,10 +3710,10 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     )
     claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
     assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
-    from backend import getting_started
+    from backend import getting_started, runner_online
 
     with cloud.store.read() as c:
-        online = getting_started._online_runners(c)
+        online = runner_online.online_rows(c)
         assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
         assert getting_started._login_target(online, {"claude"}, c) is None
     add(cloud.api, "codex_login", codex_file(), name="ChatGPT")
@@ -3838,7 +3838,7 @@ def _beat(cloud, token):
     body = {
         "version": "test",
         "platform": "linux",
-        "capabilities": [MS.CAPABILITY, "model_sign_out_v1", "model_connect_v1"],
+        "capabilities": ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"],
     }
     post(cloud.api, "runners/heartbeat", {**body, "readiness": {"schema_version": 1, "runtimes": tools}}, token=token)
 

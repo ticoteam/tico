@@ -185,7 +185,7 @@ def test_an_older_install_gets_the_view_once_and_its_open_ask_is_closed_for_the_
         FA.ensure_setup(c, store.settings.owner_email)
         BK.grant_defaults(c)
         owner = "human:" + api.app.state.auth.owner_id(c)
-        ask = H.task_create(c, H.KEEPER, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
+        ask = H.task_create(c, H.TICO_ACTOR, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
     ensure(api)
     ensure(api)
     with store.read() as c:
@@ -268,7 +268,7 @@ def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(en
     first = check(api)
     assert first["items"] == 1 and first["state"] == "opened"
     (task,) = checks(api)
-    assert task["title"] == "Books check (1)" and task["private"] == 1 and "bil_1" in task["body"]
+    assert task["title"] == "Books check (1)" and task["private"] == 1 and "bil_1" in task["words"]
     assert check(api)["words"] == "Nothing new" and len(checks(api)) == 1
 
 
@@ -326,8 +326,8 @@ def test_a_bill_emailed_to_the_address_lands_once_in_the_library_and_in_the_book
     assert again[1] == row["action_id"]
     first = check(api)
     (task,) = checks(api)
-    assert first["items"] == 1 and "Emailed bill from ap@acme.example: Invoice 1042" in task["body"]
-    assert row["file_id"] in task["body"]
+    assert first["items"] == 1 and "Emailed bill from ap@acme.example: Invoice 1042" in task["words"]
+    assert row["file_id"] in task["words"]
 
 
 def test_a_retired_template_is_offered_nowhere_but_a_bot_built_from_it_keeps_its_card(environment):
@@ -392,7 +392,7 @@ def test_a_check_reads_every_page_of_the_queue(environment, monkeypatch):
     monkeypatch.setattr(FR, "inbox", pages)
     assert check(api)["items"] == 451  # past the inbox's 200 per kind
     (task,) = checks(api)
-    assert "bil_late" in task["body"] and "uncategorized (450)" in task["body"]
+    assert "bil_late" in task["words"] and "uncategorized (450)" in task["words"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM bookkeeper_seen WHERE key='bill_to_enter:bil_late'").fetchone()
 
@@ -426,7 +426,7 @@ def test_a_failing_fetch_backs_off_then_is_listed_once_and_filed_work_closes(env
     assert len(tries) == 2
     with store.read() as c:
         assert c.execute("SELECT state FROM bills_inbound").fetchone()["state"] == "failed"
-    assert check(api)["items"] == 1 and "Invoice 1042" in checks(api)[0]["body"]
+    assert check(api)["items"] == 1 and "Invoice 1042" in checks(api)[0]["words"]
     with store.transaction() as c:
         assert c.execute("SELECT state FROM bills_inbound").fetchone()["state"] == "reported"
         later = BK.check(c, api.app.state.auth, H.shift(H.now(), hours=BK.REPEAT_HOURS + 1))
@@ -466,7 +466,7 @@ def test_only_the_failed_bills_the_body_lists_are_reported(environment, monkeypa
                 ),
             )
     assert check(api)["items"] == 50
-    body = checks(api)[0]["body"]
+    body = checks(api)[0]["words"]
     with store.read() as c:
         reported = {r["id"] for r in c.execute("SELECT id FROM bills_inbound WHERE state='reported'")}
     assert len(reported) == BK.PER_KIND and all(f"- {i} " in body for i in reported)

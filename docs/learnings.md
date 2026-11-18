@@ -16,21 +16,13 @@ heading says rules), then the newest entries: sections by the date in their head
 
 What a bot remembers between turns is its repository's `memory/`, which you read here and can edit. A bot may
 read `memory/learnings.md` and `memory/decisions.md` when its work needs them; it saves a working rule it is given at
-the top of `memory/learnings.md` and other learnings at the top of the log. The runner turns off each harness's own memory on the
-computer, so nothing steers a bot from outside its repository: Claude Code's auto memory
-(`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` on every turn, not only for bots with branches), Codex's memories
+the top of `memory/learnings.md` and other learnings at the top of the log. Nothing steers a bot from outside its repository: Claude Code's
+auto memory is kept in the repository's `memory/claude/` (`autoMemoryDirectory`, set by the runner; a stateless bot or a
+private meeting's copy keeps none, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`), and the runner turns off Codex's memories
 (`features.memories = false` on every thread) and the Gemini CLI's `save_memory` tool; a GEMINI.md the CLI saved
 before is set aside before each turn, so no turn loads it.
 
-What a bot saved there before is not lost. Before each turn, in whichever checkout it runs (its own or a task's
-worktree), the runner copies what the checkout lacks of it into a "Working rules from Claude's memory on this
-computer" section near the top of `memory/learnings.md`: each Claude memory with its whole text, whatever
-`MEMORY.md` says beyond its links to them, and Gemini's saved memory. Each entry names its source, so a retry never
-copies twice, while a same-named memory with other text, from another computer the bot ran on, is still copied; if
-a source can't be read, nothing is copied. A flat log after it gets a `## Log` heading. A task turn's closing commit
-keeps the copy; in the bot's own checkout its next memory commit does. The move is finished once the repository's
-pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
-that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
+Before 0.6.0-rc.1 a bot's AI tool kept its memory on the computer: Claude's auto memory under the bot's home (`.claude/projects/<checkout>/memory/`) and the Gemini CLI's saved memory (`.gemini/GEMINI.md`). The 0.6.0-rc.1 runner copied those into `memory/learnings.md` until each bot had it in its pushed history. The runner no longer copies them; the files stay where they are, unread (Gemini's are set aside as `GEMINI.unread.md`; `runner-rs/src/bot_files.rs`).
 
 Several checkouts and turns of one bot write the same repository, so its commits often land behind what another
 pushed. The runner rebases them onto the remote and pushes again; where both sides added lines to the same spot of
@@ -94,11 +86,11 @@ waits for the answer. A stateless bot keeps no memory and has nothing
 to dream about (409).
 
 A dream is an ordinary task (`backend/dream.py`): the bot owns it, the person who clicked asked for it, it carries the
-label `dream`, and its body is the instructions. Starting one takes the rights to give the bot a task and goes through
+label `dream`, and its instructions reach the bot through its run (like a routine's), never as a chat message. Starting one takes the rights to give the bot a task and goes through
 the same checks as any task create; while one is open, starting again returns it (or 409 `busy`, without its
 questions, to someone who may not read the bot). Starting one also records a `dream.start` event on the task; that
 event, not the label, is what makes a task a dream, since anyone can label a task `dream`. It runs as a task turn with the
-bot's own model, and its session resumes after the question. The question is the task's one ask (`tico_task_ask`); ask
+bot's own model, and its session resumes after the question. The question is the task's one ❓ (`tico_task_ask`); ask
 ingest never judges it, since the person started the dream to be asked. They answer it in the panel, on the bot's
 page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. While it works, the bot keeps
 the task note at one short line on what it is doing now, and the panel shows that line and how long the dream has run
@@ -114,7 +106,7 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 A bot is in need when it is active, keeps memory, has no dream job waiting and no open dream, its last dream of either
 kind started at least 48 hours ago (a bot that never dreamed must be 48 hours old), and its work since that dream's start,
 or 14 days back if that is later, is at least 10: its finished turns (a dream's own left out), plus five for each
-correction by a person (a thumbs-down on its work, or an org rule that applies to it added, changed or retired by a
+correction by a person (an org rule that applies to it added, changed or retired by a
 person). Memory diffs do not count. A person's edit to the bot's instructions does not count yet: the runner reports
 only `memory/` and `knowledge/` commits, and one with no known run may be Tico's own as well as a person's. At most "Most bots per
 run" are queued a run (three by default), most need first; a bot whose dream is still waiting is skipped, so it never
@@ -128,11 +120,12 @@ that ran. `backend/dream_auto.py` holds the rule.
 
 The requester is the bot's nearest human manager (the first person above it in its reporting chain, if still on the
 roster), else the company owner. The task is filed as a dream, with a `dream.auto` event under the system actor and
-its reason ("Auto dream: 23 turns and 2 corrections from people since 2026-10-28") as the first line of its body. The
+its reason ("Auto dream: 23 turns and 2 corrections from people since 2026-10-28") as the first line of its instructions. The
 panel shows that reason under the status line. Its instructions say nobody is waiting: the bot applies and commits what
-it can settle, and only if it needs the requester it asks at most three business questions in one message, then makes a
-second commit when they are answered. The requester did not start the dream, so the question is what they answer, and
-it goes through the same exemption from ask ingest. **Automations › Maintenance** switches it off. Its **Run now** starts
+it can settle, commits, and finishes without waiting. Only if it needs the requester does it ask, at most three business
+questions, each its own task with one question (`skills/add-to-flow`), never on the dream: they reach the requester's Flow
+like any bot's question, with a plain title instead of the dream's instructions, and the answer reaches the bot on that
+task. A dream a person starts still asks on the dream itself, answered on the panel. **Automations › Maintenance** switches it off. Its **Run now** starts
 the Dream step only when that step is due, as the schedule does; the bot rules above still apply.
 
 ## Learn (beta)

@@ -90,9 +90,17 @@ function rdqTilesHtml(data: MktSpend | null | undefined, revenue: RdqMoney): str
   return out.length ? `<div class="mkt-tiles">${out.join('')}</div>` : '';
 }
 
-function rdqSection(key: string, title: string, answer: string | undefined, more: string, body: string): string {
+// `needs`: the section waits on the person (its Flow mark beside the heading).
+function rdqSection(key: string, title: string, answer: string | undefined, more: string, body: string, needs = false): string {
   return `<section class="mkt-q" id="mkt-q-${key}" aria-labelledby="mkt-qh-${key}">
-    <div class="mkt-qh"><h3 id="mkt-qh-${key}">${title}</h3>${answer ? `<p class="mkt-ans">${esc(answer)}</p>` : ''}${more ? `<span class="mkt-more">${more}</span>` : ''}</div>${body}</section>`;
+    <div class="mkt-qh"><h3 id="mkt-qh-${key}">${title}${needs ? needsMarkHTML(14) : ''}</h3>${answer ? `<p class="mkt-ans">${esc(answer)}</p>` : ''}${more ? `<span class="mkt-more">${more}</span>` : ''}</div>${body}</section>`;
+}
+// Whether the sizing waits on the owner (nothing asked yet, or the Librarian's question): the section says so, and
+// stops once it is asked or answered. Market's tab carries the setup gap instead (setup-gaps.ts).
+function rdqSizingNeeds(shell: HTMLElement, needs: boolean): void {
+  const head = shell.querySelector('#mkt-qh-money'), mark = head?.querySelector('.needs-mark');
+  if (needs && head && !mark) head.insertAdjacentHTML('beforeend', needsMarkHTML(14));
+  if (!needs) mark?.remove();
 }
 
 // The briefing's items, each with its kind and the bets it touches; with none, its headline.
@@ -188,7 +196,10 @@ async function mountMarketPage(shell: HTMLElement) {
   const briefing = latest?.briefing || null, answers: RdqAnswers = briefing?.answers || {};
   const revenue = rdqRevenue(offering);
   const name = [offering?.name, offering?.definition?.geography].filter(Boolean).join(', ');
-  const sized = mktSized(offering) || mktSized(buyer), sizing = !sized && !!offering && mktOwner();
+  // The owner sizes an unsized market here, and changes the market's sentence sized or not; an open sizing task shows
+  // its state (GET /v2/market/spend `sizing`).
+  const sized = mktSized(offering) || mktSized(buyer), owner = !!offering && mktOwner(), sizing = !sized && owner;
+  const asking = offering?.sizing || null, needs = (sizing && !asking) || !!asking?.ask;
   const players = rdqPlayersHtml(offering, companies, briefing, revenue);
   const reach = mktChainHtml(chain, rdqChainMoney(offering, buyer, revenue));
   const heard = !!stats && ((stats.recent || []).length > 0 || (stats.daily || []).some(d => Object.values(d.sources || {}).some(Boolean)));
@@ -197,7 +208,7 @@ async function mountMarketPage(shell: HTMLElement) {
   const sections = [
     briefing && rdqSection('changed', 'What changed?', answers.changed,
       `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>`, rdqChangedHtml(briefing)),
-    (sized || sizing) && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-money"></div>'),
+    (sized || sizing) && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-sizing"></div><div id="mkt-money"></div>', needs),
     players && rdqSection('players', 'Who are we up against?', answers.players, tracked ? `${tracked} tracked` : '', players),
     reach && rdqSection('reach', 'How does it reach buyers?', answers.reach, '', reach),
     saying && rdqSection('saying', 'What are buyers saying?', answers.saying,
@@ -205,7 +216,7 @@ async function mountMarketPage(shell: HTMLElement) {
   ].filter(Boolean);
   const tiles = rdqTilesHtml(offering, revenue);
   // One title: the Strategy header's. Open map and the market's Definition (which names the market) are in its ⋯.
-  shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
+  shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet</p>')}</div>`;
   const moneyEl = shell.querySelector<HTMLElement>('#mkt-money');
   const money = sized && moneyEl ? mktSpend(moneyEl, {offering, buyer}) : null;
   // The header beside this shell, only while it is still in the page: a slow read that lands after the person left
@@ -218,7 +229,8 @@ async function mountMarketPage(shell: HTMLElement) {
     const open = head.querySelector<HTMLElement>('.ph-menu [data-mkt-def]');
     if (open) open.onclick = () => { if (money) money.definition(name); else mktDefinitionOpen(def, name); };
   }
-  if (sizing && moneyEl) mktSizeForm(moneyEl, offering?.definition?.description);
+  const sizingEl = shell.querySelector<HTMLElement>('#mkt-sizing');
+  const card = sizingEl && (owner || asking) ? mktSizing(sizingEl, offering, {form: owner, sized, needs: n => rdqSizingNeeds(shell, n)}) : null;
   const chainEl = shell.querySelector<HTMLElement>('.mkt-chain');
   if (chainEl && chain) mktChainBind(chainEl, chain.edges);
   shell.onclick = ev => {
@@ -236,7 +248,7 @@ async function mountMarketPage(shell: HTMLElement) {
       if (target) target.scrollIntoView({block: 'start'});
       else shell.scrollTop = 0;
     },
-    stop() { money?.stop(); },
+    stop() { money?.stop(); card?.stop(); },
   };
 }
 

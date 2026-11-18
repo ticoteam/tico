@@ -36,22 +36,6 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 53,
-                    "endColumn": 56,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 37,
-                    "endColumn": 40,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
                     "startColumn": 89,
                     "endColumn": 92,
                     "lineCount": 1

@@ -16,6 +16,7 @@ instance:
     <root>/companies/<slug>/.env            0600, the server's settings
     <root>/companies/<slug>/compose.yaml    the stock compose.yaml, unchanged
     <root>/companies/<slug>/compose.cell.yaml   memory limit, data folder, networks: what makes it one of many
+                                            (and the same for its Slack gateway, when `set-slack` turned it on)
     <root>/companies/<slug>/extra.env       0600, settings carried from an install moved here (`add --env-file`)
     <root>/companies/<slug>/company.json    what the cell knows about it (no secrets): port, index, version, state,
                                             aliases
@@ -60,6 +61,14 @@ refused and named in "ignored"); `--import-data` unpacks its /data archive, chec
 `..`, no symlinks, hard links only to its own files, no special files), into an empty data folder before the first
 start, through a staging folder renamed into place.
 
+A company's Slack gateway (compose.yaml's `slack` service, docs/slack.md) is off until staff turn it on with `set-slack
+--company <slug> on`, which the record keeps (`slack`), so every later `add` and `update` writes it again: the .env's
+COMPOSE_PROFILES is then `slack` (else empty, as for every other company), and compose.cell.yaml gives the gateway
+what it gives the server: a memory limit, the company's own data folder in place of the stock volume, its label, and
+the company's own default network (the stock service is on no other). It never mounts control/, so it cannot read the
+updater token. It writes the database itself, so every stop that protects the database (`update`, `sleep`, `stop`, a
+rollback) stops it with the server, and Docker must say both are stopped.
+
 All Docker and system calls go through one `System`, so the tests run every command with a fake.
 """
 
@@ -97,13 +106,17 @@ from .ui import MissingInput
 ROOT = "/srv/tico-cell"
 SERVER_IMAGE = "ghcr.io/ticoteam/tico"
 # The same pinned images compose.yaml uses for the single-company front doors (a test keeps them equal).
-ROUTER_IMAGE = "caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b"
-TUNNEL_IMAGE = "cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf"
+ROUTER_IMAGE = "caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0"
+TUNNEL_IMAGE = (
+    "cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d"
+)
 ROUTER_ADDRESS, ROUTER_PORT = "127.0.0.1", 8080
 ROUTER_CONTAINER, EDGE_PROJECT = "tico-cell-router", "tico-cell"
 ROUTER_HEALTH_HOST, ROUTER_HEALTH_PATH = "cell-health.invalid", "/cell-healthz"
 PROJECT_PREFIX = "tico-"
 LABEL = "tico.cell.company"
+SERVER_SERVICE, SLACK_SERVICE = "server", "slack"  # compose.yaml's service names: the server, its Slack gateway
+SLACK_MEMORY = "1g"  # the Slack gateway's memory limit: one Python process with an outbound websocket
 SERVER_UID = 10001  # the server image's user (Dockerfile)
 TUNNEL_UID = 65532  # cloudflared's image runs as nonroot (uid and gid 65532)
 
@@ -176,7 +189,6 @@ CELL_ENV_KEYS = frozenset(
         "TICO_COMPANY_FILE_S3",
         "TICO_COMPANY_FILE_S3_REGION",
         "TICO_COMPANY_FILE_DIR",
-        "TICO_SAMPLE_COMPANY",
         "TICO_UPDATES",
         "TICO_CELL",
         "TICO_HOSTED",
@@ -240,7 +252,7 @@ WAKE_HEADER = "X-Tico-Cell-Wake"
 WAKE_UNIT = "etc/systemd/system/tico-cell-wake.service"
 WAKE_SERVICE = "tico-cell-wake.service"
 # The hold: a dial to a server that is down (restarting, updating) is tried again, not answered with a 502. A request
-# with a body is retried with its body from Caddy 2.11 on (ROUTER_IMAGE is 2.11.4); 2.10 closed the body after the
+# with a body is retried with its body from Caddy 2.11 on. Caddy 2.10 closed the body after the
 # first failed dial, so such a request got the 503. No request_buffers: in 2.10.2 it mixed up concurrent bodies.
 HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 # A config reload (every add, remove, sleep and wake) leaves open WebSockets this long before closing them.
@@ -621,6 +633,10 @@ def parser() -> Parser:
     h.add_argument("--company", required=True, metavar="SLUG")
     h.add_argument("--host", required=True, help="such as acme.tico.page; \"\" clears it (the folder is kept)")
     h.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
+    k = cmd("set-slack", "a company's Slack gateway (docs/slack.md) on or off; off until turned on, kept in its record")
+    k.add_argument("--company", required=True, metavar="SLUG")
+    k.add_argument("state", choices=["on", "off"])
+    k.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -996,12 +1012,30 @@ def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
         else []
     )
     mount = [f"      - {pages}:{PAGE_MOUNT}"] if c.get("page_host") and pages else []
+    # The Slack gateway, when it is on: the server's limits with a memory limit of its own, and the data folder only
+    # (no control/: the updater token is the server's alone). It stays on the company's default network.
+    slack = (
+        [
+            f"  {SLACK_SERVICE}:",
+            f"    mem_limit: {SLACK_MEMORY}",
+            f"    memswap_limit: {SLACK_MEMORY}",
+            "    environment:",
+            "      TICO_CELL:",
+            "    labels:",
+            f"      {LABEL}: {c['slug']}",
+            "    volumes:",
+            f"      - {data_dir}:/data",
+        ]
+        if c.get("slack")
+        else []
+    )
     return (
         "\n".join(
             [
                 "# Written by `python3 -m setup cell`: what makes the stock compose.yaml beside it one company of many on a",
                 "# shared host. Its own data and control folders, a memory limit, its own two networks (so none collide), the",
-                "# cell marker, a label for `list`, and its page folder when it has a page host.",
+                "# cell marker, a label for `list`, and its page folder when it has a page host; the same for its Slack",
+                "# gateway when it is on.",
                 "services:",
                 "  server:",
                 f"    mem_limit: {c['memory']}",
@@ -1015,6 +1049,7 @@ def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
                 f"      - {data_dir}:/data",
                 f"      - {data_dir.parent / 'control'}:/control",
                 *mount,
+                *slack,
                 "networks:",
                 "  default:",
                 "    ipam:",
@@ -1035,9 +1070,14 @@ def updater_url(index: int) -> str:
 
 def cell_env(values: dict[str, str], c: dict) -> dict[str, str]:
     """`values` (a company's .env) with the cell's updater keys: its updater's address and the cell marker, and no
-    TICO_UPDATES=tico, which an older core wrote (it turns Update now and the update keys off)."""
+    TICO_UPDATES=tico, which an older core wrote (it turns Update now and the update keys off). COMPOSE_PROFILES comes
+    from the record: `slack` when its Slack gateway is on, else none."""
     out = {k: v for k, v in values.items() if k != "TICO_UPDATES"}
-    out.update(TICO_UPDATER_URL=updater_url(c["index"]), TICO_CELL="1")
+    out.update(
+        TICO_UPDATER_URL=updater_url(c["index"]),
+        TICO_CELL="1",
+        COMPOSE_PROFILES=SLACK_SERVICE if c.get("slack") else "",
+    )
     return out
 
 
@@ -1205,8 +1245,14 @@ class Cell:
             *args,
         ]
 
-    def containers(self, slug: str = "") -> dict[str, dict]:
-        """{slug: {"state", "health"}} for the cell's server containers, from one `docker ps`."""
+    def containers(self, slug: str = "", service: str = SERVER_SERVICE) -> dict[str, dict]:
+        """{slug: {"state", "health"}} for the cell's containers of one Compose service (the servers by default; a Slack
+        gateway carries the same label), from one `docker ps`."""
+        return {s: row for (s, svc), row in self.labelled(slug).items() if svc == service}
+
+    def labelled(self, slug: str = "") -> dict[tuple[str, str], dict]:
+        """{(slug, service): {"state", "health"}} for every container with the cell's label, from one `docker ps`. A row
+        without a Compose service label is a server (a container made by hand)."""
         flt = f"label={LABEL}" + (f"={slug}" if slug else "")
         r = self.run(["docker", "ps", "-a", "--filter", flt, "--format", "{{json .}}"], "docker_failed", "docker ps")
         out = {}
@@ -1228,7 +1274,8 @@ class Cell:
                 else ""
             )
             if name:
-                out[name] = {"state": str(row.get("State", "")), "health": health}
+                service = labels.get("com.docker.compose.service") or SERVER_SERVICE
+                out[(name, service)] = {"state": str(row.get("State", "")), "health": health}
         return out
 
     def state_of(self, c: dict, ps: dict) -> str:
@@ -1388,12 +1435,18 @@ class Cell:
         self.pull(version)
         self.run(self.compose(slug, "up", "-d", "--remove-orphans"), "docker_failed", "docker compose up")
 
+    def services(self, slug: str) -> list[str]:
+        """What has the company's database open: its server, and its Slack gateway when that is on (gateway first)."""
+        return [SLACK_SERVICE, SERVER_SERVICE] if (self.load(slug) or {}).get("slack") else [SERVER_SERVICE]
+
     def ensure_stopped(self, slug: str) -> None:
-        """Stop the server, then make sure Docker says it is not running: nothing touches its database before that."""
-        self.run(self.compose(slug, "stop", "server"), "stop_failed", "docker compose stop")
-        state = self.containers(slug).get(slug, {}).get("state", "")
-        if state not in STOPPED:
-            raise CellError("stop_failed", f"the server is still {state} after docker compose stop")
+        """Stop the server (and its Slack gateway), then make sure Docker says none of the company's containers runs:
+        nothing touches its database before that."""
+        self.run(self.compose(slug, "stop", *self.services(slug)), "stop_failed", "docker compose stop")
+        for (_, service), row in sorted(self.labelled(slug).items()):
+            if row["state"] not in STOPPED:
+                what = "the server" if service == SERVER_SERVICE else f"its {service} container"
+                raise CellError("stop_failed", f"{what} is still {row['state']} after docker compose stop")
 
     def launch(self, c: dict, started: float, timeout: int, between=None) -> int:
         """Run c's release (`between` runs once it is up, before the wait) and wait for /healthz. While an update is
@@ -1771,6 +1824,8 @@ class Cell:
                 sleep_minutes = sleep_minutes if sleep_minutes is not None else (old or {}).get("sleep_minutes")
                 if sleep_minutes is not None:
                     c["sleep_minutes"] = sleep_minutes
+                if (old or {}).get("slack"):  # set only by `set-slack`; add keeps it
+                    c["slack"] = True
                 if (old or {}).get("pending"):  # an update not yet seen healthy: this start is still guarded by it
                     c["pending"] = old["pending"]
                 if plan is None and (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).exists():
@@ -2025,6 +2080,7 @@ class Cell:
                     "memory": c["memory"],
                     "state": self.state_of(c, ps),
                     **({"page_host": c["page_host"]} if c.get("page_host") else {}),
+                    **({"slack": True} if c.get("slack") else {}),
                 }
                 for c in self.companies()
             ],
@@ -2032,7 +2088,8 @@ class Cell:
 
     def status(self, args) -> dict:
         c = self.company(args.company)
-        ps = self.containers(c["slug"])
+        rows = self.labelled(c["slug"])
+        ps = {s: row for (s, svc), row in rows.items() if svc == SERVER_SERVICE}
         state = self.state_of(c, ps)
         # A sleeping company is not probed: through the router, that would wake it.
         healthy = (
@@ -2050,6 +2107,11 @@ class Cell:
             "healthy": healthy,
             "container": ps.get(c["slug"], {"state": "", "health": ""}),
             **({"page_host": c["page_host"], "page_url": f"https://{c['page_host']}"} if c.get("page_host") else {}),
+            **(
+                {"slack": True, "slack_container": rows.get((c["slug"], SLACK_SERVICE), {"state": "", "health": ""})}
+                if c.get("slack")
+                else {}
+            ),
         }
 
     def live(self, slug: str) -> dict:
@@ -2159,7 +2221,7 @@ class Cell:
                 ready = self.launch(c, started, timeout)
             except CellError as e:
                 if e.code != "update_failed":
-                    self.system.run(self.compose(slug, "stop", "server"))
+                    self.system.run(self.compose(slug, "stop", *self.services(slug)))
                     raise
                 failed, ready = e, int((self.system.monotonic() - started) * 1000)
             finally:
@@ -2250,6 +2312,45 @@ class Cell:
             if changed:
                 self.save(c)
         return {"ok": True, "company": slug, "sleep_minutes": minutes, "changed": changed}
+
+    def set_slack(self, args) -> dict:
+        """The company's Slack gateway on or off (docs/slack.md), kept in its record so every later `add` and `update`
+        writes it again. On: COMPOSE_PROFILES=slack and the gateway's block in compose.cell.yaml; a running company
+        starts it (its server's own config does not change, so the server is not recreated), and a stopped or sleeping
+        one starts it with its server. Off: the gateway's container is stopped and removed first (a failure changes
+        nothing), then the files are written as for any other company. Asked again, it only redoes what differs."""
+        started = self.system.monotonic()
+        slug = check_slug(args.company)
+        on = args.state == "on"
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            d = self.dir(slug)
+            env_text = _read(d / ".env")
+            self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
+            if not on:
+                # Named with its profile, so Compose finds it whatever .env says now.
+                self.run(
+                    self.compose(slug, "--profile", SLACK_SERVICE, "rm", "--stop", "--force", SLACK_SERVICE),
+                    "docker_failed",
+                    "removing the Slack gateway",
+                )
+            changed = bool(c.get("slack")) != on
+            if on:
+                c["slack"] = True
+            else:
+                c.pop("slack", None)
+            files = self.write_compose(c)
+            env = _with_tag(env_text, c["version"], self.extra_env(slug), c)
+            files = _write_atomic(d / ".env", env, 0o600) or files
+            if changed:
+                self.save(c)
+            ready = 0
+            if on and c.get("state") == "running":
+                gateway = self.containers(slug, SLACK_SERVICE).get(slug, {}).get("state")
+                if files or gateway != "running":
+                    ready = self.launch(c, started, args.timeout)
+                    changed = True
+        return {"ok": True, "company": slug, "slack": on, "changed": changed or files, "ready_ms": ready}
 
     def update(self, args) -> dict:
         """Another release, with the database safe first. The image is pulled before anything changes (a release that

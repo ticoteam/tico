@@ -10,38 +10,14 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import bot_settings as BS
+from backend import question_marks
 from backend import reach
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.reach_nearby import chart, nearby_default  # noqa: F401  (the shipped reach default)
 from backend.tests.helpers.task_caps import as_bot
 import pytest
-
-
-@pytest.fixture(autouse=True)
-def nearby_default(monkeypatch):
-    """conftest.py starts other tests' bots open; these test the shipped default."""
-    monkeypatch.delenv("TICO_REACH_DEFAULT", raising=False)
-
-
-def chart(api):
-    with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster["org_groups"] = {"product": {"name": "Product"}}
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
-        for bot, boss, team in (
-            ("cpo", "human:ben", "product"),
-            ("product-design", "cpo", "product"),
-            ("finance", "cpo", ""),
-            ("ops", "product-design", ""),
-            ("doc-updater", None, "product"),
-        ):
-            c.execute("UPDATE bot_config SET reports_to=?, team=? WHERE bot=?", (boss, team, bot))
-            BS.update(c, bot, {"team": team})
-        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
-        c.execute("INSERT INTO bot_config(bot, team, owner_id) VALUES('scout', '', 'ana')")
-    as_bot(api, "product-design", "pd-test")
-    as_bot(api, "doc-updater", "doc-test")
 
 
 def ctx(api):
@@ -61,13 +37,14 @@ def task(api, token, owner, title="Draft the launch note", expected=200, **extra
 
 
 def wait_on_cara(c, task_id):
-    """Ben, who handed the task over, asks Cara on it: she is one it waits on, and so one it is shared with."""
+    """Ben, who handed the task over, asks Cara to OK it: she is one it waits on, and so one it is shared with."""
     H.task_ask(
         c,
         "human:ben",
         task_id,
         "human:cara",
-        "Can you check the launch note before it goes out?",
+        "OK the launch note before it goes out?",
+        kind="ok",
         seen_version=H.task(c, task_id)["version"],
     )
 
@@ -592,6 +569,43 @@ def test_a_bot_two_levels_down_may_answer_a_person_who_came_to_it_or_handed_it_t
     task(api, "ops-test", "human:ben", title="Unrelated", expected=409)
 
 
+def test_a_closed_bot_still_reaches_its_own_manager_unless_a_line_blocks_the_pair(api):
+    chart(api)
+    r = api.put("/api/v2/reach/settings/*", json={"mode": "closed"}, headers=headers())
+    assert r.status_code == 200, r.text
+    found = ctx(api)
+    assert reach.decide(found, "bot:product-design", "bot:cpo").why == "manager"
+    assert reach.decide(found, "bot:cpo", "human:ben").why == "manager"
+    assert reach.decide(found, "bot:product-design", "bot:finance").why == "reach_closed"  # a peer is not
+    capped = reach.decide(found, "bot:product-design", "bot:cpo", count=lambda scope: 999)
+    assert capped.why == "reach_cap"
+    r = api.post(
+        "/api/v2/reach/lines",
+        json={"sender": "bot:product-design", "receiver": "bot:cpo", "per_day": 0},
+        headers=headers(),
+    )
+    assert r.status_code == 200, r.text
+    assert reach.decide(ctx(api), "bot:product-design", "bot:cpo").why == "reach_line"
+
+
+def test_a_bot_asks_the_person_who_pinged_it_for_a_day(api):
+    two_levels_down(api)
+    mine = task(api, "ops-test", "bot:ops", title="A question for Ben")
+
+    def ask():  # a ❓ on its task's chat, checked against its reach as any ask to a person is
+        with api.app.state.store.transaction() as c:
+            question_marks.ask(c, "bot:ops", mine["id"], "human:ben", "Which launch date do you want?")
+
+    with pytest.raises(reach.Refused):
+        ask()
+    with api.app.state.store.transaction() as c:  # the ping route's message (backend/flow_ping.py)
+        H.say(c, "human:ben", "bot:ops", "Any questions for me?", refs={"add_to_flow": True})
+    ask()
+    with api.app.state.store.read() as c:
+        day_later = (datetime.now(timezone.utc) + timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        assert not reach.pinged(c, "bot:ops", "human:ben", before=day_later)
+
+
 def test_a_direct_report_reaches_the_owner_and_other_people_stay_closed(api):
     chart(api)
     with api.app.state.store.transaction() as c:
@@ -639,9 +653,9 @@ def test_a_task_for_the_person_goes_through_the_manager_who_passes_it_on_and_the
 
 
 def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
-    """Finance and Ops share no manager and no team. Finance drafts, the pipeline hands the task to Ops, and Ops asks
-    Finance about the draft on that task: the bot that worked it before is one the task is shared with. Off the task,
-    Finance stays out of Ops's reach."""
+    """Finance and Ops share no manager and no team. Finance drafts, the pipeline hands the task to Ops, and Ops writes
+    to Finance about the draft on that task (as an ask on it was checked: reach.check with the task): the bot that
+    worked it before is one the task is shared with. Off the task, Finance stays out of Ops's reach."""
     from backend.tests.helpers import engine as X
 
     chart(api)
@@ -664,10 +678,6 @@ def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
     with api.app.state.store.read() as c:
         now = H.task(c, copy["id"])
     assert now["owner_id"] == "bot:ops"
-    r = api.post(
-        f"/api/v2/tasks/{copy['id']}/asks",
-        json={"to": "bot:finance", "line": "Which figure is the launch price?", "version": now["version"]},
-        headers=headers("ops-test"),
-    )
-    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:  # on the task: passes (raises nothing)
+        reach.check(c, Identity("bot:ops", "bot", agent="test"), "bot:finance", "task", task_id=copy["id"])
     task(api, "ops-test", "bot:finance", title="Something new for Finance", expected=409)

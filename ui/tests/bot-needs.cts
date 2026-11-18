@@ -67,13 +67,12 @@ const T = {
 };
 // Needs you as the hub sends it: an ask (with who asked) or a task of hers, each with its task.
 type Need = {kind: 'ask' | 'task'; id: string; task_id: string; requirement_id: string | null; line: string; since: string; task: Task;
-  ask?: {requirement_id: string; kind: 'answer' | 'ok'; line: string; met: boolean; who: string; asked_by: string; choices: string[] | null; shows: []; answer: null; may: string[]}};
-const askNeed = (t: Task, kind: 'answer' | 'ok' = 'answer', choices: string[] | null = ['Yes', 'No']): Need => ({kind: 'ask', id: t.turn!.requirement_id!,
-  task_id: t.id, requirement_id: t.turn!.requirement_id!, line: t.turn!.line, since: ago(30), task: t, ask: {requirement_id: t.turn!.requirement_id!, kind,
-  line: t.turn!.line, met: false, who: 'human:ana', asked_by: 'bot:lead', choices: kind === 'ok' ? null : choices, shows: [], answer: null,
-  may: kind === 'ok' ? ['ok', 'no'] : ['answer']}});
+  ask?: {requirement_id: string; kind: 'ok'; line: string; met: boolean; who: string; asked_by: string; shows: []; answer: null; may: string[]}};
+const askNeed = (t: Task): Need => ({kind: 'ask', id: t.turn!.requirement_id!,
+  task_id: t.id, requirement_id: t.turn!.requirement_id!, line: t.turn!.line, since: ago(30), task: t, ask: {requirement_id: t.turn!.requirement_id!, kind: 'ok',
+  line: t.turn!.line, met: false, who: 'human:ana', asked_by: 'bot:lead', shows: [], answer: null, may: ['ok', 'no']}});
 const taskNeed = (t: Task): Need => ({kind: 'task', id: t.id, task_id: t.id, requirement_id: null, line: t.turn!.line, since: ago(30), task: t});
-const NEEDS: Need[] = [askNeed(T.asked), taskNeed(T.forAna), askNeed(T.waits), askNeed(T.friday), askNeed(T.announce, 'ok'),
+const NEEDS: Need[] = [askNeed(T.asked), taskNeed(T.forAna), askNeed(T.waits), askNeed(T.friday), askNeed(T.announce),
   taskNeed(task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', turn: {state: 'person', who: 'human:ana', line: 'Ana to do it'}}))];
 const needsOf = (bot: string) => NEEDS.filter(n => n.task.requester_id === bot || n.ask?.asked_by === bot);
 
@@ -153,6 +152,9 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
           ...(key === 'needs' ? {matched_ids: rows.filter(t => requested.includes(t.id)).map(t => t.id)} : {})})), tasks: all});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
+      // A task's read names its thread: Flow answers an ask in its chat (decide.ts decideChatMount).
+      const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/), known = one ? Object.values(T).find(t => t.id === one[1]) : undefined;
+      if (known) return json({task: {...known, conversation_id: 'c-' + known.id}});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -192,10 +194,10 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.ok(!(await titles('#t-open')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-blocked')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-c4')).includes('Pick the release day'));
-    // An OK or a question opens its Needs you card over the rail; nothing unfolds in the rail.
+    // An ask opens its Needs you card over the rail; nothing unfolds in the rail.
     assert.equal(await rail.locator('#t-needs details').count(), 0);
     await rail.locator('#t-needs .tk-row', {hasText: 'Send the announcement'}).click();
-    await page.locator('#need-card [data-key="r-announce"] .dc-q', {hasText: 'OK the announcement'}).waitFor();
+    await page.locator('#need-card .dc-q', {hasText: 'OK the announcement'}).waitFor();   // the ask, the last message in its task's chat
     assert.equal(await page.evaluate(() => location.hash), '#/bot/lead/tasks', 'the rail stays where it was');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);
@@ -244,12 +246,13 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
       'Send the announcement', 'Turn on the screen default', 'Ship the release notes']);
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
 
-    // Blocked: its open tasks whose turn is someone else's (not its own, not Ana's); each row's line says what it waits on.
+    // Blocked: its open tasks whose turn is someone else's (not its own, not Ana's); each row names its owner (task-row.ts)
+    // and its line says what it waits on.
     await show('blocked');
     assert.deepEqual(await titles('#t-blocked'), ['Renew the domain', 'Merge the export fix']);
     const tips = await rail.locator('#t-blocked .tk-row').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.tip || ''));
     assert.match(tips[0]!, /Waiting for the vendor's invoice\.$/, tips[0]);
-    assert.match(tips[1]!, /^QA Engineer · Waits on QA Engineer$/, tips[1]);
+    assert.match(tips[1]!, /^Head of Engineering · Waits on QA Engineer$/, tips[1]);
 
     // Done recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
     // tab opens, 50 rows at a time (paging, at the end).
@@ -274,12 +277,12 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
     await page.evaluate(() => { const r = document.querySelector<HTMLElement>('#pane-tasks')!; r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
 
-    // A half-typed answer on a question's card survives a redraw of the rail, and the picked tab stays.
+    // A half-typed reply in an ask's chat survives a redraw of the rail, and the picked tab stays.
     await tab('needs').click();
     await rail.locator('#t-needs .tk-row', {hasText: 'Plan the weekly summary'}).click();
-    await page.locator('#need-card [data-key="r-friday"] #dc-other').fill('Friday works');
+    await page.locator('#need-card .dc-chat .p-text').fill('Friday works');
     await page.evaluate(() => botNeedsChanged('lead'));
-    assert.equal(await page.locator('#need-card #dc-other').inputValue(), 'Friday works');
+    assert.equal(await page.locator('#need-card .dc-chat .p-text').inputValue(), 'Friday works');
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true');
     await page.locator('#need-card [data-dc="close"]').click();
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);

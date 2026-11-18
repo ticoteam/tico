@@ -19,8 +19,8 @@ One baseline file per source file keeps two PRs that convert different UI files 
 deletes its own baseline files and changes its own script tag, and ui/index.html keeps a blank line between script tags,
 so git's three-way merge (GitHub's merge queue runs no custom merge drivers) keeps the two edits apart.
 
-Findings under ui/vendor/ are third-party code that a type-checked module imports (ui/overview/building.ts imports
-three.js); tsc reads them, so they are dropped here, not counted.
+Findings under ui/vendor/ are third-party code, which tsc reads only when a type-checked module imports it; they are
+dropped here, not counted.
 
 Findings in a .ts file are dropped too: a TypeScript file is governed by the strict ratchet alone
 (scripts/check_ui_strict.py, one count per file under ui/baselines/strict/), so no file is gated twice.
@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", "ui/tsconfig.json", "--pretty", "false"]
+TSC = ["node", str(ROOT / "node_modules/typescript/bin/tsc"), "-p", "ui/tsconfig.json", "--pretty", "false"]
 TSC_LINE = re.compile(r"^(?P<file>[^()\n]+)\((?P<line>\d+),(?P<col>\d+)\): error (?P<code>TS\d+): (?P<msg>.*)$")
 TSC_GLOBAL = re.compile(r"^error (?P<code>TS\d+): (?P<msg>.*)$")
 VENDOR = "ui/vendor/"
@@ -88,7 +88,8 @@ def run_tsc():
     # A failing run with no diagnostic at all crashed. Findings in .ts files count too: the strict ratchet owns them.
     if done.returncode not in (0, 1, 2) or (done.returncode != 0 and not diagnostics):
         fail(f"tsc exited {done.returncode} without diagnostics:\n{done.stdout}{done.stderr}")
-    return findings, "tsc " + TSC[3].split("@")[1]
+    pinned = json.loads((ROOT / "package.json").read_text())["devDependencies"]["typescript"]
+    return findings, f"tsc {pinned}"
 
 
 def biome_command():
@@ -245,7 +246,7 @@ def print_top(counts, total_files):
 
 
 def base_name(file, old):
-    """The name a file had at the base ref: a .ts file that renamed a .js file (scripts/ui_flip.py) keeps the .js count."""
+    """The name a file had at the base ref: a .ts file that renamed a .js file keeps the .js count."""
     if file.endswith(".ts") and file not in old and file[:-3] + ".js" in old:
         return file[:-3] + ".js"
     return file

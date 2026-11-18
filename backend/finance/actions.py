@@ -311,7 +311,7 @@ def _release(c: sqlite3.Connection, name: str) -> None:
 
 
 def _requester(c: sqlite3.Connection, who: str) -> str:
-    """Who the OK is asked by: the teammate, or the keeper for system work."""
+    """Who the OK is asked by: the teammate, or Tico for system work."""
     return who if who != O.SYSTEM and tico.known_actor(c, who) else "keeper"
 
 
@@ -1003,6 +1003,8 @@ gateway_ensure = gateway_sync.ensure
 gateway_stop = gateway_sync.stop
 banking_start = sync.start
 use_vault = tico.use_vault
+may_use_credential = tico.may_use_credential
+KEY_NOT_YOURS = banking.KEY_NOT_YOURS
 BANK_FIELDS = payments.BANK_FIELDS
 banking_ensure = sync.ensure
 banking_stop = sync.stop
@@ -1037,7 +1039,7 @@ def watch(
     at: str | None = None,
 ) -> ActionResult:
     """A Tico rule's Finance action (spec §6.1 watch rules), run as an ordinary action by the rule's maker under that
-    rule, so it gets exactly the maker's rights and gates. A keeper-made rule acts as Finance itself (system work,
+    rule, so it gets exactly the maker's rights and gates. A Tico-made rule acts as Finance itself (system work,
     which may only freeze cards). `budget_id` defaults to the event's own budget. One key per rule and event: the
     same event never acts twice."""
     who = SYSTEM if by in ("", "keeper") else by

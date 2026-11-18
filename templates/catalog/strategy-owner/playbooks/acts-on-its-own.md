@@ -75,14 +75,15 @@ thing, merge them (`playbooks/recoveries.md`).
 ## A broken bot
 `tico health check` lists what is wrong with the bots, most urgent first, each with its fix. When one a current goal
 waits on is broken (failing runs, stuck, offline, out of credit), ask BotOps to fix or restart it: one task,
-`tico task create --owner botops --title "Fix <bot>: <the problem in a few words>" --body "<what Health says, the goal
+`tico task create --owner botops --title "Fix <bot>: <the problem in a few words>" --message "<what Health says, the goal
 waiting on it, and what you need back>"`, after `tico task list --owner botops` shows there is not one open already.
 Don't pause, resume, change or restart a bot yourself. Anything the fix needs that costs more (a model, a routine,
 waking more often) or changes a bot's instructions stays the owner's: the server turns it into a proposal, and
 BotOps says so on the task.
 
 ## What stays the owner's
-At every level: anything that raises cost, publishing, sending outside the company, adding or removing bots,
+At every level: anything that raises cost, publishing, the strategy (except the owner's own words, naming the task they
+said them on: `playbooks/owner-chat.md`), sending outside the company, adding or removing bots,
 changing a goal or a KPI target, the vision or the description, a bot's instructions or settings, and work for a
 person. A change to a goal's words, a KPI or a target is a proposal you file (`tico proposal create`,
 `playbooks/README.md`). Work for a person goes in a decision as a `create` (or `reassign`) with the person as owner:

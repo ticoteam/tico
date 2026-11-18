@@ -18,19 +18,49 @@ pipeline (the one the growth packs file ideas into; a channel's keeps its `chann
 there is no link. The owner and admins get **Settings**, which holds the channels, the numbers the maths uses and a **Where
 numbers come from** link to Sources; anyone else gets a **Sources** link.
 
-The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). A Growth page nobody
-arranged shows these cards, each a template below:
+The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). Over the cards sits
+**The Growth line** (below). A Growth page nobody arranged shows these cards under it, each a template below:
 
 - **Funnel**, large: the five stages (Reach, Acquire, Activate, Retain, Refer), each with its KPI's reading and the share
-  of the stage before, and the North Star.
-- **Number**, small, six of them: new customers, CAC, spend, LTV:CAC, payback and the share kept at 30 days.
-- **Channels**, large: one row per channel, and Unknown.
+  of the stage before (only between stages counted in the same unit), and the North Star.
 - **Retention**, medium: the share kept at 30, 90 and 180 days, cohort by cohort.
 - **Growth board**, medium: the open marketing tests by stage.
+
+The **Number** and **Channels** cards are still templates anyone may add; the line says what they said, so a new page
+does not repeat them. A page someone already arranged keeps its own pins.
 
 The first change saves them as real pins. A **month** picker reads the cards for one month: the page offers the newest 24
 months that have cohort rows, and the newest one is the default. A month with no cohorts yet shows the last month that
 has one for the figures that carry back (retention, LTV, LTV:CAC), saying which month they are from.
+
+## The Growth line
+
+One block over the cards reads the picked month left to right: **Sources** → **Channels** → **This month** (spend, new
+customers, kept to day 30) → **Unit economics** (CAC, LTV:CAC, payback) → **KPIs**. One sentence over it says the month,
+for example "October brought 132 new customers, up 12%. Each cost $151 to win and pays back in 4 months. One channel is
+over its guardrail. One source has not synced since 10 Jan, so 3 numbers below are from then." While the line shows, the
+stale-sources banner gives way to it.
+
+- **At rest** it is one row per channel, then Unknown and All channels. Each row shows the sources that fill it on the
+  left and the KPIs it moves on the right. A source that is stale or failing says since when, and every number it fills
+  is marked stale.
+- **Select** a source, a channel or a KPI (click, or Tab and Enter): its rows stay, the rest fade, and gray links join
+  them, dashed from a stale source. Select it again to clear. The links are pictures only; each channel's name reads its
+  sources and KPIs aloud. On a phone the rows stack and say "From … → moves …" in words instead.
+- **Any number** opens, under its own row, where it comes from: the sum with today's values, each input naming its source
+  and when it synced (or that it was typed, or computed from how many customers), the KPI it moves and its last six
+  months. A computed number has **Open its customers**, which opens that row on the Retention card. All channels' CAC
+  says it divides named channels' spend by every new customer, Unknown included.
+- **Spend** has a budget bar and says "$3,600 over budget"; a channel's guardrail chip says "$22 over guardrail".
+- **No KPI linked** on a channel is a button for whoever may edit channels: it opens the channel, where **Moves** picks
+  the input KPI (`input_kpi_id`; `--input-kpi` on `tico growth channel update`). A KPI the reader may not see is not
+  shown as linked.
+
+An agent reads the same thing as `line` in `GET /api/v2/growth/numbers?month=YYYY-MM` (`tico growth numbers --month`,
+`tico_growth_numbers`): `sources` with their health and what each fills, `channels` with each number's value, words,
+origin, source ids and names, stale mark and trace, `kpis` with the channels that move or hold them, and `headline`.
+`line` is null when there is no live channel. Opening a trace or selecting a source is counted once a day per person
+(`POST /api/v2/growth/line/used`), to see how many Growth viewers use the line.
 
 ## Cards
 
@@ -258,16 +288,53 @@ the result is the same as an upload. A missing or wrong signature is refused wit
 of the bot that owns a channel goes on that channel. A bot that owns several channels cannot be split, so its cost goes on
 Unknown and the run result carries a note. `sync` runs it.
 
+## A channel's read and its alerts
+
+A growth agent starts each run with `tico growth channel show <slug>` (API `GET /api/v2/growth/channels/{slug}`, MCP
+`tico_growth_channel_show`). Besides the channel's settings and open `channel:<slug>` tasks it answers, in this order:
+
+1. **KPI.** The KPI the channel moves (`input_kpi_id`, set with `tico growth channel update <slug> --input-kpi <id>` by the bot that owns
+   the channel, the owner or an admin) with its latest value and date, the target and colour of the goal it is linked
+   to, and its last 12 readings. Growth keeps no target of its own: a KPI with no target on any goal says "no target:
+   set on the goal by the Strategy Owner". With no KPI linked, the read says how to link one and who may.
+2. **Months.** The last 6 months of spend, new customers, CAC, kept at 30 days and LTV:CAC, each with its quality.
+3. **Changed.** The newest month against the month before, per figure: value, difference and per cent. A figure not
+   recorded in either month reads "not recorded" and has no change (never 0). Each figure that changed lists what lines
+   up with it since the start of the month before: tests started or finished on the channel (with their result) and
+   stage changes bear on every figure, budget changes on spend, CAC and LTV:CAC; a figure whose source was failing or
+   stale says it "may be a data gap"; when nothing recorded lines up, it says "nothing recorded on this channel explains
+   it". Tico never states a cause. The dated events (tests, stage and budget changes, crossings) follow, each with who
+   and when.
+4. **Tests.** Open tests on the channel with their stage and start date, and tests finished in the last 90 days, kept or
+   dropped, with their `result:` tag. Only tasks the reader may see.
+5. **Sources.** Each source behind the channel's figures with its health and last good update, and "stale" when it is
+   failing or stale or the newest month is more than 45 days old.
+
+`tico growth segment show <label>` (API `GET /api/v2/growth/segments/{label}`, MCP `tico_growth_segment_show`) is the
+same for a segment, from customer facts: new customers, kept at 30 and 90 days and LTV for the last 6 months, and the
+change from the month before. Spend is not split by segment. A month under the team's minimum cohort shows counts only.
+`GET /api/v2/growth/view-reads` counts the channel and segment reads by caller and run.
+
+**Alerts.** Three lines the team already set are watched: the channel's KPI turning red against its goal, its guardrail
+KPI going over its max, and its synced source failing. A KPI reading or a source run that crosses one files one task for
+the channel's owner, filed by the owner itself (so it may close it), labelled `channel:<slug>` and `growth:alert`, in
+General, with the value, the line and the read command. While the channel stays over the line, Tico comments on that
+task at most once a day; once the task is closed or done, the next crossing files a new one. Coming back under the line
+comments once and asks the owner to close the task: Tico never closes it. A channel with no owner tells nobody, and its
+read lists the crossing with "no owner: nobody was told". Each change of state emits `growth.channel.crossed` (ids
+only) for routines and rules. A failure in the check never undoes the reading or the run.
+
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
-is a task in **Growth Monitoring** (Watching, Slipping): docs/pipelines-v3.md "Growth and Success". Each channel has an
+is a task in **Growth Monitoring** (Watching, Slipping): docs/dev/pipelines-v3.md "Growth and Success". Each channel has an
 Owner that files its ideas and owns its tasks in both pipelines from start to finish: SEO, Content, Email, CRO, Search
 Ads and Social Ads (the growth channel packs in the same section).
 
 - **Channel.** A `channel:<slug>` label on the task or its sub-task. A channel's marketing work on this page is its open
   tasks with that label, in any pipeline. The department is the task's team.
-- **Prediction and result.** The Go-live page in Building gives the prediction as a number; the Results page in Running
+- **Prediction and result.** An idea carries no prediction. The Go-live page in Building gives it once, as a number: the
+  metric from where it is now to where it should get to, by the end date; the Results page in Running
   gives the number before and after. The result is a label: `result:failed`, `result:worked-once` or
   `result:watching`, and `result:watching` files a Monitoring task as the experiment's follow-up.
 - **Ending.** A measured experiment is Done; one stopped before it is measured is Closed with the reason. A Monitoring
@@ -320,7 +387,7 @@ it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
 
 ## Who may do what
 
-A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
+A channel's stage and budget are its owner's, and the owning bot may change its why, stage, budget and KPI. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
 
 Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
@@ -339,6 +406,8 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 tico growth numbers                       the page: each month's rows, Unknown and the totals
 tico growth setup                         the four first-run steps, each done or not, and the next one
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
+tico growth channel update SLUG --input-kpi KPI_ID the KPI the channel moves (its target stays on its goal)
+tico growth segment show LABEL            one segment's 6 months from customer facts
 tico growth source list | add | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
 tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN
@@ -358,7 +427,7 @@ tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot
                  [--quality actual|estimate] [--source FIELD=TEXT]
 tico growth settings [--set KEY=VALUE]
 tico kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
-tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --body "..."
+tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --message "..."
 tico task list --label channel:<slug>
 tico card add growth_number --place growth --metric cac [--channel SLUG]
 tico card add growth_channels --place growth --count 10

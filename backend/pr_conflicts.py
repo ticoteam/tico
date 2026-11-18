@@ -1,5 +1,5 @@
 # pyright: strict
-"""A merge conflict on a task's open PR before its pipeline's Merge stage (docs/pipelines-v3.md, "GitHub").
+"""A merge conflict on a task's open PR before its pipeline's Merge stage (docs/dev/pipelines-v3.md, "GitHub").
 
 GitHub says a PR conflicts with its base branch; backend/github.py keeps that on the task's link (`mergeable`
 'conflict', by webhook or by its read of PRs whose base moved). On a stage before the one that queues the PRs, fixing it
@@ -43,7 +43,7 @@ is_bot: Callable[[object], bool] = _core.is_bot
 KIND = "conflict"  # the kind of the standing; no requirement row has it
 LINE = "No merge conflict"
 # Said in a person's Needs you on an ask the conflict is held for (`held`), after the ask's own line.
-ASK_LINE = "The PR has a merge conflict: {builder} fixes it after your {answer}."
+ASK_LINE = "The PR has a merge conflict: {builder} fixes it after your OK."
 # The task's open PRs GitHub says conflict with their base branch, oldest link first.
 _LINKS = (
     "SELECT task_id, id, url, title, repo, number, detail FROM task_links WHERE task_id IN (%s) AND kind='pr' "
@@ -105,7 +105,7 @@ def applies(conn: "sqlite3.Connection", row: Row) -> bool:
     stage: Row = row.get("stage") or {}
     if row.get("status") != "open" or stage.get("kind") != "work" or stage.get("by_hand"):
         return False
-    work = [s for s in E.stages(conn, str(row["pipeline_id"])) if s["kind"] == "work"]
+    work = E.main_work(E.stages(conn, str(row["pipeline_id"])))
     at = next((i for i, s in enumerate(work) if s["id"] == stage.get("id")), None)
     return at is not None and any(GS.queues_prs(s) for s in work[at + 1 :])
 
@@ -117,9 +117,7 @@ def builder(conn: "sqlite3.Connection", row: Row) -> str | None:
     from . import task_engine as E
     from . import task_requirements as R
 
-    for stage in E.stages(conn, str(row["pipeline_id"])):
-        if stage["kind"] != "work":
-            continue
+    for stage in E.main_work(E.stages(conn, str(row["pipeline_id"]))):
         if any(
             r["kind"] == "item" and r.get("source") == "github" and r.get("condition") == "pr_open"
             for r in R.on_stage(conn, str(stage["id"]))
@@ -174,12 +172,15 @@ def standing(conn: "sqlite3.Connection", row: Row, others: "Iterable[R.Standing]
         "who_oks": "none",
         "settings": {},
         "shows": None,
-        "choices": None,
         "created_at": row["visit"]["entered_at"],
     }
     line = f"{refs} conflicts with its base branch: {name} rebases it on its base branch"
-    if asked:
-        person = asked.on or _person_for(conn, row)
+    # A ❓ on the task's chat waits on a person's reply as an ask does (backend/question_marks.py).
+    from . import question_marks
+
+    marked = None if asked else next(iter(question_marks.on_task(conn, row["id"])), None)
+    if asked or marked:
+        person = marked["person_id"] if marked else (asked.on if asked else None) or _person_for(conn, row)
         requirement["held_for"] = person or "a person"
         whom = str(_h().actor_name(conn, person)) if person else "a person"
         line = f"{refs} conflicts with its base branch: {name} rebases it after {whom} answers"
@@ -193,11 +194,11 @@ def _person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     return W.person_for(conn, row)
 
 
-def ask_line(conn: "sqlite3.Connection", conflict: "R.Standing", kind: str) -> str:
-    """The line a held conflict adds to a person's ask of `kind` in their Needs you (`ASK_LINE`)."""
+def ask_line(conn: "sqlite3.Connection", conflict: "R.Standing") -> str:
+    """The line a held conflict adds to a person's OK in their Needs you (`ASK_LINE`)."""
     who = conflict.on
     name = str(_h().actor_name(conn, who)) if who else "its owner"
-    return ASK_LINE.format(builder=name, answer="answer" if kind == "answer" else "OK")
+    return ASK_LINE.format(builder=name)
 
 
 def is_conflict(requirement: Row) -> bool:

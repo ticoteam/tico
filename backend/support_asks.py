@@ -38,7 +38,7 @@ STEPS = {
     "next_bot": "a bot waiting in Needs setup",
     "first_output": "a first approved output",
     "first_update": "a first update",
-    "strategy": "a published strategy",
+    "strategy": "a strategy",
 }
 ASKED_FROM = {"wizard": "the setup wizard", "health": "Health", "bot": "a bot in Needs setup"}
 # (database file, actor) -> the person's first event time, kept once found. The read walks every event of the person

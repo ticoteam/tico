@@ -3,11 +3,7 @@ bot-<slug>), and the old names still read for one release."""
 
 import yaml
 
-from backend import statuses
-from backend.config import Settings
-from backend.store import Store
 from clients import manifest as M
-from backend import bot_settings as BS
 
 
 def write(path, data):
@@ -19,7 +15,6 @@ def write(path, data):
 def test_the_readers_take_either_manifest(tmp_path):
     from clients import registry
     from clients.remotecli import seed_automations
-    from connectors.mail import access as mail
 
     routine = {"id": "daily", "title": "Daily", "cron": "0 9 * * 1-5", "enabled": False, "instructions": "Do it"}
     for folder, manifest in (
@@ -74,46 +69,6 @@ def test_the_readers_take_either_manifest(tmp_path):
     merged = registry.merge_employee({"name": "old"}, {}, root=tmp_path)
     assert registry.declared_env_keys(merged) == ["OLD_KEY"]
     assert registry.declared_env_keys(registry.merge_employee({"name": "new"}, {}, root=tmp_path)) == ["NEW_KEY"]
-    # The mail connector (its own package) reads the same two names.
-    assert [e["identity"] for e in mail.entries({"access": [{"service": "gmail", "identity": "old@x.example"}]})] == [
-        "old@x.example"
-    ]
-    assert [
-        e["identity"]
-        for e in mail.entries(
-            {
-                "tools": [{"service": "gmail", "identity": "new@x.example"}],
-                "access": [{"service": "gmail", "identity": "old@x.example"}],
-            }
-        )
-    ] == ["new@x.example"]
-
-
-def test_a_stored_needs_onboarding_row_becomes_needs_setup_and_readers_take_both(tmp_path):
-    settings = Settings(db_path=tmp_path / "hub.db", registry_dir=tmp_path)
-    store = Store(settings)
-    store.initialize()
-    with store.transaction() as c:
-        assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=45").fetchone()
-        c.execute("PRAGMA ignore_check_constraints=ON")  # rows an older release wrote, before the onboarding CHECK
-        for slug, state in (("old", "needs_onboarding"), ("new", "needs_setup"), ("done", "onboarded")):
-            c.execute("INSERT INTO bots(id,slug,display_name) VALUES(?,?,?)", (slug, slug, slug))
-            c.execute('INSERT INTO bot_config(bot,owner_id,onboarding_state) VALUES(?,?,?)', (slug, 'morgan', state))
-            BS.write(c, slug, {})
-        c.execute("PRAGMA ignore_check_constraints=OFF")
-        c.execute("DELETE FROM cloud_migrations WHERE version=45")  # the state a database is in before this release
-    store.initialize()
-    with store.read() as c:
-        states = dict(c.execute("SELECT bot,onboarding_state FROM bot_config").fetchall())
-    assert states == {"old": "needs_setup", "new": "needs_setup", "done": "onboarded"}
-    assert (
-        statuses.is_parked("needs_onboarding")
-        and statuses.is_parked("needs_setup")
-        and not statuses.is_parked("onboarded")
-    )
-    # A reader on a row a not-yet-migrated peer wrote: the SQL helper matches both.
-    with store.read() as c:
-        assert c.execute("SELECT 'needs_onboarding' IN " + statuses.PARKED_SQL).fetchone()[0] == 1
 
 
 def test_a_repository_is_found_under_bot_or_emp_and_a_new_one_is_bot(tmp_path):

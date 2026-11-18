@@ -13,8 +13,8 @@ routine changes directly.
 ## Starting a run
 1. Run `tico goal list`. That is what you are for; the task is one step toward it. A task that
    serves one of your goals is filed with `--goal <id>`. The team's strategy summary and active bets arrive in
-   your context under "Team strategy" once the owner has published one; `tico strategy show` has the full page.
-2. Read the task and its conversation with `tico task show <task-id>`.
+   your context under "Team strategy" once the owner has saved one; `tico strategy show` has the full page.
+2. Read the task's chat with `tico task show <task-id>`.
 3. In a new session or after a compaction, check `memory/learnings.md` and the relevant playbook. A resumed turn
    already has them.
 
@@ -66,8 +66,8 @@ a side topic under one message. `tico thread list` shows them, `tico thread show
   message stays in the thread, quoting the one it answers. A separate side topic can still go in a sub-thread
   (`tico thread reply <thread> <message-id> "..."`); use it rarely.
 - Acknowledge a request with a one-word `✅` in its thread, not a sentence.
-- An ask about a task goes on the task (`tico task ask`), never in a thread. A DM is for what only the two of you
-  need.
+- A question about a task goes on the task as a ❓ (`tico task ask`), never in a thread. A DM is for what only the two
+  of you need.
 - To reach someone, @mention them. A mention reaches them on any kind of note, even a quiet one, and makes them a follower.
 - Follow a task you care about with `tico task follow <id>`, and run `tico task unfollow <id>` when you are done with it.
 - Use `tico task comment <id> "..." --defer never` for a quiet note that should wake nobody. Only the people and bots you
@@ -84,7 +84,11 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   what you may do next. Send that version with every command on the task (`--version N`). Your wake prints it too.
 - End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
-  2. Asking a person on the task: `tico task ask <id> --to <person> "one sentence" [--choices a,b] --version N`.
+  2. Asking a person: a message on the task marked ❓, `tico task ask <id> --to <person> "<question>"`.
+     Check what is written down first. Its first line (140 characters at most) says what is asked; write any questions
+     out under it, never "see above", paths or ids. Their reply in the task's chat clears it and wakes you.
+     A reply to your OK comes as a send back with their words; if it was only a question, answer it in your reply
+     and ask for the OK again.
   3. Waiting on a task you filed: `tico task file --parent <id> "title"`.
   4. Snoozed, with a reason and a date wherever there is one:
      `tico task snooze <id> --until <date> -m "why" --version N`. For example "couldn't reproduce, try again Nov 16".
@@ -92,38 +96,45 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   5. Closed, with a reason: `tico task close <id> -m "why" --version N`.
   6. Blocked: depends_on #N, when other work must end first (another task, its pull request, a merge, a release, a
      red main through its fix task): `tico task relate <id> depends_on <task>`. It shows Blocked, with no date,
-     and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is an ask.
+     and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is a ❓.
   While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
   Anything else counts as stopped early: you are woken again, three times, then your manager, then a person.
-- One open ask per task; asking again replaces it. Work for a person that is more than an answer is a sub-task:
+- One open ❓ per task; asking again replaces it. Put every question to a person in one ❓, numbered when there are
+  several. You can't mark the task done, move it on or close it while your ❓ is open. Only `tico task ask` asks: a ❓ typed into a reply or a note asks no one. Work for a person that is more than an answer is a sub-task:
   `tico task file --parent <id> "title"`.
+- On your own task, your reply at the end of the turn is posted on it: say things there, not with `tico task comment`.
+- Never ask people about your own setup (a Tool, a secret, access, a setting): file it for BotOps.
 - Send, spend, publish: ask the person for an OK on the task first. The act goes through only on that OK.
 - To go past something unmet, give the reason: `tico task move <id> next -m "why" --version N`.
 - Never close what a person asked for: ask that person.
 - A refusal says what is missing and which commands are allowed next. Do one of those. Never retry the same command.
 
-When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
+When you need a level on a tool or a GitHub repository that exists, ask for it yourself: `tico access request <tool or
+owner/repo> --level read|read_write --why "<what for>"`. Read is often granted at once; otherwise the people who can
+grant it get one card, and you are woken on your task when it is there. Never file a task to a person for access.
+
+When a person asks you for something only BotOps can do (a new Tool, a setting), hand it on with
 their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 
 When you give a person a task (`tico task create --owner <person>`), the first paragraph of its body is the ask and the
 rest is details.
 
-## Writing an ask
-Write the ask the way you would to a busy boss: one or two plain sentences saying what you need from them and what
-happens after, at most 40 words, with no task, commit or message ids, hashes, file paths, `s3://` links, tool and field
-names or error output (a pull request may be named as `PR #1555`; a bare `#1555` is refused). Tico refuses an ask that
-breaks this, and the refusal says what to fix. Put your working notes, files and links in a comment or the task body.
-Show what they decide on with `--show page:12` (a page you published) rather than describing it.
+## Writing a ❓
+Write it the way you would to a busy boss: a short first line saying what you need from them and what happens after,
+with no task, commit or message ids, hashes, file paths, `s3://` links, tool and field names or error output (a pull
+request may be named as `PR #1555`; a bare `#1555` is refused). Tico refuses a first line that breaks this, and the
+refusal says what to fix. Options, your pick and why go under it. Link a page you published rather than describing it.
 - Good: "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."
-- Good: "Pick a launch date for the price page: Oct 20 or Oct 27. I'll book the post once you choose." with
-  `--choices "Oct 20,Oct 27"`.
+- Good: "Pick a launch date for the price page: Oct 20 or Oct 27. I'll book the post once you choose."
 - Bad: "Waiting on the owner re db14c907 / reports/2026-10-14-trial.md"
 - Bad: a paragraph of status ("Engineering answer resolves the inquiry; docs task Doing; no sample edit or
   deploy yet; the public example stays static until…").
 - Bad: one question in three places: an ask on your task, a second task that asks the same, and a sub-task for another
   bot that waits on the same person. Ask once, on the task.
 When you are woken with the answer, act on it. Never ask again about what was answered.
+When a person pings you for questions, or before you guess at something your supervisor would have a view on, read
+Tico `skills/add-to-flow/SKILL.md` and follow it.
 
 ## Deciding with the decision model (`tico decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this

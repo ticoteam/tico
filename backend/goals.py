@@ -39,7 +39,7 @@ SOURCES = ("measured", "estimate")  # legacy names of a reading's quality; a con
 # goal_why: the Strategy Owner's one line tying a goal to the company's vision (backend/company.py). recovery: the
 # Strategy Owner's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
 # strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
-# strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
+# strategy_realign: the goals of bets a strategy save retired or rewrote, filed by Tico for the owner (backend/strategy.py).
 # brand_draft: sections for the brand draft from any bot, an admin's to confirm (backend/brand.py).
 PROPOSALS = (
     "goal_wording",
@@ -675,8 +675,8 @@ def arm_pass(conn):
         return False
     if conn.execute("SELECT 1 FROM events WHERE action='goal_manager.armed'").fetchone():
         return False
-    routines.update(conn, H.KEEPER, sid, {"enabled": True})
-    H.event(conn, H.KEEPER, "goal_manager.armed", sid, {})
+    routines.update(conn, H.TICO_ACTOR, sid, {"enabled": True})
+    H.event(conn, H.TICO_ACTOR, "goal_manager.armed", sid, {})
     return True
 
 
@@ -1007,7 +1007,7 @@ CARD_FIELDS = {
 def card(conn, p, hidden, editor):
     """What the card tells this reader. `hidden`: owners whose goals and KPIs the reader may not read
     (backend/goal_routes.py hidden_owners); nothing of theirs is read in, not a reused measure's unit either.
-    `editor`: the reader edits the strategy, so reads unpublished bets; anyone else reads the published ones."""
+    `editor`: the reader edits the strategy, so reads every bet; anyone else reads the live version's."""
     pl, kind = p.get("payload") or {}, p["kind"]
     seen = lambda record: record if record and record["owner_id"] not in hidden else None
     row = seen(goal(conn, p["goal_id"]) if p.get("goal_id") else None)
@@ -1257,7 +1257,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
             again = strategy_suggest.follow_up(conn, row, applied["left"])
             result = {"option": chosen, "unchanged": chosen == pick, **applied, "follow_up": again and again["id"]}
         elif row["kind"] == "strategy_draft":
-            # A bot's proposed strategy, written to the draft and its bets as the owner. Never published.
+            # A bot's proposed strategy, written to the strategy and its bets as the owner, live at once.
             from . import strategy
 
             result = strategy.apply_proposal(conn, actor, payload)
@@ -1376,23 +1376,23 @@ def seed(conn, document, resolve):
                 str(entry.get("body") or ""),
                 stated,
                 str(entry.get("status_note") or ""),
-                H.KEEPER if stated else None,
+                H.TICO_ACTOR if stated else None,
                 ts if stated else None,
                 "person" if stated else None,
                 _next_rank(conn, owner),
                 ts,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 ts,
             ),
         )
-        _event(conn, gid, H.KEEPER, "created", None, entry.get("title"), "registry/goals.yaml")
+        _event(conn, gid, H.TICO_ACTOR, "created", None, entry.get("title"), "registry/goals.yaml")
         for measure in entry.get("kpis") or []:
             kid = str(measure.get("id") or "").strip() or None
             if kid and kpi(conn, kid):
                 continue
             made = K.create(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 owner,
                 {
                     "name": measure.get("name") or kid or "KPI",
@@ -1408,7 +1408,7 @@ def seed(conn, document, resolve):
                 target = {"kind": "improve", "target": measure["target"], "deadline": measure.get("deadline")}
             K.set_link(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 gid,
                 made["id"],
                 {
@@ -1425,7 +1425,7 @@ def seed(conn, document, resolve):
                 try:
                     K.add_reading(
                         conn,
-                        resolve(reading.get("by")) or H.KEEPER,
+                        resolve(reading.get("by")) or H.TICO_ACTOR,
                         made,
                         float(reading.get("value")),
                         period_end=reading.get("at"),

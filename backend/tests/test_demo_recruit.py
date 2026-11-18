@@ -8,7 +8,7 @@ import pytest
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import cloud_agents, demo
 from backend.app import create_app
 
 NOW = datetime(2026, 11, 2, 18, 0, tzinfo=timezone.utc)
@@ -77,7 +77,7 @@ def _applicants_are_open_recruiter_tasks_one_asking_ana_and_one_snoozed(built):
 def _the_cloud_agent_request_is_in_flight_with_its_first_task(built):
     with owner_api(built) as api:
         agents = {agent["id"]: agent for agent in api.get("/api/v2/cloud-agents").json()["agents"]}
-        assert len(agents) == 8
+        assert set(agents) == {agent["id"] for agent in cloud_agents.AGENTS}
         assert {key for key, agent in agents.items() if agent["supported"]} == {"claude", "codex"}
         seat = open_seats(api)["Devin"]
         request = api.get(f"/api/v2/seats/{seat['id']}/request").json()

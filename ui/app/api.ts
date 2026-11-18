@@ -74,8 +74,6 @@ const GET_INFLIGHT = new Map<string, Promise<ApiRawGet>>();
 // What startup asks for ahead of the page that will need it (getPrefetch): read once, within a few seconds.
 const GET_PREFETCHED = new Map<string, ApiPrefetch>();
 const getForget = () => { GET_INFLIGHT.clear(); GET_PREFETCHED.clear(); };
-// A read that must come from the server's rows, not a copy kept here: its tag goes, so no 304 can answer it.
-const getForgetTagged = (test: (p: string) => boolean) => { for (const p of [...GET_TAGGED.keys()]) if (test(p)) GET_TAGGED.delete(p); };
 const getRaw = (p: string): Promise<ApiRawGet> => {
   const kept = GET_TAGGED.get(p);
   return fetch(API + p, {cache:'no-store', headers: kept ? {'If-None-Match': kept.tag} : {}}).then(async r => {
@@ -244,7 +242,7 @@ async function memoryBody(body: Blob | FormData, digests: Map<Blob, string> | nu
       ? new File([bytes], file.name, {type: file.type, lastModified: file.lastModified})
       : new File([bytes], '', {type: file.type});
     // One read serves both the copy and the retry signature's digest.
-    if (digests) digests.set(made, hexDigest(await crypto.subtle.digest('SHA-256', bytes)));
+    if (digests) digests.set(made, hexDigest(await sha256Bytes(bytes)));
     return made;
   };
   if (body instanceof Blob) return copy(body);
@@ -259,13 +257,13 @@ async function memoryBody(body: Blob | FormData, digests: Map<Blob, string> | nu
 const formRequestOnce = async (url: string, body: Blob | FormData, opts: ApiWriteOptions = {}): Promise<Response> => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
-  const digests = S.me?.cloud ? new Map<Blob, string>() : null;
+  const digests = S.me ? new Map<Blob, string>() : null;
   body = await memoryBody(body, digests);
   if (!digests) return fetch(url, {method:'POST', body});
   const fields: unknown[][] = [];
   for (const [name, value] of body instanceof Blob ? [['file', body]] : body.entries()) {
     if (value instanceof Blob) {
-      const digest = digests.get(value) ?? hexDigest(await crypto.subtle.digest('SHA-256', await value.arrayBuffer()));
+      const digest = digests.get(value) ?? hexDigest(await sha256Bytes(await value.arrayBuffer()));
       fields.push([name, (value instanceof File && value.name) || '', value.type, value.size, digest]);
     } else fields.push([name, value]);
   }

@@ -115,7 +115,7 @@ def lead_notices(api):
             for r in c.execute(
                 "SELECT body FROM messages WHERE sender_id=? AND recipient_id='human:ana' "
                 "AND kind='notice' AND body LIKE '%no lead now%'",
-                (H.KEEPER,),
+                (H.TICO_ACTOR,),
             )
         ]
 
@@ -128,7 +128,7 @@ def test_a_lead_added_to_another_group_leads_its_old_one_no_more_and_the_top_hea
     assert group(api, gid)["lead"] == ""
     put(api, "usage/limits/builder-openai", {"per_30m_usd": 2}, "lead-test", expected=403)  # no authority left over
     cleared = [row for row in audit_rows(api, gid) if (row["before"] or {}).get("lead") and row["after"]["lead"] == ""]
-    assert len(cleared) == 1 and cleared[0]["via"] == f"group:{sales}" and cleared[0]["actor"] == H.KEEPER
+    assert len(cleared) == 1 and cleared[0]["via"] == f"group:{sales}" and cleared[0]["actor"] == H.TICO_ACTOR
     notices = lead_notices(api)
     assert len(notices) == 1 and "Engineering" in notices[0]
 

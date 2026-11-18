@@ -1,4 +1,4 @@
-"""`POST /api/v2/judge` (`backend/judge.py`): the judge as a hub tool, audited, budgeted, never the state."""
+"""`POST /api/v2/decisions` (`backend/judge.py`): the judge as a hub tool, audited, budgeted, never the state."""
 
 import json
 
@@ -11,7 +11,7 @@ from backend.tests.helpers.judge import FakeJudge, QUESTIONS, events, fake
 def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(api):
     engine = fake(api)
     state = {"subject": "Invoice 4471", "snippet": "the secret body of the mail"}
-    out = post(api, "judge", {"state": state, "questions": QUESTIONS, "label": "mail-triage@1"})
+    out = post(api, "decisions", {"state": state, "questions": QUESTIONS, "label": "mail-triage@1"})
     assert out["answers"]["bucket"]["choice"] == "reply" and out["label"] == "mail-triage@1"
     assert out["model"] == "judge-1.13.0" and out["ms"] == 180
     assert engine.calls[-1] == {"state": state, "questions": QUESTIONS, "label": "mail-triage@1"}
@@ -35,7 +35,7 @@ def test_rehearsal_decisions_never_reach_a_configured_provider(api):
     engine = fake(api)
     for configured in (engine, None):
         api.app.state.judge = configured
-        assert get(api, "judge")["configured"] is False
+        assert get(api, "decisions")["configured"] is False
         result = api.post(
             "/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers()
         )
@@ -103,7 +103,7 @@ def test_the_gateway_is_asked_once_then_typesafe_and_nothing_after():
 def test_the_daily_cap_is_a_setting_per_role(api):
     engine = fake(api)
     api.app.state.store.settings.decisions_daily_calls_owner = 1
-    assert get(api, "judge")["daily_calls"] == 1
+    assert get(api, "decisions")["daily_calls"] == 1
     post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})
     result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
     assert result.status_code == 429 and result.json()["error"]["code"] == "budget" and len(engine.calls) == 1

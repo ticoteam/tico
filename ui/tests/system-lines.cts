@@ -17,7 +17,6 @@ declare var thvUpdateReveal: (view: SysLive, id: string) => void;
 declare var rowSource: (m: {[key: string]: unknown; sender_id: string}, by?: unknown) => {kind: string; name: string};
 declare var isSourceLine: (m: unknown) => boolean;
 declare var actorLabel: (id: string) => string;
-declare var taskBody: (task: {[key: string]: unknown}) => string;
 declare var sourceRunsHTML: <T>(items: T[], opts: {isUpdate: (x: T) => boolean; line: (x: T) => string; draw: () => string}) => string;
 declare var commentLineHTML: (x: unknown, i: number, all: unknown[]) => string;
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -56,7 +55,7 @@ const messages = () => [
     source: {kind: 'automation', name: 'Weekly digest', link: '#/automations/au-1'}}),
   msg('b2', 11, 'bot:ops', 'Anything else?', 10, {recipient_id: 'human:ana'}),
 ];
-const KEEPER = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
+const TICO_LINES = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
 
 async function open(browser: Browser, {phone = false}: {phone?: boolean} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
@@ -114,7 +113,7 @@ let browser: Browser | null = null;
     assert.equal(await line(page, 'k4').evaluate(el => !!el.closest('details')), false, 'a lone update is not folded');
     assert.match(await line(page, 'k4').innerText(), /Blocked: Book the launch venue/);
     // No keeper row is a message with a sender, except the Assistant's relay.
-    for (const id of KEEPER.filter(id => id !== 'r1')) {
+    for (const id of TICO_LINES.filter(id => id !== 'r1')) {
       assert.equal(await msgRow(page, id).count(), 0, id + ' is not a message row');
       assert.equal(await line(page, id).locator('.th-who, .th-av').count(), 0, id + ' has no sender row or avatar');
     }
@@ -190,8 +189,6 @@ let browser: Browser | null = null;
     assert.equal(await page.evaluate(() => isSourceLine({sender_id: 'keeper', kind: 'ask', refs: {task: 't', questions: [{question: 'Which?'}]}})), false);
     assert.equal(await page.evaluate(() => actorLabel('keeper')), 'Automatic', 'the keeper is never the Assistant or Tico');
     assert.ok(lineText.every(t => !/\bTico\b/.test(t)), 'no gray line says Tico');
-    assert.match(await page.evaluate(() => taskBody({requester_id: 'keeper', owner_id: 'bot:ops', title: 'Weekly',
-      body: 'Run playbook Weekly.\n\n_Created by the keeper from schedule `weekly`._'})), /_Created from schedule `weekly`\._$/);
 
     // The Assistant's chat folds a run of task updates the same way, and names no Assistant for them.
     const chat = await page.evaluate(() => {
@@ -228,6 +225,7 @@ let browser: Browser | null = null;
   {
     const {page, errors} = await open(browser, {phone: true});
     await page.goto('https://tico-ui.test/#/thread/t-home');
+    await page.locator('#threads-shell').waitFor();
     await msgRow(page, 'b2').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll');
     const summary = page.locator('.thv-list details.src-group > summary');

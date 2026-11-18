@@ -1,7 +1,0 @@
-# The mail connector's venv, built by scripts/mail.sh at <projects>/runtime/mail/venv.
-# Pinned to current majors: upgrades inside a major are fine, a new major is a decision.
-google-api-python-client>=2.100,<3
-google-auth>=2.30,<3
-google-auth-httplib2>=0.2,<0.3
-PyYAML>=6,<7
-dkimpy>=1.1.8,<2

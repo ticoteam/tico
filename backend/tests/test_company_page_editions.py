@@ -286,7 +286,7 @@ def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch):
         elif trouble == "budget":  # the decisions cap leaves no room for the check's call
             page.store.settings.decisions_monthly_usd = 1.0
             with page.store.transaction() as c:
-                H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
+                H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
         else:
             monkeypatch.setattr(K, "on", lambda c: False)
         edition = page.draft()

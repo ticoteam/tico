@@ -17,7 +17,7 @@ here`). `pragmas` fails a bare one, so the check runs on every push, before anyt
 """
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 import os
 from pathlib import Path
@@ -83,6 +83,85 @@ def added_text(diff_text):
     return out
 
 
+def removed_text(diff_text):
+    """Counter of the removed lines' stripped text, from a `git diff -U0` text."""
+    out, current = Counter(), None
+    for line in diff_text.split("\n"):
+        if line.startswith("--- "):
+            current = line[6:] if line.startswith("--- a/") else None
+        elif current is not None and line.startswith("-") and measured(current) and line[1:].strip():
+            out[line[1:].strip()] += 1
+    return out
+
+
+# A rename the change makes on at least this many lines is mechanical (a constant renamed across the code): a line that
+# only carries it is not new code. Below it, a changed name is a change (a call given another argument), and counts.
+RENAME_LINES = 3
+TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\S")
+IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SHAPE_CANDIDATES = 50  # removed lines of one shape compared per added line, so a huge change stays linear
+
+
+def _renames(added, removed):
+    """{old name: new name} that differ between an added and a removed line of the same shape, or None when they differ
+    in anything but whole names (or rename one name two ways)."""
+    a, r = TOKEN.findall(added), TOKEN.findall(removed)
+    if len(a) != len(r):
+        return None
+    out = {}
+    for new, old in zip(a, r, strict=True):
+        if new == old:
+            continue
+        if not (IDENT.fullmatch(new) and IDENT.fullmatch(old)) or out.setdefault(old, new) != new:
+            return None
+    return out
+
+
+def _shape(text):
+    return tuple("N" if IDENT.fullmatch(t) else t for t in TOKEN.findall(text))
+
+
+def unmoved(added, removed):
+    """`added` ({file: [(line number, text)]}) without the lines that only moved: an added line whose text, ignoring
+    indentation, the same change removes elsewhere is not new code, nor is one that equals a removed line but for a
+    rename the change makes on at least RENAME_LINES lines. Each removed line excuses one added line, so code that is
+    copied rather than moved still counts."""
+    left = Counter(removed)
+    rest = []
+    for name, lines in sorted(added.items()):
+        for number, text in lines:
+            key = text.strip()
+            if key and left[key]:
+                left[key] -= 1
+            else:
+                rest.append((name, number, key))
+    by_shape = defaultdict(list)
+    for text, count in left.items():
+        if count:
+            by_shape[_shape(text)].append(text)
+    # Which renames are mechanical: each (old, new) pair counted once per added line that carries it.
+    seen = Counter()
+    pairs_of = {}
+    for name, number, key in rest:
+        found = set()
+        for text in by_shape.get(_shape(key), ())[:SHAPE_CANDIDATES] if key else ():
+            pairs = _renames(key, text)
+            if pairs:
+                found.update(pairs.items())
+                pairs_of.setdefault((name, number), []).append((text, pairs))
+        seen.update(found)
+    mechanical = {pair for pair, n in seen.items() if n >= RENAME_LINES}
+    out = {}
+    for name, number, _key in rest:
+        for text, pairs in pairs_of.get((name, number), ()):
+            if left[text] and set(pairs.items()) <= mechanical:
+                left[text] -= 1
+                break
+        else:
+            out.setdefault(name, []).append(number)
+    return out
+
+
 def diff_text(base, head, files=None):
     args = ["diff", "-U0", "--no-renames", "--no-color", base, head]
     if files:
@@ -133,7 +212,11 @@ def plan_coverage(base, head, root=ROOT, changed=None):
         files = sorted(n for n in changed if measured(n) and (root / n).is_file())
     if not files:
         return {"lines": {}}
-    added = {f: lines for f, lines in added_lines(diff_text(base, head, files)).items() if lines}
+    # Code a change moves (a split, a function to another module) or only renames in (a constant renamed everywhere)
+    # brings no new statements; its tests did not move.
+    text = diff_text(base, head, files)
+    moved_from = removed_text(diff_text(base, head, list(MEASURED)))
+    added = {f: lines for f, lines in unmoved(added_text(text), moved_from).items() if lines}
     statements = statement_lines(sorted(added), root)
     lines = {f: sorted(set(added[f]) & statements[f]) for f in sorted(added)}
     return {"lines": {f: ls for f, ls in lines.items() if ls}}

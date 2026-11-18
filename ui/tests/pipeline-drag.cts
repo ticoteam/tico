@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a pipeline's columns on the Tasks page (docs/pipelines-v3.md S7): a task dragged to another
+// Offline browser check of a pipeline's columns on the Tasks page (docs/dev/pipelines-v3.md S7): a task dragged to another
 // column is moved by the engine (POST /api/v2/tasks/{id}/move) and shows there. When the move is refused:
 // - with requirements a person may push past, the page asks "Move to Build without Spec page?" and sends the why;
 // - with a refusal it cannot push past, it shows the engine's line and the task stays where it was.
@@ -171,7 +171,7 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       // As backend/task_pipelines_routes.py answers: the record inside {pipeline: …}, on a read and on a save.
       if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {

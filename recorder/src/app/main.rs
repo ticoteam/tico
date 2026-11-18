@@ -152,7 +152,6 @@ commands! {
     sign_in(address: String) => |app| app.sign_in(&address);
     sign_in_desktop(url: Option<String>) => |app| app.sign_in_desktop(url.as_deref());
     make_default(id: String) => |app| app.make_default(&id);
-    import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
     dismiss_connect() => |app| app.dismiss_connect();
     confirm_record() => |app| app.confirm_record();
@@ -169,24 +168,24 @@ commands! {
 async fn task_picker(
     state: State<'_, Shared>,
     query: String,
-    kind: Option<String>,
+    pipeline: Option<String>,
     offset: usize,
 ) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
-    let kind = kind.unwrap_or_default();
+    let pipeline = pipeline.unwrap_or_default();
     picker_search(
         move || tico_recorder_native::network::Tico::saved(&config, &destination),
-        move |tico| tico.search_tasks(&query, &kind, offset),
+        move |tico| tico.search_tasks(&query, &pipeline, offset),
     )
     .await
 }
 
 #[tauri::command]
-async fn task_types(state: State<'_, Shared>) -> Result<Value, String> {
+async fn task_pipelines(state: State<'_, Shared>) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
     picker_search(
         move || tico_recorder_native::network::Tico::saved(&config, &destination),
-        |tico| tico.task_types(),
+        |tico| tico.pipelines(),
     )
     .await
 }
@@ -361,42 +360,7 @@ fn ticker(handle: tauri::AppHandle, recorder: &Shared) {
         .expect("recorder ticker");
 }
 
-/// `--import-transcription-key-stdin`: save one credential from standard input in this app's
-/// keychain identity and exit, without opening a window, capture or the library.
-fn import_key() -> anyhow::Result<()> {
-    use std::io::Read;
-    anyhow::ensure!(
-        std::env::args().count() == 2,
-        "Pass the credential through standard input only"
-    );
-    let mut key = String::new();
-    std::io::stdin().take(8193).read_to_string(&mut key)?;
-    let key = key.trim();
-    anyhow::ensure!(
-        (20..=8192).contains(&key.len()) && !key.chars().any(char::is_whitespace),
-        "Expected one transcription credential on standard input"
-    );
-    if !settings::secret("transcription")?.is_empty() {
-        println!("Native transcription credential is already configured; existing value retained");
-        return Ok(());
-    }
-    settings::save_secret("transcription", key)?;
-    anyhow::ensure!(
-        settings::secret("transcription")? == key,
-        "The native keychain did not retain the transcription credential"
-    );
-    println!("Transcription credential saved and verified in the native keychain");
-    Ok(())
-}
-
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--import-transcription-key-stdin") {
-        if let Err(error) = import_key() {
-            eprintln!("Credential import failed: {error:#}");
-            std::process::exit(1);
-        }
-        return;
-    }
     let demo = std::env::args().any(|arg| arg == "--demo");
     assert!(
         !demo || std::env::var_os("TICO_RECORDER_DATA_DIR").is_some(),
@@ -446,7 +410,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             more_task_links,
             task_picker,
-            task_types,
+            task_pipelines,
             link_selected_tasks,
             accept_link_item,
             unlink_item,
@@ -494,7 +458,6 @@ fn main() {
             sign_in_desktop,
             sign_out,
             make_default,
-            import_legacy,
             confirm_connect,
             dismiss_connect,
             confirm_record,

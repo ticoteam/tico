@@ -13,7 +13,8 @@ knows about rules. `c` is always a sqlite connection the caller opened (store.re
 - Cancel, never delete: `status = cancelled` until purge_cancelled removes rows 90 days on (the hourly Maintenance
   run's Clean up step).
 - `sequence` bumps on every change; an edit that names the sequence it saw is refused as `stale` when it moved.
-- Every write leaves an audit_log row and an event (`calendar.event.created|changed|cancelled`).
+- Every write leaves an audit_log row and an event (`calendar.event.created|changed|cancelled`, backend/calendar_events.py),
+  which the `event` automations hear.
 
 Who may read or write is the caller's decision (the routes, spec section 13). Reads mark private events
 `visibility: 'private'` and list their attendees, so the caller can show them as Busy to everyone else; a search hit on
@@ -27,6 +28,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from . import audit_log as _audit_log
+from . import calendar_events as _calendar_events
 from . import calendar_recur as CR
 from . import thread_search as _thread_search
 from .store import H as _H, Problem
@@ -631,13 +633,7 @@ def _audit(
     c: sqlite3.Connection, actor: str | None, action: str, row: Row, before: Row | None, detail: Row | None = None
 ) -> None:
     audit_log.write(c, actor, "calendar_event:" + row["id"], before and _core(before), _core(row))
-    H.event(
-        c,
-        actor,
-        "calendar.event." + action,
-        row["id"],
-        {"calendar_id": row["calendar_id"], **(detail or {})},
-    )
+    _calendar_events.emit(c, str(actor), action, row["id"], {"calendar_id": row["calendar_id"], **(detail or {})})
 
 
 def _insert(c: sqlite3.Connection, row: Row) -> None:
@@ -990,7 +986,7 @@ def set_response(
     )
     audit_log.write(c, actor, "calendar_event:" + target["id"], {"response": found["response"]}, {"response": response})
     detail = {"calendar_id": series["calendar_id"], "response": response}
-    H.event(c, actor, "calendar.event.changed", target["id"], detail)
+    _calendar_events.emit(c, str(actor), "changed", target["id"], detail)
     return None
 
 

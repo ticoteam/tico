@@ -121,7 +121,7 @@ async function open(browser: import('playwright').Browser, {role = 'owner', admi
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: [], services: [], agents: []});
     if (p === '/api/v2/models') return json({models: []});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     const list = () => ({repositories: data.repositories, new_bot_default: data.new_bot_default, github_connected: data.github_connected});
     if (p === '/api/v2/repositories') return json(list());
     if (p === '/api/v2/github/product-repos/preview' && method === 'GET') {

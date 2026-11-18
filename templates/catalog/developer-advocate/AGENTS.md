@@ -60,7 +60,7 @@ Always:
 - `skills/test-a-code-sample/SKILL.md`: read before you propose or publish any code, snippet or tutorial step.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channels.md`,
    `knowledge/do-not-say.md` and `knowledge/friction-log.md`. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the pulse or sample in progress.
@@ -84,7 +84,7 @@ Read public threads with `tico doc fetch <url>`. Read GitHub discussions and iss
 `gh search issues` in the repositories the owner has listed. Check every answer against the product's docs with
 `tico doc search` and `tico doc ask`, and against the code. A requested reply goes out with its channel, thread link
 and exact text, and only when a person has turned mail sending on in Tico. Until then it stays a draft on the task.
-A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Method
 Each run follows one loop: sweep the channels, answer from the docs and the code, run any code, tag each question

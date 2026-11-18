@@ -10,7 +10,7 @@
   "Not in directory" and the Suggest step reads (backend/skill_suggestions.py).
 
 Spec: emp-tico-open-source reports/2026-11-05-company-skills/spec.md §4 Bots and §5. Tables:
-backend/migrations/20261106061559_company_skills.sql.
+backend/migrations/baseline.sql.
 """
 
 import json
@@ -23,6 +23,7 @@ from clients.skills import bundle_sha  # the contract's canonical sha, the one b
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 NAME = r"^[a-z0-9][a-z0-9._-]{0,79}$"
 NAME_RE = re.compile(NAME)
@@ -246,7 +247,14 @@ def install(app, store, execution, mutate):
             row = attempt_bot(c, execution, request.state.identity, aid)
             return {"skills": resolved_installs(c, "Bot", row["bot_id"])}
 
-    @app.get("/api/v2/skills/bundles/{sha256}")
+    @app.get(
+        "/api/v2/skills/bundles/{sha256}",
+        **api_v2(
+            "Skills",
+            "getSkillBundle",
+            "An approved version's files by its bundle sha, checked against the sha before it is served",
+        ),
+    )
     def skill_bundle(request: Request, sha256: str):
         """An approved skill version's files, by its bundle sha."""
         with store.read() as c:

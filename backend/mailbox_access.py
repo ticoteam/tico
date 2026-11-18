@@ -16,16 +16,12 @@ Implicit levels, with no row:
 - a person's Assistant: exactly that person's access (backend/auth.py `assistant_principal` makes its turns that person).
 Everyone else needs an explicit `mailbox_accesses` row. Managers and admins get nothing automatic on a personal mailbox,
 and the owner holds no bypass. Nobody reshares: only a personal mailbox's person, or an admin for a shared inbox, may
-grant or revoke on it.
-
-The mail connector (a computer's own sync and the actions the server leases to it) is the `connector` principal: read
-on the mailboxes this computer may act for (/api/v2/connectors/mail/targets) and nothing else here; its writes are only
-the actions the server leased it, each checked against the automation owner's level when leased.
+grant or revoke on it. A computer is nobody here: the server reads and acts on mail itself.
 """
 
 import json
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .store import H, Problem
 
@@ -42,12 +38,10 @@ MIGRATION = "migration"
 
 @dataclass(frozen=True)
 class Principal:
-    """Who is asking: a person (`id` their person id), a bot (`id` its bot id), the mail connector (`targets` the
-    addresses its computer may act for) or nobody."""
+    """Who is asking: a person (`id` their person id), a bot (`id` its bot id) or nobody."""
 
     kind: str
     id: str = ""
-    targets: frozenset = field(default_factory=frozenset)
 
     @property
     def ref(self):
@@ -61,27 +55,10 @@ def _addr(value):
     return str(value or "").strip().lower()
 
 
-def connector(targets):
-    """The mail connector of one computer: read on `targets` (addresses, or target dicts with an `address`)."""
-    out = set()
-    for target in targets or ():
-        out.add(_addr(target.get("address") if isinstance(target, dict) else target))
-    out.discard("")
-    return Principal("connector", "", frozenset(out))
-
-
-def connector_for(c, runner_id, named, owned=None):
-    """The connector principal of computer `runner_id`: the mailboxes it may act for, as
-    /api/v2/connectors/mail/targets lists them (`named`: it is a publisher)."""
-    from . import google_rights
-
-    return connector(google_rights.visible(c, runner_id, named, owned=owned))
-
-
 def principal(c, who):
     """The principal behind an auth Identity, an actor string (`person:<id>`, `human:<id>`, `bot:<id or slug>`) or a
     Principal. A person's Assistant arrives as that person already (backend/auth.py `assistant_principal`). A runner
-    or a service key is nobody here: the connector is made with `connector_for`, from the targets."""
+    or a service key is nobody here."""
     if isinstance(who, Principal):
         return who
     if who is None:
@@ -265,8 +242,6 @@ def _level(facts, p, address, row):
     address = _addr(address)
     if not address or "@" not in address:
         return "none"
-    if p.kind == "connector":
-        return "read" if address in p.targets else "none"
     if row and row["status"] != "active":
         return "none"
     if p.kind == "person":
@@ -336,10 +311,7 @@ def mailboxes_for(c, who, min_level="read"):
             candidates[address] = row if row is not None else _row(c, address)
 
     try:
-        if p.kind == "connector":
-            for address in sorted(p.targets):
-                add(address)
-        elif p.kind == "person":
+        if p.kind == "person":
             person = facts.person(p.id)
             if person:
                 add(person.get("email"))
@@ -407,7 +379,7 @@ ACTION_NEEDS = {
 
 
 def action_refusal(c, owner, mailbox, action, args=None, *, queued=False):
-    """Why an automation of `owner` may not have the connector carry out `action` on `mailbox`, or None when it may.
+    """Why an automation of `owner` may not have Tico carry out `action` on `mailbox`, or None when it may.
     `queued`: asked when the action is queued, when a send or forward still becomes a draft if sending is off at the
     claim, so a draft is enough then. An action this does not know needs what a send needs."""
     need = ACTION_NEEDS.get(action, "send")
@@ -722,15 +694,6 @@ def kind_for(address, by_email):
     return ("personal", person["id"]) if person else ("shared", None)
 
 
-# ---------------------------------------------------------------------------------------------------- backfill
-def _table(c, name):
-    return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
-
-
-def _columns(c, name):
-    return {row[1] for row in c.execute(f"PRAGMA table_info({name})")}
-
-
 def _gmail_entries(config):
     from clients.manifest import tools_of
 
@@ -745,251 +708,3 @@ def manifest_level(entry):
         return "read"
     can = {str(v).strip().lower() for v in (entry.get("can") or [])}
     return "read_write" if can & {"draft", "send"} else "read"
-
-
-def _configs(c):
-    """{bot id: stored config} for every bot that is not archived."""
-    if not (_table(c, "bots") and _table(c, "bot_config")):
-        return {}
-    from . import bot_settings as BS
-
-    live = {row["id"] for row in c.execute("SELECT id, state FROM bots") if row["state"] != "archived"}
-    sql = (
-        f"SELECT bc.bot AS bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}"
-        if _table(c, "bot_settings")
-        else "SELECT bot, config FROM bot_config"
-    )
-    out = {}
-    for row in c.execute(sql):
-        if row["bot"] not in live:
-            continue
-        try:
-            out[row["bot"]] = json.loads(row["config"] or "{}")
-        except ValueError:
-            out[row["bot"]] = {}
-    for bot in live:
-        out.setdefault(bot, {})
-    return out
-
-
-def ever_signed_in(c, person_id):
-    """Whether this roster person has ever used Tico themselves: a sign-in session, an API token, a message they sent,
-    or anything they did (an event they are the actor of). Sessions expire, the rest stays."""
-    actor = H.human_actor(person_id)
-    for table, column, value in (
-        ("oidc_sessions", "human", person_id),
-        ("human_tokens", "human", person_id),
-        ("messages", "sender_id", actor),
-        ("events", "actor", actor),
-    ):
-        if (
-            _table(c, table)
-            and column in _columns(c, table)
-            and c.execute(f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (value,)).fetchone()
-        ):
-            return True
-    return False
-
-
-def placeholders(c, people, configs):
-    """Roster entries that stand for a mailbox, not a person ("legal@ (mailbox)", read by the Rules Owner): one with a message
-    bot that reads exactly their email, who has never signed in. Their mailbox is a shared inbox, linked to nobody.
-    {person_id: address}."""
-    from . import routines
-
-    out = {}
-    for person in people:
-        bot, email = person.get("inbox_bot"), _addr(person.get("email"))
-        if not bot or bot not in configs or not routines.MAILBOX.fullmatch(email):
-            continue
-        if _addr(routines.declared_mailbox(configs[bot]) or email) == email and not ever_signed_in(c, person["id"]):
-            out[person["id"]] = email
-    return out
-
-
-def plan(c):
-    """What the backfill would write, from today's sources: ({address: {kind, person_id, connection}},
-    {(address, grantee_type, grantee_id): level}). Nobody loses the access they had through a message bot, a bot.yaml
-    gmail entry, a Connect Google grant or a mail automation; a manager's automatic view of reports' mail is dropped."""
-    from . import people as P
-    from . import routines
-
-    roster = routines._roster(c) if _table(c, "registry_metadata") and _table(c, "humans") else {"people": []}
-    everyone = roster.get("people") or []
-    by_email = {}
-    for person in everyone:
-        email = _addr(person.get("email"))
-        if email:
-            by_email.setdefault(email, person)
-    live_people = {p["id"]: p for p in everyone if not p.get("hidden")}
-    configs = _configs(c)
-    boxes, grants = {}, {}
-    stand_ins = placeholders(c, live_people.values(), configs)
-    not_people = set(stand_ins.values())
-
-    def box(address, connection="workspace"):
-        address = _addr(address)
-        if not routines.MAILBOX.fullmatch(address):
-            return None
-        if address not in boxes:
-            kind, pid = ("shared", None) if address in not_people else kind_for(address, by_email)
-            boxes[address] = {"kind": kind, "person_id": pid, "connection": connection}
-        elif connection == "personal":
-            boxes[address]["connection"] = "personal"
-        return address
-
-    def give_(address, kind, ident, level):
-        if not address or not ident:
-            return
-        found = boxes[address]
-        if kind == "person" and found["kind"] == "personal" and found["person_id"] == ident:
-            return  # their own mailbox: no row needed
-        key = (address, kind, ident)
-        grants[key] = _best(grants.get(key, "none"), level)
-
-    operator_of = {}
-    if _table(c, "bot_config") and "owner_id" in _columns(c, "bot_config"):
-        operator_of = {row["bot"]: row["owner_id"] for row in c.execute("SELECT bot, owner_id FROM bot_config")}
-
-    # What each person's message bot handles (routines.message_bot_mailboxes, without dropping a mailbox two bots
-    # share): the bot by what its gmail entry asked; the person, when it is not their own address, so they keep it.
-    declared = {}
-    for person in live_people.values():
-        bot = person.get("inbox_bot")
-        if not bot or bot not in configs:
-            continue
-        config = configs[bot]
-        address = box(routines.declared_mailbox(config) or person.get("email"))
-        if not address:
-            continue
-        declared.setdefault(person["id"], []).append(address)
-        entry = next((e for e in _gmail_entries(config) if _addr(e.get("identity")) == address), None)
-        give_(address, "bot", bot, manifest_level(entry))
-        if person["id"] in stand_ins:
-            # A mailbox placeholder: the person it reports to keeps it (else the bot's operator), Read and write.
-            keeper = H.actor_id(person.get("reports_to") or "")
-            if keeper not in live_people:
-                keeper = H.actor_id(operator_of.get(bot) or "")
-            if keeper in live_people and keeper != person["id"]:
-                give_(address, "person", keeper, "read_write")
-        elif address != _addr(person.get("email")):
-            give_(address, "person", person["id"], "read_write" if boxes[address]["kind"] == "shared" else "read")
-
-    # Every bot's gmail entries (bot.yaml `tools:`), and `org_read: true`: read on the mailboxes below its person.
-    for bot, config in configs.items():
-        who = P.inbox_person(bot, roster)
-        own = routines.declared_mailbox(config) or _addr((who or {}).get("email"))
-        for entry in _gmail_entries(config):
-            address = box(entry.get("identity"))
-            if not address:
-                continue
-            give_(address, "bot", bot, manifest_level(entry))
-            if entry.get("org_read") is True:
-                person = P.person_by_email(address, roster) or (who if who and address == own else None)
-                if not person:
-                    continue
-                for below in P.below(person["id"], roster)[1:]:
-                    if below.get("hidden"):
-                        continue
-                    # inbox_of read their emails, token_mailboxes their message bots' mailboxes: keep both.
-                    for other in dict.fromkeys((declared.get(below["id"]) or []) + [_addr(below.get("email"))]):
-                        other = box(other)
-                        if other:
-                            give_(other, "bot", bot, "read")
-
-    # Live Connect Google grants: the mailbox its person connected.
-    if _table(c, "google_connects"):
-        have = _columns(c, "google_connects")
-        live = "grant_hash IS NOT NULL AND " if "grant_hash" in have else ""
-        for row in c.execute(f"SELECT person_id, mailbox FROM google_connects WHERE {live}status<>'disconnected'"):
-            address = box(row["mailbox"], "personal")
-            if address and row["person_id"] in live_people:
-                give_(address, "person", row["person_id"], "read_write")
-
-    # The mailboxes the server already keeps a copy of.
-    if _table(c, "mail_mailboxes"):
-        for row in c.execute("SELECT address FROM mail_mailboxes"):
-            box(row["address"])
-
-    # Mail automations: their owner keeps hearing the mailbox they hear today (automations.may_read_inbox before
-    # this change: a person's own email and their message bot's mailboxes; a bot's, its operator's).
-    if _table(c, "automations"):
-        operators = operator_of
-
-        def heard(person_id):
-            person = live_people.get(person_id)
-            if not person:
-                return []
-            email = _addr(person.get("email"))
-            return list(dict.fromkeys((declared.get(person_id) or []) + ([email] if "@" in email else [])))
-
-        for row in c.execute("SELECT owner_id, flow FROM automations WHERE deleted_at IS NULL"):
-            try:
-                flow = json.loads(row["flow"] or "{}")
-            except ValueError:
-                continue
-            owner = str(row["owner_id"] or flow.get("owner") or "")
-            kind, _, ident = (("person:" + owner[6:]) if owner.startswith("human:") else owner).partition(":")
-            if kind == "bot":
-                person_id = H.actor_id(operators.get(ident) or "")
-                if ident not in configs:
-                    continue
-            elif kind == "person":
-                person_id = ident
-            else:
-                continue
-            old = heard(person_id)
-            trigger = flow.get("trigger") or {}
-            wanted = []
-            if trigger.get("type") == "message" and "@" in str(trigger.get("inbox") or ""):
-                wanted.append(_addr(trigger["inbox"]))
-            if any(step.get("type") == "find" and step.get("source") == "mail" for step in flow.get("steps") or []):
-                wanted.extend(old)
-            for address in wanted:
-                if address not in old:
-                    continue  # not heard today either
-                if kind == "person" and address == _addr((live_people.get(ident) or {}).get("email")):
-                    continue  # their own mailbox: theirs with no row
-                address = box(address)
-                if address:
-                    give_(address, "bot" if kind == "bot" else "person", ident, "read_write")
-    return boxes, grants
-
-
-def backfill(c):
-    """Write `plan(c)`: a row per mailbox and the explicit grants, never changing a row or a grant already there, so a
-    second run (or a run after people changed access) writes nothing. Returns {"mailboxes": n, "accesses": n} made."""
-    if not (_table(c, "mailboxes") and _table(c, "mailbox_accesses")):
-        return {"mailboxes": 0, "accesses": 0}
-    boxes, grants = plan(c)
-    now, made = H.now(), {"mailboxes": 0, "accesses": 0}
-    for address, found in sorted(boxes.items()):
-        cur = c.execute(
-            "INSERT OR IGNORE INTO mailboxes(id, address, provider, person_id, kind, connection, status, shared_by, "
-            "shared_at, created_by, created_at, updated_at) VALUES(?,?,?,?,?,?,'active',?,?,?,?,?)",
-            (
-                H.new_id(),
-                address,
-                PROVIDER,
-                found["person_id"],
-                found["kind"],
-                found["connection"],
-                MIGRATION if found["kind"] == "shared" else None,
-                now if found["kind"] == "shared" else None,
-                MIGRATION,
-                now,
-                now,
-            ),
-        )
-        made["mailboxes"] += cur.rowcount
-    ids = {row["address"]: row["id"] for row in c.execute("SELECT id, address FROM mailboxes")}
-    for (address, kind, ident), lvl in sorted(grants.items()):
-        if address not in ids:
-            continue
-        cur = c.execute(
-            "INSERT OR IGNORE INTO mailbox_accesses(id, mailbox_id, grantee_type, grantee_id, level, "
-            "granted_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
-            (H.new_id(), ids[address], kind, ident, lvl, MIGRATION, now, now),
-        )
-        made["accesses"] += cur.rowcount
-    return made

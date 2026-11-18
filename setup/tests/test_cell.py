@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from setup import cell, envfile
 from setup.cell import Result
@@ -334,7 +335,7 @@ def test_a_company_file_becomes_the_servers_starter_plan(ready):
     d = ready.root / "companies" / "boatyard"
     env = envfile.parse((d / ".env").read_text())
     plan = d / "company-file" / "plan.b64"
-    assert env["TICO_TEAM_NAME"] == "Boatyard Marine" and env["TICO_SAMPLE_COMPANY"] == "off"
+    assert env["TICO_TEAM_NAME"] == "Boatyard Marine"
     assert env["TICO_COMPANY_FILE"] == "/run/tico/company-file/plan.b64" and "TICO_COMPANY_FILE_B64" not in env
     assert stat.S_IMODE(plan.stat().st_mode) == 0o600 and (str(plan), 10001, 10001) in ready.system.chowns
     assert ready(*add_args(ready))["changed"] is False  # left out again: the saved plan stays
@@ -2529,6 +2530,13 @@ def test_a_page_host_is_one_of_the_companys_hosts_for_the_wake_service_and_the_t
     assert cell.tunnel_hosts("tico.team", [page_company()]) == ["acme.tico.page"]
 
 
+def test_the_cell_front_door_uses_the_same_images_as_compose():
+    compose = Path(__file__).resolve().parents[2] / "compose.yaml"
+    services = yaml.safe_load(compose.read_text())["services"]
+    assert cell.ROUTER_IMAGE == services["caddy"]["image"]
+    assert cell.TUNNEL_IMAGE == services["cloudflared"]["image"]
+
+
 def test_the_router_mounts_the_page_folders_read_only_and_nothing_else_of_the_cell():
     text = cell.edge_compose(Path("/opt/cell"), tunnel=False)
     assert "      - /opt/cell/pages:/pages:ro" in text
@@ -2788,3 +2796,161 @@ def test_the_pinned_router_accepts_the_page_config(tmp_path):
         text=True,
     )
     assert run.returncode == 0, run.stderr[-800:]
+
+
+# --- the Slack gateway (`set-slack`) -------------------------------------------------------------------------------
+
+import yaml  # noqa: E402
+
+
+def services_of(host, slug="boatyard"):
+    return yaml.safe_load((host.root / "companies" / slug / "compose.cell.yaml").read_text())["services"]
+
+
+def env_of(host, slug="boatyard"):
+    return envfile.parse((host.root / "companies" / slug / ".env").read_text())
+
+
+def test_a_company_has_no_slack_gateway_until_staff_turn_it_on(ready):
+    ready(*add_args(ready))
+    assert "COMPOSE_PROFILES" not in env_of(ready) and set(services_of(ready)) == {"server"}
+    assert "slack" not in record(ready) and "slack" not in ready("status", "--company", "boatyard")
+    assert ready.system.slack == {} and " slack" not in ready.system.argv_text()
+    ready("update", "--company", "boatyard", "--version", "v1.3.0")
+    assert "COMPOSE_PROFILES" not in env_of(ready) and set(services_of(ready)) == {"server"}
+
+
+def test_set_slack_on_starts_an_isolated_gateway_beside_the_running_server(ready):
+    ready(*add_args(ready))
+    server = services_of(ready)["server"]
+    d = ready.root / "companies" / "boatyard"
+    answer = ready("set-slack", "--company", "boatyard", "on")
+    assert answer == {"ok": True, "company": "boatyard", "slack": True, "changed": True, "ready_ms": answer["ready_ms"]}
+    assert record(ready)["slack"] is True and env_of(ready)["COMPOSE_PROFILES"] == "slack"
+    services = services_of(ready)
+    assert services["server"] == server  # the server's config is the same, so `up -d` does not recreate it
+    assert services["slack"] == {
+        "mem_limit": cell.SLACK_MEMORY,
+        "memswap_limit": cell.SLACK_MEMORY,
+        "environment": {"TICO_CELL": None},
+        "labels": {cell.LABEL: "boatyard"},
+        "volumes": [f"{d / 'data'}:/data"],  # its own data folder in place of the stock volume, and no control/
+    }
+    assert ready.system.slack["boatyard"][0] == "running"
+    # The gateway carries the company's label, but the company's state is still its server's.
+    status = ready("status", "--company", "boatyard")
+    assert status["state"] == "running" and status["container"] == {"state": "running", "health": "healthy"}
+    assert status["slack"] is True and status["slack_container"]["state"] == "running"
+    assert ready("list")["companies"][0]["state"] == "running" and ready("list")["companies"][0]["slack"] is True
+    calls = len(ready.system.calls)
+    assert ready("set-slack", "--company", "boatyard", "on") | {"ready_ms": 0} == answer | {
+        "ready_ms": 0,
+        "changed": False,
+    }
+    assert "up -d" not in " ".join(" ".join(c) for c in ready.system.calls[calls:])
+
+
+def test_the_stock_slack_service_needs_nothing_the_override_does_not_replace():
+    # The override isolates the gateway by replacing its one volume; another mount, port or network in compose.yaml
+    # would reach the gateway unreplaced.
+    slack = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["slack"]
+    assert slack["profiles"] == ["slack"] and slack["volumes"] == ["tico-data:/data"]
+    assert "ports" not in slack and "networks" not in slack and "network_mode" not in slack
+
+
+def test_the_slack_gateway_survives_add_and_update_and_a_hand_edit(ready):
+    ready(*add_args(ready))
+    ready("set-slack", "--company", "boatyard", "on")
+    assert ready(*add_args(ready))["changed"] is False and record(ready)["slack"] is True
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["ok"]
+    assert "stop slack server" in ready.system.argv_text()  # the gateway writes the database too: stopped first
+    assert (
+        record(ready)["slack"] is True
+        and env_of(ready)["COMPOSE_PROFILES"] == "slack"
+        and "slack" in services_of(ready)
+    )
+    assert ready.system.slack["boatyard"][0] == "running"
+    env = (d / ".env").read_text()
+    (d / ".env").write_text("".join(line for line in env.splitlines(True) if not line.startswith("COMPOSE_PROFILES=")))
+    assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["changed"] is True
+    assert env_of(ready)["COMPOSE_PROFILES"] == "slack"
+
+
+def test_set_slack_off_removes_the_gateway_and_its_settings(ready):
+    ready(*add_args(ready))
+    before = (ready.root / "companies" / "boatyard" / "compose.cell.yaml").read_text()
+    ready("set-slack", "--company", "boatyard", "on")
+    answer = ready("set-slack", "--company", "boatyard", "off")
+    assert answer == {"ok": True, "company": "boatyard", "slack": False, "changed": True, "ready_ms": 0}
+    assert "--profile slack rm --stop --force slack" in ready.system.argv_text()
+    assert ready.system.slack == {} and "slack" not in record(ready) and "COMPOSE_PROFILES" not in env_of(ready)
+    assert (ready.root / "companies" / "boatyard" / "compose.cell.yaml").read_text() == before
+    assert ready("set-slack", "--company", "boatyard", "off")["changed"] is False
+    ready("update", "--company", "boatyard", "--version", "v1.3.0")
+    assert ready.system.slack == {} and "COMPOSE_PROFILES" not in env_of(ready)
+
+
+def test_a_gateway_that_cannot_be_removed_stays_on(ready):
+    ready(*add_args(ready))
+    ready("set-slack", "--company", "boatyard", "on")
+    ready.system.fail["rm --stop --force slack"] = Result(1, "", "cannot remove")
+    assert ready("set-slack", "--company", "boatyard", "off")["error"] == "docker_failed"
+    assert record(ready)["slack"] is True and env_of(ready)["COMPOSE_PROFILES"] == "slack"
+
+
+def test_update_never_copies_the_database_while_the_gateway_still_runs(ready):
+    ready(*add_args(ready))
+    ready("set-slack", "--company", "boatyard", "on")
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    run = ready.system.run
+
+    def stubborn(argv, **kw):
+        result = run(argv, **kw)
+        if "stop" in argv:
+            ready.system.slack["boatyard"] = ("running", "Up 3 seconds")
+        return result
+
+    ready.system.run = stubborn
+    answer = ready("update", "--company", "boatyard", "--version", "v1.3.0")
+    assert answer["error"] == "stop_failed" and "slack container is still running" in answer["detail"]
+    assert not (d / "snapshots").exists() and record(ready)["version"] == "v1.2.3"
+
+
+def test_the_gateway_sleeps_and_wakes_with_its_server(ready):
+    ready(*add_args(ready))
+    ready("sleep", "--company", "boatyard")
+    answer = ready("set-slack", "--company", "boatyard", "on")
+    assert answer["ok"] and answer["ready_ms"] == 0 and ready.system.slack == {}  # a sleeping company is not woken
+    assert ready("wake", "--company", "boatyard")["ok"] and ready.system.slack["boatyard"][0] == "running"
+    assert ready("sleep", "--company", "boatyard")["ok"] and ready.system.slack["boatyard"][0] == "exited"
+    assert ready("start", "--company", "boatyard")["ok"] and ready.system.slack["boatyard"][0] == "running"
+    assert ready("stop", "--company", "boatyard")["ok"] and ready.system.slack["boatyard"][0] == "exited"
+
+
+def test_set_slack_refuses_an_unknown_company_or_state(ready):
+    assert ready("set-slack", "--company", "nobody", "on")["error"] == "not_found"
+    ready(*add_args(ready))
+    assert ready("set-slack", "--company", "boatyard", "yes")["error"] == "bad_args"
+    assert "slack" not in record(ready)
+
+
+@pytest.mark.slow
+def test_compose_gives_the_gateway_only_the_companys_own_data_network_and_limits(ready):
+    # Compose's own merge of the stock file and the override, as the cell runs it.
+    import shutil
+
+    if not shutil.which("docker") or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode:
+        pytest.skip("docker compose is not on this machine")
+    ready(*add_args(ready))
+    ready("set-slack", "--company", "boatyard", "on")
+    d = ready.root / "companies" / "boatyard"
+    argv = cell.Cell(ready.root, ready.system).compose("boatyard", "config", "--format", "json")
+    run = subprocess.run(argv, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr[-800:]
+    slack = json.loads(run.stdout)["services"]["slack"]
+    assert [(v["source"], v["target"]) for v in slack["volumes"]] == [(str(d / "data"), "/data")]
+    assert list(slack["networks"]) == ["default"] and not slack.get("ports")
+    assert slack["labels"] == {cell.LABEL: "boatyard"} and slack["mem_limit"] == str(1024**3)

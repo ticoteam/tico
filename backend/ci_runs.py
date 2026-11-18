@@ -252,7 +252,7 @@ def _nudge(c: sqlite3.Connection, task: dict[str, Any], who: str, cap: int, at: 
     )
     made = cast(Callable[..., dict[str, Any]], H.task_create)(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         f"{label}: remote test runs reached {cap} VM-minutes"[:150],
         body,
         told,

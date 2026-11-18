@@ -2,7 +2,8 @@
 # Create at https://api.slack.com/apps > Create New App > From an app manifest, paste this,
 # install to your company's workspace, then copy the Bot User OAuth Token. See connectors/README.md.
 #
-# These are exactly the scopes connectors/slack.py and backend/slack_gateway.py use:
+# These are exactly the scopes backend/slack_gateway.py uses (for itself and for bots' connectors/slack.py), and
+# v0.6.0-rc.1's connectors/slack.py, which older computers run with their own copy of the token:
 #   channels:history      read public channel messages and threads  (history, gateway channel readers)
 #   channels:read         list public channels                      (channels, doctor, resolve #name)
 #   channels:join         join a public channel                     (join)
@@ -26,8 +27,8 @@
 # the server; no public receiver, no signing secret): `app_mention` in any channel the app is
 # in, `message.im` for DMs to it, and `message.channels` / `message.groups` for everything
 # else said in a channel it is in. A person's DM or @Tico wakes the bot the router picks
-# to at once; every other channel message is stored and reaches the channel's readers
-# (the channel list in Settings > Tools > Slack) on the hourly pass (docs/slack-gateway.md).
+# to at once; every other channel message is stored, and in a channel bots read (the channel list
+# in Settings > Tools > Slack) it goes into the channel's read-only thread (docs/slack-gateway.md).
 # `link_shared` is a task link pasted on one of `unfurl_domains`: the gateway answers with a preview.
 # Put your Tico's host there (and any in TICO_SLACK_UNFURL_HOSTS); Settings > Slack's manifest fills it in.
 # Interactivity is on so the preview's open button is acknowledged over the same socket.

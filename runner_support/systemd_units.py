@@ -15,11 +15,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-KINDS = ("bot", "connectors", "close-calls", "importers")
-COMMANDS = {"bot": "run", "connectors": "connectors", "close-calls": "close-calls", "importers": "importers"}
+KINDS = ("bot", "close-calls", "importers")
+COMMANDS = {"bot": "run", "close-calls": "close-calls", "importers": "importers"}
 DESCRIPTIONS = {
     "bot": "Tico runner",
-    "connectors": "Tico connectors",
     "close-calls": "Tico close-calls",
     "importers": "Tico importers",
     "api": "Tico server",
@@ -32,7 +31,7 @@ def unit_name(kind, env_slug=""):
 
 
 def helper_units(unit, kinds=KINDS):
-    """The units beside the runner's own, from its name: `tico-bot.service` -> `tico-connectors.service`, ..."""
+    """The units beside the runner's own, from its name: `tico-bot.service` -> `tico-importers.service`, ..."""
     if not (unit.startswith("tico-") and unit.endswith("bot.service")):
         return {}
     stem = unit[: -len("bot.service")]
@@ -53,7 +52,7 @@ def quote(value):
 
 
 def render(kind, *, python, config, root, log, path, env_slug="", home="", user="", env_file="", port="", throttle=10):
-    """The text of one unit. `kind` is bot, connectors, close-calls, importers, or api (an environment's local server,
+    """The text of one unit. `kind` is bot, close-calls, importers, or api (an environment's local server,
     which reads its settings from `env_file`)."""
     if kind == "api":
         exec_line = " ".join(quote(x) for x in (python, "-m", "backend.server", "--host", "127.0.0.1", "--port", port))

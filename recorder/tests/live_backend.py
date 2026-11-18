@@ -13,13 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from pydantic import ValidationError
 from backend.live_meetings import ChunkBatch, append_chunks
-from backend.meetings_schema import LIVE_MEETINGS_SCHEMA
+from backend import migrations
 from backend.store import Problem
 
 
-db = sqlite3.connect(":memory:")
+db = sqlite3.connect(":memory:", isolation_level=None)
+migrations.apply(db)  # the whole schema, from the baseline
+db.isolation_level = ""
 db.row_factory = sqlite3.Row
-db.executescript(LIVE_MEETINGS_SCHEMA)
 db.execute(
     "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at) "
     "VALUES('live-fixture','human:test','Synthetic meeting','live',30000,'now','now','now')"

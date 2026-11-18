@@ -61,8 +61,8 @@ function lcRows(state: LcState): LcTool[] { if (!state.rows) throw new Error('To
 
 // ----------------------------------------------------------------- the model: one item per tool or loose credential
 const lcBotName = (slug: string): string => botDisplayName(slug);
-// The tools list names a bot by its id; one named by slug (a server from before ids, or an old link) is read as its id.
-const lcBotId = (ref: string): string => botByRef(ref)?.id || ref;
+// The tools list names a bot by its id.
+const lcBotId = (ref: string): string => ref;
 const lcPerson = (id: string): {id: string; name?: string | null} => (S.people || []).find(p => p.id === id) || (VAULT?.people || []).find(p => p.id === id) || {id, name: id};
 // Variables a tool names (CLOSE_API_KEY), from its page and from the entries bots declare; words like API are not one.
 const lcEnvs = (row: LcTool): (string | undefined)[] => [...new Set([...credEnvs(row.credentials), ...(row.connections || []).map(c => c.env)].filter(e => e && e.includes('_') && !e.includes('<')))];
@@ -391,7 +391,7 @@ async function lcSlackLinks(state: LcState): Promise<void> {
   };
   const toggle = (open: boolean): void => { form.hidden = !open; openBtn.setAttribute('aria-expanded', String(open)); };
   openBtn.onclick = () => {
-    toggle(form.hidden);
+    toggle(Boolean(form.hidden));
     if (form.hidden) return;
     if (!threadsRead) void loadThreads().catch(failed);
     chanInput.focus();

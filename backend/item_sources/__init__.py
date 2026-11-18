@@ -1,5 +1,5 @@
 # pyright: strict
-"""Sources: places outside Tico a task can wait on (docs/pipelines-v3.md "Sources and items"). One module each, named in
+"""Sources: places outside Tico a task can wait on (docs/dev/pipelines-v3.md "Sources and items"). One module each, named in
 SOURCES; GitHub (`github.py`) is the only one.
 
 A source module has `SOURCE` (its id), `NAME`, `ITEMS` (its item types) and `CONDITIONS` (what a requirement of kind

@@ -1,4 +1,4 @@
-"""Native threads: who reads a thread, how a message is written and delivered, read state, edits, the migration.
+"""Native threads: who reads a thread, how a message is written and delivered, read state, edits.
 
 The contract every track builds on is docs/dev/threads-contract.md; this module is its implementation. A thread is a
 `conversations` row (the table keeps its name), and its id is the conversation id.
@@ -32,7 +32,7 @@ addressee) or the same insert (without one). The primary recipient's delivery ro
 `messages` (one row per message with a `recipient_id`, its state following `delivered_at`/`read_at`), so every legacy
 writer and reader agrees with the inbox. `record` adds the rest: mention rows, the deliveries for everyone the
 message is addressed to (its @mentions, the author of the message it replies to, DM members) and for its followers,
-each at a mode from the message's way and their level (`plan`), woken bots (each through a carrier: a keeper notice
+each at a mode from the message's way and their level (`plan`), woken bots (each through a carrier: a Tico notice
 whose job starts the run, since `jobs.message_id` is unique), and the loop guard, which writes a bot-caused wake past
 LOOP_GUARD_PER_HOUR in a root as `capped` and lets it go later (`resume_capped`). An @mention on a private task adds
 the person or bot to Who can see (`widen`). Nothing is guessed: a message that addresses nobody reaches only the
@@ -46,7 +46,6 @@ Every message gets an `origin_id` ('<uuid v7>@<install id>') and a `revision`; `
 (origin_id, revision) seen, so a replicated edit or delete is applied once and an older one never wins.
 """
 
-import contextlib
 import contextvars
 import json
 import os
@@ -145,21 +144,8 @@ def _now():
 
 
 # ----------------------------------------------------------------------------- schema
-# The tables, columns, triggers and other indexes are migration backend/migrations/0047_native_threads_schema.py. The
-# message indexes are built here, by migrate, after its one-time backfill (building them over unstamped rows first is
-# slow, and it stalls); 0047 makes them only on a file whose backfill already ran.
-_MESSAGE_INDEXES = (
-    # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
-    # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
-    "CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq) WHERE seq IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS messages_thread_seq ON messages(conversation_id, seq)",
-    # The people's messages of a thread: the sidebar's unread rank skips a long run of bot posts past someone's mark.
-    "CREATE INDEX IF NOT EXISTS messages_thread_human ON messages(conversation_id, seq) WHERE sender_id LIKE 'human:%'",
-    # Migrated shared-room history: which Homes still hold messages read by their old readers.
-    "CREATE INDEX IF NOT EXISTS messages_legacy_audience ON messages(conversation_id, legacy_audience) "
-    "WHERE legacy_audience IS NOT NULL",
-)
+# The tables, columns, triggers and indexes are migrations: backend/migrations/0047_native_threads_schema.py, and the
+# message indexes backend/migrations/20261116172132_threads_legacy_out.py.
 
 # The room a shared conversation belongs to, as SQL over a row named {r}: rooms.room_bot for a shared room.
 _ROOM_BOT = "substr({r}.room_key,1,instr({r}.room_key||':',':')-1)"
@@ -203,12 +189,6 @@ def _backfill_sql(r):
         f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL "
         f"OR json_extract({refs},'$.moved_home') IS NOT NULL)"
     )
-
-
-def ensure(c):
-    """Every start (hubdb.migrate): the one data step a file migrated before it existed still needs. The schema is
-    migration 0047."""
-    _neutral_titles_once(c)
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -1242,7 +1222,7 @@ def _record(c, message, conv):
 def widen(c, root, author, actor):
     """D6, D6a: `author`'s @mention of `actor` on a private task's thread adds `actor` to the task's Who can see, as a
     task event anyone on the task can undo (hubdb.set_task_readers). A bot widens it only to a teammate in its reach
-    (backend/reach.py), and never to a group; the keeper and outside writers never do. True when `actor` reads the
+    (backend/reach.py), and never to a group; Tico and outside writers never do. True when `actor` reads the
     task now."""
     row = _widens(c, root, author, actor)
     if row:
@@ -1426,11 +1406,15 @@ def never_wakes(refs, bot):
 
 
 def system_line(message, posting=None):
-    """Whether a message is a system line (D10): the keeper's (task news, notices), a roundup (refs.no_mentions), a
+    """Whether a message is a system line (D10): Tico's (task news, notices), a roundup (refs.no_mentions), a
     follow-up nudge or card (quiet_notice), or a legacy writer's notice. It reaches whom it addresses, never the
-    followers."""
+    followers. Not a system line: another Slack app's post Tico carries in (refs.slack.app), which reads as a
+    plain line from that app."""
     refs = _refs_of(message)
-    if _cause(message.get("sender_id")) == "keeper" or refs.get("no_mentions") or quiet_notice({"refs": refs}):
+    carried = isinstance(refs.get("slack"), dict) and bool(refs["slack"].get("app"))
+    if (_cause(message.get("sender_id")) == "keeper" and not carried) or refs.get("no_mentions"):
+        return True
+    if quiet_notice({"refs": refs}):
         return True
     return posting is None and message.get("kind") == "notice"
 
@@ -1555,9 +1539,9 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
     author = message.get("sender_id") or ""
     primary = message.get("recipient_id") or None
     refs = _refs_of(message)
-    # An import or replay wakes no bot; nor does a legacy writer's notice (the keeper telling a bot something already
+    # An import or replay wakes no bot; nor does a legacy writer's notice (Tico telling a bot something already
     # starts what it should, hubdb.notice).
-    replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.KEEPER))
+    replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.TICO_ACTOR))
     way, defer_for = message_way(refs)
     system = _is_backfill(refs) or system_line(message, posting)
     reached = plan(
@@ -1680,7 +1664,7 @@ def _replied_author(c, root, target):
         "ON t.id=m.conversation_id WHERE m.id=?",
         (target,),
     ).fetchone()
-    if row and row[0] == H.KEEPER:
+    if row and row[0] == H.TICO_ACTOR:
         carried = (H._json(row[1], {}) or {}).get("carries") if row[1] else None
         row = (
             c.execute(
@@ -2044,10 +2028,10 @@ def still_addressed(c, message, bot):
 
 
 def note_wake(message):
-    """Whether a message is the keeper's notice that starts a run for a thread's waiting private notes."""
+    """Whether a message is Tico's notice that starts a run for a thread's waiting private notes."""
     message = message or {}
     refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
-    return bool(isinstance(refs, dict) and refs.get("wake") == NOTE_WAKE and message.get("sender_id") == H.KEEPER)
+    return bool(isinstance(refs, dict) and refs.get("wake") == NOTE_WAKE and message.get("sender_id") == H.TICO_ACTOR)
 
 
 def replace_note_wake(c, message, bot):
@@ -2124,9 +2108,9 @@ def revalidate_notes(c, bot, notes):
             continue
         c.execute(
             "UPDATE notes SET body='', canceled_at=COALESCE(canceled_at,?), canceled_by=? WHERE id=?",
-            (_now(), H.KEEPER, item["id"]),
+            (_now(), H.TICO_ACTOR, item["id"]),
         )
-        H.event(c, H.KEEPER, "note.cancel", item["id"], {"reason": "source_unreadable"})
+        H.event(c, H.TICO_ACTOR, "note.cancel", item["id"], {"reason": "source_unreadable"})
     return kept
 
 
@@ -2137,7 +2121,7 @@ def _bots_only_room(root):
     return (
         audience_of(root) in ("participants", "personal")
         and bool(people)
-        and all(str(p).startswith("bot:") or p == H.KEEPER for p in people)
+        and all(str(p).startswith("bot:") or p == H.TICO_ACTOR for p in people)
     )
 
 
@@ -2255,7 +2239,7 @@ def _run_session(c, attempt_id):
 
 
 def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, way=None):
-    """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
+    """A Tico notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
     and its legacy audience is copied. `way` (named_way): a queued carrier stays out of a running turn
@@ -2287,11 +2271,11 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     c.execute(
         "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
         "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
-        (cid, thread["id"], H.KEEPER, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
+        (cid, thread["id"], H.TICO_ACTOR, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
     )
     from .enqueue import enqueue
 
-    enqueue(c, {"id": cid, "sender_id": H.KEEPER, "recipient_id": bot, "refs": dumped, "created_at": created})
+    enqueue(c, {"id": cid, "sender_id": H.TICO_ACTOR, "recipient_id": bot, "refs": dumped, "created_at": created})
     return cid
 
 
@@ -2301,7 +2285,7 @@ def _defer_note(c, message, bot):
         body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
         c.execute(
             "INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
-            (_new_id(), message.get("sender_id") or H.KEEPER, bot, body, _now(), refs["message_id"]),
+            (_new_id(), message.get("sender_id") or H.TICO_ACTOR, bot, body, _now(), refs["message_id"]),
         )
     except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
@@ -2351,7 +2335,7 @@ def _capped_notice(c, root):
         (root["id"], _guard_window()),
     ).fetchone():
         return
-    _event(c, H.KEEPER, "thread.capped", root["id"], {"limit": LOOP_GUARD_PER_HOUR})
+    _event(c, H.TICO_ACTOR, "thread.capped", root["id"], {"limit": LOOP_GUARD_PER_HOUR})
 
 
 def capped(c, v):
@@ -2411,7 +2395,7 @@ def resume_capped(c, root_id, *, limit=None):
             (carrier, now, now if limit is not None else d["created_at"], d["id"]),
         )
     if rows:
-        _event(c, H.KEEPER, "thread.resumed", root_id, {"deliveries": len(rows)})
+        _event(c, H.TICO_ACTOR, "thread.resumed", root_id, {"deliveries": len(rows)})
     return len(rows)
 
 
@@ -3187,11 +3171,13 @@ def search(c, v, query, *, limit=20, before=None):
     from . import thread_search
 
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    # A person finds what a timeline shows: Tico's notices to a bot have no seq (H.run_notice).
+    shown = "" if v.is_bot else " AND m.seq IS NOT NULL"
     found = thread_search.search(
         c,
         query,
         thread_sql=readable_sql(c, v, "cv"),
-        message_sql=message_sql(c, v, "m"),
+        message_sql=f"({message_sql(c, v, 'm')}){shown}",
         readable=lambda m: message_readable(c, v, m),
         limit=limit,
         before=before,
@@ -3210,7 +3196,7 @@ def search(c, v, query, *, limit=20, before=None):
     )
     named = shown_names(c, v, [h["thread_id"] for h in found["hits"] if not h["title"]])
     hits = []
-    for hit in found["hits"]:  # the sender's `source` needs the message's refs (a keeper line's kind)
+    for hit in found["hits"]:  # the sender's `source` needs the message's refs (a Tico line's kind)
         shown = known.message(
             {
                 "sender_id": hit["sender_id"],
@@ -3263,14 +3249,14 @@ def home(c, owner_id, *, create=True):
         name = (H.human(c, ident) or {}).get("name") or ident
     row = _insert_thread(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         title=name,
         audience="home",
         owner_id=owner,
         kind="chat",
         participants=[owner] if kind != "group" else (),
     )
-    _event(c, H.KEEPER, "thread.created", row["id"], {"audience": "home", "home": owner})
+    _event(c, H.TICO_ACTOR, "thread.created", row["id"], {"audience": "home", "home": owner})
     _emit_thread_created(c, row)
     return row
 
@@ -3314,36 +3300,17 @@ def _shown_title(c, v, row):
     other stored title shows as stored."""
     title = row.get("subject") or ""
     parent_id = row.get("parent_message_id")
+    if not parent_id and row.get("kind") == "task" and row.get("task_id"):
+        # A task's own room is named by its task as it is now: one made with no title, or before a rename, would
+        # otherwise read as its people or "Thread" (the chat's box said "Message Thread").
+        task = H.task_untagged(c, row["task_id"])
+        return str((task or {}).get("title") or "") or title
     if not parent_id or (title and not _derived_title(c, parent_id, title)):
         return title
     parent = H.message(c, parent_id, include_deleted=True)
     if v is None or not parent or not message_readable(c, v, parent):
         return ""
     return title or sub_thread_title(parent.get("body"))
-
-
-def _neutral_titles(c):
-    """Clears every stored sub-thread title that is its parent's first line (now or in an earlier revision): such titles
-    are derived on read now, so none is stored where a parent can later become private. Idempotent."""
-    rows = c.execute(
-        "SELECT id, subject, parent_message_id FROM conversations WHERE parent_message_id IS NOT NULL "
-        "AND COALESCE(subject,'')<>''"
-    ).fetchall()
-    for thread_id, title, parent_id in rows:
-        if _derived_title(c, parent_id, title):
-            c.execute("UPDATE conversations SET subject='' WHERE id=?", (thread_id,))
-
-
-NEUTRAL_TITLES_KEY = "threads-neutral-titles"
-
-
-def _neutral_titles_once(c):
-    """Once, after the migration's backfill (which sets the flags the rule reads): a new title follows the rule when it
-    is made (stored empty, `sub_thread`), so nothing needs this on a later start."""
-    if not migrated(c) or c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (NEUTRAL_TITLES_KEY,)).fetchone():
-        return
-    _neutral_titles(c)
-    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?)", (NEUTRAL_TITLES_KEY, json.dumps({"at": _now()})))
 
 
 def sub_thread(c, principal, parent_message_id):
@@ -3561,17 +3528,26 @@ def _newly_reading(c, root, target):
 def _joined(c, root_id, actor):
     """A join reads up to now across the whole tree: the root (followed, unless it is a task's thread: joining a task
     follows nobody) and each sub-thread (a read mark, not a follow), so nothing written before it counts as unread. One
-    statement, however many sub-threads there are."""
+    statement, however many sub-threads there are. The root's row takes `_new_id()`, so a seeded demo builds the same."""
     now = _now()
     c.execute(
         "INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
-        "updated_at) SELECT lower(hex(randomblob(16))), id, ?, "
+        "updated_at) SELECT CASE WHEN id=? THEN ? ELSE lower(hex(randomblob(16))) END, id, ?, "
         "CASE WHEN id=? AND task_id IS NULL AND COALESCE(audience,'')<>'task' THEN 1 ELSE 0 END, ?, 'joined', "
         "last_seq, ?, ? FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
         "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), following=MAX(following,excluded.following), "
         "updated_at=excluded.updated_at",
         # A bot follows a chat at `mentions` (D14): it is reached by what addresses it.
-        (actor, root_id, "mentions" if str(actor).startswith("bot:") else "live", now, now, root_id),
+        (
+            root_id,
+            _new_id(),
+            actor,
+            root_id,
+            "mentions" if str(actor).startswith("bot:") else "live",
+            now,
+            now,
+            root_id,
+        ),
     )
 
 
@@ -3979,25 +3955,76 @@ def revived_roots(c, v, roots=None):
     """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
     (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
     other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
-    read it is not shown that the thread has moved again."""
+    read it is not shown that the thread has moved again. The posts are read whole and their checks primed together
+    (`prime_checks`), and the answer for every root is kept for the snapshot: the rail and its Catch up walk both ask."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if roots is None:
+        from . import task_privacy
+
+        # Everything readable_sql and the per-message checks read from the viewer, so a snapshot that ever serves two
+        # viewers never hands one the other's answer.
+        key = ("revived_roots", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
+        return read_cache.value(c, key, lambda: _revived_roots(c, v, None), shared=True)
+    return _revived_roots(c, v, roots)
+
+
+def _revived_roots(c, v, roots):
+    from . import task_privacy
+
     scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
-    rows = c.execute(
-        "SELECT m.id, r.id FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
+    rows = []
+    for m in c.execute(
+        "SELECT r.id AS revived_root, m.* FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
         "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
         f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
         "AND m.kind<>'notice' AND m.deleted_at IS NULL "
         "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
         f"AND m.created_at>{_finish_sql('t')}"
-    ).fetchall()
+    ).fetchall():
+        message = dict(m)
+        rows.append((message.pop("revived_root"), message))
+    prime_checks(c, [message for _, message in rows])
+    # Each post's own thread (a sub-thread may be narrower than its root) in one read, then the per-message check.
+    places, _ = read_threads(c, v, [message["conversation_id"] for _, message in rows])
+    tasks = {p["task_id"] for p in places.values() if p.get("task_id")}
+    H.prime_tasks(c, tasks, with_tags=False)  # the thread checks read each task row; the per-message checks its parties
+    task_privacy._task_rows(c, tasks)
     found = set()
-    for message_id, root_id in rows:
-        if root_id in found:
-            continue
-        message = H.message(c, message_id, include_deleted=False)
-        if message and message_readable(c, v, message):
+    for root_id, message in rows:
+        place = places.get(message["conversation_id"])
+        if (
+            root_id not in found
+            and place is not None
+            and thread_readable(c, v, place)
+            and message_readable(c, v, message, thread_checked=True)
+        ):
             found.add(root_id)
     return frozenset(found)
+
+
+def prime_checks(c, rows):
+    """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
+    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
+    with hundreds of bot replies to check costs a fixed number of statements, not several per reply."""
+    if not rows:
+        return
+    from . import provenance_clock, task_privacy
+
+    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
+    for refs in every:
+        run = refs.get("run") if isinstance(refs, dict) else None
+        aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
+            run.get("attempt_id") if isinstance(run, dict) else None
+        )
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
+    H.prime_message_rows(c, rows)
+    task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
+    # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
+    # new message, so most loads) get their whole provenance read together.
+    task_privacy.prime_attempts(c, [aid for aid in runs if not provenance_clock.known(c, ("attempt_tasks", aid))])
+    task_privacy.prime_attempt_messages(c, runs)
+    task_privacy.prime_reply_chains(c, runs)
 
 
 def task_open_sql(c, v, r="r", revived=frozenset()):
@@ -4282,7 +4309,7 @@ def _rewrite_copies(c, message, body):
     ]
     text = "" if body is None else f"{message.get('sender_id') or ''} in this thread: {body}"
     for carrier in carriers:
-        c.execute("UPDATE messages SET body=? WHERE id=? AND sender_id=?", (text, carrier, H.KEEPER))
+        c.execute("UPDATE messages SET body=? WHERE id=? AND sender_id=?", (text, carrier, H.TICO_ACTOR))
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'").fetchone():
         if body is None:
             c.execute(
@@ -4766,8 +4793,8 @@ def reply_quotes(c, v, items):
     """{message id: its `reply_to`} for these shown timeline messages: the message each answers (`in_reply_to`, a
     carrier read as what it carries), else a sub-thread message's parent. `{"id", "author", "author_name", "excerpt"}`
     when the viewer reads it, `{"id", "hidden": true}` when not, None for no quote. A run's reply in a DM or Home quotes
-    nothing: it answers the message right above it. Two queries for the targets, one for the threads and one readable
-    check of the targets' threads, whatever the page."""
+    nothing: it answers the message right above it; nor does a reply to Tico's notice to a bot (H.run_notice). Two
+    queries for the targets, one for the threads and one readable check of the targets' threads, whatever the page."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     items = [i for i in items if i.get("id") and not i.get("hidden") and not i.get("deleted")]
     if not items:
@@ -4793,7 +4820,7 @@ def reply_quotes(c, v, items):
     carried = {}
     for mid, m in found.items():
         refs = H._json(m.get("refs"), {}) or {}
-        if m.get("sender_id") == H.KEEPER and isinstance(refs, dict) and refs.get("carries"):
+        if m.get("sender_id") == H.TICO_ACTOR and isinstance(refs, dict) and refs.get("carries"):
             carried[mid] = refs["carries"]
     sources = _rows_by_id(c, "SELECT * FROM messages WHERE id IN (%s)", set(carried.values()))
     for mid, source in carried.items():
@@ -4815,7 +4842,9 @@ def reply_quotes(c, v, items):
     names = lookup(c, {known.name(m.get("sender_id") or "", m["conversation_id"]) for m in shown.values()} - {""})
     out = {}
     for item_id, target in wanted.items():
-        if not target:
+        told = found.get(target) or {}
+        if not target or H.run_notice(told.get("sender_id"), told.get("recipient_id")):
+            # Tico's notice to a bot is its run's input, in no timeline: a reply to it answers nothing anyone reads.
             out[item_id] = None
             continue
         m = shown.get(target)
@@ -5589,7 +5618,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
 
 
 # ----------------------------------------------------------------------------- outside destinations (other tracks)
-def add_outside_delivery(c, thread_id, recipient, *, added_by=H.KEEPER):
+def add_outside_delivery(c, thread_id, recipient, *, added_by=H.TICO_ACTOR):
     """Link an outside destination (`slack:<channel>`) to a thread: every later message gets a
     delivery for it."""
     if not str(recipient).startswith(OUTSIDE_PREFIXES):
@@ -5610,7 +5639,7 @@ def add_outside_delivery(c, thread_id, recipient, *, added_by=H.KEEPER):
 def remove_outside_member(c, principal, thread_id, actor):
     """Take an outside destination (`slack:<channel>`) off a thread: its member row goes and its
     unsent deliveries become `moot`. One check: Manage on the thread, or an admin (who runs the bridges); a system
-    write (an actor string) is the keeper's only. Idempotent: a destination not linked returns removed False."""
+    write (an actor string) is Tico's only. Idempotent: a destination not linked returns removed False."""
     who, v = _actor_of(principal)
     recipient = str(actor or "")
     if not recipient.startswith(OUTSIDE_PREFIXES):
@@ -5620,7 +5649,7 @@ def remove_outside_member(c, principal, thread_id, actor):
         if not (can_manage(c, v, row) or (v.is_person and v.admin(c))):
             raise Problem("forbidden", "Only someone who manages this thread, or an admin, can do that", 403)
     else:
-        if who != H.KEEPER:
+        if who != H.TICO_ACTOR:
             raise Problem("forbidden", "Only Tico itself changes a thread's outside links without a viewer", 403)
         row = thread_row(c, thread_id)
         if row is None:
@@ -5664,222 +5693,7 @@ def settle_delivery(c, delivery_id, state, error=None):
     return {"id": delivery_id, "state": state}
 
 
-# ----------------------------------------------------------------------------- §4 migration
-MIGRATION_PROGRESS_KEY = "threads-migration-progress"
-MIGRATION_CHUNK = 20_000  # messages per transaction: the write lock is held for a chunk, never the whole backfill
-MIGRATION_STEPS = ("seq", "origin", "restricted", "legacy", "deliveries")  # the per-message backfill, in order
-
-
-def migrated(c):
-    return c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MIGRATION_KEY,)).fetchone() is not None
-
-
-def migrate(c):
-    """Once per install: every conversation gets its audience, root and path; every message its seq, origin and
-    restricted flag; shared rooms become their bot's Home with their history keeping its readers. Recorded under
-    registry_metadata `threads-migration`.
-
-    Resumable. The per-message backfill runs in chunks of MIGRATION_CHUNK rows, each a transaction of its own that
-    also records how far it got (`threads-migration-progress`), so a crash or a restart resumes there and the write
-    lock is held for one chunk at a time. Each step is idempotent per row, so a chunk that ran before a crash runs
-    again harmlessly. The message indexes are built after the backfill (migration 0047 skips them until then).
-    Inside a caller's transaction the chunks join it, and the whole migration is one transaction, as before."""
-    if migrated(c):
-        return False
-    _migrate(c)
-    return True
-
-
-@contextlib.contextmanager
-def _chunk(c):
-    """One piece of the migration as a savepoint: it commits when it is the outermost transaction (a server start),
-    and joins the caller's transaction when there is one."""
-    c.execute("SAVEPOINT threads_migration")
-    try:
-        yield
-    except Exception:
-        c.execute("ROLLBACK TO threads_migration")
-        c.execute("RELEASE threads_migration")
-        raise
-    c.execute("RELEASE threads_migration")
-
-
-def _progress(c):
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (MIGRATION_PROGRESS_KEY,)).fetchone()
-    return json.loads(row[0]) if row else {}
-
-
-def _set_progress(c, step, rowid):
-    c.execute(
-        "INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
-        (MIGRATION_PROGRESS_KEY, json.dumps({"step": step, "rowid": rowid})),
-    )
-
-
-def rename_rule_reviews(c):
-    """Rule-review threads made before the plain title (org_rule_check.REVIEW_TITLE) took the task's "Held: ..." or
-    "Appeal: ..." title as their subject. Only the threads of tasks labelled as rule reviews change; any other held
-    thread (a screening hold, say) keeps its title. Returns how many changed."""
-    from .org_rule_check import REVIEW_LABEL, REVIEW_TITLE
-
-    return c.execute(
-        "UPDATE conversations SET subject=?, updated_at=? WHERE task_id IN (SELECT tt.task_id FROM task_tags tt "
-        "JOIN tags g ON g.id=tt.tag_id WHERE g.key=?) AND (subject LIKE 'Held: %' OR subject LIKE 'Appeal: %')",
-        (REVIEW_TITLE, _now(), REVIEW_LABEL),
-    ).rowcount
-
-
-def _migrate(c):
-    now = _now()
-    # Two open shared rooms for one bot (never written, but a Home is one per owner): the newest is the Home, the
-    # others stay readable as they were, archived.
-    with _chunk(c):
-        c.execute(
-            "UPDATE conversations SET archived_at=? WHERE scope='shared' AND closed_at IS NULL AND archived_at IS NULL "
-            "AND COALESCE(room_key,'')<>'' AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY "
-            f"{_ROOM_BOT.format(r='conversations')} ORDER BY COALESCE(last_message_at,created_at) DESC, id DESC) AS n "
-            "FROM conversations WHERE scope='shared' AND closed_at IS NULL AND archived_at IS NULL) WHERE n=1)",
-            (now,),
-        )
-        # Audience and owner stay unset on other existing conversations: derived live from their columns. The open shared
-        # room is its bot's Home, stored: everything new follows Home Read, its history keeps its readers (below).
-        c.execute(
-            "UPDATE conversations SET root_id=COALESCE(root_id,id), path=COALESCE(path,'/'||id||'/'), "
-            "updated_at=COALESCE(updated_at,last_message_at,created_at)"
-        )
-        _store_shared_homes(c)
-        rename_rule_reviews(c)
-    install = install_id(c)
-    _backfill_messages(c, install, now)
-    # Conversation counters read the stamped seqs; a temporary table of each conversation's last seq (one pass, no index
-    # on messages needed), then one pass over the conversations.
-    with _chunk(c):
-        c.execute(
-            "INSERT INTO sequences(name,value) SELECT 'messages', COALESCE(MAX(seq),0) FROM messages WHERE true "
-            "ON CONFLICT(name) DO UPDATE SET value=MAX(value,excluded.value)"
-        )
-    c.execute("DROP TABLE IF EXISTS temp.threads_migration_last")
-    c.execute("CREATE TEMP TABLE threads_migration_last(conversation_id TEXT PRIMARY KEY, seq INTEGER NOT NULL)")
-    c.execute(
-        "INSERT INTO threads_migration_last SELECT conversation_id, MAX(seq) FROM messages "
-        "WHERE conversation_id IS NOT NULL GROUP BY conversation_id"
-    )
-    with _chunk(c):
-        c.execute(
-            "UPDATE conversations SET last_seq=COALESCE((SELECT seq FROM temp.threads_migration_last l "
-            "WHERE l.conversation_id=conversations.id),0)"
-        )
-        c.execute("UPDATE conversations SET last_unread_seq=last_seq")
-    c.execute("DROP TABLE temp.threads_migration_last")
-    # The message indexes come last: built once over the backfilled rows instead of kept up through every update.
-    for statement in _MESSAGE_INDEXES:
-        with _chunk(c):
-            c.execute(statement)
-    with _chunk(c):
-        c.execute("DELETE FROM registry_metadata WHERE key=?", (MIGRATION_PROGRESS_KEY,))
-        c.execute(
-            "INSERT INTO registry_metadata(key,value) VALUES(?,?)",
-            (
-                MIGRATION_KEY,
-                json.dumps(
-                    {"at": now, "seq": c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0]}
-                ),
-            ),
-        )
-    with _chunk(c):
-        _neutral_titles_once(c)  # the backfill sets the flags that decide a sub-thread's title
-
-
-def _backfill_messages(c, install, now):
-    """The per-message steps, each over rowid chunks, resuming from the recorded progress."""
-    top = c.execute("SELECT COALESCE(MAX(rowid),0) FROM messages").fetchone()[0]
-    progress = _progress(c)
-    step, low = progress.get("step", MIGRATION_STEPS[0]), progress.get("rowid", 0)
-    if step not in MIGRATION_STEPS:  # every step ran; only the finishing steps were left
-        return
-    for name in MIGRATION_STEPS[MIGRATION_STEPS.index(step) :]:
-        start = low if name == step else 0
-        while start < top:
-            end = min(top, start + MIGRATION_CHUNK)
-            with _chunk(c):
-                c.execute(_STEP_SQL[name], _step_params(name, install, now, start, end))
-                _set_progress(c, name, end)
-            start = end
-        with _chunk(c):
-            following = MIGRATION_STEPS[MIGRATION_STEPS.index(name) + 1 :][:1]
-            _set_progress(c, following[0] if following else "done", 0)
-
-
-def _step_params(name, install, now, low, high):
-    if name == "origin":
-        return (install, low, high)
-    if name == "deliveries":
-        return (now, low, high)
-    return (low, high)
-
-
-# The migration's rendering of _ref_strings/restricted_for: structure outside NESTED_REF_KEYS, or any string that
-# names a task (a task: prefix, a task link or any task's id), restricts the message.
-_NESTED_REFS_SQL = (
-    "EXISTS (SELECT 1 FROM json_tree(refs) t WHERE t.fullkey<>'$' AND ("
-    "(t.type IN ('object','array') AND NOT (t.fullkey IN ('$.origin','$.mentions','$.warnings') OR "
-    "(t.path='$.warnings' AND t.type='object'))) OR "
-    "(t.type='text' AND (t.atom LIKE 'task:%' OR t.atom LIKE '%#/task/%' OR t.atom LIKE '%/tasks/%' OR "
-    "t.atom IN (SELECT id FROM tasks)))))"
-)
-
-
-_ORIGIN_SQL = (
-    "UPDATE messages SET origin_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||"
-    "substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))||'@'||? "
-    "WHERE rowid>? AND rowid<=? AND origin_id IS NULL"
-)
-_RESTRICTED_SQL = (
-    "UPDATE messages SET restricted=CASE WHEN COALESCE(in_reply_to,'')<>'' THEN 1 "
-    f"WHEN conversation_id IN (SELECT id FROM conversations v WHERE {_derived_audience('v')} IN ('task','meeting') "
-    "OR task_id IS NOT NULL) THEN 1 "
-    "WHEN COALESCE(refs,'')<>'' AND (NOT json_valid(refs) OR json_type(refs)<>'object' OR "
-    f"EXISTS (SELECT 1 FROM json_each(refs) WHERE key NOT IN {_qlist(sorted(SAFE_REF_KEYS))}) OR {_NESTED_REFS_SQL}) "
-    "THEN 1 ELSE 0 END WHERE rowid>? AND rowid<=?"
-)
-_LEGACY_SQL = (
-    f"UPDATE messages SET legacy_audience='shared:'||(SELECT {_ROOM_BOT.format(r='v')} FROM conversations v "
-    "WHERE v.id=messages.conversation_id), restricted=1 WHERE rowid>? AND rowid<=? AND conversation_id IN "
-    "(SELECT id FROM conversations WHERE scope='shared' AND COALESCE(room_key,'')<>'')"
-)
-_DELIVERIES_SQL = (
-    "INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
-    "state,revision,delivered_at,read_at,created_at,updated_at) SELECT lower(hex(randomblob(16))),m.id,"
-    "m.recipient_id,m.conversation_id,m.conversation_id,"
-    "CASE WHEN COALESCE(json_extract(CASE WHEN json_valid(m.refs) THEN m.refs END,'$.quiet'),0) "
-    "THEN 'defer' ELSE 'queue' END, CASE WHEN m.kind='ask' THEN 'ask' ELSE 'addressed' END,"
-    "CASE WHEN m.sender_id LIKE 'bot:%' THEN 'bot' WHEN m.sender_id LIKE 'human:%' THEN 'human' "
-    "ELSE 'keeper' END, CASE WHEN m.delivered_at IS NOT NULL THEN 'delivered' ELSE 'pending' END,0,"
-    "m.delivered_at,m.read_at,m.created_at,? FROM messages m WHERE m.rowid>? AND m.rowid<=? "
-    "AND COALESCE(m.recipient_id,'')<>'' AND (m.delivered_at IS NULL OR m.read_at IS NULL) AND m.deleted_at IS NULL"
-)
-_STEP_SQL = {
-    "seq": "UPDATE messages SET seq=rowid WHERE rowid>? AND rowid<=? AND seq IS NULL",
-    "origin": _ORIGIN_SQL,
-    "restricted": _RESTRICTED_SQL,
-    "legacy": _LEGACY_SQL,
-    "deliveries": _DELIVERIES_SQL,
-}
-
-
-def _store_shared_homes(c, slug=None):
-    """Each bot's open shared room becomes its Home: audience 'home', owned by the bot (unless it already has one)."""
-    one = f" AND {_ROOM_BOT.format(r='s')}=?" if slug else ""
-    c.execute(
-        f"UPDATE conversations SET audience='home', owner_id='bot:'||{_ROOM_BOT.format(r='conversations')} "
-        f"WHERE id IN (SELECT s.id FROM conversations s WHERE s.scope='shared' AND COALESCE(s.room_key,'')<>'' "
-        f"AND s.closed_at IS NULL AND s.archived_at IS NULL AND s.audience IS NULL{one} AND NOT EXISTS (SELECT 1 "
-        f"FROM conversations h WHERE h.audience='home' AND h.closed_at IS NULL AND "
-        f"h.owner_id='bot:'||{_ROOM_BOT.format(r='s')}))",
-        (slug,) if slug else (),
-    )
-
-
+# ----------------------------------------------------------------------------- a migrated Home's earlier messages
 def _earlier(c, v, row):
     """`{"earlier": {"count": n}}` for a manager of a bot on its Home's root while shared-room history is still closed:
     what the control to open it needs, whether or not this manager already reads that history. Nobody else gets a count."""

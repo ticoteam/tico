@@ -9,13 +9,13 @@
 //! section is written when it is missing or differs. What changed is one commit, which the turn's own push sends
 //! (sessions::finish). Two checkouts of one bot that make the same change make the same patch, which the rebase drops.
 //!
-//! Files are read and written as the bot (crate::harness_memory), never by the runner itself.
+//! Files are read and written as the bot (crate::bot_files), never by the runner itself.
 
 use std::path::Path;
 
+use crate::bot_files::{bot_read, bot_remove, bot_write};
 use crate::env::Env;
 use crate::gitrun::{self, Fault, Out};
-use crate::harness_memory::{bot_read, bot_remove, bot_write};
 
 pub const FILE: &str = "AGENTS.md";
 pub const OLD: &str = "AGENT.md";
@@ -44,7 +44,7 @@ pub fn present(checkout: &Path) -> bool {
 /// Claude Code's auto memory folder for a turn in `checkout`: `memory/claude/` in it, or None when the turn keeps
 /// none (`off`: a stateless bot, a private meeting's copy) or runs outside a git checkout.
 pub fn memory_dir(checkout: &Path, off: bool) -> Option<String> {
-    (!off && crate::harness_memory::is_checkout(checkout))
+    (!off && crate::bot_files::is_checkout(checkout))
         .then(|| checkout.join(MEMORY_DIR).display().to_string())
 }
 
@@ -130,14 +130,6 @@ const STATE_STEPS: &[(&str, &str)] = &[
     (r"\b(Never\s+(?:mention|name)\s+)`?state\.md`?,\s+", "${1}"),
     (r"\bKeep\s+state\.md,\s+", "Keep "),
     (
-        r"(?m)^[ \t]*-\s+`state\.md`:\s+where\s+things\s+stand[^\n]*\n",
-        "",
-    ),
-    (
-        r"\s*`state\.md`:\s+where\s+things\s+stand,\s+rewritten\s+at\s+the\s+end\s+of\s+every\s+run\.",
-        "",
-    ),
-    (
         r"(If\s+the\s+owner\s+pauses,)\s+`state\.md`\s+says",
         "${1} the task says",
     ),
@@ -199,7 +191,7 @@ pub async fn ensure(
     app: &str,
     stateless: bool,
 ) -> Result<bool, String> {
-    if !crate::harness_memory::is_checkout(checkout) {
+    if !crate::bot_files::is_checkout(checkout) {
         return Ok(false);
     }
     let io = |e: std::io::Error| e.to_string();
@@ -409,10 +401,6 @@ mod tests {
             (
                 "- Never mention state.md, memory, commits or ids unless a person asks.\n",
                 "- Never mention memory, commits or ids unless a person asks.\n",
-            ),
-            (
-                "- `knowledge/`: what you know.\n- `state.md`: where things stand right now, rewritten at the end of every run.\n",
-                "- `knowledge/`: what you know.\n",
             ),
             (
                 "It goes to the named human in `state.md` the same day.\n",

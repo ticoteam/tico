@@ -37,14 +37,6 @@ LAYER_MAX = 100  # entries in one layer: every turn in the chat is handed all of
 PRIORITIES_MAX = 10  # live company goals in the company layer, in their order on Goals
 LAYERS = ("personal", "company")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS learned_entries (
-  id TEXT PRIMARY KEY, layer TEXT NOT NULL CHECK (layer IN ('personal','company')),
-  person TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  via TEXT, updated_at TEXT, updated_by TEXT);
-CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, person, created_at);
-"""
-
 
 def _person(who, settings):
     """The person whose layers these are: a person, on their own or through a turn of their own Assistant (backend/auth.py
@@ -133,8 +125,8 @@ def view(c, who, settings):
 def for_turn(c, settings, conversation, bot):
     """What a turn in a person's own chat is handed, read now: their personal layer, and in the owner's own Assistant
     chat the company layer too. Neither for any other turn (a task, a shared room, the Strategy Owner's goals session).
-    Every turn, whoever it is for, also carries the team's published strategy as `strategy` (the text of GET
-    /api/v2/strategy/summary, backend/strategy.py) once one is published; None when there is nothing to hand over."""
+    Every turn, whoever it is for, also carries the team's live strategy as `strategy` (the text of GET
+    /api/v2/strategy/summary, backend/strategy.py) once there is one; None when there is nothing to hand over."""
     from . import strategy
 
     layers = _layers(c, settings, conversation, bot)

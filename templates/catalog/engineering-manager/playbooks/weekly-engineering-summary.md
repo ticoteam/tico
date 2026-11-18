@@ -23,7 +23,7 @@ names the person and since when, and the task is done with its headline.
    - a hire proposal, only where a stage has nobody who can do its work;
    - what was not read.
 3. A repeat or a hire is a proposal on a task to your manager, filed once: `tico task create --owner <your manager>
-   --title "Proposal: <the change>" --body "<the tasks that showed it>"`. Never applied by you.
+   --title "Proposal: <the change>" --message "<the tasks that showed it>"`. Never applied by you.
 4. Publish with `tico file publish`, and finish the task with the headline, the path and what you could not read.
 
 You decide nothing new here: a task that stopped already woke you when it stopped. Write only what the tasks and pull requests

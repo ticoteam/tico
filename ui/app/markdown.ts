@@ -34,7 +34,6 @@ const lastSeg = (path: unknown): string => decoded((String(path).split(/[?#]/)[0
 // Documents a link may point at, by extension: a card with this mark (the viewer's own marks where it shows the kind).
 const MD_FILE_MARK: Record<string, string> = {pdf: 'PDF', md: 'DOC', markdown: 'DOC', txt: 'TEXT', csv: 'CSV', doc: 'DOC', docx: 'DOC',
   xls: 'XLS', xlsx: 'XLS', ppt: 'PPT', pptx: 'PPT', zip: 'ZIP'};
-const MD_IMAGE_RE = /\.(png|jpe?g|gif|webp|avif)$/i;
 const extOf = (s: unknown): string => ((/\.([a-z0-9]{1,8})$/i.exec(String(s || '').split(/[?#]/)[0] ?? '') || [])[1] || '').toLowerCase();
 const ticoFileUrl = (url: URL): boolean => url.host === location.host && /^\/api\/v2\/files\/[A-Za-z0-9-]{8,80}$/.test(url.pathname);
 // An object nothing here can open: its name, the full URI in the tooltip and a Copy button, never a long raw line.
@@ -117,6 +116,52 @@ function safeLink(el: HTMLElement, options: SafeMdOptions): void {
     else if (bare && href.length > 48) { el.title = href; el.textContent = shortUrl(url); }
   } catch { el.removeAttribute('href'); }
 }
+// A document a bot names by reference (`page:<file id>@<version>`, `file:<file id>@<version>`, as stage inputs and
+// approvals write them) is a chip with the document's title and its version that opens it in the review view
+// (file-review-route.ts), never the raw id. The title is read once per file (GET /api/v2/files/{id}/info) and kept; one
+// that arrives after the draw is put in place in every chip on screen, and the next draw has it.
+const DOC_REF_RE = /(?<![\w/:.-])(page|file):(file-[0-9a-f]{24})(?:@(\d{1,9}))?(?![\w-])/g;
+const DOC_REF_TITLES = new Map<string, string | null>();   // file id -> its title; null while asked, or not readable
+const docRefLabel = (id: string): string => DOC_REF_TITLES.get(id) || 'Document';
+function docRefs(root: Node): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), hits: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n instanceof Text && /(?:page|file):file-/.test(n.data) && !n.parentElement?.closest('a, code, pre')) hits.push(n);
+  }
+  for (const n of hits) {
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const m of n.data.matchAll(DOC_REF_RE)) {
+      const [whole, , id = '', v = ''] = m, start = m.index ?? 0;
+      frag.append(n.data.slice(at, start));
+      const a = document.createElement('a'), name = document.createElement('span');
+      a.className = 'md-doc-ref'; a.dataset.docRef = id; a.dataset.mi = '1'; a.title = whole;
+      a.setAttribute('href', fileReviewHref(id, {version: v ? Number(v) : null}));
+      name.className = 'md-doc-ref-t'; name.textContent = docRefLabel(id);
+      a.append(name);
+      // The space is for a screen reader and a copy; the chip's gap spaces them on screen.
+      if (v) a.append(' ', Object.assign(document.createElement('span'), {className: 'md-doc-ref-v', textContent: 'v' + v}));
+      frag.append(a);
+      at = start + whole.length;
+      if (!DOC_REF_TITLES.has(id)) docRefAsk(id);
+    }
+    frag.append(n.data.slice(at));
+    n.replaceWith(frag);
+  }
+}
+function docRefAsk(id: string): void {
+  DOC_REF_TITLES.set(id, null);
+  void (async () => {
+    let title = '';
+    try { title = String((await get<{file?: {title?: string | null; name?: string | null}}>(`/v2/files/${encodeURIComponent(id)}/info`)).file?.title || ''); }
+    catch { return; }   // gone or not the reader's: the chip stays "Document"
+    if (!title.trim()) return;
+    DOC_REF_TITLES.set(id, title.trim());
+    // Drawn markup that holds this chip is drawn again from the title now known.
+    for (const [key, html] of SAFE_MD_SEEN) if (html.includes(id)) SAFE_MD_SEEN.delete(key);
+    for (const el of document.querySelectorAll<HTMLElement>(`a.md-doc-ref[data-doc-ref="${CSS.escape(id)}"] > .md-doc-ref-t`)) el.textContent = title.trim();
+  })();
+}
 // The same text drawn the same way gives the same markup: a chat redraws every message for each streamed snapshot, so
 // the recent ones are kept (by text and options, newest last; a long document is drawn each time).
 const SAFE_MD_SEEN = new Map<string, string>(), SAFE_MD_KEEP = 400, SAFE_MD_LONG = 20000;
@@ -165,6 +210,8 @@ function safeMdDraw(s: unknown, options: SafeMdOptions): string {
       } catch { el.remove(); }
     }
   }
+  // After the clean-up, which keeps only href and title on a link: these chips are made here, not taken from the text.
+  docRefs(tpl.content);
   return tpl.innerHTML;
 }
 // A pull request or an issue in a bot's reply, as the one thing

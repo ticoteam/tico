@@ -59,7 +59,7 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         )
         assert G.flush_wakes(c) == [task["id"]]
         assert RT.of_message(newest(c, "ops", "%Unit tests failed")) == ("pr_checks", None)
-        # other: a keeper message nothing stamped (a Slack digest).
+        # other: a Tico message nothing stamped (a Slack digest).
         conv = H.conversation(c, task["conversation_id"])
         H.feed(c, "bot:ops", "Three new posts in #general.", conv)
         assert RT.of_message(newest(c, "ops", "Three new posts")) == ("other", None)
@@ -130,7 +130,7 @@ def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
     with api.app.state.store.transaction() as c:
         H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "Sort the inbox.",
             kind="notice",
@@ -194,8 +194,9 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     elif case == "task_update":
         version = get(api, "tasks/" + task["id"], token)["task"]["version"]
         post(api, "tasks/" + task["id"], {"version": version, "title": "Check the bank feed today"}, token)
-    elif case == "comment":
-        post(api, f"tasks/{task['id']}/comments", {"text": "Feed checked: two new lines."}, token)
+    elif case == "comment":  # on another task of its own: not the one its turn is on, whose reply is the end text
+        other = post(api, "tasks", {"owner": "ops", "title": "Reconcile the feed", "body": "Weekly."})
+        post(api, f"tasks/{other['id']}/comments", {"text": "Feed checked: two new lines."}, token)
     elif case == "message":
         post(
             api,
@@ -639,7 +640,7 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
                 H.task_done(c, "bot:ops", task["id"], "Rechecked.", H.task(c, task["id"])["version"])
         # Accepted: Done by someone else's act (the engine's effects say so for a move into Done that is not the bot's).
         H.task_done(c, ana, runs["accepted"][0], "Checked it myself.")
-        H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
+        H.task_update(c, ana, runs["edited"][0], title="Recheck the cash warning with the March file")
         H.task_move(c, ana, runs["overridden"][0], H.TASK_REOPEN, "Not yet: the March file is missing.")
         H.task_reassign(c, ana, runs["given"][0], ana, "I will do this one.")
         got = {

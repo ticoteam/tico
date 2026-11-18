@@ -212,6 +212,7 @@ def test_the_listing_endpoint_names_the_catalog(api):
         "task.created",
         "task.assigned",
         "task.step_changed",
+        "task.moved",
         "task.commented",
         "task.done",
         "task.closed",

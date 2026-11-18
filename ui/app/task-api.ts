@@ -17,11 +17,28 @@ type NeedsEntry = import('../types/api').NeedsYouItem & {
   from_id?: string;
   conversation_id?: string;
   message_id?: string;
+  /** A bot's ❓ (kind `question`, backend/question_marks.py): the mark; its id is `qmark:<mark_id>`. */
+  mark_id?: string;
+  /** A ❓'s website browser to take over (`browser:<tool>/<account>`). */
+  shows?: string[];
 };
 /** Either a full task or a list row: what a row, a mark or a filter reads. */
 type TaskAny = TaskV3 | TaskBriefV3;
-/** The stage a full task is in (the OpenAPI document leaves it untyped). */
-interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'closed'; by_hand: boolean; }
+/** The stage a full task is in (the OpenAPI document leaves it untyped). `side`: a side stage (see PipelineStageRec). */
+interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'closed'; by_hand: boolean; side?: boolean; }
+/** Where a task in a side stage came from: the main stage of its pipeline it was last in (`came_from`). A full read
+    always has it, null outside a side stage; a list row leaves it out when null, so missing reads as null. */
+interface TaskCameFrom { id: string; name: string }
+const isTaskCameFrom = (v: unknown): v is TaskCameFrom =>
+  typeof v === 'object' && v !== null && 'id' in v && 'name' in v && typeof v.id === 'string' && !!v.id && typeof v.name === 'string';
+/** A task's `came_from` when it is {id, name}; anything else (missing, null, another shape) is null. */
+const taskCameFrom = (t: object | null | undefined): TaskCameFrom | null => {
+  const from: unknown = t && 'came_from' in t ? t.came_from : null;
+  return isTaskCameFrom(from) ? {id: from.id, name: from.name} : null;
+};
+/** A side stage's mark, before its name wherever the stage is named (a column, a tab, a list group, the editor, a task's
+    Stage line): ↳, its tooltip the one word for it. */
+const SIDE_MARK = '<span class="side-mark" role="img" aria-label="Side stage" title="Side stage">↳</span>';
 
 /** A pipeline's settings record (backend/pipeline_settings.read). */
 interface PipelineReqRec {
@@ -35,8 +52,6 @@ interface PipelineReqRec {
   who_oks: 'none' | 'people_only' | 'people_with_exceptions';
   person_id: string | null;
   line: string;
-  /** An answer's choices, when it is a choice; null on every other requirement. */
-  choices?: string[] | null;
 }
 interface PipelineStageRec {
   id?: string;
@@ -49,6 +64,10 @@ interface PipelineStageRec {
   task_limit: number | null;
   expected_minutes: number | null;
   expected_bots_only: boolean;
+  /** A side stage: it sits right after its main stage (the nearest one before it), the main path skips it, and tasks
+      move into and out of it by hand alone, as a plain move (docs/dev/pipelines-v3.md "Side stages"). It has no limit,
+      no expected time and no requirements, is always by hand, and is never the first stage. */
+  side: boolean;
   on_enter: Record<string, unknown>;
   requirements: PipelineReqRec[];
   /** Where `owner` is `pick` ("One of several", backend/stage_pick.py): the bots it picks from and how. A save that
@@ -56,8 +75,6 @@ interface PipelineStageRec {
   pick?: PipelinePickRec;
   /** Who gets the next task, in one sentence, as last saved: the server writes it and a save never sends it. */
   pick_next?: string;
-  /** This stage's own "Keep warm for up to N hours" (backend/keep_warm.py); null takes the pipeline's. */
-  keep_warm_hours?: number | null;
 }
 /** A stage's "One of several". `families` is each listed bot's model family ("Claude", "GPT"; "" when unknown), read only. */
 interface PipelinePickRec {
@@ -80,8 +97,6 @@ interface PipelineRec {
   preset: string | null;
   settings_version: number;
   retired_at: string | null;
-  /** "Keep warm for up to N hours" (backend/keep_warm.py): 0 to 24, 0 is off. */
-  keep_warm_hours?: number;
   /** Each active bot's model family ("Claude", "GPT"; "" when unknown), for a stage's One of several: read only. */
   bot_families?: Record<string, string>;
   stages: PipelineStageRec[];
@@ -114,7 +129,6 @@ const withVersion = (version: number | null | undefined, body: Record<string, un
   version == null ? body : {...body, version};
 
 // ---- reads
-const taskGet = (id: string): Promise<TaskV3> => get<TaskV3>(taskPath(id), {fresh: true});
 interface TaskBriefQuery {
   owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string; pipeline?: string;
   sort?: 'queue' | 'finished'; limit?: number; offset?: number;
@@ -139,9 +153,6 @@ async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskB
   return Array.isArray(res) ? {tasks: res, cursor: '', more: false, next: ''}
     : {tasks: res.tasks || [], cursor: res.cursor || '', more: res.next_offset != null || !!res.next_after, next: res.next_after || ''};
 }
-async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
-  return (await taskBriefsPage(query)).tasks;
-}
 /** What changed since `cursor` under the same filters (GET /v2/tasks?changed_after): the changed rows that still match,
  * the ids that left the filters or became unreadable (`gone`), the next cursor; `reset` when only a full read will do. */
 interface TaskChanges { tasks: TaskBriefV3[]; gone: string[]; cursor: string; reset?: boolean }
@@ -155,7 +166,7 @@ async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sor
 // ---- lists fed by the live stream
 // Each list puts an event's task in place by its own rule and never reads the whole list because an event came (Chris,
 // Nov 3). Its catch-up is a changed_after delta from the cursor its last read gave. The Tasks page, a bot's page, a
-// person's page and My dashboard share these.
+// person's page and Company share these.
 /** A row a live list holds: a list row, or a task as an event or a write carries it. */
 type TaskLiveRow = {id: string};
 /** A task as a write's reply carries it (Task), in a list row's terms (TaskBrief): a full task says `snooze`, not
@@ -296,8 +307,15 @@ async function needsYou(): Promise<NeedsEntry[]> {
   return res.items || [];
 }
 
+/** Who else reads a private task as it moves through `pipeline` (backend/private_readers.py, Product #449): for a new
+    task for `owner` under `parent`, or an existing `task` as if it were made private. `line` is null when nobody does. */
+interface PrivateReaders { private: boolean; line: string | null; }
+const pipelinePrivateReaders = (pipeline: string, q: {owner?: string; parent?: string | undefined; task?: string}): Promise<PrivateReaders> =>
+  get<PrivateReaders>(`/v2/pipelines/${encodeURIComponent(pipeline)}/private-readers?${new URLSearchParams(Object.entries(q).filter((kv): kv is [string, string] => !!kv[1]))}`, {fresh: true});
+
 // ---- writes on a task
-interface TaskNew { title: string; body: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }
+/** `message`: the task's first chat message, from whoever creates it (a task has no description). */
+interface TaskNew { title: string; message?: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }
 const taskCreate = (b: TaskNew): Promise<TaskV3> => post('/v2/tasks', b, newRequestId()).then((r: {task: TaskV3}) => r.task);
 const taskEdit = (id: string, version: number | null, fields: Record<string, unknown>): Promise<TaskV3> =>
   post(taskPath(id), withVersion(version, fields)).then((r: {task?: TaskV3} & TaskV3) => r.task || r);
@@ -317,19 +335,25 @@ const taskReassign = (id: string, owner: string, version: number | null, why?: s
 const taskSnooze = (id: string, until: string | null, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/snooze`, withVersion(version, {...(until ? {until} : {}), ...(why ? {why} : {})}), newRequestId());
 const taskUnsnooze = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/unsnooze`, why ? {why} : {}, newRequestId());
+/** One ask leaves your own Needs you until `until` (an ISO moment, at most a year on); it stays in everyone else's, and
+    its bot is not told. `id` is the ask's Needs-you id. */
+const askSnooze = (id: string, until: string): Promise<{id: string; snoozed_until: string}> =>
+  post('/v2/needs-you/snooze', {id, until}, newRequestId());
+const askUnsnooze = (id: string): Promise<{id: string}> => post('/v2/needs-you/unsnooze', {id}, newRequestId());
 /** A person hands a task back to its owner to try again. */
 const taskTryAgain = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/try-again`, why ? {why} : {}, newRequestId());
 
 // ---- asks
-interface TaskAskNew { to: string; line: string; kind?: 'answer' | 'ok'; choices?: string[]; show?: string[]; }
+interface TaskAskNew { to: string; line: string; kind: 'ok'; show?: string[]; }
 const taskAsk = (id: string, b: TaskAskNew, version: number | null): Promise<TaskMoved> =>
   post(`${taskPath(id)}/asks`, withVersion(version, {...b}), newRequestId());
 const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMoved> =>
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
-/** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
-    page the person was shown (`<file id>@<version>`): refused when another is attached now. */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {})}), newRequestId());
+/** ok, no (send back, with a note) or done. On a page, `pageVersion` is the page the person was shown
+    (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a document approval's whole
+    key: a stale one is refused with the version submitted now (decide.ts). */
+const taskAnswer = (id: string, rid: string, value: 'ok' | 'no' | 'done', version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
+  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {}), ...(visitId ? {visit_id: visitId} : {})}), newRequestId());
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 
 // ---- an OK bound to what was shown
@@ -348,7 +372,6 @@ async function pipelinesAll(): Promise<PipelineRec[]> {
 /** One pipeline's settings record (the server answers {pipeline: record}, to a read and to a save). */
 const pipelineRec = async (id: string): Promise<PipelineRec> =>
   (await get<{pipeline: PipelineRec}>(`/v2/pipelines/${encodeURIComponent(id)}`, {fresh: true})).pipeline;
-const pipelineSave = async (id: string, rec: Omit<PipelineRec, 'id'> | PipelineRec): Promise<PipelineRec> =>
+/** `move_tasks_to`: where the tasks of a stage the save removes go (a 409 stage_has_tasks asks for it). */
+const pipelineSave = async (id: string, rec: (Omit<PipelineRec, 'id'> | PipelineRec) & {move_tasks_to?: {pipeline: string; stage: string}}): Promise<PipelineRec> =>
   ((await post(`/v2/pipelines/${encodeURIComponent(id)}`, rec, newRequestId())) as {pipeline: PipelineRec}).pipeline;
-const pipelineRetire = (id: string, settingsVersion: number): Promise<unknown> =>
-  post(`/v2/pipelines/${encodeURIComponent(id)}/retire`, {settings_version: settingsVersion}, newRequestId());

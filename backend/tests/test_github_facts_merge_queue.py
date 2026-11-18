@@ -1,5 +1,5 @@
 """Track C of the Product and Engineering pipelines: GitHub's facts (webhooks, the 5-minute re-read), the four GitHub
-standings, and the Merge stage's queue (docs/pipelines-v3.md "GitHub"; pe-contract sections 2, 3 and 7). GitHub is
+standings, and the Merge stage's queue (docs/dev/pipelines-v3.md "GitHub"; pe-contract sections 2, 3 and 7). GitHub is
 backend/tests/helpers/fake_github.py; nothing here reaches the real one."""
 
 import hashlib
@@ -1380,7 +1380,7 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
 
 
 # ----------------------------------------------------------------------------- only signed-off PRs reach the queue
-# Every way into a stage that queues PRs passes the stages before it (docs/pipelines-v3.md "GitHub", "Merge"): a bot
+# Every way into a stage that queues PRs passes the stages before it (docs/dev/pipelines-v3.md "GitHub", "Merge"): a bot
 # can't push past the person's OK, link a new PR there, move back into it, or reopen or restore a task into it.
 def preset_engineering(c):
     """The Engineering preset with the QA OK people-only (chris/rc3-signoffs makes the preset so)."""
@@ -1421,7 +1421,7 @@ def test_in_merge_only_a_person_links_another_pr(company):
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
         gh.open_pr(REPO, 2)
-        for bot in (RM, B, H.KEEPER):
+        for bot in (RM, B, H.TICO_ACTOR):
             url = f"https://github.com/{REPO}/pull/2"
             with pytest.raises(H.Refused) as raised:
                 H.task_link(c, bot, task_id, url, mover=True)

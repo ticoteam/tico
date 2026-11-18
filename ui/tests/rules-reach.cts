@@ -50,7 +50,7 @@ const STAGE_RULES = [
   {id: 'sr-1', name: 'Owner on the team', pipeline_id: 'eng', pipeline_name: 'Engineering', stages: ['build', 'fix2'], stage_names: ['Build', 'Fixes 2'],
     event: 'enters', then: 'block', scope: 'stage', revision: 1, status: 'active', cost: 'free', can_edit: true},
   {id: 'sr-2', name: 'Snooze only for a real wait', pipeline_id: '', stages: [], event: 'bot_snoozes', jev: 'Is it a real wait?', then: 'block', scope: 'company', revision: 1,
-    status: 'active', cost: 'One Jev call per event', can_edit: true},
+    status: 'active', cost: 'One Decision model call per event', can_edit: true},
 ];
 // The checks line's read (GET /v2/rules/stats), changed by a test before it opens the page.
 const stats = {on: true, checks_today: 12, unchecked_today: 0, usd_left: 48, people_usd: 0};
@@ -548,8 +548,8 @@ async function until(fn: () => unknown, what: string) {
       assert.equal((await h.locator('h2').innerText()).replace(/\s+/g, ' ').trim(), 'Engineering 1');
       assert.equal(await h.locator('.ru-sg-where').innerText(), 'Build, Fixes 2');
       assert.equal((await page.locator('.sr-ru-group').nth(1).locator('h2').innerText()).replace(/\s+/g, ' ').trim(), 'Every pipeline 1');
-      assert.equal(await page.locator('.sr-ru-group .pill, .sr-cost').count(), 0, 'no Free or Jev pill');
-      assert.equal(await page.locator('.sr-ru-group [data-sr-cost]').count(), 1, 'a quiet Jev mark');
+      assert.equal(await page.locator('.sr-ru-group .pill, .sr-cost').count(), 0, 'no Free or Decision model pill');
+      assert.equal(await page.locator('.sr-ru-group [data-sr-cost]').count(), 1, 'a quiet Decision model mark');
       // the stage panel's one-line row (stage-rules.ts): no title, the Then mark, 36 px (44 on a phone)
       assert.equal(await page.locator('.sr-ru-group .sr-name').count(), 0, 'no title on a row');
       assert.deepEqual(await page.locator('.sr-ru-group .sr-r .sr-line').evaluateAll(els => [...new Set(els.map(e => Math.round(e.getBoundingClientRect().height)))]),

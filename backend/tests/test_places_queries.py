@@ -26,6 +26,8 @@ KINDS = [
 def place_statements(api, monkeypatch, path, token="ana-test"):
     """GET `path` as `token`: the body, and the statements it took. Each request starts from cold roster and row
     caches, as a poll from a new process would."""
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     store.roster_rows = {}
     store.row_cache = type(store.row_cache)()
@@ -34,7 +36,7 @@ def place_statements(api, monkeypatch, path, token="ana-test"):
         @contextlib.contextmanager
         def borrowed(*args, **kwargs):
             with opened(*args, **kwargs) as c:
-                c.set_trace_callback(seen.append)
+                c.set_trace_callback(recorder(seen))
                 try:
                     yield c
                 finally:
@@ -45,7 +47,8 @@ def place_statements(api, monkeypatch, path, token="ana-test"):
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
-        response = api.get("/api/v2/places/" + path, headers=T.headers(token))
+        with measuring(seen):
+            response = api.get("/api/v2/places/" + path, headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 

@@ -22,7 +22,7 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 
-from . import budgeting, documents, payments, posting, posting_rules, shared
+from . import budgeting, documents, key_use, payments, posting, posting_rules, shared
 from . import receipts as RCP
 from .context import Ctx
 from .core import dates
@@ -65,7 +65,7 @@ def _review_match(ctx: Ctx, fid: str, t: F.FeedTxn, found: str) -> None:
 
 def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
     """A bank sync that failed tells the owner what failed (spec 11: no BotOps in the way). `prior` is the connection's
-    status before this run: only the first failure of a run is told (one finance.sync.failed event and one keeper
+    status before this run: only the first failure of a run is told (one finance.sync.failed event and one Tico
     notice, as budget warnings send theirs). A retry that still fails says nothing more; a run after a clean sync is
     a new run."""
     if prior == "error":
@@ -123,7 +123,40 @@ def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: s
 
 
 # ------------------------------------------------------------------------------------------------ connecting
+KEY_NOT_USABLE_NOW = key_use.KEY_NOT_USABLE_NOW
+KEY_NOT_YOURS = key_use.KEY_NOT_YOURS
+
+
+def require_usable_key(ctx: Ctx, who: str, credential_id: str) -> None:
+    """Refuse binding a credential the requester may not use (the vault's rule, `tico.may_use_credential`). Every
+    path that sets a connection's credential runs it: the connect route before its probe sends the key anywhere, and
+    connection_create, which the route and the generic actions path both reach, again at approval."""
+    if not tico.may_use_credential(ctx.c, who, credential_id):
+        raise denied(KEY_NOT_YOURS)
+
+
+def unusable_key(store: Any, row: Mapping[str, Any]) -> str:
+    """Why a sync must not read this connection's credential, or "" when it may: the person or bot who made the
+    connection may no longer use it (`key_use.refused`: a grant revoked, a person gone, a bot paused or archived)."""
+    with store.read() as c:
+        return key_use.refused(
+            c,
+            str(row["created_by"] or ""),
+            str(row["credential_ref"] or ""),
+            ident=str(row["id"]),
+            provider=str(row["provider"]),
+        )
+
+
 def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Connect a bank, card or Stripe account with a stored credential the requester may use (`require_usable_key`),
+    checked after the provider's own checks so a malformed request still says what is wrong with it."""
+    plan = _connection_plan(ctx, who, p)
+    require_usable_key(ctx, who, str(p.get("credential_id") or ""))
+    return plan
+
+
+def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Connect a Mercury account with the company's token (a Tico credential, read at use time and never copied
     here). `probe` is what finance/sync.probe read with that token just before: the accounts (last 4 only), the IO
     credit accounts and Mercury's users. Each account becomes a money account mapped to a line in the books: checking

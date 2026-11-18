@@ -19,10 +19,9 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server, follow [Hosted install](install.md#install-the-server-for-your-team).
 
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [People](people.md).
-- [The sample company](sample-company.md): a made-up five-bot team to try Tico with.
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
 - [Skills directory](skills.md): propose a skill, approve it once it is screened, and install it for bots and people.
-- [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
+- [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md), [Auth types](auth-types.md) and [Permissions](permissions.md).
   [Tico AI Gateway](ai-gateway.md) runs bots on Tico picks (a level from X-Low to X-High, Fast or not) with one key from Tico.
   Members can have 25 active bots by default; the owner can change the limit.
 - Hosted Tico: [Joining the Tico waitlist](waitlist.md), [Your Tico account page](account.md), and
@@ -54,13 +53,12 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
   [Company skills in your own Claude Code](skills.md#peoples-claude-code): the skills helper, its device token and its usage reports.
   [Recorder speech and assist](recorder.md) relays the Tico Recorder's transcription, live text and chat through the Gateway.
-- Clients written against the old names: [Upgrading to the contract release](upgrading-to-contract-release.md).
 - External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).
 - Advanced operations: [Cloud provisioning](install-advanced.md), [Cloud machines](cloud-machines.md), [Many companies on one host](cell.md) and its [stats and debug tools](cell-stats.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
 - Project maintenance: [Architecture](architecture.md), [Contributing](../CONTRIBUTING.md), [Releasing](releasing.md),
   [Runner wire contract](runner-wire-contract.md), [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).
-- Pipelines in Tico 0.6.0: [the build spec](pipelines-v3.md) and [its validation](pipelines-v3-validation.md).
+- Pipelines in Tico 0.6.0: [the build spec](dev/pipelines-v3.md) and [its validation](dev/pipelines-v3-validation.md).
 - Staff only: [Manage a company's billing](staff-billing.md) (credit, minimum balance, grace, enforcement, reversals) and
   [Review the Hosting waitlist](staff-waitlist.md).
 

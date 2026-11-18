@@ -431,7 +431,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 )
                 return {"suggested": True, "how": "pull_request", "original": original, "url": url, "files": paths}
             title = f"Review a suggestion from {names['copy']} for {names['original']}"
-            task = H.task_create(
+            from . import person_asks
+
+            task = person_asks.task_for(
                 c,
                 who.actor,
                 title,
@@ -440,6 +442,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 + names["original_slug"]
                 + "'s instructions (BotOps can do it).",
                 "human:" + owner if owner else "bot:" + original,
+                question=f"Apply a suggested change to {names['original']}'s instructions?",
+                why=f"It was made in {names['copy']}, a copy of {names['original']}.",
+                bot=who.actor,
                 allow_planned=True,
                 lint=False,
             )

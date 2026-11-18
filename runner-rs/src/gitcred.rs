@@ -1,5 +1,4 @@
-//! GitHub credentials for a turn (`runner_support/git_credentials.py`, `runner_support/credential_socket.py`,
-//! `runner_support/credential_bin/gh`).
+//! GitHub credentials for a turn. This module owns them: the Python turn helper and gh wrapper it replaced are gone.
 //!
 //! The hub mints a repository-scoped GitHub App token that lasts an hour; a turn can run longer, so git
 //! does not keep one. Its credential helper is `tico-runner git-credential`, which asks this runner's
@@ -180,8 +179,6 @@ pub fn select_token(granted: &Value, repository: Option<&str>) -> String {
 
 struct Registered {
     bot: String,
-    /// The mailboxes the hub named for this attempt (crate::mail_key::answer).
-    mailboxes: std::collections::BTreeSet<String>,
     issued: Vec<String>,
     redactor: Option<Arc<Redactor>>,
     /// A turn that asks for its GitHub tokens with its own token, and its own cache (register_as).
@@ -244,7 +241,7 @@ fn accept(
 }
 
 impl CredentialSocket {
-    /// Listen in a private temporary directory, as `credential_socket.serve` does without isolation.
+    /// Without isolation, listen in a private temporary directory.
     /// Under isolation (or with TICO_RUNNER_CRED_SOCKET) it is a fixed path the bot user owns.
     pub fn serve(client: Client, cache: Arc<TokenCache>) -> std::io::Result<CredentialSocket> {
         let named = std::env::var("TICO_RUNNER_CRED_SOCKET")
@@ -340,7 +337,6 @@ impl CredentialSocket {
             attempt_token.into(),
             Registered {
                 bot: bot.into(),
-                mailboxes: Default::default(),
                 issued: vec![],
                 redactor: None,
                 own: None,
@@ -353,7 +349,6 @@ impl CredentialSocket {
     pub fn register_as(&self, attempt_token: &str, bot: &str, own: Client) {
         let entry = Registered {
             bot: bot.into(),
-            mailboxes: Default::default(),
             issued: vec![],
             redactor: None,
             own: Some((own, Arc::new(TokenCache::new()))),
@@ -362,17 +357,6 @@ impl CredentialSocket {
             .lock()
             .unwrap()
             .insert(attempt_token.into(), entry);
-    }
-
-    /// The mailboxes this attempt may ask a mail token for.
-    pub fn set_mailboxes(
-        &self,
-        attempt_token: &str,
-        mailboxes: std::collections::BTreeSet<String>,
-    ) {
-        if let Some(r) = self.attempts.lock().unwrap().get_mut(attempt_token) {
-            r.mailboxes = mailboxes;
-        }
     }
 
     pub fn set_redactor(&self, attempt_token: &str, redactor: Arc<Redactor>) {
@@ -416,15 +400,16 @@ async fn answer(
         .lock()
         .unwrap()
         .get(token)
-        .map(|r| (r.bot.clone(), r.mailboxes.clone(), r.own.clone()));
-    let Some((bot, mailboxes, own)) = known else {
+        .map(|r| (r.bot.clone(), r.own.clone()));
+    let Some((bot, own)) = known else {
         return json!({"error": "unknown attempt"});
     };
     let (client, cache) = own
         .as_ref()
         .map_or((client, cache), |(c, k)| (c, k.as_ref()));
-    if let Some(mail) = asked.get("mail") {
-        return crate::mail_key::answer(&mailboxes, mail).await;
+    // Mail and calendar run on the server (docs/mail.md): a mail request never falls through to a GitHub token.
+    if asked.get("mail").is_some() {
+        return json!({"error": "mail access is on the server: use tico email"});
     }
     let repository = match asked.get("repository") {
         None | Some(Value::Null) => None,
@@ -1054,6 +1039,49 @@ mod tests {
             select_token(&json!({"configured": false, "token": "x"}), None),
             ""
         );
+    }
+
+    /// GitHub's stateless installation token (`ghs_<app id>_<JWT>`, ~520 characters with dots and dashes; the
+    /// default since Oct 2026), synthetic. backend/tests/helpers/github_app.py stateless_token makes the same shape.
+    fn stateless_token() -> String {
+        format!(
+            "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9.{}",
+            "S1g-n_aTuRe".repeat(40)
+        )
+    }
+
+    #[test]
+    fn a_stateless_token_reaches_git_exactly_as_the_socket_answers_it() {
+        let token = stateless_token();
+        let dir =
+            PathBuf::from("/tmp").join(format!("tico-cred-fmt-{}", uuid::Uuid::new_v4().simple())); // short
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("git-credential.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let answer = token.clone();
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut asked = String::new();
+            BufReader::new(&stream).read_line(&mut asked).unwrap();
+            (&stream)
+                .write_all(format!("{}\n", json!({ "token": answer })).as_bytes())
+                .unwrap();
+            asked
+        });
+        let got = socket_request(&path, "attempt-1", Some("Acme/emp-ops"), "git").unwrap();
+        let asked: Value = serde_json::from_str(&served.join().unwrap()).unwrap();
+        assert_eq!(
+            asked,
+            json!({"token": "attempt-1", "repository": "Acme/emp-ops", "purpose": "git"})
+        );
+        assert_eq!(
+            got, token,
+            "the token git is given is the one the socket answered"
+        );
+        let granted = json!({"configured": true, "token": token, "tokens": [{"token": token, "repositories": ["Acme/emp-ops"]}]});
+        assert_eq!(select_token(&granted, Some("acme/emp-ops")), token);
+        assert_eq!(select_token(&granted, None), token);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

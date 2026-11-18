@@ -111,7 +111,7 @@ def test_a_deleted_task_comes_back_whole_and_keeps_its_number(api):
 
     assert post(api, "tasks/41/restore", {}, token="ben-test")["restored"] == ticket["id"]
     after = get(api, "tasks/" + ticket["id"], token="ben-test")
-    for key in ("title", "body", "requester_id", "owner_id", "status", "conversation_id"):
+    for key in ("title", "request", "requester_id", "owner_id", "status", "conversation_id"):
         assert after["task"][key] == before["task"][key] if "task" in before else after[key] == before[key], key
     with store.read() as c:
         assert c.execute("SELECT number FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[0] == 41
@@ -201,11 +201,7 @@ def test_a_file_attached_when_the_task_was_made_is_locked_in_the_trash_and_count
     for token in ("ben-test", "priya-test"):
         assert api.get(attachment["url"], headers=headers(token)).content == b"%PDF wrong one"
     post(api, f"tasks/{task['id']}/delete", {}, token="ben-test")
-    with store.transaction() as c:  # a task deleted before the table existed is found in its trash row
-        from backend.task_delete import ensure
-
-        c.execute("DELETE FROM task_trash_assets")
-        ensure(c)
+    with store.transaction() as c:
         assert [r[0] for r in c.execute("SELECT blob_id FROM task_trash_assets")] == [attachment["id"]]
     # Not even its uploader opens it while the task is in the trash; a restore gives it back.
     for token in ("ben-test", "priya-test"):
@@ -434,6 +430,9 @@ def test_every_table_that_points_at_a_task_is_moved_kept_or_refuses_the_delete(a
     assert pointing - named == set()
 
 
+TASK_HOLD = "SELECT * FROM holds WHERE holdable_type='task' AND holdable_id=?"
+
+
 def test_a_deleted_task_keeps_its_quarantine_hold_when_restored(api):
     from backend import task_quarantine
 
@@ -447,18 +446,19 @@ def test_a_deleted_task_keeps_its_quarantine_hold_when_restored(api):
             "10 repeated refusals today",
             {"rule": "identity", "detail": "Only a person may make this change"},
         )
-        before = dict(c.execute("SELECT * FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone())
+        before = dict(c.execute(TASK_HOLD, (ticket["id"],)).fetchone())
     assert post(api, f"tasks/{ticket['id']}/delete", {}) == {"deleted": ticket["id"]}
     with store.read() as c:
-        assert not c.execute("SELECT 1 FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone()
+        assert not c.execute(TASK_HOLD, (ticket["id"],)).fetchone()
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     post(api, f"tasks/{ticket['id']}/restore", {})
     with store.transaction() as c:
-        after = dict(c.execute("SELECT * FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone())
-        assert {k: v for k, v in after.items() if k != "id"} == {k: v for k, v in before.items() if k != "id"}
+        after = dict(c.execute(TASK_HOLD, (ticket["id"],)).fetchone())
+        assert after == before
         assert H.bot(c, "ops")["state"] == "active"
-        assert H.lift_cooled_quarantines(c, cooldown=0) == ["ops"]
-        assert c.execute("SELECT released_at FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone()[0]
+        c.execute("UPDATE holds SET until_at=? WHERE holdable_id=?", (H.now(), ticket["id"]))
+        assert H.lift_cooled_quarantines(c) == ["ops"]
+        assert c.execute(TASK_HOLD, (ticket["id"],)).fetchone()["released_at"]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

@@ -18,7 +18,7 @@ use super::{
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::env::Env;
-use crate::util::{iso, log, py_dumps, text_of};
+use crate::util::{diagnostic, iso, log, py_dumps, text_of};
 
 const REQUEST_TIMEOUT: u64 = 120;
 const START_TIMEOUT: u64 = 60;
@@ -515,9 +515,20 @@ impl CodexHost {
                     });
                 }
             }
-            (Some(id), Some(_)) => {
-                // A server request; the runner approves nothing.
-                let _ = self.write(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "the runner answers no requests"}})).await;
+            (Some(id), Some(method)) => {
+                let (reply, decision, unexpected) = server_request_reply(&method);
+                let thread = msg["params"]["threadId"].as_str().unwrap_or("-");
+                let line = format!("codex: answered {method} on thread {thread}: {decision}");
+                if unexpected {
+                    diagnostic(&line);
+                } else {
+                    log(&line);
+                }
+                let answer = match reply {
+                    Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                    Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": error}),
+                };
+                let _ = self.write(&answer).await;
             }
             (None, method) => {
                 let p = msg
@@ -997,6 +1008,10 @@ impl CodexHost {
         // No memory under this computer's CODEX_HOME, even where the operator's config.toml turns it on: a bot
         // remembers in its repository's memory/ (Dev 301).
         cfg.insert("features.memories".into(), json!(false));
+        // The bot's verbosity; none keeps the model's own.
+        if let Some(level) = settings.verbosity.as_deref() {
+            cfg.insert("model_verbosity".into(), json!(level));
+        }
         let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never",
             "sandbox": "danger-full-access"});
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
@@ -1299,6 +1314,49 @@ impl CodexHost {
     }
 }
 
+const DECLINED: &str = "Tico runs this bot unattended, so no one can approve this request.";
+
+/// The runner's answer to a request the app server sends it: the reply, the decision for the log, and whether the
+/// request should not have come (a diagnostic). Threads run with `approvalPolicy: never` and full access, so an
+/// approval request is unexpected; one that comes is declined, which lets the turn go on without it (`cancel` or
+/// `abort` would end the turn). No one is there to answer a question, so an MCP elicitation is cancelled and a
+/// `requestUserInput` (whose answer has no cancel) gets no answers. The runner registers no dynamic tools, and
+/// manages neither ChatGPT tokens (Codex refreshes its own login) nor attestation, so those and any method this
+/// list does not know keep "method not found".
+fn server_request_reply(method: &str) -> (Reply, &'static str, bool) {
+    let not_found = |m: &str| {
+        Err(json!({"code": -32601, "message": format!("the runner does not answer {m}")}))
+    };
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            (Ok(json!({"decision": "decline"})), "declined", true)
+        }
+        "item/permissions/requestApproval" => (
+            Ok(json!({"permissions": {}, "scope": "turn"})),
+            "declined (granted nothing)",
+            true,
+        ),
+        "execCommandApproval" | "applyPatchApproval" => (
+            Ok(json!({"decision": {"denied": {"rejection": DECLINED}}})),
+            "declined",
+            true,
+        ),
+        "mcpServer/elicitation/request" => (Ok(json!({"action": "cancel"})), "cancelled", false),
+        "item/tool/requestUserInput" => (Ok(json!({"answers": {}})), "no answers", false),
+        "item/tool/call" => (
+            Ok(
+                json!({"contentItems": [{"type": "inputText", "text": "Tico registered no dynamic tools."}], "success": false}),
+            ),
+            "failed (no dynamic tools)",
+            true,
+        ),
+        "account/chatgptAuthTokens/refresh" | "attestation/generate" => {
+            (not_found(method), "method not found", false)
+        }
+        _ => (not_found(method), "method not found (unknown)", true),
+    }
+}
+
 // Codex names an overload or quota refusal in the error's structure (`codexErrorInfo`, or the API's `type`), and its
 // message may say neither ("Server busy"). Name the kind in the text the limit rules read; a message that already
 // reads as a limit is kept as it is, so a genuine quota is never relabelled as capacity.
@@ -1501,6 +1559,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_thread_gets_the_bots_verbosity_and_none_on_default() {
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
+        let settings = Settings {
+            verbosity: Some("low".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            host.thread_params(&settings)["config"]["model_verbosity"],
+            json!("low")
+        );
+        assert!(host.thread_params(&Settings::default())["config"]
+            .get("model_verbosity")
+            .is_none());
+        // A Claude output style is not Codex's.
+        let styled = Settings {
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        assert!(!host.thread_params(&styled).to_string().contains("Concise"));
+    }
+
     #[tokio::test]
     async fn a_thread_is_confirmed_by_its_first_turn_not_by_thread_start() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1586,7 +1666,8 @@ mod tests {
     }
 
     /// A fake app server that records each request it answers; `FAKE_REFUSE_ROOTS` makes it an app server without
-    /// `skills/extraRoots/set`.
+    /// `skills/extraRoots/set`. On `initialize` it sends each method in `FAKE_ASK` as a request of its own and
+    /// records the runner's answers in `FAKE_ANSWERS`.
     const FAKE_APP_SERVER: &str = r#"#!/usr/bin/env python3
 import json, os, sys
 def say(m): print(json.dumps(m), flush=True)
@@ -1596,7 +1677,13 @@ for line in sys.stdin:
     method, p = msg.get("method"), msg.get("params") or {}
     if "id" not in msg:
         continue
+    if method is None:
+        open(os.environ["FAKE_ANSWERS"], "a").write(line)
+        continue
     open(os.environ["FAKE_CALLS"], "a").write(json.dumps({"method": method, "params": p}) + "\n")
+    if method == "initialize":
+        for n, asked in enumerate(json.loads(os.environ.get("FAKE_ASK") or "[]")):
+            say({"id": "s%d" % n, "method": asked, "params": {"threadId": "th-1"}})
     if method == "skills/extraRoots/set" and os.environ.get("FAKE_REFUSE_ROOTS"):
         say({"id": msg["id"], "error": {"code": -32601, "message": "method not found"}})
     elif method == "skills/extraRoots/set":
@@ -1742,6 +1829,113 @@ for line in sys.stdin:
         assert_eq!(
             methods,
             ["initialize", "skills/extraRoots/set", "thread/start"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Every request Codex can send gets an answer its schema accepts (`codex app-server generate-json-schema`,
+    /// codex-cli 0.169.0): a stray approval is declined so the turn goes on, a question is let go, and only what the
+    /// runner never set up, or does not know, is "method not found".
+    #[test]
+    fn each_server_request_gets_a_deliberate_answer() {
+        let answer = |m: &str| server_request_reply(m);
+        for m in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            assert_eq!(
+                answer(m),
+                (Ok(json!({"decision": "decline"})), "declined", true),
+                "{m}"
+            );
+        }
+        assert_eq!(
+            answer("item/permissions/requestApproval").0,
+            Ok(json!({"permissions": {}, "scope": "turn"})),
+            "grants nothing"
+        );
+        for m in ["execCommandApproval", "applyPatchApproval"] {
+            let (reply, _, unexpected) = answer(m);
+            assert!(unexpected);
+            assert!(
+                reply.unwrap()["decision"]["denied"]["rejection"].is_string(),
+                "{m}: denied, not abort"
+            );
+        }
+        assert_eq!(
+            answer("mcpServer/elicitation/request"),
+            (Ok(json!({"action": "cancel"})), "cancelled", false)
+        );
+        assert_eq!(
+            answer("item/tool/requestUserInput").0,
+            Ok(json!({"answers": {}}))
+        );
+        let tool = answer("item/tool/call").0.unwrap();
+        assert_eq!(tool["success"], json!(false));
+        assert_eq!(tool["contentItems"][0]["type"], json!("inputText"));
+        for m in [
+            "account/chatgptAuthTokens/refresh",
+            "attestation/generate",
+            "item/somethingNew",
+        ] {
+            assert_eq!(answer(m).0.unwrap_err()["code"], json!(-32601), "{m}");
+        }
+        assert!(!answer("account/chatgptAuthTokens/refresh").2);
+        assert!(
+            answer("item/somethingNew").2,
+            "an unknown request is a diagnostic"
+        );
+    }
+
+    /// The answer goes back on the request's own id, as a result or an error.
+    #[tokio::test]
+    async fn a_server_request_is_answered_on_its_own_id() {
+        let dir =
+            std::env::temp_dir().join(format!("codex-asks-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::util::write_script(&dir.join("codex"), FAKE_APP_SERVER);
+        let answers = dir.join("answers.jsonl");
+        let env: Env = [
+            (
+                "PATH".to_string(),
+                format!(
+                    "{}:{}",
+                    dir.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            ),
+            (
+                "FAKE_CALLS".to_string(),
+                dir.join("calls.jsonl").display().to_string(),
+            ),
+            ("FAKE_ANSWERS".to_string(), answers.display().to_string()),
+            (
+                "FAKE_ASK".to_string(),
+                json!([
+                    "item/commandExecution/requestApproval",
+                    "attestation/generate"
+                ])
+                .to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        // The fake reads its input in order, so once this is answered the answers above are written.
+        host.request("noop", json!({}), 10).await.unwrap();
+        host.stop().await;
+        let got: Vec<Value> = std::fs::read_to_string(&answers)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                json!({"jsonrpc": "2.0", "id": "s0", "result": {"decision": "decline"}}),
+                json!({"jsonrpc": "2.0", "id": "s1", "error": {"code": -32601, "message": "the runner does not answer attestation/generate"}}),
+            ]
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

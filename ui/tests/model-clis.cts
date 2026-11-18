@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // Settings > Computers, a computer's pop-up > Versions and updates > Installation and updates: the owner's On box per model CLI. What the computer's bots run on, their fallback
 // included (`bot_runtimes`), is checked and locked; any other one turns on and off with a POST and the page reloads; a
-// refused change puts the box back. An older server sends no bot_runtimes: its bots' own runtimes stay locked.
+// refused change puts the box back.
 // Every request is intercepted.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -21,9 +21,9 @@ declare var loadSettings: () => Promise<void>;
     type Chip = {name: string; runtime: string; installed: boolean; version: string; managed: boolean; state: string; wanted: boolean; pinned: boolean; update_available: boolean; detail: string};
     const chip = (name: string, runtime: string, installed: boolean): Chip => ({name, runtime, installed, version: installed ? '1.0.0' : '', managed: true, state: 'idle',
       wanted: installed, pinned: false, update_available: false, detail: ''});
-    type Computer = {id: string; label: string; owner_id: string; bots: string[]; platform: string; last_seen_at: string; needed_runtimes: string[]; bot_runtimes?: string[]; harness_choices: Record<string, boolean>; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>; harnesses: Record<string, Chip>}};
+    type Computer = {id: string; label: string; owner_id: string; bots: string[]; platform: string; last_seen_at: string; online: boolean; needed_runtimes: string[]; bot_runtimes?: string[]; harness_choices: Record<string, boolean>; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>; harnesses: Record<string, Chip>}};
     const computer: Computer = {id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
-      last_seen_at: new Date().toISOString(), needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
+      last_seen_at: new Date().toISOString(), online: true, needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
       readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}},
         harnesses: {codex: chip('Codex', 'codex', true), antigravity: chip('Antigravity', 'gemini', true), grok: chip('Grok Build', 'grok', false)}}};
     const writes: {harness: string; enabled: boolean}[] = [];
@@ -41,7 +41,7 @@ declare var loadSettings: () => Promise<void>;
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: []}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
@@ -83,13 +83,7 @@ declare var loadSettings: () => Promise<void>;
     await page.waitForFunction(() => { const el = document.querySelector('#set-machines [data-harness-choice="grok"]') as HTMLInputElement; return !el.checked && !el.disabled; });
     assert.equal(writes.length, 3);
     assert.deepEqual(writes[2], {harness: 'grok', enabled: true});
-    // An older server: no bot_runtimes, so only what its bots run on (needed_runtimes) is locked.
-    delete computer.bot_runtimes;
-    await page.evaluate(() => loadSettings());
-    await page.locator('#set-machines details[data-machine-details]').evaluate((el: HTMLDetailsElement) => { el.open = true; });
-    assert.deepEqual(await state('codex'), [true, true]);
-    assert.deepEqual(await state('antigravity'), [true, false]);
     assert.deepEqual(errors, []);
-    console.log('PASS: Model CLIs toggle, bot and fallback locked, on/off, refused, older server');
+    console.log('PASS: Model CLIs toggle, bot and fallback locked, on/off, refused');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

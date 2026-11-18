@@ -26,7 +26,7 @@ from backend.finance.context import load
 from backend.finance.mercury import Answer
 from backend.finance.store import banking as store_banking
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.helpers.finance_fixtures import AT, OWNER, act, books, finance_template, store
+from backend.tests.helpers.finance_fixtures import AT, OWNER, act, books, finance_template, store, store_keys
 
 CARD = "card_acc_1"
 CASH = "cash_acc_1"
@@ -668,6 +668,7 @@ def test_the_connections_route_takes_a_brex_token_through_the_brex_probe(api, mo
     store = api.app.state.store
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
+        store_keys(c, "cred-brex")
     probed: list[str] = []
 
     def brex_probe(_store: Any, _vault: Any, credential_id: str) -> tuple[dict[str, object], str]:

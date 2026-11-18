@@ -1,8 +1,9 @@
-"""The default pipelines beyond Product and Engineering (backend/pipeline_presets_more.py, docs/pipelines-v3.md
+"""The default pipelines beyond Product and Engineering (backend/pipeline_presets_more.py, docs/dev/pipelines-v3.md
 "Default pipelines"): a new company gets Growth Experiments, Growth Monitoring, Lead and Opportunity in the Growth factory
 and Customer, Success Experiments and Success Monitoring in the Success factory, once; nothing it retired comes back; no
-stage is left without an owner; an experiment goes live only once a person OKs its Go-live page. Legal and Finance (private, in the Corporate
-factory) are made once their owner bot is: the sample company has both, the Bookkeeper and the Legal Owner."""
+stage is left without an owner; an experiment goes live only once a person approves its Release report. Legal and
+Finance (private, in the Corporate factory) are made once their owner bot is: the sample company has both, the
+Bookkeeper and the Legal Owner."""
 
 import pytest
 
@@ -14,7 +15,7 @@ from backend import task_pages as P
 from backend import task_requirements as R
 from backend.answers import answer
 from backend.store import H
-from backend.tests.helpers.sample_company import (  # noqa: F401
+from backend.tests.helpers.fresh_install import (  # noqa: F401
     booted,
     environment,
     rows,
@@ -41,7 +42,7 @@ FACTORIES = [
 
 def _new_company(environment):
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api
 
@@ -174,8 +175,9 @@ def _verdict(c, page):
     V.record(c, owed["id"], {"verdict": "met", "p": 0.9, "reason": ""})
 
 
-def test_an_experiment_goes_live_only_once_a_person_oks_its_go_live_page(environment):
-    """A person's idea rests in Ideas; Ideas -> Building by its bot owner, a Go-live page Jev passes and a person OKs, Running, a Results page, Done."""
+def test_an_experiment_goes_live_only_once_a_person_approves_its_release_report(environment):
+    """A person's idea rests in Ideas; Ideas -> Building by its bot owner, a Release report the decision model passes
+    and a person approves, Running, a Results page, Done."""
     api = _new_company(environment)
     assignee = "bot:" + rows(api, "SELECT id FROM bots WHERE slug='general-manager'")[0]["id"]
     (go_live,) = rows(
@@ -198,7 +200,7 @@ def test_an_experiment_goes_live_only_once_a_person_oks_its_go_live_page(environ
         row = E.move(c, row["id"], "growth-experiments-building", assignee, seen_version=row["version"])
         assert row["owner_id"] == assignee
         page = P.attach(
-            c, row["id"], "Go-live page", "page:" + _page(c, "Go live"), assignee, seen_version=row["version"]
+            c, row["id"], "Release report", "page:" + _page(c, "Go live"), assignee, seen_version=row["version"]
         )
         _verdict(c, page)
         row = E.task(c, row["id"])

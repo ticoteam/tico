@@ -46,6 +46,8 @@ def resolved_registry(projects, registry_dir):
         "reasoning_effort",
         "effort",
         "compact_at",
+        "output_style",
+        "verbosity",
         "status",
         "max_run_minutes",
         "schedules",
@@ -218,7 +220,7 @@ def main(argv=None):
             config = {**json.loads(row["config"] or "{}"), "repo": repo}
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
-            H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
+            H.event(c, H.TICO_ACTOR, "bot.repo_set", bot, {"repo": repo})
             from .repositories import note_chosen
 
             note_chosen(c, repo, store.settings.github_owner)
@@ -284,9 +286,9 @@ def main(argv=None):
         settings = Settings(db_path=args.database, registry_dir=registry_dir())
         store, census = Store(settings), Census(Store(settings), settings)
         if args.action == "on" or args.action == "off":
-            report = census.set_enabled(args.action == "on", H.KEEPER)
+            report = census.set_enabled(args.action == "on", H.TICO_ACTOR)
         elif args.action == "reset-id":
-            report = census.reset_id(H.KEEPER)
+            report = census.reset_id(H.TICO_ACTOR)
         elif args.action == "payload":
             # What would be sent right now; nothing is sent by this command.
             with store.read() as c:
@@ -306,7 +308,7 @@ def main(argv=None):
 
         s3 = boto3.client("s3")
         settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
-        # A hand-run bundle carries the key files beside the database (credential.key, github-app.key, slack.key):
+        # A hand-run bundle carries the key files beside the database (credential.key, github-app.key):
         # restore_bundle (python -m backend.backup) puts them back beside the restored database.
         from .company_storage import for_backup
 

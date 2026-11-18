@@ -4,7 +4,7 @@
 // belongs leaves, and the 2-minute refresh catches up with a changed_after delta from the list's cursor.
 //  - a bot's page: its Open rows and its filter tabs (Assigned to others), decided by each tab's rows client-side;
 //  - a person's page: the tasks they own, open, snoozed and finished;
-//  - My dashboard: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
+//  - Company: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
 //    read and activity events; the place is not read again for any of them;
 //  - a read that lands late (Codex review 1): a first read or a catch-up held back by a slow server, a removal coming
 //    while it is out, then the older answer: the row stays gone.
@@ -44,7 +44,7 @@ put(task('t3', 'Pick the release day', 'spec', {owner_id: 'bot:pm', requester_id
 // What backend/events.py _tasks sends for one task: its id, the change's kind(s) and the task as the viewer reads it, or
 // `gone` when it was deleted.
 const event = (x: Task, kind = 'update') => ({id: x.id, kind, kinds: [kind], task: put(x)});
-// My dashboard as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs you, Unread threads.
+// Company as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs you, Unread threads.
 const dashCard = (template: string, heading: string, data: unknown, settings = {}) => ({id: null, item: null, size: 'medium', made_by: null,
   card: {id: null, template, title: '', heading, name: heading, settings: {team: '', ...settings}, team_name: '', hidden: false, made_by: null, data}});
 const HOME_PLACE = {place: 'person:ana', kind: 'person', saved: false, can_edit: true, pins: [
@@ -200,7 +200,7 @@ const holdNext = (match: Held['match']): Held => {
   assert.deepEqual(reads.changed, ['12.a']);
   assert.equal(reads.tasks, personListed, 'the refresh reads no whole task list');
 
-  // ---- My dashboard
+  // ---- Company
   await page.evaluate(() => { location.hash = '#/home'; });
   const pin = (name: string) => page.locator('.dash-pin', {has: page.locator('h2', {hasText: name})});
   await pin('My tasks').locator('li', {hasText: 'Sign the lease'}).waitFor({timeout: t(8000)});
@@ -218,7 +218,8 @@ const holdNext = (match: Held['match']): Held => {
   assert.deepEqual(await pin('My tasks').locator('li a').allTextContents(), ['Renew the domain', 'Sign the lease 20']);
   assert.equal((await pin('My tasks').locator('.dash-head-n').textContent())?.trim(), '2', 'the header count follows a live task change');
   // Needs you as the app holds it, drawn by the server's rule (backend/cards.py needs_brief): the task's title, the word
-  // for what it needs, the ask as the tooltip; the count on the header line.
+  // for what it needs (a task there is one to fix: Needs you holds no task only because it is yours), the ask as the
+  // tooltip; the count on the header line.
   await page.evaluate(() => {
     S.v2.needs = [{id: 'n1', kind: 'task', task_id: 'n1', line: 'Say when the work is done', task: {id: 'n1', title: 'Approve the budget'}},
       {id: 'a2', kind: 'ask', task_id: 'n2', line: 'Say when the work is done', task: {id: 'n2', title: 'Print the flyers'}, ask: {kind: 'ok', may: []}},
@@ -227,7 +228,7 @@ const holdNext = (match: Held['match']): Held => {
   });
   await pin('Needs you').locator('li', {hasText: 'Approve the budget'}).waitFor();
   assert.deepEqual(await pin('Needs you').locator('.dash-needs-t').allTextContents(), ['Approve the budget', 'Print the flyers', 'Connect Google']);
-  assert.deepEqual(await pin('Needs you').locator('.dash-needs li > a > .dash-act').evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['Done', 'OK', 'Fix']);
+  assert.deepEqual(await pin('Needs you').locator('.dash-needs li > a > .dash-act').evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['Fix', 'OK', 'Fix']);
   assert.equal(await pin('Needs you').locator('.dash-needs li > a').first().getAttribute('title'), 'Say when the work is done');
   assert.equal((await pin('Needs you').locator('.dash-head-n').textContent())?.trim(), '3', 'the header count follows the needs list');
   assert.equal(await pin('Needs you').locator('.dash-big').count(), 0);
@@ -290,7 +291,7 @@ const holdNext = (match: Held['match']): Held => {
   await page.locator('#t-open', {hasText: 'Plan the launch call'}).waitFor({timeout: t(8000)});
   assert.doesNotMatch(await text('#t-open'), /Write the launch post/, "a bot's task removed while the first read was out stays removed");
   assert.doesNotMatch(await text('#t-open'), /Price the launch bundle/, 'a task Ana lost while the first read was out stays off');
-  // My dashboard read again on coming back: a task of Ana's finished while the read is out stays off My tasks.
+  // Company read again on coming back: a task of Ana's finished while the read is out stays off My tasks.
   await page.evaluate(() => { location.hash = '#/person/sam'; });
   await page.locator('#person-tasks', {hasText: 'Book the bus'}).waitFor();
   slow = holdNext(p => decodeURIComponent(p) === '/api/v2/places/person:me');
@@ -343,8 +344,8 @@ const holdNext = (match: Held['match']): Held => {
     }
   }), {whole: 1, version: 'p5', ids: ['e']});
 
-  // A list's order holds as rows come and change: queue order is by rank then age, Done most recent first, and the
-  // plain Threads list by title.
+  // A list's order holds as rows come and change: queue order is by rank then age, Done most recent first, and a
+  // renamed thread stays where the rail has it until its next read.
   assert.deepEqual(await page.evaluate(() => {
     const ids = (rows: {id: string}[]) => rows.map(r => r.id).join(' ');
     const q = [{id: 'a', rank: 1, created_at: '1'}, {id: 'c', rank: 3, created_at: '1'}, {id: 'n', rank: null, created_at: '1'}];
@@ -353,13 +354,13 @@ const holdNext = (match: Held['match']): Held => {
     taskRowsPut(q, {id: 'a', rank: 4, created_at: '1'}, 'a', () => true, taskQueueOrder);
     const done = [{id: 'x', done_at: '2026-11-09'}, {id: 'y', done_at: '2026-11-08'}];
     taskRowsPut(done, {id: 'y', done_at: '2026-11-10'}, 'y', () => true, taskFinishedOrder);
-    const kept = {rail: THREADS.rail, threads: THREADS.threads, pinned: THREADS.pinned};
+    const kept = {threads: THREADS.threads, pinned: THREADS.pinned};
     try {
-      Object.assign(THREADS, {rail: false, pinned: [], threads: [{id: 'th1', title: 'Alpha', audience: 'company', me: {member: true}}, {id: 'th2', title: 'Beta', audience: 'company', me: {member: true}}]});
+      Object.assign(THREADS, {pinned: [], threads: [{id: 'th1', title: 'Alpha', audience: 'company', me: {member: true}}, {id: 'th2', title: 'Beta', audience: 'company', me: {member: true}}]});
       threadsPut({id: 'th1', title: 'Zulu', audience: 'company', me: {member: true}});
       return {added, ranked: ids(q), done: ids(done), threads: THREADS.threads.map(t => t.title).join(' ')};
     } finally { Object.assign(THREADS, kept); }
-  }), {added: 'a b c n', ranked: 'b c a n', done: 'y x', threads: 'Beta Zulu'});
+  }), {added: 'a b c n', ranked: 'b c a n', done: 'y x', threads: 'Zulu Beta'});
 
   assert.deepEqual(errors, []);
   await browser.close();

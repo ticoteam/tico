@@ -12,7 +12,6 @@ import hashlib
 import json
 import re
 import secrets
-import sqlite3
 import threading
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -29,28 +28,7 @@ from . import manual
 from . import models as M
 from .names import lookup
 from .store import H, Problem, encode
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS docs(
- id TEXT PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
- locked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
- created_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_by_id TEXT NOT NULL, updated_at TEXT NOT NULL,
- archived INTEGER NOT NULL DEFAULT 0);
-CREATE UNIQUE INDEX IF NOT EXISTS docs_path_live ON docs(path COLLATE NOCASE) WHERE archived=0;
-CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated_at);
-CREATE TABLE IF NOT EXISTS doc_versions(
- doc_id TEXT NOT NULL REFERENCES docs(id), version INTEGER NOT NULL, title TEXT NOT NULL, path TEXT NOT NULL,
- body TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
- PRIMARY KEY(doc_id, version));
-CREATE TABLE IF NOT EXISTS linked_docs(
- id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL,
- description TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- archived INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS linked_docs_live ON linked_docs(archived, created_at);
-"""
-# Full-text index over title, path and body. It is created apart so a SQLite built without FTS5
-# still starts: search then falls back to LIKE.
-FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(title, path, body, tokenize='porter unicode61')"
+from .api_contract import api_v2
 
 KINDS = ("website", "google_drive", "google_doc", "notion", "github", "other")
 MAX_BODY = 1_000_000
@@ -213,7 +191,7 @@ def linked_view(row, names=None):
 
 
 def name_of(actor, names):
-    if actor == H.KEEPER:
+    if actor == H.TICO_ACTOR:
         return "Tico"
     return names.get(actor) or (actor.split(":", 1)[-1] if actor else "")
 
@@ -239,13 +217,8 @@ def unindex(c, rowid):
 
 
 def ensure_schema(c, settings=None):
-    """Tables, the full-text index (rebuilt when it is behind the rows) and the one-time move of
-    the old linked sources and approved repositories into linked docs. Safe to run at every start."""
-    c.executescript(SCHEMA)
-    try:
-        c.execute(FTS)
-    except sqlite3.OperationalError:
-        pass
+    """The full-text index (rebuilt when it is behind the rows) and the one-time move of the old linked sources and
+    approved repositories into linked docs. Safe to run at every start."""
     from .flight import begin
 
     done = begin(c)
@@ -321,7 +294,7 @@ def migrate(c, settings=None):
         now = H.now()
         c.execute(
             "INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-            ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.KEEPER, now, now),
+            ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.TICO_ACTOR, now, now),
         )
         added += 1
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (MIGRATED, encode({"at": H.now(), "linked": added})))
@@ -350,9 +323,9 @@ def refresh_generated_wording(c):
             (text, H.now(), row["id"]),
         )
         fresh = docs.get_row(c, row["id"])
-        docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
+        docs.snapshot(c, fresh, H.TICO_ACTOR, "Updated generated Tico wording")
         index(c, row["rid"], row["title"], row["path"], text)
-        H.event(c, H.KEEPER, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
+        H.event(c, H.TICO_ACTOR, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (marker, encode({"at": H.now()})))
 
 
@@ -377,9 +350,9 @@ def redo_generated_wording(c):
             (text, H.now(), row["id"]),
         )
         fresh = docs.get_row(c, row["id"])
-        docs.snapshot(c, fresh, H.KEEPER, "Redid generated Tico wording")
+        docs.snapshot(c, fresh, H.TICO_ACTOR, "Redid generated Tico wording")
         index(c, row["rid"], row["title"], row["path"], text)
-        H.event(c, H.KEEPER, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
+        H.event(c, H.TICO_ACTOR, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (marker, encode({"at": H.now()})))
 
 
@@ -409,22 +382,22 @@ def refresh_generated_docs(c):
             (title, text, H.now(), row["id"]),
         )
         fresh = docs.get_row(c, row["id"])
-        docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
+        docs.snapshot(c, fresh, H.TICO_ACTOR, "Updated generated Tico wording")
         index(c, row["rid"], title, row["path"], text)
-        H.event(c, H.KEEPER, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
+        H.event(c, H.TICO_ACTOR, "docs.updated", row["id"], {"path": row["path"], "version": fresh["version"]})
     for source in c.execute("SELECT * FROM docs WHERE archived=1").fetchall():
-        docs.remove_index_source(c, source, H.KEEPER)
+        docs.remove_index_source(c, source, H.TICO_ACTOR)
     bot = H.bot(c, "librarian")
     if bot and bot["state"] in ("active", "planned"):
         pending = c.execute(
             "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id='bot:librarian' "
             "AND title='Refresh the map' AND status='open'",
-            (H.KEEPER,),
+            (H.TICO_ACTOR,),
         ).fetchone()
         if not pending:
             H.task_create(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "Refresh the map",
                 "Follow playbooks/refresh-the-map.md. Reconcile every cached source against the full live "
                 "doc and link lists, including archived sources and recorded unreadable links. Update "
@@ -1188,7 +1161,15 @@ def install_docs(app, store, auth, mutate):
         if str(doc_id).startswith("manual:"):
             raise Problem("read_only", "The Tico manual is read-only; it ships with each release", 405)
 
-    @app.get("/api/v2/docs")
+    @app.get(
+        "/api/v2/docs",
+        **api_v2(
+            "Docs",
+            "listInternalDocs",
+            "Internal docs by path, without their text; path_prefix narrows to a folder, limit and cursor page",
+            "InternalDocList",
+        ),
+    )
     def list_docs(
         request: Request,
         path_prefix: str = Query(default="", max_length=300),
@@ -1211,13 +1192,29 @@ def install_docs(app, store, auth, mutate):
                     H.event(c, who.actor, "docs.write_refused", target, {"code": exc.code, "path": path, **detail})
             raise
 
-    @app.post("/api/v2/docs")
+    @app.post(
+        "/api/v2/docs",
+        **api_v2(
+            "Docs",
+            "createInternalDoc",
+            "Write a new internal doc (Markdown). The path defaults to a slug of the title; a chosen path that is taken is a 409",
+            "InternalDocResult",
+        ),
+    )
     def create_doc(request: Request, body: DocCreate):
         return refusals_recorded(
             request, body, (body.path or "").strip(), lambda: mutate(request, body, docs.create(request, body))
         )
 
-    @app.get("/api/v2/docs/search")
+    @app.get(
+        "/api/v2/docs/search",
+        **api_v2(
+            "Docs",
+            "searchInternalAndLinkedDocs",
+            "Search team and manual sections by relevance, with excerpts, and linked docs by title, note and address; each result has a type",
+            "DocsSearchResults",
+        ),
+    )
     def search_docs(
         request: Request,
         q: str = Query(min_length=1, max_length=4000),
@@ -1282,7 +1279,16 @@ def install_docs(app, store, auth, mutate):
         }
     }
 
-    @app.post("/api/v2/docs/import", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/docs/import",
+        **api_v2(
+            "Docs",
+            "importInternalDoc",
+            "A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) converted to Markdown and saved as a new internal doc",
+            "InternalDocResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def import_doc(request: Request):
         """A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) becomes an internal doc."""
         who = request.state.identity
@@ -1312,37 +1318,91 @@ def install_docs(app, store, auth, mutate):
             lambda: mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename))
         )
 
-    @app.get("/api/v2/docs/{doc_id}")
+    @app.get(
+        "/api/v2/docs/{doc_id}",
+        **api_v2("Docs", "getInternalDoc", "One internal doc with its text and version", "InternalDocResult"),
+    )
     def get_doc(request: Request, doc_id: str):
         return docs.read(request.state.identity, doc_id)
 
-    @app.patch("/api/v2/docs/{doc_id}")
+    @app.patch(
+        "/api/v2/docs/{doc_id}",
+        **api_v2(
+            "Docs",
+            "updateInternalDoc",
+            "Change a doc's title, text or path, archive it, or lock it (owner and bot administrators). `version` must be the current one or the answer is 409 version_conflict; a locked doc answers 403 locked to everyone else",
+            "InternalDocResult",
+        ),
+    )
     def edit_doc(request: Request, doc_id: str, body: DocEdit):
         read_only(doc_id)
         return refusals_recorded(request, body, doc_id, lambda: mutate(request, body, docs.edit(request, doc_id, body)))
 
-    @app.get("/api/v2/docs/{doc_id}/versions")
+    @app.get(
+        "/api/v2/docs/{doc_id}/versions",
+        **api_v2(
+            "Docs",
+            "listInternalDocVersions",
+            "A doc's versions, newest first, without their text",
+            "InternalDocVersions",
+        ),
+    )
     def doc_versions(request: Request, doc_id: str):
         return docs.versions(request.state.identity, doc_id)
 
-    @app.get("/api/v2/docs/{doc_id}/versions/{number}")
+    @app.get(
+        "/api/v2/docs/{doc_id}/versions/{number}",
+        **api_v2("Docs", "getInternalDocVersion", "One version with its text", "InternalDocVersionResult"),
+    )
     def doc_version(request: Request, doc_id: str, number: int):
         return docs.version(request.state.identity, doc_id, number)
 
-    @app.post("/api/v2/docs/{doc_id}/restore")
+    @app.post(
+        "/api/v2/docs/{doc_id}/restore",
+        **api_v2(
+            "Docs",
+            "restoreInternalDoc",
+            "Save an earlier version as a new version (the history is never rewritten)",
+            "InternalDocResult",
+        ),
+    )
     def restore_doc(request: Request, doc_id: str, body: DocRestore):
         read_only(doc_id)
         return mutate(request, body, docs.restore(request, doc_id, body))
 
-    @app.get("/api/v2/linked-docs")
+    @app.get(
+        "/api/v2/linked-docs",
+        **api_v2(
+            "Docs",
+            "listLinkedDocs",
+            "External link identities and metadata; public GitHub content is indexed separately",
+            "LinkedDocList",
+        ),
+    )
     def list_links(request: Request):
         return docs.links(request.state.identity)
 
-    @app.post("/api/v2/linked-docs")
+    @app.post(
+        "/api/v2/linked-docs",
+        **api_v2(
+            "Docs",
+            "addLinkedDoc",
+            "Link a doc by its address; the kind is detected and the title defaults to the host and path. Anyone may add one",
+            "LinkedDocResult",
+        ),
+    )
     def add_linked(request: Request, body: LinkCreate):
         return mutate(request, body, docs.link_add(request, body))
 
-    @app.patch("/api/v2/linked-docs/{link_id}")
+    @app.patch(
+        "/api/v2/linked-docs/{link_id}",
+        **api_v2(
+            "Docs",
+            "updateLinkedDoc",
+            "Change or remove (archived) a linked doc: whoever added it, owners and bot administrators",
+            "LinkedDocResult",
+        ),
+    )
     def edit_link(request: Request, link_id: str, body: LinkEdit):
         return mutate(request, body, docs.link_edit(request, link_id, body))
 

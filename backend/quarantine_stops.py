@@ -7,7 +7,7 @@ consumed approval, a fallback whose work is unknown or a named outside action (m
 for review. Such a run resumes with a note (`requeue`) that says it was stopped by a quarantine and to check what it
 already did first.
 
-A restart (`restart`) is the same keeper Stop for another reason: a computer's model subscription changed under the
+A restart (`restart`) is the same Tico Stop for another reason: a computer's model subscription changed under the
 run (backend/model_subscriptions.py), so its work goes back in the queue to start fresh on the new login. It is judged
 the same way.
 """
@@ -23,8 +23,7 @@ def line(c, bot, at=None, hold=None):
     words: the end reason is read more widely than the review."""
     at = at or H.now()
     if hold is not None:
-        until = H.shift(hold["created_at"], seconds=H.QUARANTINE_COOLDOWN_S)
-        resumes = {"auto": True, "resumes_at": until}
+        resumes = {"auto": True, "resumes_at": hold["until_at"]}
     else:
         resumes = H.quarantine_resumes(c, bot)
     if resumes["auto"]:
@@ -50,8 +49,10 @@ def stop(c, row):
 
     hold = task_quarantine.for_attempt(c, row) if H.bot(c, row["bot_id"])["state"] != "quarantined" else None
     said = line(c, row["bot_id"], hold=hold)
-    c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
-    H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot_id"], "quarantine": said})
+    c.execute(
+        "UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.TICO_ACTOR, row["id"])
+    )
+    H.event(c, H.TICO_ACTOR, "attempt.stop", row["id"], {"bot": row["bot_id"], "quarantine": said})
     return c.execute(
         "SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
         "FROM attempts a JOIN assignments x ON x.bot=a.bot_id WHERE a.id=?",
@@ -60,17 +61,19 @@ def stop(c, row):
 
 
 def restart(c, row, line):
-    """Record a keeper Stop on a live attempt whose computer's sign-in for its runtime changed: the run ends, its work
+    """Record a Tico Stop on a live attempt whose computer's sign-in for its runtime changed: the run ends, its work
     goes back in the queue (`requeues`) and starts fresh. A Stop already recorded stands. Returns whether it was new."""
     if row["stop_requested_at"]:
         return False
-    c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
-    H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot_id"], "restart": line})
+    c.execute(
+        "UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.TICO_ACTOR, row["id"])
+    )
+    H.event(c, H.TICO_ACTOR, "attempt.stop", row["id"], {"bot": row["bot_id"], "restart": line})
     return True
 
 
 def _stop_detail(c, row):
-    if not row["stop_requested_at"] or row["stop_requested_at"] != H.KEEPER:
+    if not row["stop_requested_at"] or row["stop_requested_at"] != H.TICO_ACTOR:
         return {}
     found = c.execute(
         "SELECT detail FROM events WHERE action='attempt.stop' AND target=? ORDER BY created_at DESC LIMIT 1",
@@ -80,7 +83,7 @@ def _stop_detail(c, row):
 
 
 def stopped_by(c, row):
-    """The line a keeper Stop on this attempt was recorded with (a quarantine's, or a restart's), or None for a
+    """The line a Tico Stop on this attempt was recorded with (a quarantine's, or a restart's), or None for a
     person's Stop or none."""
     detail = _stop_detail(c, row)
     return detail.get("quarantine") or detail.get("restart")
@@ -123,7 +126,7 @@ def requeue(c, row, at):
     the claim hands it to the bot with the run."""
     c.execute(
         "INSERT OR REPLACE INTO job_recovery(job_id,attempt_id,decision,note,actor,created_at) VALUES(?,?,?,?,?,?)",
-        (row["job_id"], row["id"], "resume", resume_note(at), H.KEEPER, H.now()),
+        (row["job_id"], row["id"], "resume", resume_note(at), H.TICO_ACTOR, H.now()),
     )
 
 

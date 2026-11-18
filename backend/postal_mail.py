@@ -53,6 +53,7 @@ from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
 from . import read_cache
+from .api_contract import KEYLESS, api_v2
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None  # tests' fake HQ, never the live one
@@ -92,7 +93,7 @@ DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SENDER = re.compile(r"[a-z0-9._%+-]*@[a-z0-9-]+(\.[a-z0-9-]+)+")  # a whole address, or `@domain` for any address there
-KEEPER = SimpleNamespace(actor=H.KEEPER)
+TICO = SimpleNamespace(actor=H.TICO_ACTOR)
 
 
 class Unavailable(Exception):
@@ -173,7 +174,7 @@ def bot_problem(c, bot, *, routing=False):
     """Use the task model's restrictions for bots whose host only syncs chat, and for routing task recipients."""
     if not bot or bot["state"] != "active":
         return "Choose an active bot for physical mail"
-    refusal = H.task_taking_refusal(c, H.KEEPER, H.bot_actor(bot["id"]))
+    refusal = H.task_taking_refusal(c, H.TICO_ACTOR, H.bot_actor(bot["id"]))
     if refusal and (routing or refusal[0] == "external-bot"):
         return "Physical mail is unavailable: " + refusal[1]
     return None
@@ -646,46 +647,6 @@ class PostalMail:
             c.execute("UPDATE mail_items SET read_at=? WHERE id=?", (now, row["id"]))
         return False
 
-    def backfill_private(self):
-        """Bill, financial and tax letters filed before their tasks were private (listed once by the V3 migration):
-        those tasks and every subtask below them go private now, a deleted one in its trash copy, so a restore brings
-        it back private. The app runs it at start, after the migrations; the list empties, so a task made public
-        later stays public."""
-        with self.store.transaction() as c:
-            todo, seen = [r[0] for r in c.execute("SELECT task_id FROM mail_private_backfill")], set()
-            while todo:
-                task_id = todo.pop()
-                if task_id in seen:
-                    continue
-                seen.add(task_id)
-                row = H.task(c, task_id)
-                if row and not H.task_private(c, row):
-                    H._made_private(c, H.KEEPER, task_id)
-                elif not row:
-                    c.execute(
-                        "UPDATE task_trash SET private=1,rows=json_set(rows,'$.rows.tasks[0].private',"
-                        "1,'$.rows.tasks[0].visibility','private') WHERE task_id=? AND purged_at IS NULL",
-                        (task_id,),
-                    )
-                todo += [
-                    r[0]
-                    for r in c.execute(
-                        "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?", (task_id,)
-                    )
-                ]
-                # A deleted task keeps its parent links (either end) in its trash copy; older copies on the task row.
-                # One whose child has another parent now (live, or in the child's own trash copy) is not followed.
-                linked = c.execute(
-                    "SELECT json_extract(r.value,'$.from_task') FROM task_trash t, "
-                    "json_each(t.rows,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
-                    "AND json_extract(r.value,'$.kind')='parent' AND json_extract(r.value,'$.to_task')=? "
-                    "UNION SELECT task_id FROM task_trash WHERE purged_at IS NULL "
-                    "AND json_extract(rows,'$.rows.tasks[0].parent_id')=?",
-                    (task_id, task_id),
-                ).fetchall()
-                todo += [r[0] for r in linked if r[0] and parent_now(c, r[0]) in (None, task_id)]
-            c.execute("DELETE FROM mail_private_backfill")
-
     def fail(self, row, code):
         attempts = row["attempts"] + 1
         wait = SCHEDULE.wait_for(attempts)
@@ -695,7 +656,7 @@ class PostalMail:
                 "WHERE id=? AND status IN ('new','failed')",
                 (attempts, H.shift(H.now(), seconds=wait), str(code)[:80], H.now(), row["id"]),
             )
-            H.event(c, H.KEEPER, "mail.failed", row["id"], {"error": str(code)[:80], "attempts": attempts})
+            H.event(c, H.TICO_ACTOR, "mail.failed", row["id"], {"error": str(code)[:80], "attempts": attempts})
 
     def read(self, data, mime, name):
         if READABLE.get(mime) is None or len(data) > READ_BYTES:
@@ -787,7 +748,7 @@ class PostalMail:
             if engine is None:
                 with self.store.read() as c:
                     engine = server_engine(self.store, c, getattr(self.app.state, "judge", None))
-                    if engine is not None and used_today(c, H.KEEPER) >= daily_cap(self.settings, "bot"):
+                    if engine is not None and used_today(c, H.TICO_ACTOR) >= daily_cap(self.settings, "bot"):
                         engine = None
             if engine is None:
                 return out
@@ -795,7 +756,7 @@ class PostalMail:
             replies = DG.ask_run(engine, [pairs[k] for k in run], label, calls, run)
             with self.store.transaction() as c:
                 for call in calls:
-                    H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, types=["choice"]))
+                    H.event(c, H.TICO_ACTOR, "judge.call", label, DG.audit_row(call, label, types=["choice"]))
             for k, reply in zip(run, replies, strict=True):
                 if isinstance(reply, BaseException):
                     continue  # Decide never stops a letter: the reader's word stands
@@ -820,7 +781,7 @@ class PostalMail:
         if rule["to"] and not to:
             raise Unavailable("no_recipient")  # nobody on the roster yet: kept failed, never archived unseen
         # A filed scan is read through its task; an archived one has no task, so it is the owner's own file.
-        holder = KEEPER if to else SimpleNamespace(actor=owner_actor(c, self.auth) or H.KEEPER)
+        holder = TICO if to else SimpleNamespace(actor=owner_actor(c, self.auth) or H.TICO_ACTOR)
         item = blobs.register(c, holder, digest, size, name, mime)
         task_id, file_id = None, None
         if to:
@@ -848,7 +809,7 @@ class PostalMail:
                 if owner:
                     H.notice(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         owner,
                         f"Legal mail: {summary}\nAssigned to {H.actor_name(c, to)}.\n"
                         + (
@@ -859,9 +820,9 @@ class PostalMail:
                         refs={"task": task_id},
                     )
             bot = H.actor_id(to) if H.is_bot(to) else self.file_bot(c)
-            file_id, number = self.app.state.files.attach_task(c, KEEPER, task_id, item, digest, bot)
+            file_id, number = self.app.state.files.attach_task(c, TICO, task_id, item, digest, bot)
             c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (task_id, item["id"]))
-            file_added(c, KEEPER, task_id, item, number)
+            file_added(c, TICO, task_id, item, number)
         status = "filed" if task_id else "archived"
         c.execute(
             "UPDATE mail_items SET status=?,kind=?,summary=?,sender=?,deadline=?,task_id=?,file_id=?,blob_id=?,"
@@ -879,7 +840,7 @@ class PostalMail:
                 ident,
             ),
         )
-        H.event(c, H.KEEPER, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
+        H.event(c, H.TICO_ACTOR, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
         if kind == "legal" and task_id:
             from . import personal_alerts
 
@@ -890,10 +851,29 @@ class PostalMail:
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
         private = True if private else None
         requester = owner_actor(c, self.auth) if inform_owner else None
+        if H.is_human(to):
+            # A letter for a person is their task with BotOps' question on it (backend/person_asks.py), so it is in their
+            # Needs you, not only their Tasks. No bot holds it: a private letter never reaches a bot's turn unasked.
+            from . import person_asks
+
+            when = f", due {due[:10]}" if due else ""
+            return person_asks.ask(
+                c,
+                H.TICO_ACTOR,
+                to,
+                title,
+                body,
+                f"Can you handle this letter{when}?",
+                f"{title[:150]}. It came by post, and only a person can act on it.",
+                due=due,
+                deduplicate=False,
+                private=private,
+                requester_actor=requester,
+            )["id"]
         made = H.attempt(
             c,
             H.task_create,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             to,
@@ -909,7 +889,7 @@ class PostalMail:
         # Nobody else to hand it to: file it for `to` again, so the refusal says why.
         return H.task_create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             to if not owner or owner == to else owner,
@@ -1104,7 +1084,15 @@ def install(app, settings, store, auth):
         more = len(rows) > len(out)
         return {"address_id": scope, "grants": out, "next": out[-1]["id"] if more and out else None}
 
-    @app.get("/api/v2/postal/bots")
+    @app.get(
+        "/api/v2/postal/bots",
+        **api_v2(
+            "Physical mail",
+            "listPostalMailBots",
+            "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin",
+            "PostalMailBots",
+        ),
+    )
     def mail_bots(
         request: Request,
         after: str = Query(default="", max_length=120),
@@ -1135,7 +1123,15 @@ def install(app, settings, store, auth):
                 size += added
             return {"bots": out, "next": out[-1]["id"] if len(rows) > len(out) and out else None}
 
-    @app.get("/api/v2/postal/addresses/{address_id}/grants")
+    @app.get(
+        "/api/v2/postal/addresses/{address_id}/grants",
+        **api_v2(
+            "Physical mail",
+            "listPostalMailGrants",
+            "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin",
+            "PostalMailGrants",
+        ),
+    )
     def mail_grants(
         request: Request,
         address_id: str = Path(min_length=1, max_length=300),
@@ -1152,7 +1148,16 @@ def install(app, settings, store, auth):
     class PostalReadGrant(Contract):
         level: str = Field(default="read", pattern="^read$")
 
-    @app.put("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}")
+    @app.put(
+        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+        **api_v2(
+            "Physical mail",
+            "grantPostalMailRead",
+            "Give one person or bot Read, including private letters and scans; owner or admin",
+            "PostalMailGrantResult",
+            idempotency=KEYLESS,
+        ),
+    )
     def mail_grant(
         request: Request,
         body: PostalReadGrant,
@@ -1185,7 +1190,10 @@ def install(app, settings, store, auth):
                 )
             return {"grant": dict(row)}
 
-    @app.delete("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}")
+    @app.delete(
+        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+        **api_v2("Physical mail", "revokePostalMailRead", "Revoke one Read grant; owner or admin", "PostalMailRevoked"),
+    )
     def mail_revoke(
         request: Request,
         address_id: str = Path(min_length=1, max_length=300),
@@ -1218,7 +1226,15 @@ def install(app, settings, store, auth):
     def routing_view(c):
         return {"settings": dict(c.execute("SELECT * FROM postal_mail_settings WHERE id=1").fetchone())}
 
-    @app.get("/api/v2/postal/settings")
+    @app.get(
+        "/api/v2/postal/settings",
+        **api_v2(
+            "Physical mail",
+            "getPostalMailSettings",
+            "Legal mail routing; null legal_bot_id means owner",
+            "PostalMailSettings",
+        ),
+    )
     def mail_settings(request: Request):
         """Legal mail routing: a null legal_bot_id means the owner. Changing this never moves existing tasks."""
         with store.read() as c:
@@ -1228,7 +1244,16 @@ def install(app, settings, store, auth):
     class PostalLegalRouting(Contract):
         legal_bot_id: str | None = Field(max_length=120)
 
-    @app.put("/api/v2/postal/settings")
+    @app.put(
+        "/api/v2/postal/settings",
+        **api_v2(
+            "Physical mail",
+            "setPostalMailSettings",
+            "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin",
+            "PostalMailSettings",
+            idempotency=KEYLESS,
+        ),
+    )
     def mail_settings_set(request: Request, body: PostalLegalRouting):
         """Choose an active bot for future legal mail, or null for the owner. The owner stays informed. Owner or admin."""
         who = request.state.identity

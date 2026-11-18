@@ -106,10 +106,12 @@ def test_the_bets_touched_are_the_active_published_ones_that_cite_or_watch_an_it
     assert none["bets"] == [] and none["touched"] == []
 
 
-def test_a_draft_bet_is_not_touched_until_it_is_published(seeded, events):
+def test_a_proposed_bet_is_not_touched_and_an_active_one_is_at_once(seeded, events):
     write(seeded, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
-    add_bet(seeded, cites=["company/northwind"])
+    bet = add_bet(seeded, cites=["company/northwind"], status="proposed")["bet"]
     assert brief(seeded, items=[item("company/northwind")])["briefing"]["bets"] == []
+    post(seeded, f"strategy/bets/{bet['id']}", {"status": "active"})
+    assert brief(seeded, items=[item("company/northwind")], body="Again.")["briefing"]["bets"] == [bet["id"]]
 
 
 def test_the_event_goes_out_once_a_week_with_the_touched_bets(seeded, events):

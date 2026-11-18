@@ -112,8 +112,8 @@ def test_a_repeated_send_while_its_turn_runs_shows_that_turn_not_a_dismissal(api
     assert get(api, snapshot)["execution"]["label"] == "Delivery dismissed"
 
 
-def test_an_unchanged_webhook_queues_nothing_and_the_notice_wait_is_its_only_timer(api):
-    window = W.NOTICE_SECONDS
+def test_an_unchanged_webhook_queues_nothing_and_a_persons_review_comment_starts_at_once(api):
+    # Product #546: news about a task's pull request is never held by the notice wait.
     task = post(api, "tasks", {"owner": "ops", "title": "Repair checks", "body": "x", "links": [PR]})
     failing = {
         "action": "created",
@@ -127,18 +127,8 @@ def test_an_unchanged_webhook_queues_nothing_and_the_notice_wait_is_its_only_tim
         assert G.flush_wakes(c) == [task["id"]]  # the next flush, not three minutes on
         G.pr_signal(c, "pull_request_review_comment", failing)  # the same comment: nothing new
         assert G.flush_wakes(c) == []
-    [ci] = [j for j in jobs(api) if j["wake_class"] == "review" and j["state"] == "queued"]
-    assert ci["held"] == 1  # a person's review comment nobody waits on is batched
-    tick(api, H.now())
-    [ci] = [j for j in jobs(api) if j["id"] == ci["id"]]
-    assert H.parse_ts(ci["hold_until"]) <= H.parse_ts(H.shift(H.now(), seconds=window))
-    with api.app.state.store.transaction() as c:
-        G.queue_wake(c, H.task(c, task["id"]), "The release you armed a wait for is out.")
-        assert G.flush_wakes(c) == [task["id"]]  # an awaited result goes at once too
-    # It takes the held review wake with it (one turn per task) and is not held for it.
-    [armed] = [j for j in jobs(api) if "The release you armed" in j["body"]]
-    assert (armed["state"], armed["held"]) == ("queued", 0) and "review comment" in armed["body"]
-    assert [j["state"] for j in jobs(api) if j["id"] == ci["id"]] == ["canceled"]
+    [review] = [j for j in jobs(api) if "review comment" in j["body"]]
+    assert (review["state"], review["held"], review["wake_class"]) == ("queued", 0, None)
 
 
 def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unheld(api):
@@ -199,7 +189,7 @@ def test_a_usage_limit_with_a_known_reset_waits_for_it(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     scheduler.tick()
     with api.app.state.store.read() as c:
-        assert not cooling_off(c, "ops")
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
         assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == 1
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "queued"
 
@@ -363,7 +353,7 @@ def stale_comments(api, task, n):
     these reminders carry no stale-check flag."""
     with api.app.state.store.transaction() as c:
         for i in range(n):
-            H.task_comment(c, H.KEEPER, task["id"], f"Still waiting on review {i}.")
+            H.task_comment(c, H.TICO_ACTOR, task["id"], f"Still waiting on review {i}.")
 
 
 def finished_requests(api, task, n):
@@ -404,7 +394,7 @@ def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
 
 def test_a_persons_done_through_botops_wakes_no_bot_about_the_done_task(api, botops):
     """BotOps marking done, for the person, a task a bot asked them for: the person's act, as the same act from the app
-    is. Pipelines v3 wakes no bot about a Done task (docs/pipelines-v3.md, check rule 7), so nothing is queued or held."""
+    is. Pipelines v3 wakes no bot about a Done task (docs/dev/pipelines-v3.md, check rule 7), so nothing is queued or held."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Approve the vendor list", "Please check it.", "human:ana")
     attempt = turn(api, botops, person="ana-test", text="Mark the vendor list done")

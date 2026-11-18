@@ -233,6 +233,71 @@ def test_ac9_all_paused_wakes_the_manager_once_and_tells_it_why(c, bots):
     assert E.task(c, row["id"])["owner_id"] == "bot:reviewer2"
 
 
+def test_every_builder_paused_gives_the_task_to_the_manager_who_owns_it_from_then_on(c, bots):
+    eng = _eng(c)
+    _pause(c, "builder")
+    _pause(c, "builder2")
+    said = _next(c, eng["stages"]["Build"])
+    assert said == "The next task goes to manager, the manager: every builder it picks from is paused."
+    row = _file(c, "Fix the export")
+    assert (row["owner_id"], row["assignee_id"]) == ("bot:manager", "bot:manager")
+    assert row["visit"]["pick_state"] is None and row["visit"]["holder_id"] == "bot:manager"
+    why = "every builder it picks from is paused, so it went to the manager"
+    assert _lines(c, row["id"]) == [f"Build given to manager · {why}"]
+    assert [who for _, who in X.wakes(c, row["id"])] == ["bot:manager"]
+    assert E._turn_of(c, row)[0] == "bot:manager"
+    X.place(c, "builder")  # a Builder back takes the next task, not this one
+    assert E.task(c, row["id"])["owner_id"] == "bot:manager"
+    assert _file(c, "Fix the import")["owner_id"] == "bot:builder"
+
+
+def test_a_task_left_with_nobody_goes_to_the_manager_on_the_next_pass(c, bots):
+    _eng(c)
+    _pause(c, "builder")
+    _pause(c, "builder2")
+    _pause(c, "manager")  # a manager that cannot run is no fallback: it is woken to pick, as before
+    row = _file(c, "Fix the search")
+    assert row["owner_id"] is None and row["visit"]["pick_state"] == "nobody"
+    X.place(c, "manager")
+    never_stuck.check(c)
+    row = E.task(c, row["id"])
+    assert (row["owner_id"], row["assignee_id"]) == ("bot:manager", "bot:manager")
+    assert any(who == "bot:manager" for _, who in X.wakes(c, row["id"]))
+
+
+def _file_private(c, title):
+    made = H.task_create(c, ANA, title, "What to do.", ANA, pipeline="eng", lint=False, unassigned=True, private=True)
+    return E.task(c, made["id"])
+
+
+def test_a_private_task_the_manager_cannot_read_is_filed_with_nobody_and_stays_so(c, bots):
+    _eng(c)
+    _pause(c, "builder")
+    _pause(c, "builder2")
+    row = _file_private(c, "Fix the payroll export")  # filed, not refused: the manager is no fallback here
+    assert row["owner_id"] is None and row["visit"]["pick_state"] == "nobody"
+    assert not H.task_private_readable(c, "bot:manager", row)
+    never_stuck.check(c)  # the pass never makes it the manager's, which would add a reader
+    row = E.task(c, row["id"])
+    assert row["owner_id"] is None and not H.task_private_readable(c, "bot:manager", row)
+
+
+def test_a_person_as_the_pipelines_manager_is_never_handed_the_build(c, bots):
+    X.pipeline(c, "eng", "Engineering", _stages(), manager=ANA)
+    _pause(c, "builder")
+    _pause(c, "builder2")
+    row = _file(c, "Fix the export")
+    assert row["owner_id"] is None and row["visit"]["pick_state"] == "nobody"
+
+
+def test_a_review_with_every_reviewer_paused_still_wakes_the_manager_to_pick(c, bots):
+    _eng(c)
+    for slug in ("reviewer1", "reviewer2"):
+        _pause(c, slug)
+    row = _through(c, _file(c, "Fix the footer"))
+    assert row["owner_id"] is None and row["visit"]["pick_state"] == "nobody"
+
+
 def test_a_reassign_in_a_pick_stage_holds_the_stage_and_moves_the_owner_with_it(c, bots):
     _eng(c)
     row = _file(c, "Fix the toast")

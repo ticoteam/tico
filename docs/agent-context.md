@@ -2,13 +2,13 @@
 
 ## The strategy in every run
 
-Once the owner has published a [strategy](strategy.md) version, every bot's run context carries the text of
+Once the owner has saved a [strategy](strategy.md), every bot's run context carries the text of
 `GET /api/v2/strategy/summary` under a **Team strategy** header, about 500 characters: the summary, one line per active
 bet with its wrong-if, then "version N". It is there on every turn, not only the Strategy Owner's, so a bot reads the team's bets
-before it reads its task. Nothing is added while no version is published, and a bot never sees the owner's draft. The full
-published page (the seven sections, every bet with its why, what it rules out and its health) is `tico strategy show` /
-`tico_strategy_show`; the same short text is `tico strategy summary` / `tico_strategy_summary`. Publishing sends no note to any
-bot: the context is how they learn of it. A bot reads; only the owner writes the draft and publishes.
+before it reads its task. Nothing is added while there is no version. The full
+live page (the seven sections, every bet with its why, what it rules out and its health) is `tico strategy show` /
+`tico_strategy_show`; the same short text is `tico strategy summary` / `tico_strategy_summary`. A save sends no note to any
+bot: the context is how they learn of it. A bot reads; only the owner writes it.
 
 ## Search and reads
 
@@ -16,7 +16,7 @@ The `tico` CLI and MCP expose the same read-only functions, and one that files a
 
 | CLI | MCP | Purpose |
 | --- | --- | --- |
-| `tico strategy show` | `tico_strategy_show` | The published strategy version, with its bets, the goals under each and each bet's health. |
+| `tico strategy show` | `tico_strategy_show` | The live strategy version, with its bets, the goals under each and each bet's health. |
 | `tico strategy summary` | `tico_strategy_summary` | The short text every bot gets in context. |
 | `tico doc search --market "pricing"` | `tico_doc_search` | Search full team document text and market entities/evidence. |
 | `tico doc read <document-id>` | `tico_doc_read` | Read a complete document found by search. |

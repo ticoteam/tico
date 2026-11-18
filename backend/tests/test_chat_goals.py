@@ -5,6 +5,7 @@ import pytest
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner, restrict  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.chat_goals import action, goal_event, setup, task_goal_world
 
 
@@ -109,7 +110,7 @@ def test_expired_or_superseded_harness_events_cannot_finish_current_goal(api):
 
 
 @pytest.mark.parametrize('ruled', [False, True])
-def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api, ruled):
+def test_a_task_goal_is_set_by_the_tico_and_meeting_it_marks_the_task_done(api, ruled):
     """With a company rule in force the done note is the fixed "Goal met.": the harness's words were never checked."""
     if ruled:
         from backend.tests.helpers.org_rules import rule
@@ -218,15 +219,9 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         },
         machine['token'],
     )
-    with api.app.state.store.transaction() as c:  # the owner asks another bot on the task: its turn, in the task's room
-        H.task_ask(
-            c,
-            'bot:ops',
-            task['id'],
-            'bot:product-design',
-            'Is the summary right?',
-            seen_version=H.task(c, task['id'])['version'],
-        )
+    # The owner's older OK ask of another bot on the task (X.ok_ask): its turn, in the task's room.
+    with api.app.state.store.transaction() as c:
+        X.ok_ask(c, task['id'], 'bot:ops', 'bot:product-design', 'OK the summary?')
     other = claim(api, machine)
     assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']

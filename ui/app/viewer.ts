@@ -124,7 +124,15 @@ function rowsView(rows: string[][], max = CSV_ROWS) {
 // network, so pictures embedded in the file show and remote ones do not. A link opens in a new tab.
 const HTML_VIEW_LIMIT = 10_000_000;
 const HTML_VIEW_POLICY = "default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline' data:; font-src data:";
-function htmlPreviewDoc(raw: unknown): string {
+// What a page or HTML file with no styles of its own is drawn with, instead of the browser's defaults: an h1 of 2em
+// (32 px, several lines in a phone's column), 8 px margins, no text-size-adjust (a phone may enlarge the text). Each rule
+// is :where(), of no weight, so any rule of the page's own wins.
+const HTML_VIEW_BASE = ':where(html){-webkit-text-size-adjust:100%;text-size-adjust:100%}'
+  + ':where(body){margin:0;padding:16px;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;overflow-wrap:break-word}'
+  + ':where(h1){font-size:1.5em;line-height:1.25}:where(h2){font-size:1.25em;line-height:1.3}:where(h3){font-size:1.1em}'
+  + ':where(img,video){max-width:100%;height:auto}:where(pre){overflow-x:auto}';
+/** `look`: more base styles after HTML_VIEW_BASE (a task's document takes the app's colours, task-docs.ts docLook). */
+function htmlPreviewDoc(raw: unknown, look = ''): string {
   // DOMParser builds an inert document: nothing in it runs or loads while it is rewritten.
   const doc = new DOMParser().parseFromString(String(raw), 'text/html');
   for (const m of doc.querySelectorAll('meta[http-equiv]')) if (/^\s*refresh\s*$/i.test(m.getAttribute('http-equiv') ?? '')) m.remove();
@@ -139,17 +147,20 @@ function htmlPreviewDoc(raw: unknown): string {
   newTab(doc);
   const policy = doc.createElement('meta');
   policy.httpEquiv = 'Content-Security-Policy'; policy.content = HTML_VIEW_POLICY;
-  doc.head.prepend(policy);
+  // Base styles first, so the page's own CSS wins wherever it says anything (HTML_VIEW_BASE).
+  const base = doc.createElement('style');
+  base.textContent = HTML_VIEW_BASE + look;
+  doc.head.prepend(policy, base);
   return (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML;
 }
-function htmlPreviewFrame(raw: string, title?: string) {
+function htmlPreviewFrame(raw: string, title?: string, look = '') {
   const frame = document.createElement('iframe');
   frame.className = 'html-view';
   // Set before the frame joins the page, so its first document already runs sandboxed.
   frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
   frame.referrerPolicy = 'no-referrer';
   frame.title = title || 'HTML preview';
-  frame.srcdoc = htmlPreviewDoc(raw);
+  frame.srcdoc = htmlPreviewDoc(raw, look);
   return frame;
 }
 // Files fetched to be shown here (a chat picture, a file in the viewer) are kept for the visit up to a byte budget per

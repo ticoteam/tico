@@ -29,7 +29,9 @@ const TOOLS = [
   tool('repo', 'github', 'GitHub', {logo_key: 'github', identity: 'acme-co/emp-cmo', scope: {repo: 'acme-co/emp-cmo'}, url: 'https://github.com/acme-co/emp-cmo'}),
   tool('posthog', 'posthog', 'PostHog', {logo_key: 'posthog', identity: 'PostHog project 12345 (US), personal key', can: ['read'],
     scope: {project: '12345'}, env: 'POSTHOG_KEY', note: 'funnels only', status: 'problem', problem: 'Credential missing on Test Mac'}),
-  tool('slack', 'slack', 'Slack', {logo_key: 'slack', identity: 'Acme workspace', can: ['read', 'post'], scope: {channels: ['#ops', '#launch']}, env: 'SLACK_TOKEN'}),
+  // Declared in bot.yaml and granted in Tools: one row, marked granted, opening its tool in Tools.
+  tool('slack', 'slack', 'Slack', {logo_key: 'slack', identity: 'Acme workspace', can: ['read', 'post'], scope: {channels: ['#ops', '#launch']}, env: 'SLACK_TOKEN',
+    granted: {level: 'read_write', kind: 'api', href: '#/tools/api/slack', tool_id: 'slack'}}),
   tool('github', 'github', 'GitHub', {logo_key: 'github', identity: 'acme-co/website', can: ['read', 'write'], scope: {repo: 'acme-co/website'},
     env: 'GH_TOKEN', status: 'problem', problem: 'Credential missing on Test Mac'}),
   tool('meeting-notes', 'meeting-notes', 'Meeting notes', {can: ['use'], status: 'unknown', detail: 'No credential is declared, so there is nothing to check'}),
@@ -256,6 +258,10 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       assert.equal(await list.locator('[data-tool=repo] summary a').getAttribute('href'), 'https://github.com/acme-co/emp-cmo');
       // Who else has a tool, and its keys, are one link away: the tool's page under Tools.
       assert.equal(await list.locator('[data-tool=repo] .bt-open').getAttribute('href'), '#/tools/github');
+      // A tool the bot uses through a grant carries the key mark, and opens that tool in Tools.
+      assert.equal(await list.locator('[data-granted]').count(), 1, scheme + ': one granted mark');
+      assert.equal(await list.locator('[data-tool=slack] summary [data-granted]').getAttribute('title'), 'Granted in Tools');
+      assert.equal(await list.locator('[data-tool=slack] .bt-open').getAttribute('href'), '#/tools/api/slack');
       // The repository's name opens GitHub (window.open is stubbed: nothing leaves the test) and leaves its line as it was.
       await page.evaluate(() => { (window as unknown as PageWin).opened = []; (window as unknown as PageWin).open = url => { (window as unknown as PageWin).opened.push(url); return null; }; });
       await list.locator('[data-tool=repo]').evaluate(d => { (d as HTMLDetailsElement).open = false; });
@@ -443,15 +449,15 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       assert.equal(await page.locator('#bot-alert button, #bot-alert a').count(), 0);
       assert.deepEqual(errors, [], "can't run, no fix errors");
       await context.close();
-      // #411: a bot being made on a task, waiting on the viewer's answer there: the one button opens that task.
+      // #411: a bot being made on a task, waiting on the viewer's OK there: the one button opens that task.
       const making = {id: 'add-cmo', title: 'Add AI CMO'}, asked = 'OK to start its cloud machine?';
       ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'planned'},
-        cantRun: {cause: 'AI CMO is waiting for your answer', fix: 'open_ask', task: making, ask: {kind: 'answer', mine: true, line: asked}}}));
+        cantRun: {cause: 'AI CMO is waiting for your OK', fix: 'open_ask', task: making, ask: {kind: 'ok', mine: true, line: asked}}}));
       await page.goto('https://tico-ui.test/#/bot/cmo');
       await page.locator('#bot-alert .bot-cant-run').waitFor();
       const answer = page.locator('#bot-alert a');
       assert.equal(await answer.count(), 1);
-      assert.equal(await answer.innerText(), 'Answer');
+      assert.equal(await answer.innerText(), 'Review OK');
       assert.equal(await answer.getAttribute('href'), '#/task/add-cmo');
       assert.equal(await answer.getAttribute('title'), asked);
       assert.deepEqual(errors, [], "can't run, ask errors");

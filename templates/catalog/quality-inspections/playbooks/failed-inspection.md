@@ -13,7 +13,7 @@ and the task is updated.
 
 ---
 
-1. Read the task, the inspection record, the photos and the checklist item. If the photo does not show the pass standard,
+1. Read the task's chat, the inspection record, the photos and the checklist item. If the photo does not show the pass standard,
    say so: an unclear item is a system cause until shown otherwise.
 2. State what failed, against which item, what the customer saw, and what a re-do would take in hours.
 3. Check the item's history in `knowledge/inspection-log.md` and `knowledge/redos.md`. Say whether it has failed before and

@@ -64,7 +64,7 @@ def give(api, m, runtime, sid, confirm=False, token="ana-test", expected=200):
     )
 
 
-def machine(api, signed_in=False, takes=True, bot="ops", claude=None, label="Test Mac"):
+def machine(api, signed_in=False, bot="ops", claude=None, label="Test Mac", caps=("model_subscriptions_v1",)):
     m = runner(api, label=label)
     assign(api, m, bot)
     post(
@@ -73,7 +73,7 @@ def machine(api, signed_in=False, takes=True, bot="ops", claude=None, label="Tes
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY] if takes else [],
+            "capabilities": list(caps),
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {

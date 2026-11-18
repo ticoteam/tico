@@ -17,16 +17,11 @@ interface UpdateStatus {
 }
 
 // A tab left open through an update keeps running the old UI. The config poll already runs, so what this page
-// loaded with is compared to the server's on every answer: its release, and the build of its script and
-// stylesheet (the `?v=` of their tags, which the config carries as `ui_build`; empty when the files are served
-// unbundled). The bar offers the reload and never reloads by itself, since the person may be typing.
+// loaded with is compared to the server's on every answer: its release, and its build (the parts list's `build`,
+// ui/app/parts.ts, which the config carries as `ui_build`). The bar offers the reload and never reloads by itself,
+// since the person may be typing.
 let LOADED_VERSION = '';
-const PAGE_BUILD = (() => {
-  if (UI_PARTS.build) return UI_PARTS.build;   // the shell and its page parts (ui/app/parts.ts)
-  const v = (sel: string) => (document.querySelector(sel)?.getAttribute(sel.startsWith('script') ? 'src' : 'href') || '').split('?v=')[1] || '';
-  const js = v('script[src*="app.bundle.js"]'), css = v('link[href*="app.bundle.css"]');
-  return js && css ? js + '.' + css : '';
-})();
+const PAGE_BUILD = UI_PARTS.build;
 function noticeUpdatedServer() {
   const v = String(S.config.version || '');
   if (!v) return;
@@ -223,7 +218,7 @@ function renderNewVersion() {
   if (!wrap) return;
   const u = S.config.update, show = nvUpdateShown();
   wrap.hidden = !show;
-  window.renderChangelogNotice?.();   // the "Updated to" row keeps out of the way while this one shows
+  renderChangelogNotice();   // the "Updated to" row keeps out of the way while this one shows
   if (!show) { setNewVersionPop(false); return; }
   $('#new-version-label').textContent = nvBusy ? 'Updating…' : 'Update to ' + nvVersion(u?.scheduled || u?.latest);
   if (!nvBusy) nvRenderPop();
@@ -333,7 +328,20 @@ const namedRoster = (rows: Employee[]): Employee[] => rows.map(row => {
 });
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
-window.ticoIsCloud = () => !!S.me?.cloud;
 // Modules loaded on their own still need the environment's names for anything a person reads.
 window.ticoAppName = () => appName();
 window.ticoAssistantName = () => assistantName();
+
+// The sidebar's "Updated to" row and the changelog badge (the What's new page itself is a page part, ui/changelog.ts).
+function renderChangelogNotice() {
+  const count = Number(S.config.changelog?.unread_count) || 0;
+  const notice = document.querySelector<HTMLElement>('#changelog-notice');
+  const badge = document.querySelector<HTMLElement>('#changelog-badge');
+  if (notice) {
+    // The sidebar's one version row (ui/app/notices.ts): while a newer release is offered, that row stands in for this one.
+    notice.hidden = !count || nvUpdateShown();
+    const label = notice.querySelector<HTMLElement>('.changelog-notice-label');
+    if (label) label.textContent = S.config.version ? `Updated to ${nvVersion(S.config.version)}` : "What's new";
+  }
+  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = String(count); }   // ticks (ui/app/motion.ts)
+}

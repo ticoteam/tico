@@ -46,20 +46,9 @@ def environment_identity(env=os.environ):
     if os.path.exists(env["TICO_DB"]):
         from backend import migrations
 
-        # A database the server would refuse (a newer one, or one from Tico 0.5 with tasks) is refused here, before
-        # this step opens it at all: even the read-only probe below makes a missing -wal and -shm and writes the -shm.
+        # A database the server would refuse (a newer one, or one from before Tico 0.6) is refused here, before this
+        # step opens it at all.
         migrations.preflight(env["TICO_DB"])
-        # Upgrade the old metadata column before reading the id, without Settings.from_env: a named install needs
-        # the id this step supplies before it can construct Settings. Warm starts need only the read-only probe.
-        probe = sqlite3.connect("file:%s?mode=ro" % env["TICO_DB"], uri=True)
-        try:
-            columns = {row[1] for row in probe.execute("PRAGMA table_info(registry_metadata)")}
-        finally:
-            probe.close()
-        if "value_json" in columns and "value" not in columns:
-            from backend import hubdb
-
-            hubdb.connect(env["TICO_DB"]).close()
     db = leave_wal_for_litestream(sqlite3.connect(env["TICO_DB"]))
     try:
         row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()

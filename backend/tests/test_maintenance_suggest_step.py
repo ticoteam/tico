@@ -17,6 +17,7 @@ from backend.maintenance_steps import update as update_step
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, put  # noqa: F401
 from backend.tests.helpers.maintenance_learn_step import complete, queue, start
+from backend.tests.helpers.statement_scope import belongs, measuring
 
 
 @pytest.fixture(autouse=True)
@@ -613,7 +614,7 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
         with original_read() as c:
 
             def trace(sql):
-                if sql.startswith("UPDATE credential_keys"):
+                if belongs(writes) and sql.startswith("UPDATE credential_keys"):
                     writes.append(bool(c.in_transaction and c.write_transaction))
 
             c.set_trace_callback(trace)
@@ -629,7 +630,8 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
 
     monkeypatch.setattr(install, "read", read)
     monkeypatch.setattr(credentials, "Vault", fresh_vault)
-    assert run_step(install)["status"] == "ran"
+    with measuring(writes):
+        assert run_step(install)["status"] == "ran"
     assert suggestions.target(install) == ("install-test-key", "https://gateway.acme.example")
     assert calls == ["encrypt", "decrypt"] and writes == [True]
     with install.read() as c:
@@ -692,24 +694,6 @@ def test_condition_validation_matches_hq_dictionary_types_and_bounds():
         condition,
         {"spend_month_usd": 51, "spend_month_cap_usd": 50, "source_github_connected": True, "plan_tier": "starter"},
     )
-
-
-def test_migration_is_idempotent_and_preserves_receipts():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105010200_suggestions.py"
-    spec = importlib.util.spec_from_file_location("suggestions_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        c.execute(
-            "INSERT INTO suggestions(id,fingerprint,owner_role,title,body,condition,cooldown_days,created_at,updated_at) "
-            "VALUES('id','hash','botops','Title','Body','{}',7,'then','then')"
-        )
-        migration.up(c)
-        assert c.execute("SELECT status,message_id FROM suggestions").fetchone() == ("new", None)
-        with pytest.raises(sqlite3.IntegrityError):
-            c.execute("UPDATE suggestions SET status='unknown'")
-        assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_engineering_lead_role_goes_to_a_new_org_engineering_team_manager(install, api):

@@ -6,6 +6,7 @@ import re
 
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BeforeValidator,
     BaseModel,
     ConfigDict,
@@ -132,7 +133,7 @@ class BatchRespond(Contract):
     kind: Literal["decide", "needs_info", "instruct", "rule", "skip", "later"]
     text: str = Field(default="", max_length=4000)
     item: int | None = Field(default=None, ge=1)  # 1-based position; the current item when omitted
-    decision: Literal["ok", "send_back", "done", "close", "answer"] | None = None
+    decision: Literal["ok", "send_back", "done", "close"] | None = None
     heard: str = Field(default="", max_length=2000)  # what the person actually said, when spoken
     until: str | None = Field(default=None, max_length=40)
 
@@ -144,17 +145,6 @@ class ChangelogPost(Contract):
 
 class ChangelogRead(Contract):
     ids: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(max_length=250)
-
-
-class TaskChat(Contract):
-    text: Text
-    expected_recipient: ID | None = None
-
-
-class PageChat(Contract):
-    page: Literal["tasks"]
-    text: str = Field(default="", max_length=200_000)
-    task_id: str | None = None
 
 
 Lane = Literal["company", "product"]
@@ -186,6 +176,12 @@ CompactAt = Literal[
     100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
 ]
 
+# Claude Code's built-in output styles (`outputStyle` in its settings); Default is its own, and saves nothing
+# (backend/harnesses.py OUTPUT_STYLES). Only a Claude Code turn uses it.
+OutputStyle = Literal["Default", "Concise", "Explanatory", "Learning", "Proactive"]
+# Codex's `model_verbosity` (backend/harnesses.py VERBOSITIES); none is the model's own. Only a Codex turn uses it.
+Verbosity = Literal["low", "medium", "high"]
+
 
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
@@ -195,7 +191,9 @@ class TaskCreate(Contract):
     public_summary: str | None = Field(default=None, max_length=8000)
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
-    body: Text
+    # A task has no description: `message` is its first chat message, the request, posted as the caller's own
+    # (hubdb.first_message). `body` is its older name. Left out, the task is its title alone.
+    body: Text | None = Field(default=None, validation_alias=AliasChoices("message", "body"))
     # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
     owner: ID | None = None
     # The person accountable for it, whoever owns it (hubdb.task_human): asks that name nobody go to them first.
@@ -290,7 +288,6 @@ class TaskUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     note: str | None = Field(default=None, max_length=200_000)
     due: str | None = None
-    body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)  # "" takes the goal off
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
@@ -304,6 +301,16 @@ class TaskUpdate(Contract):
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def no_description(cls, data: Any) -> Any:
+        # A held update written before descriptions went carries "body": None; any text is refused.
+        if isinstance(data, dict) and "body" in data:
+            if data["body"] is not None:
+                raise ValueError("A task has no description: say it in a message on the task instead")
+            data = {k: v for k, v in data.items() if k != "body"}
+        return data
+
 
 class TaskDone(Contract):
     """The work of this stage is finished (H.task_done). It never pushes past anything."""
@@ -314,15 +321,65 @@ class TaskDone(Contract):
 
 
 class TaskMove(Contract):
-    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move)."""
+    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move). With `to_pipeline` (another
+    pipeline's id or name) it moves there (H.task_move_to): `to` names that pipeline's stage, its first when left out."""
 
-    to: Annotated[str, Field(min_length=1, max_length=200)]
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
     # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
     # next. Refused when the task now waits on someone else (H.task_let_see).
     let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
+
+
+class TaskMovePlace(Contract):
+    """A stage of a pipeline, each by id or name."""
+
+    pipeline: Annotated[str, Field(min_length=1, max_length=200)]
+    stage: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class TaskManyOf(Contract):
+    """The tasks a write to many names: `ids`, or every open task in the stage `from` names (a board's column)."""
+
+    ids: list[ID] | None = Field(default=None, min_length=1, max_length=500)
+    from_: TaskMovePlace | None = Field(default=None, alias="from")
+    why: Why | None = None
+    on_behalf_of: ID | None = None
+
+    @model_validator(mode="after")
+    def one_selection(self):
+        if (self.ids is None) == (self.from_ is None):
+            raise ValueError("name the tasks: ids, or from (a pipeline and a stage), not both")
+        return self
+
+
+class TaskMoveMany(TaskManyOf):
+    """Move many tasks (`POST /api/v2/tasks/move`): with `to_pipeline`, to its stage `to` (its first when left out);
+    without, each in its own pipeline, as a single move's `to` says (next, done, closed, reopen or a stage)."""
+
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+
+    @model_validator(mode="after")
+    def somewhere(self):
+        if not self.to_pipeline and not self.to:
+            raise ValueError("say where they go: to, or to_pipeline")
+        return self
+
+
+class TaskOwnerMany(TaskManyOf):
+    """Give many tasks to one owner for their stage (`POST /api/v2/tasks/owner`)."""
+
+    owner: ID
+
+
+class TaskSnoozeMany(TaskManyOf):
+    """Snooze many tasks in their stages (`POST /api/v2/tasks/snooze`): until a date, or with none (On ice)."""
+
+    until: str | None = Field(default=None, min_length=10, max_length=40)
 
 
 class TaskQueue(Contract):
@@ -366,24 +423,22 @@ class TaskWhy(Contract):
 
 
 class TaskAsk(Contract):
-    """Ask a person on the task (H.task_ask): a question (`answer`, with `choices` where there are some) or an OK."""
+    """Ask a person on the task for an OK of what it `show`s (H.task_ask). `answer`, a question, is a message marked ❓
+    now (backend/question_marks.py): a bot's is asked as one, its line first and the older fields below as words in it,
+    so a `tico` from before ❓ marks (one a computer runs until it updates) still asks; anyone else's is refused."""
 
     to: ID
     line: Annotated[str, Field(min_length=1, max_length=300)]
     kind: Literal["answer", "ok"] = "answer"
-    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(
-        default=None, min_length=2, max_length=6
-    )
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
-    # A bot's question to a person (backend/ask_shape.py): why it matters, a line per choice on what happens on it (in
-    # the choices' order) and the choice it recommends. Required there; anyone else may send them too.
+    version: Version | None = None
+    # A question's parts as clients before ❓ marks sent them, as words in its ❓. An OK refuses choices and leaves out
+    # `why` and `title`, which those clients sent with every ask.
+    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(default=None, max_length=6)
     why: Annotated[str, Field(max_length=200)] | None = None
     details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
     recommend: Annotated[str, Field(max_length=60)] | None = None
-    # A short title the decision view shows as the ask's heading, with `line` once under it. Optional: an ask without
-    # one is headed by its line.
     title: Annotated[str, Field(max_length=60)] | None = None
-    version: Version | None = None
 
 
 class TaskOkGive(Contract):
@@ -412,13 +467,19 @@ class OkUse(Contract):
 
 
 class TaskAskAnswer(Contract):
-    """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer).
-    `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now."""
+    """ok, or no (send it back, with a note) (H.task_answer).
+    `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now.
+    `visit_id`: on a document approval, the visit it was asked on: with `page_version`, the approval's key. A stale key
+    is refused (`task_changed`) with the version submitted now in `approval`."""
 
     value: Annotated[str, Field(min_length=1, max_length=20_000)]
     note: str | None = Field(default=None, max_length=20_000)
     version: Version | None = None
-    page_version: Annotated[str, Field(pattern=r"^[^@\s]+@[1-9][0-9]{0,8}$", max_length=200)] | None = None
+    page_version: (
+        Annotated[str, Field(pattern=r"^[^@,\s]+@[1-9][0-9]{0,8}(?:,[^@,\s]+@[1-9][0-9]{0,8})*$", max_length=8192)]
+        | None
+    ) = None
+    visit_id: ID | None = None
     on_behalf_of: ID | None = None
 
 
@@ -443,13 +504,6 @@ class TaskAskGive(Contract):
     to: ID
     version: Version | None = None
     on_behalf_of: ID | None = None
-
-
-class TaskAskThumbs(Contract):
-    """Was this worth asking (H.task_thumbs). A thumbs down says what was wrong."""
-
-    up: StrictBool
-    note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskFilter(Contract):
@@ -507,6 +561,8 @@ class PipelineRecord(Contract):
 
 class PipelineRetire(Contract):
     settings_version: int | None = None
+    # Where its open tasks go first (another pipeline's stage); without it a pipeline that holds one is refused.
+    move_tasks_to: TaskMovePlace | None = None
 
 
 class PipelineFromPreset(Contract):
@@ -574,6 +630,28 @@ class TaskComment(Contract):
     # A reply to a bot's question on this task (the ask's requirement id): written to the bot that asked, whom it
     # wakes, and the question stays open (the decision view's "Write to <bot>").
     ask: ID | None = None
+
+
+class Question(Contract):
+    """A bot's ❓ (backend/question_marks.py): its message to one named person, marked "needs your reply". No task is
+    filed and nothing is sent for it; Needs you lists it until they reply in the chat."""
+
+    to: ID
+    text: Text
+    # A question Tico answered itself (backend/ask_known.py), sent again because the answer did not cover it.
+    not_known: bool = False
+
+
+class ChatQuestion(Question):
+    """A ❓ in a direct chat: the bot's chat with the person unless `conversation_id` names another it is in."""
+
+    conversation_id: ID | None = None
+
+
+class QuestionGive(Contract):
+    """Give to: the person an open ❓ is for."""
+
+    to: ID
 
 
 class TaskReaders(Contract):
@@ -846,15 +924,15 @@ class MarketAsk(Contract):
     question: str = Field(min_length=1, max_length=2000)
 
 
-# The team's strategy (backend/strategy.py): the draft is edited a field at a time against the revision the writer
-# read, the bets one by one, and publishing takes a one-line note. Lengths and shapes are checked there, where the
-# refusal is recorded.
+# The team's strategy (backend/strategy.py): it is edited a field at a time against the revision the writer read, the
+# bets one by one, and every save is live. Lengths and shapes are checked there, where the refusal is recorded.
 class StrategyDraft(Contract):
     revision: int
     guide: str | None = Field(default=None, max_length=40)
     summary: str | None = Field(default=None, max_length=2000)
     vision: str | None = Field(default=None, max_length=2000)
     sections: dict | None = None  # {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class StrategyVision(Contract):
@@ -866,8 +944,11 @@ class StrategyVision(Contract):
 
 
 class StrategyPublish(Contract):
+    """Kept for older callers (backend/strategy.py publish): every save is live already."""
+
     note: str = Field(default="", max_length=2000)
-    revision: int
+    revision: int | None = None
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class StrategyDraftFrom(Contract):
@@ -902,6 +983,7 @@ class StrategyBetCreate(Contract):
     status: Literal["proposed", "active", "retired"] = "proposed"
     rank: int | None = None
     revision: int | None = None  # the draft's, when the writer wants a stale page refused
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class StrategyBetUpdate(Contract):
@@ -913,6 +995,7 @@ class StrategyBetUpdate(Contract):
     status: Literal["proposed", "active", "retired"] | None = None
     rank: int | None = None
     revision: int | None = None
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class MarketEvidenceCreate(Contract):
@@ -964,25 +1047,6 @@ class MarketEdgeCreate(Contract):
     confidence: Literal["high", "medium", "low"] = "medium"
     properties: dict = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
-    insight_id: str | None = Field(default=None, max_length=80)
-
-
-class MarketEdgeUpdate(Contract):
-    rel: str | None = Field(default=None, max_length=40)
-    since: str | None = None
-    until: str | None = None
-    set_since: bool = False
-    set_until: bool = False
-    confidence: Literal["high", "medium", "low"] | None = None
-    properties: dict | None = None
-    evidence_ids: list[str] | None = None
-    insight_id: str | None = Field(default=None, max_length=80)
-
-
-class MarketCitation(Contract):
-    claim_kind: Literal["entity", "edge", "evidence", "document"]
-    claim_id: str = Field(min_length=1, max_length=200)
-    evidence_id: str = Field(min_length=1, max_length=80)
     insight_id: str | None = Field(default=None, max_length=80)
 
 
@@ -1383,8 +1447,10 @@ AppState = Literal[
 APP_STATES = AppState.__args__
 
 
+# The retired desktop-app driver's readiness: today's runner never sends it, but a 0.6.x runner may
+# (contracts/runner/releases/0.6.0), so it is accepted and ignored until 0.6.0 leaves the supported window.
 class AppDriverApp(Contract):
-    """One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py)."""
+    """One desktop app the computer's app driver could operate for a synced bot."""
 
     installed: StrictBool = False
     version: Annotated[str, _cut(100), Field(max_length=100)] = ""
@@ -1441,7 +1507,8 @@ class StructuredReadiness(Contract):
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
-    mail_key: Literal["exposed"] | None = None  # the mail key is where bots can read it (runner_support/mail_key.py)
+    # A 0.6 computer's Google key is where its bots can read it; a newer one deletes the key (runner-rs/src/mail_retire.rs)
+    mail_key: Literal["exposed"] | None = None
     shared_env: Literal[True] | None = None  # secrets/_shared.env holds keys every bot there receives
     container_exec: ContainerExecReadiness | None = None
     # A bot's GitHub App token asked GitHub who it is, and Playwright's Chromium started (runner-rs/src/readiness_extra.rs).
@@ -1449,7 +1516,7 @@ class StructuredReadiness(Contract):
     browser_launch: ContainerExecReadiness | None = None
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
-    appdriver: AppDriverReadiness | None = None
+    appdriver: AppDriverReadiness | None = None  # retired: accepted from 0.6.x runners, read by nothing
     browser: BrowserReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
@@ -1568,9 +1635,9 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
-    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
-    # Nightly memory tidy pilot's packet path: today's runner no longer sends it, but the 0.6.x runners
-    # (contracts/runner/releases/0.6.0) do, so it is accepted and ignored until 0.6.0 leaves the supported window
+    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 and
+    # memory_tidy_keep_v1 the retired Nightly memory tidy pilot: today's runner sends neither, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so they are accepted and ignored until 0.6.0 leaves the supported window
     # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
@@ -1594,15 +1661,18 @@ class Heartbeat(Contract):
             "turns_at_once_v1",
             "private_lanes_v1",
             "model_subscriptions_v1",
+            "plan_usage_v1",
             "browser_exit_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",
+            "claude_login_v1",  # full Claude logins: their turns, refreshes and usage reads (backend/claude_login.py)
             "threads_v1",
             "memory_tidy_packets_v1",
             "harness_allocation_v1",
             "make_page",
             "memory_tidy_keep_v1",
             "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
+            "plan_switch_resume_v1",  # a Claude thread resumes on the plan a set moves to (backend/model_subscriptions.py)
         ]
     ] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
@@ -2011,49 +2081,6 @@ class BotArchive(Contract):
     on_behalf_of: ID | None = None
 
 
-class AppDelivery(Contract):
-    """Where a synced bot's messages are delivered: through `app` on the computer (runner) `computer`."""
-
-    computer: ID
-    app: Literal["grok"] = "grok"
-
-
-class AppDeliveryMessage(Contract):
-    """One message the app shows in the bot's conversation. `key` is the driver's own stable id for it."""
-
-    key: Annotated[str, Field(min_length=1, max_length=200)]
-    role: Literal["bot", "user"]
-    text: Annotated[str, Field(min_length=1, max_length=40_000)]
-    at: Annotated[str, Field(max_length=50)] | None = None
-    needs_human: StrictBool = False
-
-
-class AppDeliveryError(Contract):
-    code: Literal[
-        "needs_human",
-        "no_permission",
-        "not_signed_in",
-        "needs_foreground",
-        "ui_changed",
-        "not_installed",
-        "not_running",
-        "bot_not_found",
-        "timeout",
-        "send_failed",
-        "busy",
-    ]
-    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
-    text: Annotated[str, Field(max_length=40_000)] = ""
-
-
-class AppDeliveryReport(Contract):
-    """What a computer read from a bot's conversation in the app, newest last (POST /api/v2/runners/me/app-delivery)."""
-
-    app: Literal["grok"] = "grok"
-    messages: list[AppDeliveryMessage] = Field(default_factory=list, max_length=50)
-    error: AppDeliveryError | None = None
-
-
 class BotDefinitionUpdate(Contract):
     private_tasks_default: StrictBool | None = None
     # A new slug: the label people type (@slug) and read. The bot's id, its history and every reference keep as they are.
@@ -2079,9 +2106,6 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
-    # A Grok Bot answered through the Grok app on one of its person's computers; null turns it off
-    # (backend/app_delivery.py). Unset leaves it as it is.
-    app_delivery: AppDelivery | None = None
     # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
@@ -2132,7 +2156,6 @@ class PersonUpdate(Contract):
     about: str | None = Field(default=None, max_length=2000)
     goals: str | None = Field(default=None, max_length=8000)
     notes: str | None = Field(default=None, max_length=20_000)
-    notify_slack_task_done: bool | None = None
     # Their GitHub login ("" clears it): a review request naming it puts them on the linked task.
     github: str | None = Field(default=None, pattern=r"^@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?$|^$")
     notify_slack_bot_messages: bool | None = None
@@ -2156,7 +2179,7 @@ class PersonUpdate(Contract):
     def has_change(self):
         if not (self.model_fields_set - {"on_behalf_of"}):
             raise ValueError(
-                "Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, update_draft, notify_browser, email_digest, slack_muted_bots, github, reports_to or left"
+                "Provide title, about, goals, notes, notify_slack_bot_messages, update_draft, notify_browser, email_digest, slack_muted_bots, github, reports_to or left"
             )
         return self
 
@@ -2231,6 +2254,23 @@ class BotCompactAt(Contract):
     # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
     compact_at: CompactAt | None = Field(
         description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotOutputStyle(Contract):
+    # Required: null or "Default" clears it, back to Claude Code's own. Kept on any harness; only a Claude Code turn
+    # uses it (backend/harnesses.py output_style).
+    output_style: OutputStyle | None = Field(
+        description="Claude Code's output style for the bot's turns; null or Default is Claude Code's own"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotVerbosity(Contract):
+    # Required: null clears it, back to the model's own. Kept on any harness; only a Codex turn uses it.
+    verbosity: Verbosity | None = Field(
+        description="Codex's model_verbosity for the bot's turns; null is the model's own"
     )
     expected_revision: int = Field(ge=1)
 
@@ -2310,10 +2350,6 @@ class BotTransitionCreate(Contract):
         if self.kind == "machine" and (not self.runner_id or self.model or self.effort or self.harness):
             raise ValueError("A machine transition requires only runner_id")
         return self
-
-
-class BotTransitionApply(Contract):
-    change_without_checkpoint: Literal[True]
 
 
 class SettingsUndo(Contract):
@@ -2429,14 +2465,6 @@ class StrategyBotChecks(Contract):
 
 class StrategyBotLevel(Contract):
     level: Literal[1, 2, 3]
-
-
-# Several bots' asks waiting on one person, made one Strategy Owner item (backend/strategy_merge.py).
-class StrategyBotMerge(Contract):
-    person: str = Field(min_length=1, max_length=200)
-    title: str = Field(min_length=1, max_length=300)
-    question: str = Field(min_length=1, max_length=4000)
-    tasks: list[str] = Field(min_length=2, max_length=10)
 
 
 # One change in a decision the Strategy Owner makes alone at level 3 (backend/strategy_acts.py).
@@ -2882,6 +2910,16 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class RunTimings(Contract):
+    """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
+    `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
+    the size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings)."""
+
+    claimed_at: float = Field(ge=0)
+    phases: dict[Annotated[str, Field(max_length=40)], Annotated[int, Field(ge=0, le=10**9)]] = Field(max_length=40)
+    transcript_bytes: int | None = Field(default=None, ge=0)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2898,8 +2936,8 @@ class Completion(Contract):
     # When the provider said that limit lifts (its own reset time); work resumes then instead of after a default wait.
     limit_resets_at: str | None = Field(default=None, max_length=40)
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
-    # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
-    # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
+    # The turn gave its place up for an update (runner-rs/src/drain.rs): its job goes back in the queue to continue,
+    # neither answered nor held for review.
     yielded: bool = False
     # The model was at capacity after the turn acted, and the runner kept its thread: the job continues that thread
     # after the capacity hold instead of being held for review (backend/execution.py capacity_continuation).
@@ -2923,6 +2961,7 @@ class Completion(Contract):
     rotated: RunRotation | None = None
     # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
     session: RunSession | None = None
+    timings: RunTimings | None = None  # feature `run_timings`
 
 
 class Retry(Contract):
@@ -3217,7 +3256,7 @@ class LoginStart(Contract):
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
     # Sign in to another account in place: the old login keeps working until the new one has finished.
     switch: bool = False
-    # Switch type: "subscription" moves the computer's own login off its API key, once the sign-in has worked.
+    # Switch to subscription, from a page drawn before D11-5: refused with where keys are changed now.
     to: Literal["", "subscription"] = ""
 
 
@@ -3232,32 +3271,11 @@ class RemovalStart(Contract):
 
 
 class SharedKeyUse(Contract):
-    """Use the shared key again on a signed-out login; with `credential`, Add connection > API key > "Use a shared
-    key": that shared key, attached to this computer (a credential administrator's change)."""
+    """Use the shared key again on a signed-out login. `credential` (attaching a shared key from Add connection) is
+    refused: keys are given to computers in Settings > Models now (backend/model_login.py MOVED)."""
 
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
     credential: str = Field(default="", max_length=100)
-
-
-class KeyClear(Contract):
-    """Clear key on a computer; "all" clears the company's shared key on every computer it serves."""
-
-    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
-    scope: Literal["this", "all"] = "this"
-
-
-class KeyReplace(Contract):
-    """Replace key (or Add key) on a computer. The key is sealed in the vault; nothing sends it back (backend/computer_keys.py)."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
-    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
-    secret: SecretStr = Field(max_length=4000)
-    env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
-    scope: Literal["this", "all"] = "this"
-    # Add connection > API key > "Shared with: [computers]": the other computers it serves (this one always does).
-    share: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=200)
-    # Switch to API key: the computer's own login moves off its subscription onto this key once the key works there.
-    switch: bool = False
 
 
 class LoginCode(Contract):
@@ -3548,6 +3566,7 @@ class GrowthChannelCreate(Contract):
     why: str = Field(default="", max_length=1000)
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
+    input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int = 0
 
 
@@ -3561,7 +3580,12 @@ class GrowthChannelUpdate(Contract):
     why: str | None = Field(default=None, max_length=1000)
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
+    input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int | None = None
+
+
+class GrowthLineUse(Contract):
+    use: Literal["trace", "source"]
 
 
 # A synced source's kind (backend/growth_sync.py): file import, database query, Finance ad spend

@@ -103,10 +103,10 @@ def drain(api):
     """Finish the tasks an earlier step left and drop its queued runs, so the next claim is this step's."""
     with api.app.state.store.transaction() as c:
         for row in c.execute("SELECT id FROM tasks WHERE status NOT IN ('done','closed')").fetchall():
-            H.task_close(c, H.KEEPER, row["id"], "Done with this step")
+            H.task_close(c, H.TICO_ACTOR, row["id"], "Done with this step")
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")  # a failed run's retry is still queued
         c.execute("UPDATE attempts SET state='completed' WHERE state NOT IN ('completed','failed','canceled')")
-        c.execute("DELETE FROM run_backoff WHERE bot='ops'")
+        c.execute("DELETE FROM holds WHERE kind='failing' AND holdable_id='ops'")
 
 
 def refused(api, machine, attempt, profile=None):
@@ -125,9 +125,9 @@ def refused(api, machine, attempt, profile=None):
 
 
 def next_turn(api, machine):
-    """The bot's next claim, past the short retry wait its failed run started (backend/run_backoff.py)."""
+    """The bot's next claim, past the short retry wait its failed run started (backend/run_failures.py)."""
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM run_backoff WHERE bot='ops'")
+        c.execute("DELETE FROM holds WHERE kind='failing' AND holdable_id='ops'")
     return claim(api, machine)
 
 
@@ -240,16 +240,16 @@ def make_private(api, t):
 
 
 def hold_item(api, bot="ops"):
-    from backend import run_backoff
+    """Fast sign-in failures in a row hold the bot: its Needs-you item, None when a login card stands for it."""
+    from types import SimpleNamespace
 
+    from backend import run_failures
+
+    run = {"bot_id": bot, "started_at": H.now(), "created_at": H.now()}
     with api.app.state.store.transaction() as c:
-        run_backoff.ensure(c)
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,error_class,error) VALUES(?,5,?,?) ON CONFLICT(bot) DO NOTHING",
-            (bot, run_backoff.SIGN_IN, "401 unauthorized"),
-        )
-        run_backoff.hold(c, api.app.state.store.settings, bot, 5, run_backoff.SIGN_IN, "401 unauthorized", H.now())
-        return run_backoff.get(c, bot).get("task_id")
+        for _ in range(run_failures.HOLD_AFTER):
+            run_failures.failed(c, api.app.state.store.settings, run, SimpleNamespace(text="401 unauthorized"), "a")
+        return run_failures.get(c, bot).get("upkeep_task_id")
 
 
 def login_card(api, t, runner_id="r1"):
@@ -265,17 +265,17 @@ def test_only_a_standing_login_card_stands_for_the_sign_in_hold_item(api):
     t = task(api)
     open_card(api, t)  # a Google card is another cause
     assert hold_item(api)
-    from backend import run_backoff
+    from backend import run_failures
 
     with api.app.state.store.transaction() as c:
-        run_backoff.release(c, H.KEEPER, "ops")
+        run_failures.release(c, H.TICO_ACTOR, "ops")
     second = task(api, "Book the Acme call")
     assert login_card(api, second)
     assert hold_item(api) is None  # its card is the item
     with api.app.state.store.transaction() as c:
         H.task_close(c, "human:ana", second["id"], "Not needed")
         assert not R.bot_open(c, "ops", "login:")
-        assert run_backoff.get(c, "ops").get("task_id")  # the card went unfixed: the hold's own item is back
+        assert run_failures.get(c, "ops").get("upkeep_task_id")  # the card went unfixed: the hold's own item is back
     assert [c["status"] for c in cards(api, second)] == ["retired"]
 
 
@@ -319,7 +319,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     assert shown(api, t)["task"]["status"] == "open"
     with api.app.state.store.read() as c:
         assert R.hold(c, t["id"])["why"] == "Codex on Test Mac to be reconnected"
-    # The bot is Paused on it: one row for the person who can fix it, naming the task (docs/pipelines-v3.md, Paused).
+    # The bot is Paused on it: one row for the person who can fix it, naming the task (docs/dev/pipelines-v3.md, Paused).
     [row] = paused(api)
     assert row["line"] == "ops has a login to reconnect" and row["task_ids"] == [t["id"]]
     # The same refusal again (the queued job's retry) changes nothing: one card, one item.
@@ -423,7 +423,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     )
     box = "Ana@acme.example"
     with api.app.state.store.transaction() as c:
-        H.turn_start(c, H.KEEPER, "ops", task_id=t["id"])
+        H.turn_start(c, H.TICO_ACTOR, "ops", task_id=t["id"])
         assert R.google_report(c, "mail", [box]) == [t["id"]]
         R.google_report(c, "calendar", [box])
         # Mail works again (a clean report, a synced mailbox) while the calendar has not said so: still open.
@@ -446,11 +446,11 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
         lambda c, roster=None: [{"address": "ana@acme.example", "person_id": "ana", "bot": "ops", "declared": False}],
     )
     with api.app.state.store.transaction() as c:
-        H.turn_start(c, H.KEEPER, "ops", task_id=first["id"])
+        H.turn_start(c, H.TICO_ACTOR, "ops", task_id=first["id"])
         R.google_report(c, "mail", ["ana@acme.example"])
         # No calendar report at all: mail working again is enough.
         assert R.google_good(c, "mail", ["ana@acme.example"]) == [first["id"]]
-        H.turn_start(c, H.KEEPER, "ops", task_id=second["id"])
+        H.turn_start(c, H.TICO_ACTOR, "ops", task_id=second["id"])
         R.google_report(c, "mail", ["ana@acme.example"])
         R.google_report(c, "calendar", ["ana@acme.example"])
         # A clean mail report while the calendar stays silent: the calendar refused, so it must say so first.

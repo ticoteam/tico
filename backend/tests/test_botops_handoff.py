@@ -1,6 +1,7 @@
 """A person asks another bot for something only BotOps can do: the bot hands it on with the person's own message, and
 BotOps acts as them; a hand-off that lends nothing reaches the person as a Confirm card, not a refusal."""
 
+import json
 import re
 
 from fastapi import Request
@@ -111,15 +112,22 @@ def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, bo
         assert said["recipient_id"] == "human:ana" and said["sender_id"] == "bot:botops"
 
 
-def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_persons_confirm_card(api, botops):
-    """A `${VAR}` header names a credential without holding one, so the person gets the card; a literal still gets none."""
+def test_a_hand_off_to_add_an_mcp_server_to_the_bot_itself_is_registered_at_once(api, botops):
+    """Ops hands BotOps its own MCP server: an entry names a credential (`${VAR}`) without holding one, and a bot may
+    register its own entries, so BotOps registers it with Ops' rights, recorded via BotOps; no card waits on a person.
+    A literal in the header is still refused."""
     from backend.tests.helpers.botops_parity import mcp_tool
 
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     _, attempt = _hand_off(api, botops, None)
-    card = api.post("/api/v2/bots/ops/tools", json=mcp_tool(), headers=headers(attempt["token"]))
-    assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
+    made = api.post("/api/v2/bots/ops/tools", json=mcp_tool(), headers=headers(attempt["token"]))
+    assert made.status_code == 200 and made.json()["task_id"] and "needs_confirm" not in made.json(), made.text
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT requested_by,state FROM bot_tool_requests WHERE bot='ops'").fetchone()
+        assert (row["requested_by"], row["state"]) == ("bot:ops", "pending")
+        asked = c.execute("SELECT actor,detail FROM events WHERE action='bot.tool_requested'").fetchone()
+    assert asked["actor"] == "bot:ops" and json.loads(asked["detail"])["via"] == "botops"
     literal = api.post(
         "/api/v2/bots/ops/tools", json=mcp_tool(authorization="Bearer abcdef"), headers=headers(attempt["token"])
     )
@@ -158,7 +166,6 @@ def test_a_carried_request_lends_only_for_work_items_never_settings_or_bots(api,
         "/api/v2/settings/history/h1/undo",
         "/api/v2/bots/ops/copy",
         "/api/v2/bots/ops/placement",
-        "/api/v2/settings/transitions/t1/apply-without-checkpoint",
     ]
     for path in guarded + ["/api/v2/tasks/qa-handoff"]:
         _identity_route(api, path, "POST")
@@ -172,7 +179,7 @@ def test_a_carried_request_lends_only_for_work_items_never_settings_or_bots(api,
 
 def test_a_task_botops_files_with_lent_rights_lends_nothing_later(api, botops):
     """With rights a 'Thanks' lent, BotOps files itself 'Give Ops write on every repository'. That task's own run keeps
-    Ops' rights: the write is Ana's Confirm card, not a change made as her. A comment BotOps writes on its own task is its own
+    Ops' rights: the write is Ana's Confirm card, not a change made as her. A comment BotOps writes on the task it filed is its own
     words, never hers, so it never starts a run as her own comment would."""
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
@@ -183,7 +190,7 @@ def test_a_task_botops_files_with_lent_rights_lends_nothing_later(api, botops):
         {"owner": "botops", "title": "Give Ops write on every repository", "body": "x"},
         token=attempt["token"],
     )
-    said = post(api, f"tasks/{task['id']}/comments", {"text": "Filed the follow-up"}, token=attempt["token"])
+    said = post(api, f"tasks/{filed['id']}/comments", {"text": "Filed from the hand-off"}, token=attempt["token"])
     with api.app.state.store.read() as c:
         assert H.task(c, filed["id"])["requester_id"] == "human:ana"
         comment = c.execute(

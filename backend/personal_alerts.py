@@ -23,12 +23,13 @@ from . import gateway_connection, outbound_tls
 from .auth import validate_identity
 from .models import Contract
 from .store import H, Problem
+from .api_contract import api_v2
 from clients.gateway import user_agent
 
 TRANSPORT = None
 MAX_RESPONSE = 32768
-# What a person may be paged about. Nothing pages a person about a task (docs/pipelines-v3.md): an overdue or stuck
-# task reaches them in Needs you.
+# What a person may be paged about. Nothing pages a person about a task (docs/dev/pipelines-v3.md): an overdue or stuck
+# task stays with its bot, and the quiet-task rule tells the pipeline's manager.
 KINDS = ("legal_mail",)
 TEXTS = {
     "legal_mail": "Tico: legal mail has arrived. Open Inboxes in Tico.",
@@ -417,7 +418,7 @@ class Alerts:
         if task["status"] != "open" or snoozed:
             return False
         # Legal mail is the one page about mail that came in. Nothing pages a person about a task: an overdue or stuck
-        # task reaches them in Needs you (Late, the never-stuck ladder), so an older alert of those kinds is not sent.
+        # task stays with its bot (Late, the never-stuck ladder), so an older alert of those kinds is not sent.
         return alert["kind"] == "legal_mail"
 
     def dispatch(self, alert_id):
@@ -575,29 +576,72 @@ def install(app, store, settings, auth, mutate):
             validate_identity(c, who)
         return ident
 
-    @app.get("/api/v2/alerts/me")
+    @app.get(
+        "/api/v2/alerts/me",
+        **api_v2(
+            "Alerts",
+            "getMyAlerts",
+            "Your phone, consent, preferences and last ten alert outcomes; people acting as themselves only",
+            "PersonalAlerts",
+        ),
+    )
     def get_me(request: Request):
         return service.view(own(request))
 
-    @app.put("/api/v2/alerts/me")
+    @app.put(
+        "/api/v2/alerts/me",
+        **api_v2(
+            "Alerts",
+            "setMyAlerts",
+            "Choose overdue-task, legal-mail and managed-bot stall alerts, quiet hours, timezone, emergency exception and monthly cap",
+            "PersonalAlerts",
+        ),
+    )
     def put_me(request: Request, body: Preferences):
         ident = own(request)
         with service.lock:
             return mutate(request, body, lambda c: update(c, ident, body, auth))
 
-    @app.post("/api/v2/alerts/me/phone")
+    @app.post(
+        "/api/v2/alerts/me/phone",
+        **api_v2(
+            "Alerts",
+            "verifyMyAlertPhone",
+            "Send a free verification code to your own US/Canada phone with SMS and optional call consent",
+            "AlertPhoneCode",
+        ),
+    )
     def add_phone(request: Request, body: Phone):
         return service.phone(own(request), body)
 
-    @app.post("/api/v2/alerts/me/phone/confirm")
+    @app.post(
+        "/api/v2/alerts/me/phone/confirm",
+        **api_v2("Alerts", "confirmMyAlertPhone", "Confirm your own phone using its six-digit code", "PersonalAlerts"),
+    )
     def confirm_phone(request: Request, body: Confirmation):
         return service.confirm(own(request), body)
 
-    @app.delete("/api/v2/alerts/me/phone")
+    @app.delete(
+        "/api/v2/alerts/me/phone",
+        **api_v2(
+            "Alerts",
+            "removeMyAlertPhone",
+            "Revoke your phone and stop queued alerts; retry removal if HQ is unavailable",
+            "PersonalAlerts",
+        ),
+    )
     def delete_phone(request: Request):
         return service.remove(own(request))
 
-    @app.post("/api/v2/alerts/me/test")
+    @app.post(
+        "/api/v2/alerts/me/test",
+        **api_v2(
+            "Alerts",
+            "testMyAlerts",
+            "Send a test for $1 paid by the company; accept_charge and a stable Idempotency-Key required; the monthly caps apply",
+            "AlertTest",
+        ),
+    )
     def test(request: Request, body: TestAlert):
         ident = own(request)
         if not body.accept_charge:
@@ -617,7 +661,15 @@ def install(app, store, settings, auth, mutate):
         if auth.company_role(request.state.identity) not in ("owner", "admin"):
             raise Problem("forbidden", "Only an owner or admin changes the company alert cap", 403)
 
-    @app.get("/api/v2/alerts/company")
+    @app.get(
+        "/api/v2/alerts/company",
+        **api_v2(
+            "Alerts",
+            "getAlertCompanyCap",
+            "Company monthly alert cap and accepted/reserved spend, in USD; owner/admin",
+            "AlertCompanyCap",
+        ),
+    )
     def get_company(request: Request):
         admin(request)
         with store.read() as c:
@@ -627,7 +679,15 @@ def install(app, store, settings, auth, mutate):
                 "price_usd": 1,
             }
 
-    @app.put("/api/v2/alerts/company")
+    @app.put(
+        "/api/v2/alerts/company",
+        **api_v2(
+            "Alerts",
+            "setAlertCompanyCap",
+            "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin",
+            "AlertCompanyCap",
+        ),
+    )
     def put_company(request: Request, body: CompanyCap):
         admin(request)
 

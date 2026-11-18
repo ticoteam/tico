@@ -10,6 +10,7 @@ declare function cloudMachineComputerHTML(machine: unknown): string;
 
 interface Machine {
   last_seen_at: string;
+  online: boolean;
   cloud_machine: {state: string; restarting?: boolean};
   turn_counts?: Record<string, number>;
   revoked_at?: string;
@@ -29,12 +30,13 @@ interface Machine {
       }
       await page.addScriptTag({content: `SETTINGS_PRESENCE.at = Date.now();`});
       const status = await page.evaluate(() => {
-        const machine: Machine = {last_seen_at: new Date().toISOString(), cloud_machine: {state: 'stopped'}};
+        const machine: Machine = {last_seen_at: new Date().toISOString(), online: true, cloud_machine: {state: 'stopped'}};
         const live = machineNowWords(machine);
         machine.turn_counts = {running: 1};
         const busy = machineNowWords(machine);
         machine.turn_counts = {};
         machine.last_seen_at = new Date(Date.now() - 300000).toISOString();
+        machine.online = false; // the server's flag: no contact inside its online window
         const asleep = machineNowWords(machine);
         machine.cloud_machine.state = 'starting';
         const offline = machineNowWords(machine);

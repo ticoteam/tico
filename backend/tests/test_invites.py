@@ -19,7 +19,7 @@ def invites_sent(signin):  # noqa: F811
 def test_invite_goes_out_from_the_tico_issuer_with_the_installs_client_credentials_and_is_recorded(signin):  # noqa: F811
     signin.fake.invites = [(202, {"status": "sent"})]
     headers = owner(signin)
-    sent = signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=headers)
+    sent = signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=headers)
     assert sent.status_code == 200, sent.text
     assert sent.json()["person"] == "cara" and sent.json()["invited_at"]
     (call,) = signin.fake.invite_calls
@@ -42,7 +42,7 @@ def test_an_invite_that_does_not_go_out_is_a_visible_error_and_is_not_recorded(s
     for number, (answer, code, words) in enumerate(REFUSALS, 1):
         signin.fake.invites = [answer]
         refused = signin.api.post(
-            "/api/v2/access/people/cara/invite",
+            "/api/v2/access/humans/cara/invite",
             json={},
             headers={**headers, "idempotency-key": "invite-" + uuid.uuid4().hex},
         )
@@ -54,7 +54,7 @@ def test_an_invite_that_does_not_go_out_is_a_visible_error_and_is_not_recorded(s
 
 
 def test_an_issuer_that_sends_no_invites_is_never_sent_the_secret_and_the_owner_is_told_what_to_do(signin):  # noqa: F811
-    refused = signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=owner(signin))
+    refused = signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=owner(signin))
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
     assert "Tell Cara to sign in at " + signin.settings.public_url in refused.json()["error"]["detail"]
     assert signin.fake.invite_calls == []
@@ -68,7 +68,7 @@ def test_a_rehearsal_with_tico_account_sign_in_offers_no_invite_and_asks_the_iss
     monkeypatch.setenv("TICO_REHEARSAL", "1")
     monkeypatch.setattr(signin.auth.proxy, "_discover", lambda *a, **k: pytest.fail("a rehearsal asked the issuer"))
     assert signin.api.get("/api/v2/access", headers=headers).json()["invite_email"] is False
-    refused = signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=headers)
+    refused = signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=headers)
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "rehearsal", refused.text
     with pytest.raises(Exception, match="rehearsal"):
         signin.auth.proxy.invite("cara@acme.example")
@@ -79,10 +79,10 @@ def test_only_an_owner_or_admin_sends_invites_and_only_to_someone_on_the_roster(
     signin.fake.invites = [(202, {"status": "sent"})]
     assert signin.login(claims={"email": "cara@acme.example"}).status_code == 302
     headers = {"origin": signin.settings.public_url}
-    assert signin.api.post("/api/v2/access/people/ben/invite", json={}, headers=headers).status_code == 403
+    assert signin.api.post("/api/v2/access/humans/ben/invite", json={}, headers=headers).status_code == 403
     signin.api.cookies.clear()
     headers = owner(signin)
-    assert signin.api.post("/api/v2/access/people/nobody/invite", json={}, headers=headers).status_code == 404
+    assert signin.api.post("/api/v2/access/humans/nobody/invite", json={}, headers=headers).status_code == 404
     assert signin.fake.invite_calls == []
 
 
@@ -94,10 +94,10 @@ def test_one_invite_request_sends_one_email_across_a_repeat_an_overlap_and_a_los
     signin.fake.invites = [(202, {"status": "sent"}) for _ in range(3)]
     headers = owner(signin)
     post = lambda key: signin.api.post(
-        "/api/v2/access/people/cara/invite", json={}, headers={**headers, "idempotency-key": key}
+        "/api/v2/access/humans/cara/invite", json={}, headers={**headers, "idempotency-key": key}
     )
     keyless = {k: v for k, v in headers.items() if k != "idempotency-key"}
-    assert signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=keyless).status_code == 422
+    assert signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=keyless).status_code == 422
     assert signin.fake.invite_calls == []
 
     # An overlapping copy, arriving while the first waits on the issuer, is refused and sends nothing.
@@ -142,11 +142,11 @@ def test_the_secret_never_goes_to_an_invite_endpoint_off_the_issuer_over_plain_h
     elsewhere.invites = [(202, {"status": "sent"})]
     signin.fake.invites = []
     signin.fake.invite_endpoint = elsewhere.issuer + "/oauth2/invite"  # another host:port
-    refused = signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=owner(signin))
+    refused = signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=owner(signin))
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable", refused.text
     signin.fake.invite_endpoint, signin.fake.invite_redirect = None, elsewhere.issuer + "/oauth2/invite"
     signin.auth.proxy._discovery = None  # read discovery again
-    refused = signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=owner(signin))
+    refused = signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=owner(signin))
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_failed", refused.text
     assert len(signin.fake.invite_calls) == 1 and elsewhere.invite_calls == []
 
@@ -177,7 +177,7 @@ def test_a_person_removed_while_the_issuer_is_asked_keeps_no_refusal_that_names_
         return issuer(email)
 
     monkeypatch.setattr(signin.auth.proxy, "invite", invite)
-    assert signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=headers).status_code == 422
+    assert signin.api.post("/api/v2/access/humans/cara/invite", json={}, headers=headers).status_code == 422
     with store.read() as c:
         row = c.execute(
             "SELECT state,error_detail FROM idempotency WHERE binding='invites' AND key=?",
@@ -194,7 +194,7 @@ def test_each_invite_request_answers_its_own_recorded_time_on_a_repeat(signin, m
 
     signin.fake.invites = [(202, {"status": "sent"}), (202, {"status": "sent"})]
     first = owner(signin)
-    url = "/api/v2/access/people/cara/invite"
+    url = "/api/v2/access/humans/cara/invite"
     k1 = signin.api.post(url, json={}, headers=first)
     assert k1.status_code == 200, k1.text
     second = {**first, "idempotency-key": "invite-" + uuid.uuid4().hex}

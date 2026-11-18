@@ -32,7 +32,7 @@ def review_routine(api):
     with api.app.state.store.transaction() as c:
         routines.create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "strategy-owner",
             {"title": "Weekly goals review", "cron": "0 9 * * 1", "timezone": "America/Los_Angeles", "enabled": False},
             key="goals-review",
@@ -161,12 +161,12 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
     raise_level(api, 2)
     sync(api)
     vision = [a for a in asks(api, OWNER) if a["kind"] == "vision"]
-    # Asked as the Strategy Owner's question (AC-10 of "Bots ask people a question with choices"), not a to-do of theirs.
+    # Asked as the Strategy Owner's ❓ (backend/question_marks.py), not a to-do of theirs.
     assert [(a["title"], a["status"], a["owner_id"]) for a in vision] == [
         ("What is this team for?", "open", "bot:strategy-owner")
     ]
     mine = get(api, "needs-you")["items"]
-    assert (mine[0]["kind"], mine[0]["task_id"]) == ("ask", vision[0]["id"])  # first in the owner's list
+    assert (mine[0]["kind"], mine[0]["task_id"]) == ("question", vision[0]["id"])  # first in the owner's list
     assert [i["kind"] for i in get(api, "goals/needs-you")["items"]][0] == "vision"
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
     with api.app.state.store.read() as c:
@@ -191,10 +191,10 @@ def test_why_proposals_reach_the_owner_as_one_item(api):
     assert "Grow rentals" in why["body"] and "Cut churn" in why["body"]
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "why"]
     assert {g["goal_id"] for g in item["goals"]} == set(goals)
-    post(api, f"goal-proposals/{first['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{first['id']}/decide", {"decision": "confirm"})
     with api.app.state.store.read() as c:
         assert H.task(c, why["id"])["status"] == "open"  # one still waits
-    post(api, f"goal-proposals/{second['id']}/decide", {"decision": "confirm", "why": "Landlords who stay."})
+    post(api, f"proposals/{second['id']}/decide", {"decision": "confirm", "why": "Landlords who stay."})
     with api.app.state.store.read() as c:
         assert H.task(c, why["id"])["status"] == "closed"
         assert c.execute("SELECT count(*) FROM tasks WHERE title=?", (why["title"],)).fetchone()[0] == 1
@@ -365,7 +365,7 @@ def test_with_no_chosen_level_passive_pauses_the_note_and_withdraws_what_waits_a
     }
     waiting = post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "recovery", "goal_id": goal_id, "reason": "Red for a week", "payload": payload},
         token=strategy_token,
     )["proposal"]
@@ -381,7 +381,7 @@ def test_with_no_chosen_level_passive_pauses_the_note_and_withdraws_what_waits_a
             "SELECT status, decision_note, decided_by FROM goal_proposals WHERE id=?", (waiting["id"],)
         ).fetchone()
     # Tico withdrew it, not the owner: no streak, an older release's after a rollback included, counts it as a no.
-    assert (status, note, by) == ("rejected", strategy_suggest.WITHDRAWN, H.KEEPER)
+    assert (status, note, by) == ("rejected", strategy_suggest.WITHDRAWN, H.TICO_ACTOR)
     with store.transaction() as c:
         strategy_bot.reconcile(c)
     assert not review_enabled(api)  # at Passive nothing starts it again
@@ -396,7 +396,7 @@ def test_a_monday_note_the_old_level_1_started_is_paused_at_passive_once(api):
     review_routine(api)
     store = api.app.state.store
     with store.transaction() as c:
-        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        routines.update(c, H.TICO_ACTOR, REVIEW, {"enabled": True})
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
             (
@@ -430,7 +430,7 @@ def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolv
     sync(api)
     assert {a["id"] for a in asks(api)} == set(filed.values())  # nothing new at Passive
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
-    post(api, f"goal-proposals/{why['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{why['id']}/decide", {"decision": "confirm"})
     sync(api)
     with api.app.state.store.read() as c:
         assert [H.task(c, t)["status"] for t in filed.values()] == ["closed", "closed"]
@@ -445,7 +445,11 @@ def test_with_regular_checks_off_a_due_kpi_pass_is_skipped(api):
     store = api.app.state.store
     with store.transaction() as c:
         routines.create(
-            c, H.KEEPER, "strategy-owner", {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"}, key="kpi-pass"
+            c,
+            H.TICO_ACTOR,
+            "strategy-owner",
+            {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"},
+            key="kpi-pass",
         )
         aid = routines.row(c, strategy_bot.PASS)["automation"]
     assert aid
@@ -484,7 +488,7 @@ def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
     review_routine(api)
     store = api.app.state.store
     with store.transaction() as c:
-        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        routines.update(c, H.TICO_ACTOR, REVIEW, {"enabled": True})
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
             (strategy_bot.KEY, json.dumps({"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})),

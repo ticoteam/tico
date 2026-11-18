@@ -28,6 +28,7 @@ from . import people as P
 from . import task_caps
 from .store import Problem, encode
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 SYSTEM_BOTS = (
     "assistant",
@@ -41,6 +42,7 @@ SYSTEM_BOTS = (
     H.DESIGN_OWNER,
     "updates-owner",
     "automations-owner",
+    H.TOOLS_OWNER,
 )
 # The General Manager's team, the built-in bots: Tico's own. Its id and name are the same for every company.
 BUILT_IN = "built-in"
@@ -55,6 +57,7 @@ GENERAL_TEAM = (
     H.DESIGN_OWNER,
     "automations-owner",
     "updates-owner",
+    H.TOOLS_OWNER,
 )
 
 
@@ -416,7 +419,7 @@ def leads_follow(c, cause):
     for gid in gone:
         roster["org_groups"][gid]["lead"] = ""
     _save(c, roster)
-    _audit(c, H.KEEPER, before, cause)
+    _audit(c, H.TICO_ACTOR, before, cause)
     from .proposals import decider
 
     top = decider(c)
@@ -425,7 +428,7 @@ def leads_follow(c, cause):
             who = task_caps.actor(lead) or lead
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 top,
                 f"{task_caps._name(c, who)} left {roster['org_groups'][gid]['name']}; it has no lead now.",
                 kind="notice",
@@ -754,7 +757,7 @@ def migrate(c, settings):
     refresh_teams(c)
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "groups.migrated",
         "",
         {"groups": len(groups), "new": len(groups) - before, "bots": sum(1 for g in placed.values() if g)},
@@ -766,7 +769,15 @@ def migrate(c, settings):
 def install(app, store, auth, mutate, settings):
     from fastapi import Request
 
-    @app.get("/api/v2/groups")
+    @app.get(
+        "/api/v2/groups",
+        **api_v2(
+            "Team chart",
+            "listGroups",
+            "The groups, nested by `parent`, each with its humans and the bots the caller can see",
+            "GroupList",
+        ),
+    )
     def group_list(request: Request):
         """The groups (nested by `parent`) with their humans and the bots the caller may see."""
         who = request.state.identity
@@ -782,7 +793,15 @@ def install(app, store, auth, mutate, settings):
                 group["bot_slugs"] = [slugs.get(bot, bot) for bot in group["bots"]]
             return out
 
-    @app.post("/api/v2/groups")
+    @app.post(
+        "/api/v2/groups",
+        **api_v2(
+            "Team chart",
+            "createGroup",
+            "Add a group: a name, an optional parent group and teammates to start with (owners and admins)",
+            "Group",
+        ),
+    )
     def group_create(request: Request, body: M.GroupCreate):
         who = request.state.identity
 
@@ -792,7 +811,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.patch("/api/v2/groups/{gid}")
+    @app.patch(
+        "/api/v2/groups/{gid}",
+        **api_v2(
+            "Team chart",
+            "updateGroup",
+            "Rename a group, move it under another (`parent`, empty for the top) and add or remove teammates (owners and admins)",
+            "Group",
+        ),
+    )
     def group_update(request: Request, gid: str, body: M.GroupUpdate):
         who = request.state.identity
 
@@ -802,7 +829,14 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/groups/{gid}")
+    @app.delete(
+        "/api/v2/groups/{gid}",
+        **api_v2(
+            "Team chart",
+            "deleteGroup",
+            "Remove a group; the groups and teammates in it move up to its parent (owners and admins)",
+        ),
+    )
     def group_delete(request: Request, gid: str):
         who = request.state.identity
 

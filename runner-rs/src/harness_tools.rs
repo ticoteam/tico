@@ -155,8 +155,6 @@ pub struct Capabilities {
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
-    /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
-    pub one_turn_per_login: bool,
     /// The CLI keeps no owner-only state shared across turns (a 0600 sign-in file in the bot's home), so a turn can
     /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
     pub isolated_user: bool,
@@ -200,7 +198,6 @@ impl Default for Capabilities {
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
-            one_turn_per_login: false,
             isolated_user: false,
             compaction: false,
             own_compaction: false,
@@ -240,6 +237,8 @@ pub struct Manifest {
     pub install: toml::Table,
     pub version_args: Vec<String>,
     pub version_pattern: String,
+    /// The oldest supported release and the known-broken ones (`[version] minimum`, `broken`; cli_compat.rs).
+    pub compat: crate::cli_compat::Compat,
     pub policy: String,
     pub pin: String,
     pub api_key_env: Vec<String>,
@@ -539,6 +538,14 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
             ))
         }
     }
+    let minimum = match version.get("minimum") {
+        None => String::new(),
+        Some(toml::Value::String(s)) => s.clone(),
+        Some(_) => return Err(format!("{at}: version.minimum must be a version")),
+    };
+    let broken = strings(version.get("broken"), "version.broken", &at, None, 0, &[])?;
+    let compat = crate::cli_compat::Compat::parse(&minimum, &broken)
+        .map_err(|e| format!("{at}: version.minimum or version.broken: {e}"))?;
     let update = table(data, "update", &at)?;
     let policy = update
         .get("policy")
@@ -736,6 +743,7 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         install,
         version_args,
         version_pattern: pattern,
+        compat,
         policy,
         pin,
         api_key_env: keys,
@@ -803,7 +811,10 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
-            "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
+            // Retired with the one-turn-per-login queue; a manifest from an older checkout may still name it.
+            "one_turn_per_login" => {
+                flag(k, v)?;
+            }
             "isolated_user" => c.isolated_user = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "own_compaction" => c.own_compaction = flag(k, v)?,
@@ -1223,6 +1234,8 @@ pub struct Harnesses {
     state: Map<String, Value>,
     /// Seconds since a turn last used a host (`quiet_for`); tests set their own.
     quiet: Box<dyn Fn(&str) -> f64 + Send>,
+    /// Compatibility notes already logged (`note`), so a poll every few seconds logs each once.
+    noted: HashSet<String>,
 }
 
 fn mtime(p: &Path) -> Option<i128> {
@@ -1279,6 +1292,7 @@ impl Harnesses {
             results: vec![],
             state: Map::new(),
             quiet: Box::new(quiet_for),
+            noted: HashSet::new(),
         };
         h.state = h.load();
         h
@@ -1629,6 +1643,8 @@ impl Harnesses {
                 let work = move || {
                     let result = if job2.kind == "check" {
                         newest(&m).map(Value::String)
+                    } else if job2.version.is_empty() {
+                        target(&m).and_then(|v| stage(&m, &v, &tools))
                     } else {
                         stage(&m, &job2.version, &tools)
                     };
@@ -1679,6 +1695,13 @@ impl Harnesses {
             ));
         }
         None
+    }
+
+    /// Log a compatibility note once per runner.
+    fn note(&mut self, line: &str) {
+        if self.noted.insert(line.to_string()) {
+            log(&format!("Tico runner: {line}"));
+        }
     }
 
     fn harvest(&mut self) {
@@ -1776,8 +1799,13 @@ impl Harnesses {
             if policy == "pinned" && installed != pin {
                 return job("update", &id, &pin);
             }
-            if policy == "latest" && newer(&text_of(&self.read("latest", &id)), &installed) {
-                return job("update", &id, "");
+            let latest = text_of(&self.read("latest", &id));
+            if policy == "latest" && newer(&latest, &installed) {
+                // A known-broken release is skipped: the installed one stays until a newer release that is not.
+                match m.compat.held(&m.name, &latest, &installed) {
+                    None => return job("update", &id, ""),
+                    Some(why) => self.note(&why),
+                }
             }
             if epoch_s() - self.read("checked", &id).as_f64().unwrap_or(0.0) >= self.check_every {
                 return job("check", &id, "");
@@ -1912,6 +1940,18 @@ impl Harnesses {
                 ),
                 _ => ("idle", String::new()),
             };
+            // Below the minimum or known broken, else a daily update held back from a known-broken release.
+            let held = (policy == "latest" && newer(&latest, &installed))
+                .then(|| m.compat.held(&m.name, &latest, &installed))
+                .flatten();
+            let compat = m.compat.problem(&m.name, &installed).or(held.clone());
+            if let Some(line) = &compat {
+                self.note(line);
+            }
+            let detail = match (state, compat) {
+                ("idle", Some(line)) => line,
+                _ => detail,
+            };
             let authenticated = if path.is_some() {
                 row.get("authenticated")
                     .filter(|v| truthy_str(v))
@@ -1925,7 +1965,7 @@ impl Harnesses {
                 "version": installed.chars().take(100).collect::<String>(), "managed": source == "tools", "source": source,
                 "pinned": policy == "pinned", "pin": if policy == "pinned" { pin } else { String::new() },
                 "authenticated": authenticated,
-                "update_available": source == "tools" && newer(&latest, &installed),
+                "update_available": source == "tools" && newer(&latest, &installed) && held.is_none(),
                 "latest": latest.chars().take(100).collect::<String>(), "wanted": self.wanted.contains(&id), "state": state, "detail": detail,
             });
             for key in ["goals", "commands"] {
@@ -2088,6 +2128,46 @@ fn newest(m: &Manifest) -> Result<String, String> {
         .find(&text)
         .map(|f| f.as_str().to_string())
         .unwrap_or_default())
+}
+
+/// The release an install or Update without a version takes: "" (the newest) unless the newest is known broken, then
+/// the newest plain release below it that is supported and not broken (cli_compat.rs). Only npm lists its releases;
+/// another method with a broken newest release refuses.
+fn target(m: &Manifest) -> Result<String, String> {
+    if m.compat.broken.is_empty() {
+        return Ok(String::new());
+    }
+    let latest = newest(m)?;
+    let Some(range) = m.compat.broken(&latest) else {
+        return Ok(String::new());
+    };
+    let listed: Vec<String> = if m.method() == "npm" {
+        need("npm")?;
+        let text = exec(
+            &[
+                "npm".into(),
+                "view".into(),
+                m.get("package"),
+                "versions".into(),
+                "--json".into(),
+            ],
+            &[],
+        )?;
+        serde_json::from_str(&text).unwrap_or_default()
+    } else {
+        vec![]
+    };
+    let pick = m.compat.newest_allowed(&listed, &latest).ok_or_else(|| {
+        format!(
+            "{} {latest} is a known-broken release ({}) and no earlier release can be taken",
+            m.name, range.text
+        )
+    })?;
+    log(&format!(
+        "Tico runner: {} {latest} is a known-broken release ({}); taking {pick}",
+        m.name, range.text
+    ));
+    Ok(pick)
 }
 
 /// Install one complete copy beside whatever is there and prove it answers `--version`.
@@ -2924,6 +3004,75 @@ mod tests {
         assert_eq!(m.row()["update_available"], json!(true));
         let job = m.h.next().unwrap();
         assert_eq!((job.kind.as_str(), job.version.as_str()), ("update", ""));
+    }
+
+    #[test]
+    fn a_daily_update_skips_a_known_broken_release_and_says_why() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY; // no `step` here starts a real check
+        m.h.manifests.get_mut("claude-code").unwrap().compat =
+            crate::cli_compat::Compat::parse("2.1.74", &[">=2.1.400 <2.1.402".into()]).unwrap();
+        m.stage("2.1.316");
+        m.h.step(HashSet::new);
+        assert_eq!(m.turn_runs(), m.managed());
+        // The newest release is on the broken list: no update, the installed one stays, and its status says why.
+        m.h.section("latest")
+            .insert("claude-code".into(), json!("2.1.401"));
+        assert!(m.h.next().is_none());
+        let row = m.row();
+        assert_eq!(
+            (&row["version"], &row["update_available"], &row["state"]),
+            (&json!("2.1.316"), &json!(false), &json!("idle"))
+        );
+        assert_eq!(
+            row["detail"],
+            json!("Claude Code 2.1.401 is a known-broken release (>=2.1.400 <2.1.402); staying on 2.1.316")
+        );
+        // A newer release that is not broken is taken as usual.
+        m.h.section("latest")
+            .insert("claude-code".into(), json!("2.1.402"));
+        assert_eq!(m.row()["update_available"], json!(true));
+        let job = m.h.next().unwrap();
+        assert_eq!((job.kind.as_str(), job.version.as_str()), ("update", ""));
+        // A pinned harness never updates, so a broken newest release holds nothing back there.
+        m.h.section("latest")
+            .insert("claude-code".into(), json!("2.1.401"));
+        m.h.section("overrides").insert(
+            "claude-code".into(),
+            json!({"policy": "pinned", "pin": "2.1.316"}),
+        );
+        assert!(m.h.next().is_none());
+        assert_eq!(m.row()["detail"], json!(""));
+    }
+
+    #[test]
+    fn an_installed_release_below_the_minimum_or_known_broken_is_reported() {
+        let mut m = Machine::new(false);
+        // A person's own Claude Code on PATH, 2.1.220: never touched, but its status names the problem.
+        m.h.manifests.get_mut("claude-code").unwrap().compat =
+            crate::cli_compat::Compat::parse("2.1.300", &[]).unwrap();
+        let row = m.row();
+        assert_eq!(
+            (&row["source"], &row["state"]),
+            (&json!("path"), &json!("idle"))
+        );
+        assert_eq!(
+            row["detail"],
+            json!("Claude Code 2.1.220 is older than 2.1.300, the oldest Tico supports; update it")
+        );
+        m.h.manifests.get_mut("claude-code").unwrap().compat =
+            crate::cli_compat::Compat::parse("2.1.74", &["2.1.220".into()]).unwrap();
+        assert!(text_of(&m.row()["detail"]).contains("2.1.220 is a known-broken release (2.1.220)"));
+        // Shipped manifests: every entry parses, and a bad one is refused naming the file.
+        let all = built_in();
+        assert_eq!(all["claude-code"].compat.minimum, "2.1.74");
+        assert_eq!(all["codex"].compat.minimum, "0.136.0");
+        let bad = BUILT_IN[0]
+            .1
+            .replace("broken = []", "broken = [\"~2.1.0\"]");
+        assert!(parse(&toml::from_str(&bad).unwrap(), "claude-code.toml")
+            .unwrap_err()
+            .contains("version.minimum or version.broken: \"~2.1.0\" is not a version"));
     }
 
     #[test]

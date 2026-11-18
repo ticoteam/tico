@@ -33,7 +33,7 @@ again the same way.
 
 ## 3. Check each criterion in production
 
-Read `skills/build-the-page/SKILL.md` first. For each criterion tagged before release, check it in production
+Read `.claude/skills/build-the-page/SKILL.md` first. For each criterion tagged before release, check it in production
 and keep its proof:
 - **A screen**: open production in the read-only view with `tico bot app-shot` at phone (390 px) and desktop (1280 px)
   width, and keep the screenshots. A size or a position is measured from the screenshot, and the number written down.
@@ -55,7 +55,7 @@ know".
 
 ## 4. Build the page and attach it
 
-Follow `skills/build-the-page/SKILL.md` with `templates/validation.html`: the verdict and its count first, then what
+Follow `.claude/skills/build-the-page/SKILL.md` with `templates/validation.html`: the verdict and its count first, then what
 to decide, then each criterion with its result and proof and the screenshots at both widths with red numbered arrows,
 then the details: the version checked, what could not be checked and the after-launch checks. Write
 `reports/YYYY-MM-DD-checked-<slug>.html`, build and check it with `page.py`, publish it on the task (it prints the

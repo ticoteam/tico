@@ -9,7 +9,7 @@ from backend.store import H, encode
 from backend.tests.helpers.api import post  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 
-MODEL = {"model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None}
+MODEL = {"model": "gpt-6.2-sol", "effort": "high", "harness": None, "runner_id": None}
 
 
 def inbox_bot_of(api, person):
@@ -87,5 +87,5 @@ def test_backfill_leaves_what_is_a_choice_for_an_owner(api):
         c.execute("UPDATE bots SET state='archived' WHERE slug='second'")
     assert backfill(api) == ["first"]
     # An owner who takes the link away is not overruled at the next start.
-    post(api, "access/people/ben", {"inbox_bot": ""})
+    post(api, "access/humans/ben", {"inbox_bot": ""})
     assert inbox_bot_of(api, "ben") is None and backfill(api) == []

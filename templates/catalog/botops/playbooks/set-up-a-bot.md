@@ -15,7 +15,7 @@ Done when: `tico bot check <slug>` passes or its warnings are explained in the n
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
 The task names the bot, the template it comes from, and, when the bot is already registered, its slug, and it carries the
 owner's reviewed instructions and the setup answers.

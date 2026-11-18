@@ -3,7 +3,7 @@
 // it; a run asks the steps one at a time (a list adds rows on Enter, the scores grid is built from the earlier answers,
 // Back keeps what was typed, a skipped step is left out of the answers) and goes to the run page, which polls until done and
 // draws the value curve (Us thick and in the accent, end labels that never overlap, a legend), the 2x2, the tables and the
-// cascade; Add to draft sends the draft's revision and a 409 reloads the run; Ask (to sharpen a finding) files once; a draft run
+// cascade; Add to strategy sends the draft's revision and a 409 reloads the run; Ask (to sharpen a finding) files once; a draft run
 // carries its chip, and a member cannot see one; failed, no-model and nothing-published runs say so; no page scrolls sideways
 // at 400px.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
@@ -290,7 +290,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Nothing published: only Draft is offered. A publish that vanished meanwhile (422 no_published) offers the draft.
+    // No strategy yet: only Draft is offered. One that vanished meanwhile (422 no_published) offers the draft.
     {
       const {page, errors, sent} = await open(browser, {published: false});
       await page.locator('[data-lens-run="scenarios"]').click();
@@ -310,7 +310,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const d2 = racy.page.locator('#lens-flow');
       await d2.locator('[data-lens-next]').click();
       await d2.locator('[data-lens-notice]').waitFor();
-      assert.match(await d2.locator('[data-lens-notice]').innerText(), /Nothing is published/);
+      assert.match(await d2.locator('[data-lens-notice]').innerText(), /No strategy yet/);
       assert.deepEqual(await d2.locator('[data-lens-on]').allInnerTexts(), ['Draft']);
       await d2.locator('[data-lens-next]').click();
       await racy.page.locator('[data-lens-run-page]').waitFor();
@@ -318,7 +318,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual([...errors, ...racy.errors], []);
       await racy.page.close();
     }
-    // The value curve and its run page; Add to draft with a 409; Ask once.
+    // The value curve and its run page; Add to strategy with a 409; Ask once.
     {
       const {page, errors, sent} = await open(browser, {runs: PAST, route: '#/strategy/lenses/r-blue'});
       await page.locator('.lens-curve').waitFor();
@@ -350,10 +350,10 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
         [['Challenges', 'Bet 1'], ['Supports', 'Bet 2'], ['Gap', '']]);
       assert.equal(await page.locator('.lens-bet').first().getAttribute('href'), '#/strategy?bet=b-price');
       assert.equal(await page.locator('[data-lens-sec="assumptions"] li').innerText(), 'Rivals prices assumed from their websites.');
-      // Add to draft: the first write meets a changed draft (409), the run is read again, the second sends the new revision.
+      // Add to strategy: the first write meets a changed draft (409), the run is read again, the second sends the new revision.
       const add = page.locator('[data-lens-apply="0"]');
       await add.click();
-      await page.locator('.toast', {hasText: 'The draft changed'}).waitFor();
+      await page.locator('.toast', {hasText: 'The strategy changed'}).waitFor();
       await page.locator('[data-lens-apply="0"]').waitFor();
       assert.deepEqual(sent.filter(x => x[1] === '/apply')[0], ['POST', '/apply', {index: 0, revision: 7}]);
       await page.locator('[data-lens-apply="0"]').click();

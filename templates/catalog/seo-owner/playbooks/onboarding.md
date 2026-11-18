@@ -50,7 +50,7 @@ Fill the blanks in `knowledge/channel-playbook.md` (who puts changes live, the p
 "SEO playbook" is bot-wide, and a page made in a chat stays in that chat, so publish it on a task of its own. File one
 for yourself:
 
-    tico task create --owner me --title "Publish the SEO playbook" --body "Publish knowledge/channel-playbook.md as the SEO playbook page."
+    tico task create --owner me --title "Publish the SEO playbook" --message "Publish knowledge/channel-playbook.md as the SEO playbook page."
 
 On that task (or on this one, when setup runs on a task), write the file as an HTML page and publish it. Bold, code
 and lists become HTML tags, with no `**` or backtick left on the page, and the sentence that calls the file a starter

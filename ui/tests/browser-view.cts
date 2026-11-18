@@ -7,7 +7,8 @@ import type * as Routes from './support/routes.cts';
 // - Take control (POST …/browser/control {take: true}): a click lands at the page's own pixels, the box types, an empty
 //   box and ⏎ send Enter, ⌫ Backspace, the wheel scrolls; Give back; Done closes and gives control back;
 // - a browser host that is offline: "<label> is offline";
-// - the ask screen (a `browser:<tool>/<account>` show ref): the view inline at 1440, and Done answers the ask "Done";
+// - a bot's ❓ that shows it (a `browser:<tool>/<account>` show ref): the view inline at 1440, and Done replies "Done" in
+//   its chat;
 //   at 390 an Open browser button opens it full screen with 48 px controls, no sideways scroll.
 // TICO_UI_SHOTS=<dir> saves screenshots in both themes.
 const {chromium}: typeof import('playwright') = require('playwright');
@@ -26,10 +27,10 @@ const TOOL = {tool: {id: 'w1', name: 'TIDY admin', kind: 'website', sites: ['c.t
 const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id: 'product', stage_id: 'spec', status: 'open',
   owner_id: 'bot:support-bot', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask: true, requirement_id: null}, version: 3});
-const NEED = {kind: 'ask', id: 'r1', task_id: 't-r1', requirement_id: 'r1', line: 'Sign in to TIDY admin for me', since: '2026-11-09T10:00:00Z',
-  task: brief('t-r1', 'Refund booking 88120'),
-  ask: {requirement_id: 'r1', kind: 'answer', line: 'Sign in to TIDY admin for me', who: 'human:ana', asked_by: 'bot:support-bot', choices: ['Done'],
-    may: ['answer'], met: false, shows: ['browser:w1/a1'], standing: 'waiting', answer: null}};
+// A bot's ❓ that shows the account's browser ("sign in for me", backend/browser_commands.py): "Done" is the reply.
+const NEED = {kind: 'question', id: 'r1', mark_id: 'q1', task_id: 't-r1', message_id: 'm-q1', conversation_id: 'c-t-r1', root_id: 'c-t-r1',
+  from_id: 'bot:support-bot', requirement_id: null, line: 'Sign in to TIDY admin for me', since: '2026-11-09T10:00:00Z',
+  task: brief('t-r1', 'Refund booking 88120'), shows: ['browser:w1/a1']};
 const PIPELINE = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false, factory_id: null, preset: null,
   settings_version: 1, retired_at: null, stages: [{id: 'spec', name: 'Spec', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
     expected_bots_only: false, on_enter: {}, requirements: []}], done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
@@ -80,7 +81,7 @@ async function start(browser: import('playwright').Browser, hash: string, width:
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, credential_access: true, mover: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([{id: 'support-bot', name: 'support-bot', display_name: 'Support Bot', status: 'active', owner_id: 'ana'}]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [PIPELINE]});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: 1, items: [NEED], version: '1', next: null});
     if (p === '/api/v2/website-tools/w1') return json(TOOL);
@@ -94,7 +95,6 @@ async function start(browser: import('playwright').Browser, hash: string, width:
       writes.push({path: p, body});
       if (p === '/api/v2/website-tools/w1/accounts/a1/browser' && offline)
         return json({error: {code: 'browser_host_offline', detail: 'Mac mini is offline', computer: 'Mac mini'}}, 409);
-      if (p === '/api/v2/tasks/t-r1/asks/r1/answer') return json({task: brief('t-r1', 'x'), answer_id: 'ans-1', requirement_id: 'r1'});
       return json({ok: true, where: 'central'});
     }
     return json(unrouted(p));
@@ -194,21 +194,23 @@ async function start(browser: import('playwright').Browser, hash: string, width:
       assert.deepEqual(errors, [], 'offline: no page errors');
       await page.close();
     }
-    // The ask screen: inline at 1440, full screen at 390; Done answers "Done".
+    // The ❓: inline at 1440; at 390 Open browser is the bottom row's forward action, full screen, and back from it the
+    // forward action is Done, which replies "Done" in its chat (as the view's own Done does).
     for (const width of [1440, 390]) {
       const tag = width < 500 ? 'phone' : 'desktop';
       const {page, errors, sent} = await start(browser, '#/tasks', width, frame);
       await page.locator('[data-need="r1"]').first().waitFor();
       await page.locator('#task-play').click();
       const card = page.locator('#need-card');
-      await card.locator('.dc-browser').waitFor();
-      await card.locator('[data-dc-choice="Done"]').waitFor();
+      await card.locator('.dc-browser').waitFor({state: 'attached'});
       let view = card.locator('.dc-browser .bv');
       if (tag === 'phone') {
-        await card.locator('.dc-browser [data-bv-launch]').waitFor();
+        const go = card.locator('.dc-side [data-dc="browse"]');
+        await go.waitFor();
+        assert.equal((await go.innerText()).trim(), 'Open browser', 'phone: Open browser is the forward action');
         assert.equal(await sideways(page), false, 'phone: the ask has no sideways scroll');
         await shot(page, `ask-${tag}`);
-        await card.locator('.dc-browser [data-bv-launch]').click();
+        await go.click();
         view = page.locator('dialog.bv-dialog[open] .bv');
       }
       await view.locator('[data-bv-img]:visible').waitFor();
@@ -233,9 +235,19 @@ async function start(browser: import('playwright').Browser, hash: string, width:
         assert.equal(await sideways(page), false, 'desktop: no sideways scroll');
       }
       await shot(page, `ask-view-${tag}`);
-      await view.locator('[data-bv-done]').click();
+      if (tag === 'phone') {
+        // Back from it, the forward action is Done.
+        await view.locator('[data-bv-close]').click();
+        const done = card.locator('.dc-side [data-dc="browse-done"]');
+        await done.waitFor();
+        assert.equal((await done.innerText()).trim(), 'Done', 'phone: back from the browser, the forward action is Done');
+        await shot(page, `ask-back-${tag}`);
+        await done.click();
+      } else {
+        await view.locator('[data-bv-done]').click();
+      }
       await card.locator('.dc-bar:not([hidden])').waitFor();
-      assert.equal(sent('/api/v2/tasks/t-r1/asks/r1/answer')[0]?.value, 'Done', `${tag}: Done answers the ask`);
+      assert.deepEqual(sent('/api/v2/threads/c-t-r1/messages'), [{text: 'Done'}], `${tag}: Done replies in its chat`);
       await page.locator('dialog.bv-dialog').waitFor({state: 'detached', timeout: 3000});   // the view is closed
       assert.deepEqual(errors, [], `${tag}: no page errors`);
       await page.close();

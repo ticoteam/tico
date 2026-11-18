@@ -27,67 +27,14 @@ RECRUITING, ONBOARDING, ACTIVE = "recruiting", "onboarding", "active"
 SEAT_PREFIX = "seat:"
 TITLE_MAX, DESCRIPTION_MAX, SUMMARY_MAX = 120, 8000, 2000
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-    "reports_to TEXT NOT NULL DEFAULT '', team TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL, "
-    "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)"
-)
-
-
-# Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
-# a chart model's text), when an earlier release's Strategy Owner drafted it and the task that asked it to, and the bot
-# that filled the seat.
-COLUMNS = (
-    ("description_by", "TEXT NOT NULL DEFAULT ''"),
-    ("drafted_at", "TEXT"),
-    ("draft_task", "TEXT NOT NULL DEFAULT ''"),
-    ("filled_by", "TEXT NOT NULL DEFAULT ''"),
-    # A cloud agent this seat asks Tico to connect (backend/cloud_agents.py): its id, its name for `other`, where
-    # the request stands, the support ticket that asked, and the first task waiting for the agent.
-    ("agent", "TEXT NOT NULL DEFAULT ''"),
-    ("agent_name", "TEXT NOT NULL DEFAULT ''"),
-    ("request_state", "TEXT NOT NULL DEFAULT ''"),
-    ("request_ticket", "TEXT NOT NULL DEFAULT ''"),
-    ("first_task", "TEXT NOT NULL DEFAULT ''"),
-    # The template setup placed the seat with (a company file's or the setup chart's role): Recruit offers it alone
-    # (backend/recruiting.py `candidates`). '' for a seat a person added, which Recruit ranks by its title.
-    ("template", "TEXT NOT NULL DEFAULT ''"),
-)
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
 # wrote seats then, so it reads as a person's words.
 EARLIER = "earlier"
-# A cloud agent request Tico is asked to file for a seat (backend/cloud_agents.py), kept under its Idempotency-Key. It is
-# reserved as `filing` before Tico hears of it, so a repeat waits for the request in flight; it is `filed` once the seat
-# and its ticket are kept. A reservation older than FILING_STALE_SECONDS never came back, and its key may be used again.
-# `made` says the request made its seat, so releasing the request closes the seat rather than only clearing it.
-REQUESTS = (
-    "CREATE TABLE IF NOT EXISTS seat_requests(id TEXT PRIMARY KEY, actor TEXT NOT NULL, "
-    "request_key TEXT NOT NULL, request_hash TEXT NOT NULL, seat_id TEXT NOT NULL DEFAULT '', "
-    "state TEXT NOT NULL, ticket_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
-    "made INTEGER NOT NULL DEFAULT 0)"
-)
 FILING_STALE_SECONDS = 120
 # A seat's cloud agent request (`request_state`): `filing` while Tico is told, `requested` once its ticket is kept,
 # `canceling` while a cancel is told to Tico, and `canceled` once the cancel is finished. A seat with an open request
 # changes only once the request is canceled (refuse_if_requested).
 FILING, REQUESTED, CANCELING, CANCELED = "filing", "requested", "canceling", "canceled"
-
-
-def ensure(c):
-    """Unversioned and idempotent, like the task trash: an older release never reads the table or its new columns."""
-    c.execute(SCHEMA)
-    c.execute("CREATE INDEX IF NOT EXISTS seats_open ON seats(reports_to) WHERE closed_at IS NULL")
-    have = {row[1] for row in c.execute("PRAGMA table_info(seats)")}
-    for name, kind in COLUMNS:
-        if name not in have:
-            c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")
-    if "description_by" not in have:
-        c.execute("UPDATE seats SET description_by=? WHERE TRIM(description)<>''", (EARLIER,))
-    c.execute(REQUESTS)
-    if "made" not in {row[1] for row in c.execute("PRAGMA table_info(seat_requests)")}:
-        c.execute("ALTER TABLE seat_requests ADD COLUMN made INTEGER NOT NULL DEFAULT 0")
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS seat_requests_key ON seat_requests(actor,request_key)")
-    c.execute("CREATE INDEX IF NOT EXISTS seat_requests_seat ON seat_requests(seat_id,state)")
 
 
 # ------------------------------------------------------------------ stages

@@ -79,3 +79,21 @@ def test_a_search_hit_and_a_breadcrumb_carry_the_same_name_as_the_thread(api):
     sub = new_thread(api, title="Side", members=(), parent_message_id=topic["id"])
     path = get_thread(api, sub["id"], "ana-test").json()["breadcrumb"]
     assert path == [{"id": thread, "title": "Ben, Cara"}, {"id": sub["id"], "title": "Kickoff agenda"}]
+
+
+def test_a_tasks_own_room_is_named_by_its_task_as_it_is_now(api):
+    """Made with no title, or before a rename, a task's room reads as its task's title, never "Thread" or its people
+    (Flow's chat box said "Message Thread")."""
+    from backend import hubdb as H
+    from backend.tests.helpers.cards import task
+
+    tid = task(api, "human:ana", "Checkout flow")
+    with api.app.state.store.transaction() as c:
+        room = H.task(c, tid)["conversation_id"]
+        c.execute("UPDATE conversations SET subject='' WHERE id=?", (room,))
+    assert room
+    shown = get_thread(api, room, "ana-test").json()
+    assert (shown["title"], shown["name"]) == ("Checkout flow", "Checkout flow")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET title='Guest checkout' WHERE id=?", (tid,))
+    assert name_as(api, room, "ana-test") == "Guest checkout"

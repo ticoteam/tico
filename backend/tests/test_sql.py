@@ -28,6 +28,7 @@ SECRET_TABLES = (
     "bot_session_epochs",
     "settings_changes",
     "backup_verified_blobs",
+    "google_connects",  # people's sealed Google grants
     "sqlite_temp_master",
     "sqlite_sequence",
     "_litestream_seq",
@@ -263,7 +264,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert tasks == sorted(world[k]["id"] for k in ("private", "coo_task", "finance_task"))
     assert "inbox" in column(api, "SELECT slug FROM bots")
     bodies = column(api, "SELECT body FROM messages")
-    assert "Ana private context." in bodies and "Sort the inbox is in To do (General)." in firsts(bodies)
+    # Tico's notice to a bot about its task is that bot's run input, in no person's timeline, the owner's included.
+    assert "Ana private context." in bodies and "Sort the inbox is in To do (General)." not in firsts(bodies)
     assert "Ben private context." not in bodies
     personal = column(api, "SELECT id FROM conversations WHERE scope='personal'")
     assert world["ana_room"] in personal and world["steven_room"] not in personal
@@ -285,16 +287,13 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     ) == [
         "access",
         "access_bot_limit",
-        "bot-chats-to-home",
         "bot_access",
         "ceo-bot",
         "company-turn-incident",
         "credential-file-migration-v1",
         "credential-file-migration-v2-hub",
-        "credential-use-backfill",
         "depends-release-running",
         "docs_migrated",
-        "idempotency_messages.ready",
         "inbox-only-runners",
         "inbox_prompt_repair",
         "librarian_wording35",
@@ -306,17 +305,13 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "redesign_cutover",
         "release-history",
         "release-snoozes-seen",
-        "repositories-access-migrated",
-        "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text",
         "rules.asks_to_a_person",
         "stage_rules_snooze_sweep",
         "strategy-bot",
-        "task_session_default",
-        "threads-migration",
-        "threads-neutral-titles",
+        "tool_settings.ids_repaired",
+        "tool_settings.moved",
+        "tool_templates.grouped",
         "usage-count",
-        "validate-proof-sweep",
     ]
 
 
@@ -329,13 +324,10 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
     assert column(api, "SELECT bot FROM bot_status", ben) == sorted(
         b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox"
     )
-    # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line.
-    # A task's first line in its own room says where it stands (the rest is the bot's brief).
-    assert firsts(column(api, "SELECT body FROM messages", ben)) == [
-        "Ben private context.",
-        "Close the books is in To do (General).",
-        "Summarize the week is in To do (General).",
-    ]
+    # Their own room, and the own rooms of the public tasks with each one's request; not Ana's room or its "Started
+    # task" line, nor the notices Tico gives a bot about a task (where it stands): those are the bot's run input, in no
+    # person's timeline.
+    assert firsts(column(api, "SELECT body FROM messages", ben)) == ["Ben private context.", "For finance.", "For ops."]
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
         [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
     )
@@ -359,10 +351,12 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     token = world["attempt"]["token"]
     assert query(api, "SELECT 1", token)["rows"] == [[1]]
     bodies = column(api, "SELECT body FROM messages", token)
-    # Its granted room, and the own rooms of the ordinary tasks it may read.
+    # Its granted room, and the own rooms of the ordinary tasks it may read, each with its request.
     assert firsts(bodies) == [
         "Ana private context.",
         "Close the books is in To do (General).",
+        "For finance.",
+        "For ops.",
         "Started task: Summarize the week",
         "Summarize the week is in To do (General).",
     ]
@@ -441,18 +435,27 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
             )
 
     guarded = S.guarded
+    # The message rule is a hidden view named per connection (sql.READABLE_MESSAGES), read by name.
+    readable = r'EXISTS \(SELECT 1 FROM ("v[0-9a-f]+_readable_messages") readable WHERE readable\.id=source\.'
     replacements = {
-        'EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)': 'message_id IN (SELECT id FROM messages)',
-        'EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)': 'job_id IN (SELECT id FROM jobs)',
-        'EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)': 'attempt_id IN (SELECT id FROM attempts)',
-        'EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id)': 'conversation_id IN (SELECT id FROM conversations)',
+        readable + r'message_id\)': r'message_id IN (SELECT id FROM \1)',
+        readable + r'id\)': r'id IN (SELECT id FROM \1)',
+        re.escape(
+            'EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)'
+        ): 'job_id IN (SELECT id FROM jobs)',
+        re.escape(
+            'EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)'
+        ): 'attempt_id IN (SELECT id FROM attempts)',
+        re.escape(
+            'EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id)'
+        ): 'conversation_id IN (SELECT id FROM conversations)',
     }
 
     def legacy(*args, **kwargs):
         rules = guarded(*args, **kwargs)
         for table, (predicate, hidden) in rules.items():
-            for new, old in replacements.items():
-                predicate = predicate.replace(new, old)
+            for pattern, old in replacements.items():
+                predicate = re.sub(pattern, old, predicate)
             rules[table] = predicate, hidden
         return rules
 
@@ -807,7 +810,7 @@ def test_direct_run_messages_keep_denied_attempt_provenance(api, world, source):
         elif source == 'carried':
             c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
-            H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'tasks': [hidden['id']]})
+            H.event(c, H.TICO_ACTOR, 'task.next-run.carried', aid, {'tasks': [hidden['id']]})
     with store.read() as c:
         who = Identity('bot:ops', 'bot', attempt_id=aid)
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -845,22 +848,6 @@ def test_direct_refs_cannot_override_denied_conversation_task(api, world, unknow
             args = ('synthetic-room-task', room, json.dumps(refs), None)
             assert not fast.message(*args)
             assert not recursive.message(*args)
-
-
-def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api, world):
-    store = api.app.state.store
-    with store.transaction() as c:
-        before = [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')]
-        c.execute('DROP INDEX attempts_created')
-        c.execute('DELETE FROM cloud_migrations WHERE version=62')
-    store.initialize()
-    store.initialize()  # Existing installs and repeated starts take the same additive path.
-    with store.read() as c:
-        assert [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')] == before
-        assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created_at']
-        assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
-        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created_at>=?", (H.now(),))
-        assert any('attempts_created (created_at>?)' in row[3] for row in plan)
 
 
 def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world, monkeypatch):
@@ -969,7 +956,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
         elif source == 'carried':
             c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
-            H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
+            H.event(c, H.TICO_ACTOR, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     for token in callers:
         assert seen(token) == (False, False), token
 
@@ -1004,7 +991,7 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
 
     # Retained next-run provenance survives independently of attempts.task_id.
     with store.transaction() as c:
-        event = H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
+        event = H.event(c, H.TICO_ACTOR, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     assert rows('attempts', aid) == []
     with store.transaction() as c:
         c.execute('DELETE FROM events WHERE id=?', (event['id'],))
@@ -1274,12 +1261,10 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 
 
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
-    from backend import assistant
     from backend.tests.helpers.api import setup_attempt
     from backend.tests.helpers.mcp import call, rpc
 
     with api.app.state.store.transaction() as c:
-        assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate(
             [("done", "assistant"), ("canceled", "assistant"), ("done", "bot:botops")]
         ):
@@ -1396,7 +1381,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
 
 def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner_reads(api):
     import sqlite3
-    from backend import assistant, sql as S
+    from backend import sql as S
     from backend.tests.helpers.assistant import assistant_turn
 
     # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
@@ -1408,7 +1393,6 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     assert api.get("/api/v2/outcome-stats/readers", headers=headers(personal)).status_code == 403
     assert api.get("/api/v2/outcome-stats/readers", headers=headers()).json() == {"readers": []}
     with api.app.state.store.transaction() as c:
-        assistant.ensure_schema(c)
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key='outcome-stats-readers'").fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE action='outcome_stats.granted'").fetchone()
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers()).json() == {

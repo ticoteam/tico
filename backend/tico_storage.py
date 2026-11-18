@@ -81,21 +81,6 @@ from clients import gateway as G
 from . import models as M
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS tico_storage(
- id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL CHECK(state IN ('off','on','credits_out','stopped')),
- bucket TEXT NOT NULL DEFAULT '', prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '',
- access_key_id TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', expires_at TEXT,
- signing_key_id TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', keep_until TEXT,
- changed_at TEXT, checked_at TEXT, error TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS storage_moves(
- id TEXT PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('running','done','failed','stopped')),
- started_at TEXT NOT NULL, started_by TEXT NOT NULL, finished_at TEXT,
- estimate_files INTEGER NOT NULL, estimate_bytes INTEGER NOT NULL,
- moved_files INTEGER NOT NULL DEFAULT 0, moved_bytes INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
- error TEXT NOT NULL DEFAULT '');
-CREATE UNIQUE INDEX IF NOT EXISTS storage_moves_one_running ON storage_moves(state) WHERE state='running';
-"""
 PATH, TOTAL = "/files", "/files/total"
 CONTEXT = "tico_storage:keys"
 STATES = ("off", "on", "credits_out", "stopped")

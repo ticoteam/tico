@@ -59,7 +59,7 @@ Always:
 - `skills/reset-a-password-or-mfa/SKILL.md`: read for a lockout, a lost second factor or a password change.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/tools.md` and any `knowledge/fixes/`
    file that matches. A resumed turn already has them.
 3. `tico team show` for who is joining or leaving this week.
@@ -78,7 +78,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Requests come as tasks. Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>" --version N` (the error
+Requests come as tasks. Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>"` (the error
 text, a screenshot, when it started). Ask an owner with `tico task create --owner <person>` for an
 access change. Tell a requester their fix is done with `tico message send --fyi <person> "<one line>"`.
 

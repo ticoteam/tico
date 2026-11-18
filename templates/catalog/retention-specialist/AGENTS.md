@@ -62,7 +62,7 @@ Always:
 - `skills/check-the-cancel-path/SKILL.md`: read before any reply that answers a cancellation goes on the task.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/save-policy.md` and the open lines in
    `knowledge/reasons.md`. A resumed turn already has them.
 
@@ -83,7 +83,7 @@ stop, and their end wakes you.
 Requests arrive as tasks. Read with `tico task show`, `tico task list`, the support mailbox where
 connected, and the usage export the owner has shared. A missing-feature
 pattern is `tico task create --owner customer-insights-analyst`; an at-risk business account is `tico task create
---owner success-owner`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+--owner success-owner`. One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Quality standards
 - **Answer first.** The report opens with requests, saves and the net loss this week.

@@ -70,7 +70,7 @@ def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_b
         urgent = H.new_id()
         c.execute(
             "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-            (urgent, H.KEEPER, "bot:cpo", "Back from quarantine", H.now()),
+            (urgent, H.TICO_ACTOR, "bot:cpo", "Back from quarantine", H.now()),
         )
         assert jobs(c, "cpo") == 0
         H.task_comment(c, "human:ana", task["id"], "Please start this today.")
@@ -204,8 +204,6 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
     # One story for every always-wake case, each on its own fresh parked task (one setup, not one per case).
     cases = [
         ("say", {}, "Hi", "person"),
-        ("ask", {}, "Which release?", "ask"),
-        ("answer", {}, "v0.3.62", "ask"),
         ("steer", {}, "Stop and fix the tests", "ask"),
         ("notice", {"approval": "a1"}, "Approved", "approval"),
         ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),
@@ -215,7 +213,7 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
     with api.app.state.store.transaction() as c:
         for n, (kind, refs, body, key) in enumerate(cases):
             task, _ = parked_task(c, title=f"Build case {n}", blocker_title=f"Build 1/9 case {n}")
-            actor = "human:ana" if key == "person" else H.KEEPER
+            actor = "human:ana" if key == "person" else H.TICO_ACTOR
             cause = "human:ana" if key == "person" else "bot:cpo"
             assert W.always_wakes(c, actor, "bot:cpo", kind, refs, body, cause) == key, body
             assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None, body
@@ -272,11 +270,12 @@ def test_the_gate_fails_open():
             raise RuntimeError("no database")
 
     assert (
-        W.gate(Broken(), H.KEEPER, "bot:cpo", "notice", {"task": "t1", "trigger": "comment"}, "x", {"id": "c"}) is None
+        W.gate(Broken(), H.TICO_ACTOR, "bot:cpo", "notice", {"task": "t1", "trigger": "comment"}, "x", {"id": "c"})
+        is None
     )
 
 
-def test_the_request_says_whose_write_it_is_and_the_keepers_sweeps_are_nobodys(api, monkeypatch):
+def test_the_request_says_whose_write_it_is_and_the_tico_sweeps_are_nobodys(api, monkeypatch):
     r = setup(api)
     post(api, "chat/cpo", {"text": "Run your check"})
     attempt = claim(api, r, "cpo")

@@ -1,5 +1,5 @@
 # pyright: strict
-"""The default pipelines beyond General, Product and Engineering (docs/pipelines-v3.md "Default pipelines"): Growth
+"""The default pipelines beyond General, Product and Engineering (docs/dev/pipelines-v3.md "Default pipelines"): Growth
 Experiments, Growth Monitoring, Lead and Opportunity in the Growth factory; Customer, Success Experiments and Success
 Monitoring in the Success factory; Legal and Finance, both private, in the Corporate factory.
 
@@ -154,10 +154,18 @@ def _experiments(pid: str, name: str, goal: str, prefix: str, factory: str) -> R
         _stage(
             f"{pid}-building",
             "Building",
-            "Make the real thing, not yet live: the email, the page change, the ad. Attach a Go-live page. A person "
-            "OKs it before it goes live.",
+            "Make the real thing, not yet live: the email, the page change, the ad. Write the Release report: what goes "
+            "live. Writing it here submits it; a person approves it before it goes live.",
             3 * DAY,
-            [_people_only({"kind": "page", "line": "Go-live page", "settings": {"rubric": GO_LIVE_RUBRIC}})],
+            [
+                _people_only(
+                    {
+                        "kind": "page",
+                        "line": "Release report",
+                        "settings": {"document": "Release report", "rubric": GO_LIVE_RUBRIC},
+                    }
+                )
+            ],
             task_limit=6,
         ),
         _stage(
@@ -230,6 +238,15 @@ EARLIER: dict[str, tuple[str, ...]] = {
         ("ideas/purpose", (_IDEAS_RC3,)),
         ("running/purpose", (_RUNNING_RC3,)),
         ("building/page/rubric", (_GO_LIVE_RC6, _GO_LIVE_NOV11)),
+        # Nov 16: the stage approves the Release report, a task document, not a page attached by hand.
+        ("building/page/line", ("Go-live page",)),
+        (
+            "building/purpose",
+            (
+                "Make the real thing, not yet live: the email, the page change, the ad. Attach a Go-live page. A "
+                "person OKs it before it goes live.",
+            ),
+        ),
         ("running/page/rubric", (_RESULTS_RC6,)),
     )
 }

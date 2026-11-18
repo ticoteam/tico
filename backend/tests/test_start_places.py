@@ -10,6 +10,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, ready, 
 from backend.tests.helpers.attempt_contention import fleet
 from backend.tests.helpers.runner_load import point
 from backend.tests.helpers.start_places import memory, overload, waiters
+from backend.tests.helpers.held_runs import no_start_wait
 
 
 def sent_by(api, message_id, actor):
@@ -181,26 +182,19 @@ def test_stop_on_waiter_is_final_even_after_capacity_returns(api):
         assert c.execute("SELECT state FROM jobs WHERE attempt_id='attempt-0'").fetchone()[0] == 'canceled'
 
 
-def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, monkeypatch):
-    from backend import login_waits, start_places
+def test_upgrade_gives_unstarted_runs_a_place_without_a_deadline(api):
+    from backend import start_places
 
-    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
     computer = waiters(api, n=2, running=1)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM start_places")
         old = H.shift(H.now(), seconds=-7200)
         c.execute("UPDATE attempts SET created_at=?", (old,))
-        # One legacy worker cleared its wait and really is preparing; the other still waits.
-        c.execute(
-            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES('attempt-1',2,'status',?,?)",
-            ('{"waiting":""}', H.now()),
-        )
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
         assert sum(start_places.held(c, computer['runner_id']).values()) == 3
         counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
-        assert counts['running'] == 1 and counts['waiting'] == 1
-        assert counts['waits'][0]['oldest'] == old
+        assert counts['running'] == 1 and counts['waiting'] == 0
 
 
 def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypatch):
@@ -208,8 +202,7 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
     from backend.tests.helpers.api import setup_attempt
 
     monkeypatch.setattr(execution, 'PRE_START_TRIES', 2)
-    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
-    monkeypatch.setattr(execution, 'HAND_BACK_WAIT', 0)
+    no_start_wait(monkeypatch)  # a lapse's wait before the next try is not what this test is about
     machine, message, first = setup_attempt(api)
     store = api.app.state.store
     attempt = first
@@ -345,53 +338,7 @@ def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api
         assert secret not in str(row['turn_counts']) + row['turn_summary']
 
 
-def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, monkeypatch):
-    from backend import login_waits, start_places
-    from backend.tests.helpers.task_lanes import task_bot, new_task
-
-    caps = {'one_turn_per_login': True}
-    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: caps)
-    computer = task_bot(api, lanes=True)
-    task = new_task(api, 'Work finished during legacy preparation')
-    attempt = post(api, 'jobs/claim', {}, computer['token'])['attempt']
-    aid = attempt['id']
-
-    def status(seq, waiting):
-        post(
-            api,
-            f'attempts/{aid}/events',
-            {'events': [{'seq': seq, 'kind': 'status', 'payload': {'waiting': waiting, 'login': 'ChatGPT'}}]},
-            computer['token'],
-        )
-
-    status(1, 'shared login')
-    with api.app.state.store.read() as c:
-        assert start_places.is_waiting(c, aid)
-    status(2, '')
-    with api.app.state.store.transaction() as c:
-        assert not start_places.is_waiting(c, aid)
-        assert c.execute('SELECT waiting_since FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
-        task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
-    assert not post(api, f'attempts/{aid}/renew', {}, computer['token']).get('stop')
-    # An obsolete login-queue report cannot reintroduce a wait after this capability opts out.
-    caps['one_turn_per_login'] = False
-    status(3, 'obsolete shared login')
-    with api.app.state.store.transaction() as c:
-        assert not start_places.is_waiting(c, aid)
-        counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
-        assert counts['starting'] == 1 and counts['waiting'] == 0
-        c.execute('DELETE FROM start_places WHERE attempt_id=?', (aid,))
-        start_places.restore_waits(c)
-        assert not start_places.is_waiting(c, aid)
-    # The task finished before the run started: the engine no longer wants it (execution.held_before_start).
-    refused = post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'], expected=409)
-    assert refused['error']['code'] == 'start_wait'
-
-
-def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monkeypatch):
-    from backend import login_waits
-
-    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
+def test_delayed_managed_status_events_cannot_release_a_new_start_grant(api):
     computer = waiters(api, n=1, running=0)
     aid = 'attempt-0'
     grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
@@ -411,7 +358,7 @@ def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monk
 
 def test_overload_rechecks_even_a_previously_granted_start(api):
     computer = waiters(api, n=1, running=0)
-    sent_by(api, 'message-0', H.KEEPER)
+    sent_by(api, 'message-0', H.TICO_ACTOR)
     grant = post(api, 'attempts/attempt-0/start-place', {}, computer['token'])
     assert grant['reserved']
     overload(api, computer)
@@ -424,10 +371,10 @@ def test_overload_rechecks_even_a_previously_granted_start(api):
 
 def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else_does(api):
     """Bots' own load held every start, a person's chat to a bot included, behind a hundred bot turns. A person's
-    message still starts, ahead of the turns waiting there; a keeper notice (routine, sweep, rule wake) or a bot's
+    message still starts, ahead of the turns waiting there; a Tico notice (routine, sweep, rule wake) or a bot's
     message still waits."""
     computer = waiters(api, n=3, running=0)
-    sent_by(api, 'message-0', H.KEEPER)
+    sent_by(api, 'message-0', H.TICO_ACTOR)
     sent_by(api, 'message-1', 'bot:finance')
     overload(api, computer)
     for i in (0, 1):
@@ -474,7 +421,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
             ).fetchone()[0]
             == 'queued'
         )
-    # A person's @mention in a thread with product-design reaches it as a keeper carrier, which counts as the person's.
+    # A person's @mention in a thread with product-design reaches it as a Tico carrier, which counts as the person's.
     assign(api, computer, 'product-design')
     ready(api, computer, ['ops', 'finance', 'cpo', 'product-design'])
     thread = post(api, 'threads', {'title': 'Layout', 'members': ['bot:product-design']})
@@ -486,7 +433,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
 
 
 def test_a_persons_thread_message_to_a_bot_starts_before_the_bots_older_queued_work(api):
-    """A person's @mention in a thread with a bot reaches the bot as a keeper carrier, which counts as the person's
+    """A person's @mention in a thread with a bot reaches the bot as a Tico carrier, which counts as the person's
     message. The claim takes it ahead of the bot's older queued work (a 1:1 DM message is the bot's direct job)."""
     machine = runner(api)
     assign(api, machine, 'ops')
@@ -584,28 +531,6 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
     memory(api, computer, 0.79)
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved']
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'synthetic-thread'}, computer['token'])['started']
-
-
-@pytest.mark.parametrize('sender,capabilities', [('human:ana', []), ('bot:ops', ['turns_at_once_v1'])])
-def test_memory_cannot_revoke_a_grant_without_negotiated_allocation_reporting(api, sender, capabilities):
-    """After a hub upgrade an older runner may already have a process but cannot report its allocation."""
-    computer = bot_waiting_for_finance(api, sender=sender)
-    ready(api, computer, ['ops', 'finance'], capabilities=capabilities)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
-    attempt = claim(api, computer, 'finance')
-    aid = attempt['id']
-    grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
-    assert grant['reserved']
-    overload(api, computer, cpu=20, mem=0.96)
-    assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == grant
-    assert post(api, f'attempts/{aid}/started', {'thread_id': 'older-runner-thread'}, computer['token'])['started']
-    with api.app.state.store.read() as c:
-        assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
-        assert (
-            c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
-            == grant['start_until']
-        )
 
 
 @pytest.mark.parametrize('cpu,held', [(0, False), (95, True)])

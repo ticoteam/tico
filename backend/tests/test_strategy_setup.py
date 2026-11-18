@@ -120,7 +120,7 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     assert {host for _, host in research.connected} == {"acme.example"}
     assert not any("server-secret" in request for _, _, request in research.asked)  # no credential of the server's
     (sent,) = research.sent
-    assert sent["owner_words"] == "Bots for small landlords" and len(sent["pages"]) == 4
+    assert sent["owner_words"] == "Bots for small landlords" and len(sent["pages"]) == SS.PAGES
     assert "$29 a unit" in json.dumps(sent["pages"]) and "text" not in json.dumps(job["pages"])
 
     view = get(api, "strategy")
@@ -138,7 +138,7 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     assert set(job["written"]["bets"]) == set(bets) and {b["status"] for b in bets.values()} == {"proposed"}
     first = next(b for b in bets.values() if b["rules_out"])
     assert first["wrong_if"]["kind"] == "text" and first["wrong_if"]["check_by"] > H.now()[:10]
-    assert get(api, "strategy/versions") == []  # nothing is published
+    assert [v["n"] for v in get(api, "strategy/versions")] == [1]  # live at once, as one version
 
     # The same research again: the owner's sections stay theirs and no bet is proposed twice.
     write = put(api, "strategy/draft", {"revision": view["draft"]["revision"], "sections": {"serve": "Mine."}})
@@ -187,7 +187,7 @@ def test_the_shared_prompt_drafts_summary_seven_sections_and_three_bets_and_no_v
     for key in S.FIXED_KEYS:
         assert draft["sections"][key] == SS.unconfirmed(answer[key], "your description")
     assert {b["status"] for b in get(api, "strategy")["bets"]} == {"proposed"}
-    assert get(api, "strategy/versions") == []
+    assert [v["n"] for v in get(api, "strategy/versions")] == [1]
 
 
 def test_the_job_gives_up_and_reports_when_the_owner_wrote_the_draft_meanwhile(api, research):
@@ -264,13 +264,13 @@ def test_setup_keeps_the_website_and_the_one_line_and_an_older_client_keeps_them
         "answers": {"building": "Bots that run small rentals.", "what_we_do": "Rentals"},
         "selected": {},
     }
-    saved = api.put("/api/v2/onboarding", json=body, headers=signed_in()).json()
+    saved = api.put("/api/v2/setup", json=body, headers=signed_in()).json()
     assert (
         saved["names"]["website"] == "https://acme.example"
         and saved["answers"]["building"] == "Bots that run small rentals."
     )
     older = api.put(
-        "/api/v2/onboarding",
+        "/api/v2/setup",
         json={"names": {"company_name": "Acme"}, "answers": {"what_we_do": "Rentals"}, "selected": {}},
         headers=signed_in(),
     ).json()
@@ -279,13 +279,11 @@ def test_setup_keeps_the_website_and_the_one_line_and_an_older_client_keeps_them
         and older["answers"]["building"] == "Bots that run small rentals."
     )
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["website"] == "https://acme.example"
-    bad = api.put(
-        "/api/v2/onboarding", json={**body, "names": {"website": "mailto:ana@acme.example"}}, headers=signed_in()
-    )
+    bad = api.put("/api/v2/setup", json={**body, "names": {"website": "mailto:ana@acme.example"}}, headers=signed_in())
     assert bad.status_code == 422
     # An internal address is refused when saved, as the research refuses it: nothing reaches the Librarian's task.
     for url in ("http://10.0.0.1", "http://169.254.169.254/latest", "http://[::1]/", "intranet.local"):
-        bad = api.put("/api/v2/onboarding", json={**body, "names": {"website": url}}, headers=signed_in())
+        bad = api.put("/api/v2/setup", json={**body, "names": {"website": url}}, headers=signed_in())
         assert bad.status_code == 422 and bad.json()["error"]["reason"] == "private_address", url
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["website"] == "https://acme.example"
 
@@ -300,14 +298,14 @@ def test_a_run_cut_off_or_left_with_nothing_to_read_stops_and_never_writes(envir
         "answers": {"building": "Bots that run small rentals."},
         "selected": {},
     }
-    assert api.put("/api/v2/onboarding", json=body, headers=signed_in()).status_code == 200
+    assert api.put("/api/v2/setup", json=body, headers=signed_in()).status_code == 200
     start = lambda: api.post(
         "/api/v2/strategy/draft-from", json={"text": "Bots that run small rentals."}, headers=signed_in()
     ).json()
     latest = lambda: api.get("/api/v2/strategy/draft-from/latest", headers=signed_in()).json()
     # The owner clears the website and the line: nothing is left to draft from, so the run stops.
     assert start()["state"] == "running"
-    cleared = api.put("/api/v2/onboarding", json={**body, "answers": {"building": ""}}, headers=signed_in())
+    cleared = api.put("/api/v2/setup", json={**body, "answers": {"building": ""}}, headers=signed_in())
     assert cleared.status_code == 200, cleared.json()
     assert latest()["state"] == "failed" and latest()["error"]["code"] == "cleared"
     # A restart: no thread of the new process runs it (install stops every running job at start-up).
@@ -328,7 +326,7 @@ def test_the_org_builder_names_the_bet_a_group_serves_and_setup_stores_it(enviro
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")] + [(row, "") for row in CARDS[:-1]])
     (Path(api.app.state.store.settings.catalog_dir).parent / "groups.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
     ask = lambda: api.post(
-        "/api/v2/onboarding/recruit",
+        "/api/v2/setup/recruit",
         headers=signed_in(),
         json={"department": "sales", "briefing": "Founders sell", "share": False},
     ).json()
@@ -348,7 +346,7 @@ def test_the_org_builder_names_the_bet_a_group_serves_and_setup_stores_it(enviro
     assert answer["bet"] == {"id": made["id"], "statement": made["statement"]} and answer["source"] == "local"
     assert "deal-desk" in [row["template_id"] for row in answer["bots"]]  # the pricing bet brings it in
     api.put(
-        "/api/v2/onboarding",
+        "/api/v2/setup",
         headers=signed_in(),
         json={
             "answers": {"departments": ["sales", "finance"], "briefings": {"sales": "Founders sell"}},
@@ -358,7 +356,7 @@ def test_the_org_builder_names_the_bet_a_group_serves_and_setup_stores_it(enviro
             },
         },
     )
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     groups = {g["id"]: g for g in api.get("/api/v2/groups", headers=signed_in()).json()}
     assert groups["sales"]["bet_id"] == made["id"] and groups["finance"]["bet_id"] is None
 
@@ -366,7 +364,7 @@ def test_the_org_builder_names_the_bet_a_group_serves_and_setup_stores_it(enviro
 def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(environment):
     api = environment(seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
     api.put(
-        "/api/v2/onboarding",
+        "/api/v2/setup",
         headers=signed_in(),
         json={
             "names": {"company_name": "Acme", "website": "https://acme.example"},
@@ -375,35 +373,33 @@ def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(en
         },
     )
     for _ in range(2):
-        assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+        assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
+        tasks = [dict(r) for r in c.execute("SELECT id, title FROM tasks WHERE owner_id='bot:librarian'")]
+        said = H.task_words(c, tasks[0]["id"]) if tasks else ""
     assert [t["title"] for t in tasks] == ["Set up the market map"]
-    assert "https://acme.example" in tasks[0]["body"] and "Bots that run small rentals." in tasks[0]["body"]
+    assert "https://acme.example" in said and "Bots that run small rentals." in said
     market = api.get("/api/v2/librarian/setup", headers=signed_in()).json()["market"]
     assert market["task"]["id"] and market["answers"]["sell"].startswith("https://acme.example")
 
 
 def test_finishing_setup_without_a_website_files_no_market_task(environment):
     api = environment(seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
-    api.put("/api/v2/onboarding", headers=signed_in(), json={"answers": {"building": "A new idea"}, "selected": {}})
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    api.put("/api/v2/setup", headers=signed_in(), json={"answers": {"building": "A new idea"}, "selected": {}})
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:librarian'").fetchone()
 
 
-def test_a_bot_administrator_recruits_from_the_published_bets_never_the_draft(api):
+def test_a_bot_administrator_recruits_from_the_live_bets_which_each_save_changes(api):
     from backend import recruit
     from backend.auth import Identity
-    from backend.tests.helpers.strategy import publish, ready
+    from backend.tests.helpers.strategy import ready
 
-    ready(api, statement="Small landlords pay for bots")
-    publish(api)
-    post(api, "strategy/bets", {"statement": "Unannounced: a franchise model"})
+    first = ready(api, statement="Small landlords pay for bots")
+    post(api, "strategy/bets", {"statement": "A franchise model"})
+    post(api, f"strategy/bets/{first['id']}", {"status": "retired"})
     owner, admin = Identity("human:ana", "owner"), Identity("human:riley", "human")
     with api.app.state.store.read() as c:
-        assert [b["statement"] for b in recruit.strategy_bets(c, owner)] == [
-            "Small landlords pay for bots",
-            "Unannounced: a franchise model",
-        ]
-        assert [b["statement"] for b in recruit.strategy_bets(c, admin)] == ["Small landlords pay for bots"]
+        for who in (owner, admin):
+            assert [b["statement"] for b in recruit.strategy_bets(c, who)] == ["A franchise model"]

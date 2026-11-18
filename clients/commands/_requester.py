@@ -51,8 +51,8 @@ def _asked(api, args):
 
 
 ON_BEHALF_OF = _s(
-    "BotOps, following a person's request in a run something else started (a daily update, "
-    "a notice): the id of the open task they asked you for. Default: the request that started this run"
+    "BotOps, following a person's request in a run something else started: the open task id they "
+    "asked for. Default: this run's request."
 )
 
 

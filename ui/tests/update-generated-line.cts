@@ -137,6 +137,7 @@ let browser: import('playwright').Browser | null = null;
   {
     const {page, errors} = await open(browser, {phone: true});
     await page.goto('https://tico-ui.test/#/thread/t-upd');
+    await page.locator('#threads-shell').waitFor();
     await line(page).waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll');
     assert.ok((await line(page).boundingBox())!.height >= 44, "the line is a finger's height");

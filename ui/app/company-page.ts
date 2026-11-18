@@ -1,8 +1,8 @@
-/* ui/app/company-page.ts — The Company page for owners and admins (docs/company-page.md). Company's Share tab
-   shows the page itself, with sharing behind one icon; its Manage goes to the section, one screen with Transparency,
+/* ui/app/company-page.ts — The Company page for owners and admins (docs/company-page.md). Share (in Company's
+   ⋯, #/overview/company-page) shows the page itself, with sharing behind one icon; its Manage goes to the section, one screen with Transparency,
    Editions, Audiences, Disclosure, Stats, Readers and Preview, in that order. Each part loads and fails on its own. The
    server decides every right; this file only hides what the viewer can't use. The reader's page itself is not drawn
-   here: the tab and Preview show what the server renders.
+   here: Share and Preview show what the server renders.
    Reads and writes: /api/v2/company-page, /api/v2/audiences, /api/v2/editions, /api/v2/readers (backend/company_page).
    An approval is an OK ask on a task: Approve shows exactly what is asked (okShown) and gives the OK on that (okGive).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -217,8 +217,8 @@ function pageCompanyPage() {
   cpTeardown();
   const main = cpFind(document, '#main');
   main.classList.add('strategy-layout', 'company-layout');
-  // The shared header: "Company ›" leads back to the Share tab the section belongs to.
-  const back = {href: cpAllowed() ? OVERVIEW_COMPANY : OVERVIEW, label: 'Company'};
+  // The shared header: "Company ›" leads back to Share, which the section belongs to.
+  const back = {href: cpAllowed() ? OVERVIEW_COMPANY : HOME, label: 'Company'};
   if (!cpAllowed()) { main.innerHTML = pageHead({title: 'Share', back, hook: 'cp-head'}) + cpEmpty('Owners and admins only'); return; }
   const head = pageHead({title: 'Share', back, hook: 'cp-head', more: PAGE_HEAD_COPY});
   const state = CP = cpNewState();
@@ -1195,7 +1195,7 @@ function cpPreview() {
     `<a class="ghost small cp-preview" href="${API}/v2/company-page/preview?audience=${cpId(a.id)}" target="_blank" rel="noopener noreferrer" data-cp-preview="${esc(a.id)}">${esc(a.name)}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>`).join('')}</div>`);
 }
 
-// ----------------------------------------------------------------- Company's Share tab
+// ----------------------------------------------------------------- Share
 // The page itself, in the server's sandboxed preview. The picker's choice holds while the app stays open.
 let CP_TAB_AUDIENCE = '';
 // Which audience opens: the one the page's level puts in front of people, or the first one turned on.
@@ -1215,7 +1215,7 @@ function pageOverviewCompany() {
   main.classList.add('overview-layout');
   // The tools come once the server has said the page is theirs (cpTabLoad): the audience to preview, Share, and Manage
   // in ⋯ (used less than daily, style guide "Top bars: one line").
-  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share">${dashCompanyHead('company', {hook: 'cp-tab-head'})}
+  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share">${pageHead({title: 'Share', back: {href: HOME, label: 'Company'}, pad: true, hook: 'cp-tab-head', more: PAGE_HEAD_COPY})}
     <div class="cp-tab-body" id="cp-tab-body">${allowed ? skelRows(4, {dot: false}) : cpEmpty('Owners and admins only')}</div></section>`;
   if (!allowed) return;
   const state = CP = {...cpNewState(), tab: true};
@@ -1236,7 +1236,7 @@ async function cpTabLoad(state: CpState) {
   cpTabPick(state);
   await cpTabFrame(state);
 }
-// The tab's tools in its header: the audience picker's slot, Share as an icon (the font has no share glyph), and Manage.
+// Share's tools in its header: the audience picker's slot, Share as an icon (the font has no share glyph), and Manage.
 function cpTabTools() {
   const head = cpFind(document, 'header.cp-tab-head');
   pageHeadSet(head, 'tools', `<span class="cp-tab-pick" data-cp-tab-pick></span><button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>`);

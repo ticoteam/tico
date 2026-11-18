@@ -221,7 +221,7 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
     if row:
         if json.loads(row["participants"] or "[]") != participants:
             c.execute("UPDATE conversations SET participants=? WHERE id=?", (encode(participants), row["id"]))
-            H.event(c, H.KEEPER, "conversation.members_synced", row["id"], {"participants": participants})
+            H.event(c, H.TICO_ACTOR, "conversation.members_synced", row["id"], {"participants": participants})
         return H.conversation(c, row["id"])
     if not create:
         return None
@@ -241,8 +241,8 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
                 "UPDATE conversations SET scope='personal',owner_id=?,room_key=?,closed_at=? WHERE id=?",
                 (humans[0], f"{bot}:legacy:{old['id']}", H.now(), old["id"]),
             )
-            H.event(c, H.KEEPER, "conversation.archived_for_shared_room", old["id"], {"bot": bot})
-    opener = actor or next((p for p in participants if p.startswith("human:")), H.KEEPER)
+            H.event(c, H.TICO_ACTOR, "conversation.archived_for_shared_room", old["id"], {"bot": bot})
+    opener = actor or next((p for p in participants if p.startswith("human:")), H.TICO_ACTOR)
     return H.open_conversation(
         c,
         opener,

@@ -704,17 +704,28 @@ def test_a_confirm_card_is_refused_at_the_tap_once_anything_it_was_bound_to_chan
 
 # ------------------------------------------------------------------------------- what a send reads (test 12, race)
 def interleave(monkeypatch, cipher, write):
-    """Run `write` on its own connection, once, the moment a send has read the saved row and starts unsealing its key:
-    a save that commits between the send's reads."""
-    unseal, done = cipher.unseal, []
+    """Run `write` on its own connection, once, the moment a send has read the saved row and starts opening its key
+    (the vault's service row since D11-11, or a key an older server sealed in the record): a save that commits between
+    the send's reads."""
+    unseal, open_service, done = cipher.unseal, cipher.open_service, []
 
-    def paused(c, context, sealed):
-        if context == gateway_connection.CONTEXT and not done:
+    def pause():
+        if not done:
             done.append(True)
             write()
+
+    def paused(c, context, sealed):
+        if context == gateway_connection.CONTEXT:
+            pause()
         return unseal(c, context, sealed)
 
+    def paused_service(c, row):
+        if row["id"] == gateway_connection.SECRETS["key"][0]:
+            pause()
+        return open_service(c, row)
+
     monkeypatch.setattr(cipher, "unseal", paused)
+    monkeypatch.setattr(cipher, "open_service", paused_service)
     return done
 
 

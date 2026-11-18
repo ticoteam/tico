@@ -3,8 +3,9 @@
 
 import pytest
 
-from backend import updates
+from backend import question_marks, updates
 from backend.store import H
+from backend.tests.helpers.engine import ok_ask
 
 ANA, BEN = "human:ana", "human:ben"
 DAY = "2026-11-10"
@@ -30,10 +31,10 @@ def section(text, heading):
 
 def test_a_bots_task_with_an_open_ask_to_a_person_waits_on_that_person(c):
     asked = H.task_create(c, ANA, "Renew the Acme domain", "Please.", "bot:ops", lint=False)
-    H.task_ask(c, "bot:ops", asked["id"], BEN, "Which card pays for the Acme domain?", seen_version=asked["version"])
+    question_marks.ask(c, "bot:ops", asked["id"], BEN, "Which card pays for the Acme domain?")
     H.task_create(c, ANA, "Plain work", "Please.", "bot:ops", lint=False)
     private = H.task_create(c, ANA, "Private renewal", "Please.", "bot:ops", lint=False, private=True)
-    H.task_ask(c, "bot:ops", private["id"], ANA, "Secret question?", seen_version=H.task(c, private["id"])["version"])
+    question_marks.ask(c, "bot:ops", private["id"], ANA, "Secret question?")
     waiting = section(updates.request_text(c, "ops", "daily", DAY), "Waiting on a person:")
     assert len(waiting) == 1 and waiting[0].startswith("Renew the Acme domain (")
     assert H.actor_name(c, BEN) in waiting[0]
@@ -41,7 +42,7 @@ def test_a_bots_task_with_an_open_ask_to_a_person_waits_on_that_person(c):
 
 def test_a_persons_draft_lists_what_waits_on_someone_else(c):
     mine = H.task_create(c, ANA, "Book the venue", "Please.", ANA, lint=False)
-    H.task_ask(c, ANA, mine["id"], BEN, "Is the 12th free for you?")
+    H.task_ask(c, ANA, mine["id"], BEN, "OK the 12th for you?", kind="ok")
     given = H.task_create(c, ANA, "Draft the brief", "Please.", "bot:ops", lint=False)
     H.task_create(c, ANA, "My own work", "Please.", ANA, lint=False)
     facts = updates.draft_facts(c, ANA, "daily", DAY)[0]
@@ -52,13 +53,13 @@ def test_a_persons_draft_lists_what_waits_on_someone_else(c):
 
 def test_a_persons_draft_reads_her_answers_from_the_answers(c):
     task = H.task_create(c, "bot:ops", "Pick the launch date", "Please.", "bot:ops", lint=False)
-    added = H.task_ask(c, "bot:ops", task["id"], ANA, "Which date?", seen_version=task["version"])
-    first = H.task_answer(c, ANA, task["id"], added["requirement_id"], "The 11th")
+    added = ok_ask(c, task["id"], "bot:ops", ANA, "OK the 11th?")
+    first = H.task_answer(c, ANA, task["id"], added["requirement_id"], "no", "The 11th clashes")
     H.task_answer_undo(c, ANA, first["answer_id"])  # taken back: not hers any more
-    H.task_answer(c, ANA, task["id"], added["requirement_id"], "The 12th")
+    H.task_answer(c, ANA, task["id"], added["requirement_id"], "ok", "The 11th works after all")
     hidden = H.task_create(c, "bot:ops", "Private pick", "Please.", "bot:ops", lint=False, private=True)
-    other = H.task_ask(c, "bot:ops", hidden["id"], ANA, "Secret?", seen_version=H.task(c, hidden["id"])["version"])
-    H.task_answer(c, ANA, hidden["id"], other["requirement_id"], "Secret answer")
+    other = ok_ask(c, hidden["id"], "bot:ops", ANA, "OK the secret?")
+    H.task_answer(c, ANA, hidden["id"], other["requirement_id"], "no", "Secret answer")
     facts = updates.draft_facts(c, ANA, "daily", DAY)[0]
-    assert "On Pick the launch date: The 12th" in facts
-    assert "Secret answer" not in facts and "The 11th" not in facts
+    assert "On Pick the launch date: OK: The 11th works after all" in facts
+    assert "Secret answer" not in facts and "clashes" not in facts

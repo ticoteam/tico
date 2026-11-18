@@ -22,7 +22,6 @@ from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
 from . import setup_live as _setup_live
-from . import strategy_merge as _strategy_merge
 from . import task_asks as _task_asks
 from . import task_caps as _task_caps
 from . import task_rule_gate as _task_rule_gate
@@ -31,6 +30,8 @@ from . import task_engine as _task_engine
 from . import task_privacy as _task_privacy
 from .store import H as _H
 from .store import Problem
+from . import store as _store_module
+from .api_contract import api_v2
 
 # Untyped modules, reached through Any in this strict module.
 H: Any = _H
@@ -38,13 +39,16 @@ ask_ingest: Any = _ask_ingest
 org_rule_check: Any = _org_rule_check
 reach: Any = _reach
 setup_live: Any = _setup_live
-strategy_merge: Any = _strategy_merge
 task_asks: Any = _task_asks
 task_caps: Any = _task_caps
 task_rule_gate: Any = _task_rule_gate
 stage_rules: Any = _stage_rules
 task_engine: Any = _task_engine
 privacy: Any = _task_privacy
+store_module: Any = _store_module
+
+# One bulk move takes at most this many tasks (`POST /api/v2/tasks/move`): a board's stage of a few hundred, in one write.
+MOVE_CAP = 500
 
 # A snooze's bare date is the start of that day here, as the bot tools say ("the start of that day, Pacific").
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -69,6 +73,33 @@ def parse_until(value: object) -> str | None:
     if stamp <= H.now():
         raise Problem("date", "until is a date to come", 422)
     return stamp
+
+
+# An OK approves what it shows: the choices an older client's question carried are not an OK's.
+OK_NO_CHOICES = (
+    'An OK approves what it shows and has no choices. To ask a question, ask it: tico task ask <id> --to <person> "<line>", '
+    "with the options in its words."
+)
+
+
+def question_words(body: M.TaskAsk) -> str:
+    """An older client's question (`answer`) as a ❓'s words: its line first, then why it matters, each choice with
+    what happens on it, and the one it recommends. Its title is the line's heading only, so it is left out."""
+    parts = [body.line.strip()]
+    if body.why and body.why.strip():
+        parts.append(body.why.strip())
+    details = list(body.details or [])
+    picks = [
+        f"- {choice.strip()}: {details[n].strip()}"
+        if n < len(details) and details[n].strip()
+        else f"- {choice.strip()}"
+        for n, choice in enumerate(body.choices or [])
+    ]
+    if body.recommend and body.recommend.strip():
+        picks.append(f"I'd pick {body.recommend.strip()}.")
+    if picks:
+        parts.append("\n".join(picks))
+    return "\n\n".join(parts)
 
 
 def register(
@@ -268,13 +299,31 @@ def register(
 
     says("task_done", M.TaskDone, lambda body: [("Done", body.note)], done_call, late=True)
 
-    @app.post("/api/v2/tasks/{tid}/done")
+    @app.post(
+        "/api/v2/tasks/{tid}/done",
+        **api_v2(
+            "Tasks",
+            "doneTask",
+            "The work of this stage is finished, with a note. It never pushes past anything: while something else is missing it is refused (409 task_not_met) with what is missing and the commands allowed next. In the last stage the task is Done",
+            "TaskResult",
+        ),
+    )
     def task_done(request: Request, tid: str, body: M.TaskDone):
         """The work of this stage is finished. It never pushes past anything: while something else is missing it is
         refused with what is missing and the commands allowed next. In the last stage the task is Done."""
         return checked(request, tid, body, "task_done")
 
     def move_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        if body.to_pipeline:
+            if body.let_see:
+                raise Problem(
+                    "bad_request", "Letting someone see a task moves it to the next stage: no to_pipeline", 422
+                )
+            why, version = carry(c, who, task_id, gate, body.why, body.version)
+            H.task_move_to(c, who.actor, task_id, body.to_pipeline, body.to, why, version, mover=mover(c, who) or None)
+            return
+        if not body.to:
+            raise Problem("bad_request", "Say where it goes: to (a stage, next, done, closed or reopen)", 422)
         if str(body.to).strip().lower() == "done":
             setup_finished(c, who, task_id)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
@@ -294,10 +343,257 @@ def register(
 
     says("task_move", M.TaskMove, lambda body: [("Why", body.why)], move_call)
 
-    @app.post("/api/v2/tasks/{tid}/move")
+    @app.post(
+        "/api/v2/tasks/{tid}/move",
+        **api_v2(
+            "Tasks",
+            "moveTask",
+            "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. With to_pipeline (another pipeline's id or name) it moves there, to the stage to names (its first when left out), keeping its number, label and history; a Done or Closed task lands in that pipeline's Done or Closed. A refusal is 409 with error, detail, missing, next and version (task_turn_running while a bot's turn on it runs)",
+            "TaskResult",
+            description="Within a pipeline, moves between a side stage and another work stage or Done need no why and count no requirements as skipped. Next from a side stage goes to the next main stage, or to Done when there is none.",
+        ),
+    )
     def task_move(request: Request, tid: str, body: M.TaskMove):
-        """Forward (`next`; with a why, past what is not met), back to an earlier stage, `done`, `closed` or `reopen`."""
+        """Forward (`next`; with a why, past what is not met), back to an earlier stage, `done`, `closed` or `reopen`;
+        with `to_pipeline`, to a stage of another pipeline (`to`, its first when left out)."""
         return checked(request, tid, body, "task_move")
+
+    # ------------------------------------------------------------------ many at once
+    def many_ids(c: Any, who: Any, body: Any) -> tuple[list[str], list[dict[str, Any]]]:
+        """The tasks a write to many names (M.TaskManyOf) as `who` reads them, and those it skips already: an id that
+        names nothing they read is counted, never named (it may not be theirs). Past MOVE_CAP it is refused whole."""
+        ids: list[str] = []
+        skipped: list[dict[str, Any]] = []
+        if body.from_ is not None:
+            place = body.from_
+            pipe = task_engine.pipeline_named(c, who.actor, place.pipeline)
+            stage = next(
+                (
+                    s
+                    for s in task_engine.stages(c, pipe["id"])
+                    if s["id"] == place.stage or str(s["name"]).lower() == place.stage.lower()
+                ),
+                None,
+            )
+            if not stage:
+                raise Problem("task_no_such_stage", f"No stage {place.stage} in {pipe['name']}", 409)
+            ids = [
+                r[0]
+                for r in c.execute(
+                    f"SELECT id FROM tasks WHERE pipeline_id=? AND stage_id=? AND ({auth.task_sql(c, who)}) "
+                    "ORDER BY created_at, id LIMIT ?",
+                    (pipe["id"], stage["id"], MOVE_CAP + 1),
+                )
+            ]
+        else:
+            for ident in dict.fromkeys(body.ids or []):
+                try:
+                    ids.append(auth.resolve_task(c, who, ident))
+                except Problem as exc:
+                    skipped.append({"code": exc.code, "reason": exc.detail})
+        if len(ids) > MOVE_CAP:
+            raise Problem("too_many", f"A change takes at most {MOVE_CAP} tasks at once", 422, extra={"cap": MOVE_CAP})
+        return ids, skipped
+
+    def many(c: Any, who: Any, body: Any, batch: str, one: Callable[[str, Any], bool]) -> dict[str, Any]:
+        """One write to many tasks: `one(task_id, version)` makes the single write on each, as it is now (read inside
+        this write, so a caller names tasks, not versions), and says whether it changed it. A task that can't is
+        skipped with its code and the rest still change. One live `bulk` change for the lot, not one per task.
+        Answers what changed and what was skipped; a task the write took out of the caller's sight is only counted."""
+        ids, skipped = many_ids(c, who, body)
+        seq = c.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
+        changed: list[str] = []
+        unchanged = 0
+        token = H.BULK_CALL.set(batch)  # the tasks it skips keep their refusals, counted once
+        try:
+            for task_id in ids:
+                try:
+                    auth.task(c, who, task_id)
+                except Problem as exc:
+                    skipped.append({"code": exc.code, "reason": exc.detail})  # not named: not theirs to read
+                    continue
+                c.execute("SAVEPOINT tasks_many_one")
+                before = len(c.after_commit)
+                try:
+                    current: Any = H.task(c, task_id)
+                    done = one(task_id, current["version"] if current else None)
+                except H.Refused as exc:
+                    del c.after_commit[before:]
+                    problem = store_module.refused(c, who, exc, savepoint="tasks_many_one")
+                    skipped.append({"id": task_id, "code": problem.code, "reason": problem.detail})
+                except Problem as exc:
+                    c.execute("ROLLBACK TO tasks_many_one")
+                    c.execute("RELEASE tasks_many_one")
+                    del c.after_commit[before:]
+                    skipped.append({"id": task_id, "code": exc.code, "reason": exc.detail})
+                else:
+                    c.execute("RELEASE tasks_many_one")
+                    if done:
+                        changed.append(task_id)
+                    else:
+                        unchanged += 1
+        finally:
+            H.BULK_CALL.reset(token)
+        if len(changed) > 1:
+            # One `bulk` change for the open screens (events.FAN_CAP): each reads its list once, not a task at a time.
+            c.execute("DELETE FROM changes WHERE topic='tasks' AND kind<>'bulk' AND seq>?", (seq,))
+            c.execute("INSERT INTO changes(topic,kind,created_at) VALUES('tasks','bulk',?)", (H.now(),))
+        readable = {
+            r[0]
+            for r in c.execute(
+                f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({auth.task_sql(c, who)})",
+                (json.dumps(changed + [s["id"] for s in skipped if s.get("id")]),),
+            )
+        }
+        return {
+            "batch_id": batch,
+            "changed": [t for t in changed if t in readable],
+            "changed_unseen": len([t for t in changed if t not in readable]),
+            "unchanged": unchanged,
+            "skipped": [s for s in skipped if not s.get("id") or s["id"] in readable],
+        }
+
+    @app.post(
+        "/api/v2/tasks/move",
+        **api_v2(
+            "Tasks",
+            "moveTasks",
+            "Move many tasks: ids, or from {pipeline, stage} for every open task there; to_pipeline and to (its first "
+            "stage when left out), or to alone (next, done, closed, reopen or a stage, each in its own pipeline); why (a "
+            "bot's is required). Each moves as one move does; one that cannot is skipped with its code "
+            "(task_turn_running, task_stage_full, task_not_met, not_found, ...) and the rest still move. At most 500 tasks",
+            "TaskMoveResult",
+        ),
+    )
+    def tasks_move(request: Request, body: M.TaskMoveMany):
+        """Move many tasks: the tasks `ids` names, or every open task in the stage `from` names. With `to_pipeline`, to
+        its stage `to`, each as a single move there would (H.task_move_to); without, each in its own pipeline as a
+        single move's `to` says (next, done, closed, reopen or a stage). One that can't move is skipped with its code
+        (a bot's turn running on it, no room, what its stage still needs, not one the caller reads) and the rest still
+        move. A bot says why. One live `bulk` change for the lot, not one per task."""
+        caller: Any = request.state.identity
+        auth.domain(caller)
+        if H.is_bot(caller.actor) and not (body.why or "").strip():
+            raise Problem("task_why", "Say why you move them", 422)
+        batch = H.new_id()
+
+        def write(c: Any) -> dict[str, Any]:
+            who = acting(c, caller, body)
+            moves = mover(c, who) or None
+
+            def one(task_id: str, version: Any) -> bool:
+                if body.to_pipeline:
+                    H.task_move_to(
+                        c, who.actor, task_id, body.to_pipeline, body.to, body.why, version, mover=moves, batch=batch
+                    )
+                    return True
+                if str(body.to).strip().lower() == "done":
+                    setup_finished(c, who, task_id)
+                after: Any = H.task_move(c, who.actor, task_id, body.to, body.why, version, mover=moves)
+                # A move to where the task already is changes nothing (the engine leaves it as it is).
+                return not after or after.get("version") != version
+
+            out = many(c, who, body, batch, one)
+            return {
+                "batch_id": batch,
+                "moved": out["changed"],
+                "moved_unseen": out["changed_unseen"],
+                "skipped": out["skipped"],
+            }
+
+        return mutate(request, body, write)
+
+    def people_many(request: Request, body: Any, operation: str, said: Any, new_owner: Any, one: Callable[..., bool]):
+        """A write to many tasks that only a person makes, or a bot for a person (`on_behalf_of`): a bot acting alone
+        reassigns or snoozes one task at a time, through the checks that single write has. What it says (`said`) is
+        checked once against the company's rules for all the people it reaches (each task's owner and requester, and
+        `new_owner`), outside the write, as `POST /api/v2/task-bulk` checks it; held, nothing changes, and warned,
+        each task's why carries the line. `one(c, who, task_id, version, why)` is the single write."""
+        caller: Any = request.state.identity
+        auth.domain(caller)
+        batch = H.new_id()
+
+        def reach(c: Any) -> list[str]:
+            who = acting(c, caller, body)
+            ids, _ = many_ids(c, who, body)
+            people = [task_rules.rule_target(c, caller, new_owner)] if new_owner else []
+            for task_id in ids:
+                row: Any = H.task(c, task_id)
+                if row:
+                    people += [row["owner_id"], row["requester_id"]]
+            return list(dict.fromkeys(a for a in people if a))
+
+        verdict = task_rules.check_words(caller, operation, said, reach)
+
+        def write(c: Any) -> dict[str, Any]:
+            who = acting(c, caller, body)
+            if not H.is_human(who.actor):
+                raise Problem("forbidden", "A bot changes these one task at a time; a person changes many at once", 403)
+            gate = task_rules.apply_words(c, caller, verdict, said, reach)
+            if task_rule_gate.held(gate):
+                return org_rule_check.answer(gate)
+            why = task_rule_gate.warn_on(gate, body.why) if gate and gate.get("warn") else body.why
+            out = many(c, who, body, batch, lambda task_id, version: one(c, who, task_id, version, why))
+            return {**out, **org_rule_check.answer(gate)}
+
+        return mutate(request, body, write)
+
+    @app.post(
+        "/api/v2/tasks/owner",
+        **api_v2(
+            "Tasks",
+            "reassignTasks",
+            "Give many tasks to one owner for their stage: ids, or from {pipeline, stage} for every open task there; "
+            "owner and why. Each is given as one reassign is; one that can't be is skipped with its code and the rest "
+            "still change. A person's, or a bot's for a person (on_behalf_of). At most 500 tasks",
+            "TaskManyResult",
+        ),
+    )
+    def tasks_owner(request: Request, body: M.TaskOwnerMany):
+        def one(c: Any, who: Any, task_id: str, version: Any, why: Any) -> bool:
+            before: Any = H.task(c, task_id)
+            reassign(c, who, task_id, M.TaskOwner(owner=body.owner, why=why, version=version))
+            after: Any = H.task(c, task_id)
+            return bool(after and before and after["owner_id"] != before["owner_id"])
+
+        return people_many(request, body, "task_owner", [("Why", body.why)], body.owner, one)
+
+    @app.post(
+        "/api/v2/tasks/snooze",
+        **api_v2(
+            "Tasks",
+            "snoozeTasks",
+            "Snooze many tasks in their stages: ids, or from {pipeline, stage} for every open task there; until (a date "
+            "to come; none is On ice) and why. Each is snoozed as one snooze is; one that can't be is skipped with its "
+            "code and the rest still change. A person's, or a bot's for a person (on_behalf_of). At most 500 tasks",
+            "TaskManyResult",
+        ),
+    )
+    def tasks_snooze(request: Request, body: M.TaskSnoozeMany):
+        until = parse_until(body.until)  # a bad date is refused before anything is checked
+
+        def one(c: Any, who: Any, task_id: str, version: Any, why: Any) -> bool:
+            setup_live.refuse_snooze_once_live(c, task_id)  # a seat's setup task waits for its go-live
+            H.task_snooze(c, who.actor, task_id, why, until, version, mover=mover(c, who) or None)
+            return True
+
+        return people_many(request, body, "task_snooze", [("Why", body.why)], None, one)
+
+    # Before `POST /api/v2/tasks/{tid}` (app.py), which would take "move", "owner" or "snooze" for a task's id.
+    routes = app.router.routes
+    many_paths = ("/api/v2/tasks/move", "/api/v2/tasks/owner", "/api/v2/tasks/snooze")
+    mine = [r for r in routes if getattr(r, "path", None) in many_paths]
+    for r in mine:
+        routes.remove(r)
+    at = next(
+        (
+            i
+            for i, r in enumerate(routes)
+            if getattr(r, "path", None) == "/api/v2/tasks/{tid}" and "POST" in (getattr(r, "methods", None) or ())
+        ),
+        len(routes),
+    )
+    routes[at:at] = mine
 
     def reassign(c: Any, who: Any, task_id: str, body: Any, ingest: Any = None) -> Any:
         """H.task_reassign, with the checks a hand-over makes before it: the new owner is someone the caller may give
@@ -360,7 +656,10 @@ def register(
         hands_over=True,
     )
 
-    @app.post("/api/v2/tasks/{tid}/owner")
+    @app.post(
+        "/api/v2/tasks/{tid}/owner",
+        **api_v2("Tasks", "reassignTask", "Give the task to another owner for this stage, with a why", "TaskResult"),
+    )
     def task_owner(request: Request, tid: str, body: M.TaskOwner):
         """Give the task to another owner for this stage."""
         caller = request.state.identity
@@ -382,7 +681,15 @@ def register(
 
     says("task_snooze", M.TaskSnooze, lambda body: [("Why", body.why)], snooze_call)
 
-    @app.post("/api/v2/tasks/{tid}/snooze")
+    @app.post(
+        "/api/v2/tasks/{tid}/snooze",
+        **api_v2(
+            "Tasks",
+            "snoozeTask",
+            "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice): no wakes, no Late, and off Needs you until then",
+            "TaskResult",
+        ),
+    )
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
         """Set a task aside in its stage until a date, or with none."""
         until = parse_until(body.until)  # a bad date is refused before anything is checked
@@ -421,7 +728,9 @@ def register(
 
     says("task_unsnooze", M.TaskWhy, lambda body: [("Why", body.why)], unsnooze_call)
 
-    @app.post("/api/v2/tasks/{tid}/unsnooze")
+    @app.post(
+        "/api/v2/tasks/{tid}/unsnooze", **api_v2("Tasks", "unsnoozeTask", "Bring a snoozed task back now", "TaskResult")
+    )
     def task_unsnooze(request: Request, tid: str, body: M.TaskWhy):
         """Bring a snoozed task back now."""
         return checked(request, tid, body, "task_unsnooze")
@@ -431,7 +740,15 @@ def register(
 
     says("task_try_again", M.TaskWhy, lambda body: [("Why", body.why)], try_again_call)
 
-    @app.post("/api/v2/tasks/{tid}/try-again")
+    @app.post(
+        "/api/v2/tasks/{tid}/try-again",
+        **api_v2(
+            "Tasks",
+            "tryTaskAgain",
+            "A person hands a task that reached them back to its owner, with the count at zero",
+            "TaskResult",
+        ),
+    )
     def task_try_again(request: Request, tid: str, body: M.TaskWhy):
         """A person hands a task that reached them back to its owner, with the count at zero."""
         who = request.state.identity
@@ -441,76 +758,21 @@ def register(
 
     # ------------------------------------------------------------------ asks
     def ask_said(body: Any) -> list[tuple[str, Any]]:
-        """What the rule check reads of an ask: its line, why it matters, each choice with its line (the one
-        recommended marked) and what it shows. One call reads all of it."""
-        details: list[str] = list(body.details or [])
-        best = ask_shape.recommended(body.choices, body.recommend)
-        choices = [
-            f"{label}{' (recommended)' if label.strip() == best else ''}"
-            + (f": {details[i]}" if i < len(details) and details[i] else "")
-            for i, label in enumerate(body.choices or [])
-        ]
-        return [
-            ("Title", body.title),
-            ("Ask", body.line),
-            ("Why", body.why),
-            ("Choices", "\n".join(choices)),
-            ("Shows", "\n".join(body.show or [])),
-        ]
+        """What the rule check reads of an ask: its line and what it shows. One call reads all of it."""
+        return [("Ask", body.line), ("Shows", "\n".join(body.show or []))]
 
-    def ask_brief(body: Any) -> dict[str, Any] | None:
-        """What a question keeps besides its line and choices (task_calls._brief_of reads it back)."""
-        if not (body.why or "").strip():
-            return None
-        return {
-            "why": body.why.strip(),
-            "details": [d.strip() for d in body.details] if body.details else None,
-            "recommend": ask_shape.recommended(body.choices, body.recommend),
-        }
-
-    def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk) -> None:
-        """A bot's question to a person that is not shaped as one (backend/ask_shape.py) is refused before the rule
+    def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk | M.TaskOkAsk) -> None:
+        """A bot's ask to a person whose line is not shaped as one (backend/ask_shape.py) is refused before the rule
         check's call, and nothing is written but the refusal (rule `task_ask_shape`: fixed by rewriting, never counted
-        toward quarantine)."""
+        toward quarantine). What an OK shows is the engine's to check (task_engine.shows_a_file)."""
         caller: Any = request.state.identity
-        if caller.role != "bot" or body.kind != "answer":
+        if caller.role != "bot":
             return
         with store.read() as c:
             target = H.resolve_actor(c, body.to) or ""
             if not H.is_human(target):
                 return
-            name = H.actor_name(c, target) or "They"
-
-            def exists(kind: str, ident: str, version: int | None) -> bool:
-                """A task by its id or number (the number through its unique index). A page or file by its id (pages
-                are files), not archived, not a deleted page, and at the version it pins when it pins one."""
-                if kind == "task":
-                    number = int(ident) if ident.isdigit() and int(ident) < 2**63 else None
-                    return (
-                        c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
-                    )
-                found = c.execute(
-                    "SELECT f.current_version FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.id=? "
-                    "AND f.archived=0 AND (p.file_id IS NULL OR (p.deleted_at IS NULL AND p.archived=0))",
-                    (ident,),
-                ).fetchone()
-                if found is None:
-                    return False
-                if version is None:
-                    return True
-                sql = "SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?"
-                return c.execute(sql, (ident, version)).fetchone() is not None
-
-            detail = ask_shape.refusal(
-                name,
-                why=body.why,
-                choices=body.choices,
-                details=body.details,
-                recommend=body.recommend,
-                shows=body.show,
-                exists=exists,
-            )
-        if detail:
+        if detail := ask_shape.line_refusal(body.line):
             work(
                 request,
                 tid,
@@ -533,12 +795,9 @@ def register(
             body.to,
             body.line,
             kind=body.kind,
-            choices=body.choices,
             shows=body.show or None,
             seen_version=version,
             mover=mover(c, who) or None,
-            brief=ask_brief(body),
-            title=(body.title or "").strip() or None,
         )
         if gate and gate.get("late"):
             saved: dict[str, Any] = H.task(c, task_id) or {}
@@ -547,12 +806,27 @@ def register(
 
     says("task_ask", M.TaskAsk, ask_said, ask_call, to=lambda body: body.to, ask=True, late=True)
 
-    @app.post("/api/v2/tasks/{tid}/asks")
+    @app.post(
+        "/api/v2/tasks/{tid}/asks",
+        **api_v2(
+            "Tasks",
+            "askOnTask",
+            "Ask a person on the task for an OK of what it shows, in one sentence. The task stays in its stage until they answer; carries requirement_id. A question is a message marked ❓ (POST /api/v2/tasks/{tid}/questions)",
+            "TaskResult",
+        ),
+    )
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
-        """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19). A
-        bot's ask a company rule covers is refused with the rule's words (docs/pipelines-v3.md, "How a rule stops the
-        next one"). A bot's question to a person says why it matters, and its choices (2 to 4) each say what happens
-        and which one it recommends (backend/ask_shape.py): refused before any check otherwise."""
+        """Ask a person on the task for an OK of what it shows, in one sentence (C19). A bot's ask a company rule covers
+        is refused with the rule's words (docs/dev/pipelines-v3.md, "How a rule stops the next one"). A bot's ask to a
+        person has a short first line that stands on its own and shows only what the person can open
+        (backend/ask_shape.py): refused before any check otherwise. A question (`answer`) is a message marked ❓: it is
+        asked as one (POST /api/v2/tasks/{tid}/questions, backend/question_marks.py), with the parts an older client
+        sends as words in it (`question_words`), so a computer's `tico` from before ❓ marks still asks."""
+        if body.kind == "answer":
+            text = question_words(body)
+            return request.app.state.task_question(request, tid, M.Question(to=body.to, text=text))
+        if body.choices or body.details or body.recommend:
+            raise Problem("validation", OK_NO_CHOICES, 422)
         ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 
@@ -564,17 +838,24 @@ def register(
 
     says("task_withdraw_ask", M.TaskWhy, lambda body: [("Why", body.why)], withdraw_call)
 
-    @app.delete("/api/v2/tasks/{tid}/asks/{requirement_id}")
+    @app.delete(
+        "/api/v2/tasks/{tid}/asks/{requirement_id}",
+        **api_v2("Tasks", "withdrawAsk", "Take back an ask that was added to the task", "TaskResult"),
+    )
     def task_withdraw_ask(request: Request, tid: str, requirement_id: str, body: M.TaskWhy | None = None):
         """Take back an ask that was added to the task."""
         body = body or M.TaskWhy()
         return checked(request, tid, body, "task_withdraw_ask", {"requirement_id": requirement_id})
 
     def answer_said(body: Any) -> list[tuple[str, Any]]:
-        typed = body.value if body.value.strip().lower() not in task_rule_gate.BUTTONS else None
-        return [("Answer", typed), ("Note", body.note)]
+        return [("Note", body.note)]
 
     def answer_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        from . import files
+
+        def page_reader(refs: list[str]) -> bool:
+            return files.page_refs_readable(c, auth, who, refs)  # pyright: ignore[reportUnknownMemberType]
+
         asked = requirement_on(c, task_id, params["requirement_id"])
         refused = task_asks.refuses_ok_by(c, who, asked, body.value)
         if refused:
@@ -592,9 +873,10 @@ def register(
             body.version,
             own_click=task_asks.own_click(who),
             page_version=body.page_version,
+            visit_id=body.visit_id,
+            keyed=True,
+            page_reader=page_reader,
         )
-        # An answer on the Strategy Owner's merged item goes to each original it stands for.
-        strategy_merge.on_answer(c, who.actor, task_id, body.value)
         return {"answer_id": done.get("answer_id")}
 
     def asker(c: Any, params: dict[str, Any]) -> list[str]:
@@ -606,18 +888,36 @@ def register(
 
     says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker)
 
-    @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/answer")
+    @app.post(
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/answer",
+        **api_v2(
+            "Tasks",
+            "answerAsk",
+            "Answer an OK: ok, or no (send it back, with a note); carries answer_id",
+            "TaskResult",
+        ),
+    )
     def task_answer(request: Request, tid: str, requirement_id: str, body: M.TaskAskAnswer):
-        """OK, send back (`no` with a note), look again (`again`), or the answer to a question. A requirement of the
-        stage is answered here too."""
+        """OK, or send back (`no` with a note). A requirement of the stage is answered here too."""
         return checked(request, tid, body, "task_ask_answer", {"requirement_id": requirement_id})
 
-    @app.post("/api/v2/tasks/{tid}/pages")
+    @app.post(
+        "/api/v2/tasks/{tid}/pages",
+        **api_v2(
+            "Tasks",
+            "attachTaskPage",
+            "Attach a page to a page requirement: the Decision model checks it, then a named person OKs that version; carries page",
+            "TaskResult",
+        ),
+    )
     def task_page_attach(request: Request, tid: str, body: M.TaskPageAttach):
         """Attach a page to a page requirement of the task's stage: Jev checks it, then a person OKs it if one is
         named. Attaching again replaces the page."""
         from . import files as F
+        from . import page_links
+        from . import task_engine
         from . import task_pages
+        from . import task_requirements
 
         def call(c: Any, who: Any, task_id: str) -> Any:
             ref = body.page.strip()
@@ -628,6 +928,14 @@ def register(
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):  # pyright: ignore[reportUnknownMemberType]
                 raise Problem("not_found", "That page is not one you can read", 404)
+            task = task_engine.task(c, task_id)
+            requirement = task_pages.requirement_of(c, task, body.requirement) if task else None
+            if (
+                requirement
+                and task_requirements.document_of(requirement)
+                and not page_links.may_write(c, auth, who, row)
+            ):
+                raise Problem("forbidden", "Only a page writer may link it as a task document", 403)
             made = H.task_page_attach(
                 c,
                 who.actor,
@@ -661,22 +969,20 @@ def register(
                 "notices": page_rounds.notices(c, task_id, requirement_id),
             }
 
-    @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/give")
+    @app.post(
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/give",
+        **api_v2(
+            "Tasks",
+            "giveAsk",
+            "Give an ask to another person: it leaves your Needs you and goes to theirs",
+            "TaskResult",
+        ),
+    )
     def task_give(request: Request, tid: str, requirement_id: str, body: M.TaskAskGive):
         """Give an ask to another person: it leaves your list and goes to theirs."""
 
         def call(c: Any, who: Any, task_id: str) -> Any:
             H.task_give(c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.to, body.version)
-
-        return work(request, tid, body, call)
-
-    @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/thumbs")
-    def task_thumbs(request: Request, tid: str, requirement_id: str, body: M.TaskAskThumbs):
-        """Was this worth asking. A thumbs down says what was wrong, and sends an open ask back."""
-
-        def call(c: Any, who: Any, task_id: str) -> Any:
-            done = H.task_thumbs(c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.up, body.note)
-            return {"feedback_id": done.get("feedback_id")} if done.get("feedback_id") else None
 
         return work(request, tid, body, call)
 
@@ -692,7 +998,15 @@ def register(
             raise Problem("not_found", "No such OK", 404) from None
         return task_id
 
-    @app.get("/api/v2/oks/{requirement_id}")
+    @app.get(
+        "/api/v2/oks/{requirement_id}",
+        **api_v2(
+            "Tasks",
+            "previewOk",
+            "What an OK is for, exactly as asked, with the shown_hash its OK sends back",
+            "OkPreview",
+        ),
+    )
     def ok_preview(request: Request, requirement_id: str):
         """What an OK is for, exactly as it was asked, with the `shown_hash` to send back with the OK. Opened by a
         person in their own session, it records that they were shown it."""
@@ -705,7 +1019,15 @@ def register(
             shown = task_asks.preview(c, who.actor, requirement_id, own_click=task_asks.own_click(who))
             return {**shown, "task_id": task_id}
 
-    @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/ok")
+    @app.post(
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/ok",
+        **api_v2(
+            "Tasks",
+            "giveOk",
+            "OK exactly what you were shown, by your own click: only the person asked, never a bot or anyone acting for them",
+            "TaskResult",
+        ),
+    )
     def task_give_ok(request: Request, tid: str, requirement_id: str, body: M.TaskOkGive):
         """The person it is asked of OKs exactly what they were shown, by their own click. Never a bot, a token, the
         Assistant or anyone acting for them; never content that changed since they opened it."""
@@ -757,13 +1079,22 @@ def register(
 
     says("task_ok_ask", M.TaskOkAsk, ok_ask_said, ok_ask_call, to=lambda body: body.to, ask=True)
 
-    @app.post("/api/v2/tasks/{tid}/oks")
+    @app.post(
+        "/api/v2/tasks/{tid}/oks",
+        **api_v2(
+            "Tasks",
+            "askOk",
+            "Ask a person to OK exactly this content before doing subject (kind:id); carries requirement_id",
+            "TaskResult",
+        ),
+    )
     def task_ask_ok(request: Request, tid: str, body: M.TaskOkAsk):
         """A bot asks a person to OK exactly this content before it does `subject`. Subjects whose own module asks
         (an email, a letter, an edition...) are asked there, not here. One a company rule covers is refused like any
         ask."""
         if not task_asks.generic(body.subject):
             raise Problem("validation", "This kind of OK is asked where the work is, not here", 422)
+        ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ok_ask")
 
     def ok_use_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
@@ -774,7 +1105,15 @@ def register(
 
     says("task_ok_use", M.OkUse, lambda body: [("Done", body.note)], ok_use_call)
 
-    @app.post("/api/v2/oks/{requirement_id}/use")
+    @app.post(
+        "/api/v2/oks/{requirement_id}/use",
+        **api_v2(
+            "Tasks",
+            "useOk",
+            "Use an OK once, for the same subject and exactly the same content, just before the act",
+            "TaskResult",
+        ),
+    )
     def ok_use(request: Request, requirement_id: str, body: M.OkUse):
         """Whoever asked uses the OK, once, for the same subject and exactly the same content, just before the act."""
         if not task_asks.generic(body.subject):
@@ -793,7 +1132,7 @@ def register(
 
         return mutate(request, body, write, durable=True)
 
-    @app.post("/api/v2/answers/{answer_id}/undo")
+    @app.post("/api/v2/answers/{answer_id}/undo", **api_v2("Tasks", "undoAnswer", "Take an answer back", "TaskResult"))
     def answer_undo(request: Request, answer_id: str, body: M.Empty):
         """Take an answer back: whoever gave it, or any person."""
 
@@ -819,7 +1158,15 @@ def register(
         return mutate(request, body, write)
 
     # ------------------------------------------------------------------ the merge queue
-    @app.post("/api/v2/tasks/{tid}/queue")
+    @app.post(
+        "/api/v2/tasks/{tid}/queue",
+        **api_v2(
+            "Tasks",
+            "queueTask",
+            "Queue again: put the PRs GitHub took out of the merge queue (or refused) back in it at their newest commit. The stage owner, the pipeline's manager or any person. 409 task_stage off a stage that queues PRs, task_requirement when nothing was taken out or its checks are running or failing",
+            "TaskResult",
+        ),
+    )
     def task_queue(request: Request, tid: str, body: M.TaskQueue):
         """Queue again: after GitHub took a PR out of the merge queue (or refused it), put it back at its newest
         commit (backend/item_sources/github.py `requeue`). The stage owner, the pipeline's manager or any person."""
@@ -833,7 +1180,15 @@ def register(
 
         return work(request, tid, body, call)
 
-    @app.post("/api/v2/tasks/{tid}/release")
+    @app.post(
+        "/api/v2/tasks/{tid}/release",
+        **api_v2(
+            "Tasks",
+            "releaseTask",
+            "Cut the release the task waits for, the way its In a release names (`release_with`: run the release workflow, or create the tag `tag`), through Tico's GitHub App on the next Heartbeat. The stage owner, the pipeline's manager or any person; a bot only once a person signed off before release. 409 task_stage off a stage that waits for a release, task_needs_person with no person's sign-off, task_requirement with no way set, no tag named, nothing merged, already released, or an earlier ask still waiting",
+            "TaskResult",
+        ),
+    )
     def task_release(request: Request, tid: str, body: M.TaskRelease):
         """Cut the release the task waits for in its Release stage, the way In a release names (`release_with`): Tico
         runs the release workflow or creates the tag through its GitHub App (backend/item_sources/github_release.py).

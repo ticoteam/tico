@@ -1,4 +1,4 @@
-"""Due dates on rules (docs/rules-plan.md §1, §4): a date, a repeat, an owner and a status for each rule that has one.
+"""Due dates on rules (docs/dev/rules-plan.md §1, §4): a date, a repeat, an owner and a status for each rule that has one.
 
 - A due date is its own row (`rule_due_dates`), so one rule can have several (quarterly returns and an annual report).
   Its occurrences are worked out from the first date and the repeat; nothing stores them. `rule_due_status` holds each
@@ -15,43 +15,23 @@
 Unversioned and idempotent (`ensure`), like backend/strategy.py.
 """
 
-import calendar
 import json
 import sqlite3
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import audit_log
+from . import automation_due
 from . import hubdb as H
 from .store import Problem
 
-REPEATS = ("once", "weekly", "monthly", "quarterly", "yearly")
-STEP_MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}
 STATUSES = ("overdue", "due_soon", "upcoming", "satisfied")
 WINDOW_DAYS = 30  # "due soon" without a routine window
-ROUTINE_DAYS = 14  # a routine's lead time when its trigger names none (automation_due.OPEN_DAYS)
 MAX_OCCURRENCES = 5000  # a backstop: a weekly date from decades ago still walks in a few hundred steps
 HISTORY = 5  # the last status rows a list shows for a due date
-OPEN_DAYS = 20  # the open occurrences a detail names (the count is always exact)
+DETAIL_OPEN_DAYS = 20  # the open occurrences a detail lists as open_days (the count is always exact)
 DETAIL_MARKS = 100  # the satisfied occurrences a detail shows, per row of its chain
 CHAIN_MAX = 50  # the rows of one due date's chain (its edits) a detail walks
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS rule_due_dates(id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, first_due_on TEXT NOT NULL, "
-    "repeats TEXT NOT NULL CHECK (repeats IN ('once','weekly','monthly','quarterly','yearly')), "
-    "timezone TEXT NOT NULL, owner TEXT NOT NULL, routine_id TEXT, replaces TEXT, "
-    "ended_on TEXT, retired_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS rule_due_dates_rule ON rule_due_dates(rule_id)",
-    "CREATE INDEX IF NOT EXISTS rule_due_dates_routine ON rule_due_dates(routine_id) WHERE routine_id IS NOT NULL",
-    "CREATE TABLE IF NOT EXISTS rule_due_status(due_date_id TEXT NOT NULL, due_on TEXT NOT NULL, "
-    "satisfied_by TEXT NOT NULL, via TEXT NOT NULL CHECK (via IN ('routine','person')), task_id TEXT, satisfied_at TEXT NOT NULL, "
-    "PRIMARY KEY(due_date_id, due_on))",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def default_zone():
@@ -78,8 +58,8 @@ def parse_zone(value):
 
 
 def parse_repeats(value):
-    if value not in REPEATS:
-        raise Problem("validation", "Repeats is " + ", ".join(REPEATS), 422)
+    if value not in automation_due.REPEATS:
+        raise Problem("validation", "Repeats is " + ", ".join(automation_due.REPEATS), 422)
     return value
 
 
@@ -87,22 +67,12 @@ def local_today(zone):
     return datetime.now(ZoneInfo(zone)).date()
 
 
-def occurrence(first, repeats, n):
-    """The nth occurrence (from 0) counted from the first date, or None past the last one."""
-    if repeats == "once":
-        return first if n == 0 else None
-    if repeats == "weekly":
-        return first + timedelta(weeks=n)
-    months = first.month - 1 + STEP_MONTHS[repeats] * n
-    year, month = first.year + months // 12, months % 12 + 1
-    return date(year, month, min(first.day, calendar.monthrange(year, month)[1]))
-
-
 def occurrences(first, repeats, until):
-    """Ascending occurrences up to `until`, plus the first one after it (that one is the next to fall due)."""
+    """Ascending occurrences up to `until`, plus the first one after it (that one is the next to fall due). The day of
+    the nth occurrence is automation_due.occurrence: one rule for both readers, so a routine's run and its due day agree."""
     out = []
     for n in range(MAX_OCCURRENCES):
-        day = occurrence(first, repeats, n)
+        day = automation_due.occurrence(first, repeats, n)
         if day is None:
             break
         out.append(day)
@@ -143,7 +113,7 @@ def state(row, satisfied, today, window=WINDOW_DAYS):
         "due_on": current.isoformat(),
         "status": status,
         "open": len(opened),
-        "open_days": [day.isoformat() for day in opened[:OPEN_DAYS]],
+        "open_days": [day.isoformat() for day in opened[:DETAIL_OPEN_DAYS]],
     }
 
 
@@ -196,7 +166,7 @@ def task_days(c, rows):
         ):
             trigger = json.loads(r["flow"]).get("trigger") or {}
             if trigger.get("type") == "due":
-                out[r["id"]] = int(trigger.get("open_days", ROUTINE_DAYS))
+                out[r["id"]] = automation_due.open_days_of(trigger)
     return out
 
 
@@ -418,9 +388,9 @@ def on_task_status(c, actor, task, old, new):
 
 
 def _completes(task, actor):
-    """Completed (docs/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
+    """Completed (docs/dev/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
     and a close by Tico (cleanup, a task closed with the one above it) never are."""
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         return False
     if task.get("status") == "done":
         return actor == task.get("owner_id")
@@ -500,7 +470,7 @@ def on_due_task_completed(c, task, closed_by=None):
 def on_due_task_reopened(c, task, reopened_by=None):
     """A routine's task reopened: the occurrence it marked is no longer satisfied. Removes the routine's mark for this
     task, and writes an audit row on each rule. Returns the due date ids unmarked."""
-    actor = reopened_by or task.get("owner_id") or H.KEEPER
+    actor = reopened_by or task.get("owner_id") or H.TICO_ACTOR
     unmarked = []
     for mark in _rows(c, "SELECT * FROM rule_due_status WHERE task_id=? AND via='routine'", (task.get("id"),)):
         due = one(c, mark["due_date_id"])

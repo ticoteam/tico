@@ -36,7 +36,7 @@ Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowl
 `knowledge/voice.md` (with the two good examples), `knowledge/results.md` and `knowledge/do-not-email.md` from them.
 Each flow they already run and want kept becomes one Watching task, with a range from its last month of numbers:
 
-    tico task create --owner me --pipeline growth-monitoring --label channel:email --title "<the flow>" --body "<link>. Bounces under <x>%, complaints under <y>%, conversions <low> to <high> a week. Running before setup."
+    tico task create --owner me --pipeline growth-monitoring --label channel:email --title "<the flow>" --message "<link>. Bounces under <x>%, complaints under <y>%, conversions <low> to <high> a week. Running before setup."
 
 ## 5. Say setup is done
 
@@ -53,7 +53,7 @@ Fill the blanks in `knowledge/channel-playbook.md` (who puts changes live, what 
 playbook" is bot-wide, and a page made in a chat stays in that chat, so publish it on a task of its own. File one for
 yourself:
 
-    tico task create --owner me --title "Publish the Email playbook" --body "Publish knowledge/channel-playbook.md as the Email playbook page."
+    tico task create --owner me --title "Publish the Email playbook" --message "Publish knowledge/channel-playbook.md as the Email playbook page."
 
 On that task (or on this one, when setup runs on a task), write the file as an HTML page and publish it. Bold, code
 and lists become HTML tags, with no `**` or backtick left on the page, and the sentence that calls the file a starter

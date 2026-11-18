@@ -633,7 +633,7 @@ def _turn_conversation(c, rid, slug, title):
     if conv and not conv.get("closed_at") and conv.get("room_key") == room and "bot:" + slug in conv["participants"]:
         return conv
     conv = H.open_conversation(
-        c, H.KEEPER, ["bot:" + slug], kind="chat", subject="Live meeting: " + title, room_key=room
+        c, H.TICO_ACTOR, ["bot:" + slug], kind="chat", subject="Live meeting: " + title, room_key=room
     )
     c.execute("UPDATE live_meeting_bots SET conversation_id=? WHERE meeting_id=? AND bot=?", (conv["id"], rid, slug))
     return conv
@@ -694,42 +694,6 @@ def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     # A retry says so, and is a new event rather than a repeat the wake hold drops (wake_presets._SAME_EVENT).
     again = "Your last reply to this turn was empty. Answer it now, or answer exactly PASS.\n" if retry else ""
     H.feed(c, "bot:" + slug, again + _turn_prompt(c, rid, turn_id, slug), conv, refs=refs)
-    if meeting["visibility"] != "team":
-        _wait_for_update(c, rid, turn_id, slug)
-
-
-def _wait_for_update(c, rid, turn_id, slug):
-    """Say once per meeting and bot when no computer running the bot can take a private meeting's turn: one without
-    private lanes is never handed it (execution.PRIVATE_LANES), so the turn waits for its runner's update."""
-    from .execution import PRIVATE_LANES, capability_set
-
-    computers = c.execute(
-        "SELECT r.label,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-        "WHERE a.bot=? AND r.revoked_at IS NULL",
-        (slug,),
-    ).fetchall()
-    old = [
-        r["label"] or "This bot's computer" for r in computers if PRIVATE_LANES not in capability_set(r["capabilities"])
-    ]
-    if not computers or len(old) < len(computers):
-        return
-    if c.execute(
-        "SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting' "
-        "AND json_extract(payload,'$.bot')=?",
-        (rid, slug),
-    ).fetchone():
-        return
-    _event(
-        c,
-        rid,
-        "meeting.bot_turn_waiting",
-        {
-            "turn_id": turn_id,
-            "bot": slug,
-            "reason": "runner_update",
-            "detail": f"{old[0]} needs a Tico update before it can join private meetings",
-        },
-    )
 
 
 def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None, named=False):
@@ -815,7 +779,7 @@ def _cancel_queued_turn_job(c, turn_id, reason):
     for job in jobs:
         c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (job["id"],))
         c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job["message_id"]))
-        H.event(c, H.KEEPER, "job.suppress", job["id"], {"reason": reason, "turn_id": turn_id})
+        H.event(c, H.TICO_ACTOR, "job.suppress", job["id"], {"reason": reason, "turn_id": turn_id})
 
 
 def _finish_pass(c, rid, turn, reason):
@@ -845,7 +809,7 @@ def _finish_pass(c, rid, turn, reason):
 
 
 def _attachment_authority(c, auth, rid, bot):
-    """Check a scoped keeper delivery against the human who attached the bot."""
+    """Check a scoped Tico delivery against the human who attached the bot."""
     attachment = c.execute(
         "SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot)
     ).fetchone()
@@ -859,7 +823,7 @@ def _attachment_authority(c, auth, rid, bot):
         return "meeting_requires_human_contact"
     if not auth.bot_access(c, initiator, bot)["write"]:
         return "bot_write_access_revoked"
-    # The runner message is keeper-delivered, but contact policy belongs to the human who
+    # The runner message is Tico-delivered, but contact policy belongs to the human who
     # attached the bot. This prevents that transport from silently creating bot contact.
     if not auth.bot_contact(c, initiator, bot, kind="message"):
         return "bot_contact_policy"
@@ -989,7 +953,7 @@ def complete_runner_turn(
             "SELECT m.refs FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
             "WHERE i.attempt_id=? AND m.sender_id=? AND m.recipient_id=? "
             "AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL",
-            (attempt_id, H.KEEPER, "bot:" + bot),
+            (attempt_id, H.TICO_ACTOR, "bot:" + bot),
         ).fetchall():
             ref = (H._json(row["refs"], {}) or {}).get("live_meeting") or {}
             folded = c.execute(

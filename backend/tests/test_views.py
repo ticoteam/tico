@@ -1,4 +1,5 @@
 from backend.store import H
+from backend.tests.helpers.views import assistant_for
 from backend.tests.helpers.api import (
     as_member,
     headers,
@@ -15,7 +16,7 @@ from backend.tests.helpers.api import (
 
 def test_revocation_invalidates_running_bot_credential(api):
     r, _, attempt = setup_attempt(api)
-    post(api, f"runners/{r['runner_id']}/revoke", {})
+    post(api, f"computers/{r['runner_id']}/revoke", {})
     get(api, "me", r["token"], expected=401)
     get(api, "me", attempt["token"], expected=401)
 
@@ -33,7 +34,7 @@ def test_bot_execution_cannot_read_another_humans_personal_chat(api):
     attempt = claim(api, r)
     assert attempt["message"]["id"] == own["id"]
     get(api, f"conversations/{secret['conversation_id']}/messages", attempt["token"], expected=404)
-    assert secret["id"] not in {row["id"] for row in get(api, "inbox", attempt["token"])["messages"]}
+    assert secret["id"] not in {row["id"] for row in get(api, "messages?unread=1", attempt["token"])["messages"]}
     post(api, "messages", {"to": "human:ana", "text": "Use an old private chat"}, attempt["token"], expected=404)
     question = post(
         api, "messages", {"to": "finance", "text": "What is the budget?", "needs_action": True}, attempt["token"]
@@ -52,8 +53,8 @@ def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
     machine = runner(api)
     assign(api, machine, "assistant")
     ready(api, machine, ["assistant"])
-    attempt = claim(api, machine)
-    fleet = get(api, "tico/fleet", attempt["token"])
+    claim(api, machine)
+    fleet = get(api, "health/issues", assistant_for(api, "human:ben", "ben@acme.example"))
     assert fleet["actor"] == "human:ben"
     # The assistant is in the fleet (it still takes work) though nobody chats with it.
     assert {bot["slug"] for bot in fleet["bots"]} == {"assistant", "ops", "cpo", "product-design", "doc-updater"}
@@ -69,7 +70,9 @@ def test_tico_task_execution_cannot_assume_a_private_fleet_identity(api):
     ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     assert attempt["conversation"]["scope"] == "task"
-    get(api, "tico/fleet", attempt["token"], expected=403)
+    fleet = get(api, "health/issues", attempt["token"])
+    # Only the Assistant's own turn reads the team snapshot: a task token gets the checks, never the roster.
+    assert "actor" not in fleet and "tasks" not in fleet and isinstance(fleet["bots"], int)
 
 
 def test_message_pagination_preserves_all_history_with_timestamp_ties(api):

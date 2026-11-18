@@ -191,9 +191,24 @@ A bot on the Gateway with no model of its own, for example one that waits for a 
 version. A template can start a bot on another level: its `bot.yaml` may hold
 `gateway: {level: low, fast: true}` (level `xlow`, `low`, `medium`, `high` or `xhigh`) ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
-Every decision Tico makes (Decide, rule checks, pipeline judges, automation Decide steps, Slack routing) runs on Jev,
-`tico-decide-low`, and nothing else: there is no setting for it, and no other model answers when Jev fails. Skill
-screening is the one exception: it asks Decide High alone ([Skills](skills.md)).
+Decide, rule checks, pipeline judges, automation Decide steps, and Slack routing use the current decision model on
+`tico-decide-low`. A server can also use its own TypeSafe key as a fallback. Skill screening uses Decide High
+([Skills](skills.md)).
+
+Before promoting a new Decide Low version, run the repository's labeled comparison with the current version pinned.
+Dispatch **Decide Low evaluation** from `main` with the deployed pin and candidate. The workflow uses the existing
+`TICO_GATEWAY_KEY` and a scoped `DECIDE_EVAL_OPENROUTER_KEY` repository secret. To invoke the same comparison in another
+CI environment, set `TICO_GATEWAY_KEY` and `OPENROUTER_API_KEY` and run:
+
+```sh
+python -m evals.pipeline_judge.run --models "$CURRENT_DECIDE_PIN" \
+  --candidate "$DATED_OPENROUTER_ID" --endpoint "$PAID_ENDPOINT_SLUG" --out decide-results
+```
+
+Use the paid endpoint and dated model ID from the HQ proposal. The comparison exercises the shipped pipeline
+thresholds and the support and reply question sets. The JSON report includes case outcomes, error counts, cost, and
+latency for both models. Keep the report with the promotion PR and review any changed verdicts or threshold needs
+before changing the default.
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
@@ -235,7 +250,8 @@ same warnings to the owner, with **Open Models**.
 
 ## When the Gateway refuses a bot's run
 
-The bot's status says why, in plain words, and the run waits or is saved for later. The same holds when a Tico model ran as the bot's own fallback:
+The bot's status says why, in plain words, and the run waits or is saved for later. The same holds when a Tico model ran as the bot's own fallback.
+The Gateway is one login for the whole company, as a provider login is for its computer ([How it works](how-it-works.md)): its cap, a rate limit, a pause for want of credit or an outage holds every Tico run, not only the bot that met it. A bot whose own model is not a Tico model runs on it meanwhile, and when the wait ends one run tries the Gateway before the rest:
 
 | The bot's status says | What happens to the run |
 |---|---|

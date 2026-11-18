@@ -129,10 +129,10 @@ async function wizard(browser: import('playwright').Browser, theme: string) {
   // Leaving setup restores the bar and makes the normal drawer reachable again.
   await phone.page.evaluate(() => { location.hash = '#/tasks'; });
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'flow', 'mobile-ask', 'tasks', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
-  assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link')).includes('tasks'));
+  assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row > .nav-link')).includes('tasks'));
   assert.equal(await phone.page.locator('#changelog-notice').isVisible(), true);
   await phone.page.locator('#usage-notice').waitFor({state: 'visible'});
   assert.deepEqual(phone.notices, ['shown'], 'the phone also waits until setup is left');
@@ -174,7 +174,7 @@ async function created(browser: import('playwright').Browser, theme: string) {
   const {page, errors, close} = await open(browser, {theme, needed: false, team: true, route: '#/tasks'});
   await page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor();
   // Setup is done: the app's pages are back.
-  assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
+  assert.ok((await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row > .nav-link')).includes('tasks'));
   await expand(page);
   const team = await rows(page);
   // The Finance Owner is a built-in helper, off the Team tree (it opens from Finance).
@@ -204,7 +204,7 @@ async function created(browser: import('playwright').Browser, theme: string) {
 
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/tasks'});
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'flow', 'mobile-ask', 'tasks', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor({state: 'visible'});
   await expand(phone.page);

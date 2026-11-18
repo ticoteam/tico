@@ -1,15 +1,15 @@
 """Feedback on work: a person's thumbs up or down, with an optional reason, on something a bot or another person made.
 
 - Subjects: a message a bot or a person wrote (Assistant chat, threads, DMs, task comments) and a task a bot or a
-  person filed (its requester). Work with no such author (the keeper's, the system's) is refused (422), and so is the
-  rater's own (rating yourself says nothing). An ask (a bot's requirement on a task, an OK among them) is a third
-  subject, rated through backend/answers.py and read back here; it is as readable as its task.
+  person filed (its requester). Work with no such author (Tico's, the system's) is refused (422), and so is the
+  rater's own (rating yourself says nothing). Rows rated on an ask before asks lost their thumbs stay as history:
+  no read lists them.
 - One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names who made the
   work in `bot_id` (a bot, or the person's `human:` actor) and, where the work links to a runner attempt, the attempt,
   its model and harness, for training. It keeps no copy of the rated words: deleting a message erases them, and the
   reason is the person's own.
 - Privacy: every read, write, count and list asks whether the viewer reads the subject, with the checks the subject's
-  own pages use (`threads._reactable` for a message, `Auth.task` for a task and an ask). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
+  own pages use (`threads._reactable` for a message, `Auth.task` for a task). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
   chat's feedback is its person's alone. Only people rate; a bot or a computer never does.
 - 👎 on a bot's work can tell the bot (a quiet note for its next run, tied to the rated message so a private
   conversation's feedback stays in that conversation's session, threads.note_fits_run) or make a rule (an internal org
@@ -31,9 +31,10 @@ from . import org_rules as O
 from . import threads
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
-SUBJECTS = ("message", "task", "ask")
-SUBJECTS_SAID = "subject_type is message, task or ask"
+SUBJECTS = ("message", "task")
+SUBJECTS_SAID = "subject_type is message or task"
 RATINGS = ("up", "down")
 REASON_MAX = 1000
 IDS_MAX = 200  # the subjects one markers read names
@@ -82,7 +83,7 @@ def _missing(subject_type):
 
 
 def _author(actor, said):
-    """The actor who made the rated work: a bot or a person. Anything else (the keeper, the system) takes no feedback."""
+    """The actor who made the rated work: a bot or a person. Anything else (Tico, the system) takes no feedback."""
     if not (H.is_bot(actor) or H.is_human(actor)):
         raise Problem("not_rateable", said, 422)
     return actor
@@ -127,20 +128,6 @@ def _readable_task(c, auth, who, task_id):
         raise _missing("task") from None
 
 
-def _readable_ask(c, auth, who, subject_id):
-    """The ask (answers.ask_of) with its task, when the viewer reads the task."""
-    from .answers import ask_of
-
-    ask = ask_of(c, subject_id)
-    if not ask:
-        raise _missing("ask")
-    try:
-        task = auth.task(c, who, ask["task_id"])
-    except Problem:
-        raise _missing("ask") from None
-    return {**ask, "task": task}
-
-
 def _latest_message(c, conversation_id):
     """The newest message of a conversation, which a note to the bot is tied to."""
     latest = c.execute(
@@ -182,24 +169,7 @@ def subject(c, auth, who, subject_type, subject_id):
             "revision": task.get("version"),
             "note_message_id": _latest_message(c, task.get("conversation_id")),
             "link": "/#/task/" + quote(task["id"], safe=""),
-            "text": f"{task.get('title') or ''}\n\n{task.get('body') or ''}".strip(),
-        }
-    if subject_type == "ask":
-        # Rated through backend/answers.py, never through give(); read back here for a removal, a rule draft and the
-        # audit event, which targets the task.
-        from .task_requirements import name_of
-
-        ask = _readable_ask(c, auth, who, subject_id)
-        task = ask["task"]
-        return {
-            "bot_id": ask["bot"],
-            "conversation_id": task.get("conversation_id"),
-            "attempt": (None, None, None),
-            "revision": task.get("version"),
-            "note_message_id": _latest_message(c, task.get("conversation_id")),
-            "link": "/#/task/" + quote(task["id"], safe=""),
-            "text": f"{task.get('title') or ''}\n\n{name_of(ask['requirement'])}".strip(),
-            "target": task["id"],
+            "text": f"{task.get('title') or ''}\n\n{H.task_request_text(c, task['id'])}".strip(),
         }
     raise Problem("validation", SUBJECTS_SAID, 422)
 
@@ -212,7 +182,6 @@ def readable(c, auth, who, subject_type, subject_id, memo=None):
     check = {
         "message": _readable_message,
         "task": _readable_task,
-        "ask": _readable_ask,
     }.get(subject_type)
     try:
         found = bool(check) and check(c, auth, who, subject_id) is not None
@@ -308,8 +277,6 @@ def give(c, auth, who, body):
     H._writer(c, who.actor)
     if body["tell_bot"] and body["rating"] != "down":
         raise Problem("validation", "tell_bot goes with a 👎", 422)
-    if body["subject_type"] == "ask":
-        raise Problem("validation", "Rate an ask on its task", 422)
     subj = subject(c, auth, who, body["subject_type"], body["subject_id"])
     if subj["bot_id"] == who.actor:
         raise Problem("own_work", "Your own work takes no feedback", 422)
@@ -389,7 +356,7 @@ def _about(row):
 def _private(c, subject_type, subject_id, subj):
     """Whether the rated work is narrower than the company: a private thread (an Assistant chat, a members or
     participants thread), a message tied to a private task or meeting, or a private task."""
-    if subject_type in ("task", "ask") and H.task_private(c, H.task(c, subj.get("target") or subject_id) or {}):
+    if subject_type == "task" and H.task_private(c, H.task(c, subject_id) or {}):
         return True
     source, thread, root = threads._note_source(c, {"message_id": subj["note_message_id"]})
     return source is not None and threads._source_private(c, source, thread, root)
@@ -585,7 +552,15 @@ def draft(write, given):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
-    @app.post("/api/v2/feedback")
+    @app.post(
+        "/api/v2/feedback",
+        **api_v2(
+            "Feedback",
+            "giveFeedback",
+            "Rate a message, task or approval a bot or another person made; rating again replaces it. tell_bot (a 👎 on a bot's work only) leaves the bot a note",
+            "Feedback",
+        ),
+    )
     def feedback_give(request: Request, body: FeedbackGive):
         """Rate a message or task a bot or another person made: 👍 or 👎 with an optional reason. Rating again replaces
         it. `tell_bot` (a 👎 on a bot's work only) leaves the bot a note for its next run in that conversation."""
@@ -593,7 +568,15 @@ def install(app, store, auth, mutate):
         return mutate(request, body, lambda c: give(c, auth, who, body.model_dump()))
 
     # Declared before /api/v2/feedback/{feedback_id} routes so these words are never read as an id.
-    @app.get("/api/v2/feedback/list")
+    @app.get(
+        "/api/v2/feedback/list",
+        **api_v2(
+            "Feedback",
+            "listFeedback",
+            "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads",
+            "FeedbackPage",
+        ),
+    )
     def feedback_list(
         request: Request,
         bot_id: str | None = None,
@@ -607,25 +590,57 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return listing(c, auth, request.state.identity, args)
 
-    @app.get("/api/v2/feedback/recent-reasons")
+    @app.get(
+        "/api/v2/feedback/recent-reasons",
+        **api_v2(
+            "Feedback",
+            "listRecentFeedbackReasons",
+            "The caller's five latest distinct reasons, each with how often they used it",
+            "FeedbackReasons",
+        ),
+    )
     def feedback_recent_reasons(request: Request):
         """The caller's five latest distinct reasons, each with how often they used it."""
         with store.read() as c:
             return recent_reasons(c, request.state.identity)
 
-    @app.get("/api/v2/feedback")
+    @app.get(
+        "/api/v2/feedback",
+        **api_v2(
+            "Feedback",
+            "listFeedbackMarkers",
+            "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and everyone's up/down counts",
+            "FeedbackMarkers",
+        ),
+    )
     def feedback_markers(request: Request, subject_type: str, subject_ids: str = ""):
         """My feedback on these subjects (comma-separated ids, at most 200) that I read, and everyone's counts."""
         with store.read() as c:
             return markers(c, auth, request.state.identity, subject_type, subject_ids)
 
-    @app.delete("/api/v2/feedback/{feedback_id}")
+    @app.delete(
+        "/api/v2/feedback/{feedback_id}",
+        **api_v2(
+            "Feedback",
+            "removeFeedback",
+            "Remove my feedback; a note it left that no run carried yet is taken back",
+            "FeedbackRemoved",
+        ),
+    )
     def feedback_remove(request: Request, feedback_id: str):
         """Remove my feedback; a note it left that no run carried yet is taken back."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: remove(c, auth, who, feedback_id))
 
-    @app.post("/api/v2/feedback/{feedback_id}/rule-draft")
+    @app.post(
+        "/api/v2/feedback/{feedback_id}/rule-draft",
+        **api_v2(
+            "Feedback",
+            "draftFeedbackRule",
+            "A one-sentence rule drafted from my 👎; stores nothing. With no model the reason comes back, drafted false",
+            "FeedbackRuleDraft",
+        ),
+    )
     def feedback_rule_draft(request: Request, feedback_id: str):
         """A one-sentence rule drafted from my 👎's reason and the rated work. Stores nothing; with no model (or Decide
         at its spend cap) the reason itself comes back, `drafted` false."""
@@ -637,7 +652,15 @@ def install(app, store, auth, mutate):
         text = draft(write, given) if write is not None else None
         return {"text": text or given["reason"], "drafted": text is not None}
 
-    @app.post("/api/v2/feedback/{feedback_id}/rule")
+    @app.post(
+        "/api/v2/feedback/{feedback_id}/rule",
+        **api_v2(
+            "Feedback",
+            "makeFeedbackRule",
+            "Make my 👎 an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+            "FeedbackRuleMade",
+        ),
+    )
     def feedback_rule(request: Request, feedback_id: str, body: FeedbackRule):
         """Make my 👎 an internal org rule for the bot (or all bots): active when I manage its Who, else suggested."""
         who = request.state.identity

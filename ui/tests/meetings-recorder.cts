@@ -20,7 +20,7 @@ async function open(browser: Browser, {features, installed, recorder, width = 12
   const errors: string[] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(({features, installed}) => {
-    (window as unknown as {EventSource: unknown}).EventSource = undefined;
+    (window as unknown as {EventSource: unknown}).EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
     (window as unknown as RW).__posted = [];
     // Set once the page has asked Tico about the person's Recorder and drawn the answer.
     const fetched = window.fetch;

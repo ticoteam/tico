@@ -343,7 +343,7 @@ def _best_effort(c, name, work, skipped):
 
 def _strategy_draft(c, actor, strategy):
     """Summary, vision and the company file's sections where the draft's are empty (How we sell is not in the file, so
-    it stays as the draft has it), and the listening requests as the Watching section. Never published."""
+    it stays as the draft has it), and the listening requests as the Watching section. import_strategy makes it live."""
     row = S.draft(c)
     sections = {
         k: SS.unconfirmed(strategy["sections"].get(k), SOURCE)
@@ -355,7 +355,7 @@ def _strategy_draft(c, actor, strategy):
         sections["extra"] = {WATCHING: {"title": WATCHING_TITLE, "body": "\n".join("- " + r for r in requests)}}
     lines = {k: strategy[k] for k in ("summary", "vision") if strategy[k] and not row[k].strip()}
     if sections or lines:
-        S.update_draft(c, actor, sections=sections or None, **lines)
+        S.update_draft(c, actor, sections=sections or None, live=False, **lines)
     return sorted(sections) + sorted(lines)
 
 
@@ -378,7 +378,7 @@ def _strategy_bets(c, actor, bets, today, skipped):
             c,
             "company_file_bet",
             lambda item=item, wrong=wrong: S.add_bet(
-                c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed"
+                c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed", live=False
             )[0],
             skipped,
         )
@@ -579,6 +579,7 @@ def import_strategy(c, actor, strategy, company, today=None):
         "draft": _best_effort(c, "company_file_draft", lambda: _strategy_draft(c, actor, strategy), skipped) or []
     }
     bets = _strategy_bets(c, actor, strategy["bets"], today or date.today(), skipped)
+    S.go_live(c, actor)  # the file's sections and bets are one version
     segments = (
         _best_effort(c, "company_file_market", lambda: _market(c, actor, strategy["market"], company, skipped), skipped)
         or {}
@@ -950,7 +951,7 @@ def add_invitee(onboarding, c, who, key, email):
 
 
 def load_on_start(onboarding, c):
-    """The installer-configured plan is applied before any generic sample company.
+    """The installer-configured plan, applied on a start.
 
     A company whose setup is complete is left alone: no plan replaces its team, and nothing is kept against it. Until
     then, an error raises, and the caller (`start`) keeps it for the owner to see instead of stopping the server or
@@ -976,7 +977,7 @@ def load_on_start(onboarding, c):
 
 def start(onboarding, store, telemetry=None):
     """Apply the setup's company file on server start (spec test 2). A file that can't be applied leaves nothing of
-    itself behind (its transaction rolls back), never puts a generic sample company in its place, and is kept as
+    itself behind (its transaction rolls back), never puts another team in its place, and is kept as
     `onboarding.company_import_failed` for the owner to see on first run and on Health; the server still starts, with the
     built-ins only. A later import that works clears it."""
     try:

@@ -41,6 +41,8 @@ function botMoreItemsHTML(slug: string, lockable: boolean): string {
   const tasks = botTabs(slug).includes('tasks') ? `<a class="bot-mi bot-mi-tasks" href="${base}/tasks" data-bot-mtab="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>` : '';
   return tasks + (lockable ? '<button type="button" class="bot-mi bot-mi-phone" data-bot-incognito aria-pressed="false"><span class="nav-icon" aria-hidden="true">lock</span>Incognito</button>' : '')
     + '<button type="button" class="bot-mi bot-mi-phone" data-bot-members hidden><span class="nav-icon" aria-hidden="true">groups</span>Members</button>'
+    // Flow on this bot, in ⋯ on a phone, whose line has no room for its mark (#bot-flow).
+    + (botLimited(botRow(slug)) ? '' : `<button type="button" class="bot-mi bot-mi-phone" data-bot-flow>${flowMarkHTML(16)}Flow</button>`)
     + `<div class="bot-mgroup" role="group" aria-label="Details">${views.map(t => `<a class="bot-mi" href="${base}/${t}" data-bot-mtab="${t}">${BOT_DETAIL_LABELS[t]}</a>`).join('')}</div>`
     + '<div class="bot-mgroup" id="bot-dm-arch-host" role="group" aria-label="Private chat" hidden></div>';
 }
@@ -113,7 +115,7 @@ function lastStopOpen(slug: string) {
 }
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
-// The top line while the bot can't run (docs/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
+// The top line while the bot can't run (docs/dev/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
 // fix a person makes. GET /v2/bots/{bot} `cant_run` (backend/org_routes.py), read with the page and again as the status
 // moves, at most every 15 seconds.
 type BotCantRun = NonNullable<import('../types/api').BotDetail['cant_run']>;
@@ -134,7 +136,8 @@ function botCantRunFixHTML(slug: string, cant: BotCantRun): string {
   const more = `#/bot/${encodeURIComponent(slug)}/info`, cls = 'primary bot-alert-resume';
   const task = cant.task?.id ? `#/task/${encodeURIComponent(cant.task.id)}` : '';
   switch (cant.fix) {
-    // A bot being made on a task waits on an ask there that is the viewer's: the button opens it on its task (#411).
+    // A bot being made on a task waits on the viewer's OK or ❓ there (backend/org_routes.py making): the button opens it
+    // on its task (#411).
     case 'open_ask': return task ? `<a class="${cls}" href="${task}" data-bot-ask${cant.ask?.line ? ` title="${esc(cant.ask.line)}"` : ''}>${cant.ask?.kind === 'ok' ? 'Review OK' : 'Answer'}</a>` : '';
     case 'resume': return `<button class="${cls}" type="button" data-bot-unpause>Unpause</button>`;
     case 'release_quarantine': return `<button class="${cls}" type="button" data-quarantine-resume>Resume bot</button>`;
@@ -271,6 +274,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
     ${lockable ? `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>` : ''}
+    ${limited ? '' : `<button type="button" class="bot-flow" id="bot-flow" aria-label="Flow" title="Flow">${flowMarkHTML(18)}</button>`}
     ${pageHeadMore(botMoreItemsHTML(slug, lockable), 'bot-more-btn', 'bot-more-menu')}
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
@@ -410,6 +414,7 @@ async function pageBot(slug: string, tab: string | undefined) {
   const moreMenu: HTMLElement = $('#bot-more-menu');
   moreMenu.addEventListener('click', (ev: MouseEvent) => {
     if (eventElement(ev)?.closest('[data-bot-incognito]')) incognitoFlip();
+    if (eventElement(ev)?.closest('[data-bot-flow]')) $('#bot-flow')?.click();
     // Members in ⋯ is the chat's own Members button, out of the phone's line: the thread's handler opens it.
     // The list closes and ⋯ takes the focus first, so the dialog gives the focus back to ⋯ when it closes.
     if (eventElement(ev)?.closest('[data-bot-members]')) {
@@ -428,6 +433,9 @@ async function pageBot(slug: string, tab: string | undefined) {
   if (lockable) void botDmArchiveLoad(slug);
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
+  // Flow on this bot's items alone; its All done pings this bot, whoever manages it.
+  const flow = $('#bot-flow');
+  if (flow) flow.onclick = () => void decideBotsFlow(flow, ['bot:' + slug], botDisplayName(slug), {scope: 'bot', id: slug});
   $('#bot-detail-tabs').onkeydown = (event: KeyboardEvent & {currentTarget: HTMLElement}) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const buttons = [...event.currentTarget.querySelectorAll('button')];
@@ -715,7 +723,8 @@ function botThreadShow(kind: string | undefined, picking = false) {
   const actor = 'bot:' + BOT.slug;
   // The thread's actions (call, Members, menu) sit in the page's top line beside the tabs, never a row of their own.
   // Both keep the bot chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
-  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false};
+  // A helper's page has no composer (state.ts ASSISTANT_HELPERS): the server lets its owner write to its Home, so the page says no itself.
+  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false, canPost: !isAssistantHelper(BOT.slug)};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
   BOT_TALK_LAST.set(BOT.slug, kind);

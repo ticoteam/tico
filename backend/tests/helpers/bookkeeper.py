@@ -20,7 +20,7 @@ def built(environment):
     shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "finance-owner")
     machine(api)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     return api
 
 
@@ -37,7 +37,7 @@ def check(api):
 
 
 def checks(api):
+    """The Bookkeeper's check tasks, each with its words: the instructions Tico gave it (H.task_words)."""
     with api.app.state.store.read() as c:
-        return [
-            dict(r) for r in c.execute("SELECT id,title,body,status,private FROM tasks WHERE owner_id=?", (BK.ACTOR,))
-        ]
+        rows = c.execute("SELECT id,title,status,private FROM tasks WHERE owner_id=?", (BK.ACTOR,))
+        return [{**dict(r), "words": H.task_words(c, r["id"])} for r in rows.fetchall()]

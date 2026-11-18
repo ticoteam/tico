@@ -165,12 +165,13 @@ pub fn matches(want: &Value, got: &Value) -> bool {
     }
 }
 
-/// The frames the runner chose and a replay cannot repeat, by harness: its own message ids, the turn's folder and
+/// The frames the runner chose and a replay cannot repeat, by harness: its own message and request ids, the turn's folder and
 /// the per-thread config (checked by the hosts' own tests).
 pub fn unrepeatable(harness: &str, frame: &Value) -> Value {
     let mut f = frame.clone();
     match harness {
         "claude" if f.get("uuid").is_some() => f["uuid"] = json!("<any>"),
+        "claude" if f["type"] == "control_request" => f["request_id"] = json!("<any>"),
         "codex" if matches!(f["method"].as_str(), Some("thread/start" | "thread/resume")) => {
             f["params"]["cwd"] = json!("<any>");
             f["params"]["config"] = json!("<any>");

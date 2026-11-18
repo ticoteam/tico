@@ -7,6 +7,7 @@ import pytest
 from backend import run_diagnostics
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 
 
 def start(api):
@@ -51,7 +52,7 @@ def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause
     assert row['ended_at'] and row['last_event_at'] and row['last_event'] in ('error', 'diagnostic')
     # Metadata uses the existing run gate, including a bot reading its own run.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the failure's wait is over
+        wait_over(c)  # the failure's wait is over
     post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner': 'ops'})
     next_run = claim(api, machine, 'ops')
     assert next_run
@@ -329,7 +330,7 @@ def test_a_late_update_hand_back_keeps_its_saved_pause_and_does_not_use_a_start_
 
 
 def test_a_late_yield_report_without_a_pause_event_uses_the_pause_fallback(api):
-    from backend.login_waits import PAUSED
+    from backend.run_diagnostics import PAUSED
 
     machine, _, a = setup_attempt(api)
     with api.app.state.store.transaction() as c:
@@ -498,3 +499,8 @@ def test_a_clean_stop_reports_its_saved_diagnostic_even_with_no_reply(api):
     )
     post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'text': '', 'last_seq': 1}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == 'Runner stopped during execution'
+
+
+def test_slack_tokens_are_scrubbed():
+    for token in ("xoxb-1234567-abcdefg", "xoxp-12-34-abcdef", "xapp-1-A01-123-abcdef"):
+        assert run_diagnostics.scrub(f"auth failed for {token} now") == "auth failed for [redacted] now"

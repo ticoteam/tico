@@ -22,16 +22,14 @@ interface Weekly { used_percent: number; resets_at: string; reported_at: string;
 interface RuntimeState { installed: boolean; authenticated: string; rejected_at?: string; rejected_reason?: string; credential_source?: string; account?: Account | undefined; weekly?: Weekly | undefined }
 interface ToolState { name: string; runtime: string; installed: boolean; version: string; managed: boolean; state: string; wanted: boolean; pinned: boolean; update_available: boolean; detail: string }
 interface BotConnection { bot: string; profile: null; source: string; runtime: string; harness: string; signed_in: boolean; problem: string; warning?: string | undefined }
-interface AppDriverApp { installed: boolean; version: string; running: boolean; signed_in: boolean; background_ok: boolean; ready: boolean; state: string; detail: string }
 interface Machine {
   id: string; label: string; owner_id: string; bots: string[]; platform: string; version: string; turn_summary: string;
   turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]};
-  last_seen_at: string; needed_runtimes: string[]; bot_runtimes: string[]; harness_choices: Record<string, boolean>;
+  last_seen_at: string; online: boolean; needed_runtimes: string[]; bot_runtimes: string[]; harness_choices: Record<string, boolean>;
   update: {state: string; label: string; target: string}; inbox_only: boolean;
   readiness: {runtimes: {claude: RuntimeState; codex: RuntimeState; musecode: RuntimeState; cursor: RuntimeState; grok: RuntimeState};
-    harnesses: Record<string, ToolState>; appdriver?: {trusted: boolean; macos: string; detail: string; apps: Record<string, AppDriverApp>} | undefined};
+    harnesses: Record<string, ToolState>};
   profiles: unknown[]; bot_connections: BotConnection[];
-  shared_logins?: {runtime: string; profile: string; display_name: string; count: number; bots: string[]}[] | undefined;
   may_manage?: boolean | undefined;
 }
 // App globals the page defines; the browser flow reads and drives them through page.evaluate.
@@ -56,7 +54,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     const box: Machine = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
       turn_summary: '3 running · 1 starting · 37 waiting for shared login (oldest 2 h) · 5 queued',
       turn_counts: {running: 3, starting: 1, waiting: 37, queued: 5, waits: []},
-      last_seen_at: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
+      last_seen_at: at(-3000), online: true, needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
       update: {state: 'needs_update', label: 'Needs update', target: '0.3.53'}, inbox_only: false,
       readiness: {
         runtimes: {
@@ -82,11 +80,11 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
         {bot: 'helper', profile: null, source: 'computer', runtime: 'claude', harness: 'claude', signed_in: true, problem: ''},
         {bot: 'ops', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''},
         {bot: 'writer', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''}]};
-    const empty = {id: 'empty', label: 'Spare server', owner_id: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen_at: at(-2000),
+    const empty = {id: 'empty', label: 'Spare server', owner_id: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen_at: at(-2000), online: true,
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}, harnesses: {}}, profiles: [], bot_connections: []};
     // Before its first report the server sends readiness_document(None) (backend/store.py).
-    const fresh = {id: 'fresh', label: 'Fresh Mac', owner_id: 'ana', bots: [], version: '', last_seen_at: at(-2000), readiness: {schema_version: 0, runtimes: {}, bots: {}}};
-    const revoked = {id: 'old', label: 'Old laptop', owner_id: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen_at: at(-86400000),
+    const fresh = {id: 'fresh', label: 'Fresh Mac', owner_id: 'ana', bots: [], version: '', last_seen_at: at(-2000), online: true, readiness: {schema_version: 0, runtimes: {}, bots: {}}};
+    const revoked = {id: 'old', label: 'Old laptop', owner_id: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen_at: at(-86400000), online: false,
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
     const writes: {p: string; body: unknown}[] = [];
@@ -117,7 +115,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
       if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0]!.toUpperCase() + name.slice(1),
         status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}})));
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
@@ -125,7 +123,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
         presenceReads++;
         if (presenceMode === 'slow') { heldPresence.push(route); return; }
         if (presenceMode === 'failure') return json({error: 'Unavailable'}, 503);
-        if (presenceMode === 'live') box.last_seen_at = at(presenceOffset - 3000);
+        if (presenceMode === 'live') Object.assign(box, {last_seen_at: at(presenceOffset - 3000), online: true});
         return json({machines: [box, empty, fresh, revoked], services: []});
       }
       // The manifests' capabilities this page reads (runner-rs/harnesses/*.toml).
@@ -248,8 +246,8 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
 
     // Settings: inbox-only saves; Revoke is here and not on the row.
     await dialog.locator('[data-inbox-only=box]').check();
-    for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/runners/box/inbox-only'); i++) await page.waitForTimeout(20);
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only')!.body, {enabled: true});
+    for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/computers/box/inbox-only'); i++) await page.waitForTimeout(20);
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/inbox-only')!.body, {enabled: true});
     // Rename: the name becomes a field; Escape and Cancel leave it; a blank name is not sent; Save renames.
     const renamed = () => writes.filter(w => w.p === '/api/v2/computers/box/label');
     const nameField = dialog.locator('[data-computer-rename-input]');
@@ -314,7 +312,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-login-warning=codex]').waitFor();
     assert.match(await dialog.locator('[data-login-warning=codex]').innerText(), /API credit is not checked/);
-    assert.equal(await codex.getByRole('button', {name: 'Switch to subscription', exact: true}).isEnabled(), true);
+    assert.equal(await codex.getByRole('button', {name: 'Switch account', exact: true}).isEnabled(), true);
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await dialog.locator('[data-login-warning=codex]').isVisible(), true);
     assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);
@@ -331,7 +329,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await page.keyboard.press('Escape');
 
     // 23. Offline: last seen on the row, chips keep their reading, actions wait for the computer.
-    box.last_seen_at = at(-3 * 3600000);
+    Object.assign(box, {last_seen_at: at(-3 * 3600000), online: false});
     await page.evaluate(() => loadSettings());
     await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
     assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline · last seen 3h ago');
@@ -343,28 +341,12 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     assert.equal(await dialog.locator('[data-add-connection]').getAttribute('title'), 'Computer is offline');
     await page.keyboard.press('Escape');
 
-    // Desktop apps (a Mac's app driver), under Versions and updates: only when the computer reports `appdriver`, one row
-    // per app with its state and the driver's detail; still titled on a phone. Bots sharing one ChatGPT sign-in take
-    // turns (backend/views.py shared_logins): each login a line stands for says so, naming the bots this reader may see.
-    box.last_seen_at = at(-2000);
+    // On a phone the computer's turn counts wrap.
+    Object.assign(box, {last_seen_at: at(-2000), online: true});
     await page.evaluate(() => loadSettings());
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-connection]').first().waitFor();
-    assert.equal(await dialog.locator('.machine-apps').count(), 0, 'no driver, no Desktop apps');
-    assert.equal(await dialog.locator('[data-shared-login]').count(), 0, 'no shared sign-in, no note');
-    box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
-      signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
-    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']}];
-    await page.evaluate(() => loadSettings());
-    const apps = dialog.locator('[data-detail-section=versions] [role=table][aria-label="Desktop apps on Team box"]');
-    await apps.waitFor();
-    assert.deepEqual(await apps.locator('[data-machine-app="grok"] [role=cell]').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
-      ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
-    assert.equal(await dialog.locator('[data-connection="own:codex"] [data-shared-login="codex:"]').innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
-    assert.equal(await dialog.locator('[data-connection="own:claude"] [data-shared-login]').count(), 0);
     await page.setViewportSize({width: 390, height: 844});
-    assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
-    assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
     assert.equal(await dialog.locator('[data-turn-counts]').innerText(), box.turn_summary);
     assert.ok(await dialog.locator('[data-turn-counts]').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'turn counts wrap on a phone');
     await page.setViewportSize({width: 1440, height: 900});
@@ -501,6 +483,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     assert.equal(await page.locator('[data-runner-outdated-banner]').count(), 1);
 
     // Only a successful read can confirm disconnect; both views recover from the next heartbeat.
+    Object.assign(box, {last_seen_at: at(-3 * 3600000), online: false});
     presenceMode = 'fixed';
     await page.evaluate(() => settingsMachinesRefresh());
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /^offline/);
@@ -510,7 +493,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
     for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
-      body: JSON.stringify({machines: [{...box, last_seen_at: at(-3 * 3600000)}], services: []})});
+      body: JSON.stringify({machines: [{...box, last_seen_at: at(-3 * 3600000), online: false}], services: []})});
     await online(); // A late answer to the timed-out read cannot replace the newer heartbeat.
     await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
     await page.keyboard.press('Escape');
@@ -563,7 +546,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
 
     // 22. A member who is neither admin nor operator sees everything and can change nothing. The server sends them no
     // accounts and no usage of the computer's own login.
-    box.last_seen_at = at(-2000);
+    Object.assign(box, {last_seen_at: at(-2000), online: true});
     for (const state of Object.values(box.readiness.runtimes)) { delete state.account; delete state.weekly; }
     Object.assign(box, {may_manage: false});
     await page.evaluate(() => { S.me = {...S.me, id: 'cara', role: 'member', bot_admin: false}; return loadSettings(); });

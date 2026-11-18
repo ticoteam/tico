@@ -126,3 +126,61 @@ def test_a_repository_github_made_before_the_bot_is_someone_elses_until_a_person
         R.note_chosen(c, "emp-cpo")  # what Settings > Bots and `manage set-repo` record
     assert _repository(api, "cpo") == "Acme/emp-cpo"
     assert turn_token(api, "cpo").json()["repository"] == "Acme/emp-cpo"
+
+
+def _old(api, bot="cpo", days=30):
+    with api.app_state.store.read() as c:
+        born = H.parse_ts(c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()[0])
+    return (born - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_a_bot_made_with_a_repository_github_already_had_clones_it_and_a_filled_in_default_name_does_not(api, gh):
+    """TIDY, Nov 17: video-producer was made with TIDYAPP/emp-video-producer, which already existed. Creation stored it
+    but never recorded the choice, so its computer was sent no repository and every turn failed."""
+    _ready(api, gh)
+    old = _old(api)
+    _sync(api, gh, **{"emp-video-producer": {"created_at": old}, "bot-scout": {"created_at": old}})
+    body = {"description": "Makes videos", "status": "planned"}
+    made = api.post(
+        "/api/v2/bots",
+        json={**body, "slug": "video-producer", "display_name": "Video Producer", "repo": "Acme/emp-video-producer"},
+        headers={**auth(), "Idempotency-Key": "vp"},
+    )
+    assert made.status_code == 200, made.text
+    # The name the Add bot form fills in by itself is not a choice: GitHub had it first, so it may be someone else's.
+    scout = api.post(
+        "/api/v2/bots",
+        json={**body, "slug": "scout", "display_name": "Scout", "repo": "bot-scout"},
+        headers={**auth(), "Idempotency-Key": "scout"},
+    )
+    assert scout.status_code == 200, scout.text
+    with api.app_state.store.read() as c:
+        producer, scout = H.resolve_bot(c, "video-producer")["id"], H.resolve_bot(c, "scout")["id"]
+    assert _repository(api, producer) == "Acme/emp-video-producer"
+    assert _repository(api, scout) == ""
+
+
+def test_the_backfill_records_named_repositories_of_bots_made_before_and_running_it_again_changes_nothing(api, gh):
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261117210532_named_bot_repositories_chosen")
+    _ready(api, gh)
+    old = _old(api)
+    _sync(api, gh, **{"marketing-site": {"created_at": old}, "emp-cpo": {"created_at": old}})
+    with api.app_state.store.transaction() as c:  # as create_bot stored it before it recorded the choice
+        c.execute("UPDATE bot_config SET repo='Acme/marketing-site' WHERE bot='cmo'")
+        R.note_repository(c, R.TAKEN, "Acme/marketing-site")
+    assert _repository(api, "cmo") == "" and _repository(api, "cpo") == ""
+    with api.app_state.store.transaction() as c:
+        migration.up(c)
+    assert _repository(api, "cmo") == "Acme/marketing-site"
+    # cpo's emp-cpo is the name Tico gives it unasked: GitHub had it first, so it stays someone else's.
+    assert _repository(api, "cpo") == ""
+    with api.app_state.store.read() as c:
+        assert "acme/marketing-site" not in R.metadata(c, R.TAKEN)
+        before = c.execute("SELECT key, value FROM registry_metadata WHERE key LIKE 'bot-repositories-%'").fetchall()
+    with api.app_state.store.transaction() as c:
+        migration.up(c)
+    with api.app_state.store.read() as c:
+        after = c.execute("SELECT key, value FROM registry_metadata WHERE key LIKE 'bot-repositories-%'").fetchall()
+    assert [tuple(r) for r in after] == [tuple(r) for r in before]

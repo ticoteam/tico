@@ -447,7 +447,7 @@ step_refused() {
   wait "$pid"; code=$?
   after="$(data_files)" || { say "could not read the database files after the start"; return 1; }
   [ "$code" != 0 ] || { say "the $CAND server exited 0 on a $PREV database with tasks"; return 1; }
-  # docs/updates.md, "From 0.5 to 0.6" (backend/migrations OLD_TASKS)
+  # docs/updates.md, "From 0.5 to 0.6" (backend/migrations BELOW_FLOOR)
   if ! grep -q "Tico 0.6 does not carry tasks over" "$WORK/refused.log" || ! grep -q "Nothing was changed" "$WORK/refused.log"; then
     say "the $CAND server exited $code without the fresh-start message:"; tail -n 15 "$WORK/refused.log" | sed 's/^/    /'; return 1
   fi

@@ -114,9 +114,9 @@ class Api:
 def test_the_tools_rewrite_text_before_sending_and_say_so():
     api = Api()
     made = hubtools.BY_NAME["tico_task_create"]["fn"](
-        api, {"owner": "human:ana", "title": "Review the drafts", "body": "Draft: s3://acme-files/d/launch.md"}
+        api, {"owner": "human:ana", "title": "Review the drafts", "message": "Draft: s3://acme-files/d/launch.md"}
     )
-    assert made["sent"]["body"] == "Draft: " + VIEW + "/d/launch.md"
+    assert made["sent"]["message"] == "Draft: " + VIEW + "/d/launch.md"
     assert made["s3_links"]["rewritten"] == [{"from": "s3://acme-files/d/launch.md", "to": VIEW + "/d/launch.md"}]
     assert "rewritten" in made["s3_links"]["note"]
     said = hubtools.BY_NAME["tico_message_send"]["fn"](api, {"to": "human:ana", "text": "See s3://other-bucket/k.md"})
@@ -144,9 +144,11 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
 def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
     api = Api(mapping=None)
     made = hubtools.BY_NAME["tico_task_create"]["fn"](
-        api, {"owner": "human:ana", "title": "T", "body": "s3://acme-files/d.md"}
+        api, {"owner": "human:ana", "title": "T", "message": "s3://acme-files/d.md"}
     )
-    assert made["sent"]["body"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == ["s3://acme-files/d.md"]
+    assert made["sent"]["message"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == [
+        "s3://acme-files/d.md"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -160,10 +162,10 @@ def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
                 "ana",
                 "--title",
                 "Review",
-                "--body",
+                "--message",
                 "s3://acme-files/d.md and s3://other-bucket/e.md",
             ],
-            "body",
+            "message",
         ),
         (["task", "comment", "t1", "s3://acme-files/d.md and s3://other-bucket/e.md"], "text"),
         (

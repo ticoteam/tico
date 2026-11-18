@@ -20,6 +20,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import H, Store
+from backend.tests.helpers.statement_scope import belongs, measuring
 
 MINUTE = 1_700_000_040
 
@@ -159,23 +160,6 @@ def test_a_full_buffer_counts_what_it_drops(monkeypatch):
     assert rec.take(MINUTE)["process"][-1] == 2 and rec.take(MINUTE)["process"][-1] == 0
 
 
-def test_slow_request_upgrade_keeps_history_and_adds_nullable_attribution(tmp_path):
-    path = tmp_path / 'synthetic.sqlite'
-    with sqlite3.connect(path) as c:
-        c.execute(
-            'CREATE TABLE flight_slow(id INTEGER PRIMARY KEY,created_at INTEGER,route TEXT,caller TEXT,actor TEXT,ms REAL,bytes INTEGER,status INTEGER)'
-        )
-        c.execute(
-            "INSERT INTO flight_slow(created_at,route,ms) VALUES(?,?,?)", (MINUTE, 'GET /api/v2/tasks/{tid}', 1500)
-        )
-    store = Store(Settings(db_path=path, registry_dir=tmp_path), flight.Recorder())
-    store.initialize(seed_market=False)
-    store.initialize(seed_market=False)
-    with store.read() as c:
-        row = dict(c.execute('SELECT * FROM flight_slow').fetchone())
-    assert row['ms'] == 1500 and row['sql_ms'] is None and row['wait_ms'] is None and row['queries'] is None
-
-
 def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatch):
     with store.transaction() as c:
         c.execute("CREATE TABLE size_fixture(created_at INTEGER, payload BLOB)")
@@ -190,6 +174,8 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
         with read() as c:
 
             def trace(sql):
+                if not belongs(sizing):
+                    return  # another thread's statement is not the size pass's
                 if "dbstat" in sql:
                     dbstat.append(sql)
                 if sql.startswith(("PRAGMA table_info", "PRAGMA index_info")):
@@ -204,7 +190,8 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     monkeypatch.setattr(store, "read", traced_read)
 
     sampler = flight.Flight(store.recorder, store, store.settings)
-    sampler.size_db(MINUTE)
+    with measuring(sizing):
+        sampler.size_db(MINUTE)
     with store.read() as c:
         first = flight._db(c, MINUTE)
     assert first["objects"]["size_fixture"] > 0
@@ -212,10 +199,12 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     assert one_pass > 1
     with store.transaction() as c:
         c.execute("INSERT INTO size_fixture VALUES(?, zeroblob(?))", (MINUTE + 1, 256 * 1024))
-    sampler.size_db(MINUTE + 3600)
+    with measuring(sizing):
+        sampler.size_db(MINUTE + 3600)
     # A new recorder must use the persisted sample rather than repeat the scan on each restart.
     sampler = flight.Flight(store.recorder, store, store.settings)
-    sampler.size_db(MINUTE + 7200)
+    with measuring(sizing):
+        sampler.size_db(MINUTE + 7200)
     with store.read() as c:
         reused = flight._db(c, MINUTE + 7200)
     assert len(sizing) == one_pass
@@ -223,7 +212,8 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     assert reused["at"] == (MINUTE + 7200) // 3600 * 3600
     assert reused["rows"]["size_fixture"] == 2 and reused["oldest"]["size_fixture"] == MINUTE
 
-    sampler.size_db(MINUTE + 86400)
+    with measuring(sizing):
+        sampler.size_db(MINUTE + 86400)
     with store.read() as c:
         refreshed = flight._db(c, MINUTE + 86400)
         assert [r[0] for r in c.execute("SELECT name FROM pragma_table_info('flight_db')")] == [

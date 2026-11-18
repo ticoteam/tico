@@ -53,7 +53,7 @@ Always:
 - `skills/find-unbilled-work/SKILL.md`: read when you check a cycle for delivered work that has no invoice.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/billing-register.md`,
    `knowledge/unbilled.md` and the playbook the task names. A resumed turn already has them.
 3. Collect this cycle's inputs: usage exports, recorded timesheets, milestones signed off, new contracts. Note the cut-off date for each.

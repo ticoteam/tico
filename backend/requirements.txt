@@ -8,11 +8,12 @@ annotated-types==0.8.0
     # via pydantic
 anyio==4.15.1
     # via
+    #   fastapi
     #   httpx
     #   starlette
-boto3==1.43.114
+boto3==1.44.5
     # via -r requirements.in
-botocore==1.43.114
+botocore==1.44.5
     # via
     #   boto3
     #   s3transfer
@@ -33,11 +34,14 @@ cryptography==50.0.2
     # via
     #   -r requirements.in
     #   pyjwt
-dnspython==2.9.0
+dkimpy==1.1.8
+    # via -r requirements.in
+dnspython==2.9.2
     # via
     #   -r requirements.in
+    #   dkimpy
     #   pymongo
-fastapi==0.141.1
+fastapi==0.163.2
     # via -r requirements.in
 h11==0.16.0
     # via
@@ -61,6 +65,8 @@ livekit==1.1.21
     # via -r requirements.in
 numpy==2.5.4
     # via livekit
+opentelemetry-api==1.45.2
+    # via fastapi
 orjson==3.13.0
     # via -r requirements.in
 pillow==13.0.0
@@ -69,21 +75,21 @@ pillow==13.0.0
     #   reportlab
 protobuf==7.36.2
     # via livekit
-psycopg[binary]==3.3.6
+psycopg[binary]==3.3.9
     # via -r requirements.in
-psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+psycopg-binary==3.3.9 ; implementation_name != 'pypy'
     # via psycopg
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
-pydantic==2.14.1
+pydantic==2.14.3
     # via fastapi
-pydantic-core==2.50.1
+pydantic-core==2.50.4
     # via pydantic
 pyjwt[crypto]==2.15.1
     # via -r requirements.in
-pymongo==4.19.0
+pymongo==4.20.0
     # via -r requirements.in
-pymysql==1.2.3
+pymysql==1.2.4
     # via -r requirements.in
 pypdf==6.21.4
     # via -r requirements.in
@@ -91,7 +97,7 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   croniter
-python-multipart==0.0.32
+python-multipart==0.0.34
     # via -r requirements.in
 pyyaml==6.0.3
     # via -r requirements.in
@@ -99,19 +105,20 @@ reportlab==4.5.1
     # via -r requirements.in
 s3transfer==0.19.2
     # via boto3
-sentry-sdk==2.69.2
+sentry-sdk==2.75.0
     # via -r requirements.in
 six==1.17.0
     # via python-dateutil
-slack-sdk==3.45.0
+slack-sdk==3.47.0
     # via -r requirements.in
-starlette==1.8.0
+starlette==1.10.0
     # via fastapi
 types-protobuf==7.35.1.20260906
     # via livekit
 typing-extensions==4.16.0
     # via
     #   fastapi
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
     #   typing-inspection

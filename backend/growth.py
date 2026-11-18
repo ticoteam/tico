@@ -3,7 +3,8 @@ cohorts per channel (spend, bot cost, new customers, the share kept at 30, 90 an
 they add up to, and the sources each number's truth lives in.
 
 - Channels (`growth_channels`): a performance or brand track and a stage (idea, testing, scaling, paused), an owner, a
-  monthly budget, the source its numbers come from, and an optional guardrail (a KPI that must stay at or under a max).
+  monthly budget, the source its numbers come from, an optional guardrail (a KPI that must stay at or under a max) and
+  the optional input KPI it moves (backend/growth_line.py draws both).
   A channel's marketing work is the open tasks labelled `channel:<slug>` (backend/marketing_tasks.py).
 - Sources (`gtm_sources`): which system is the truth for what, and how a bot reaches it. Two live sources for the
   same thing are a conflict the page shows. A source with a sync kind fills numbers itself, and each number records
@@ -13,11 +14,12 @@ they add up to, and the sources each number's truth lives in.
 - The KPI tree is four columns on `kpis` (parent, growth role, funnel stage, loop): at most one North Star.
 
 Who may: everyone signed in reads. The owner and admins (people) write channels, sources and settings; the bot that
-owns a channel may change its why, stage and budget; any bot or admin records cohorts.
+owns a channel may change its why, stage, budget and input KPI; any bot or admin records cohorts.
 """
 
 import asyncio
 import json
+import logging
 import math
 import secrets
 
@@ -46,11 +48,12 @@ CHANNEL_FIELDS = (
     "why",
     "guardrail_kpi_id",
     "guardrail_max",
+    "input_kpi_id",
     "sort",
     "retired_at",
 )
 SOURCE_FIELDS = ("id", "truth_for", "system", "reach_kind", "reach_ref", "may", "owner_ref", "retired_at")
-OWNER_PATCH = {"why", "stage", "budget_month"}  # what the bot that owns a channel may change
+OWNER_PATCH = {"why", "stage", "budget_month", "input_kpi_id"}  # what the bot that owns a channel may change
 ROLES = ("north_star", "input", "guardrail")
 STAGES = ("reach", "acquire", "activate", "retain", "refer")
 KPI_FIELDS = ("parent_kpi_id", "growth_role", "stage", "loop_name", "loop_step")
@@ -575,7 +578,7 @@ def ask_owners(c, month=None):
         shown = "; ".join(lines[:5]) + (f"; and {len(lines) - 5} more" if len(lines) > 5 else "")
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             ch["owner_ref"],
             f"Growth: numbers typed as actual for {ch['name']} differ from the ones computed from customers: {shown}. "
             "Keep the typed number or the computed one on the Growth page.",
@@ -744,7 +747,7 @@ def _owner_ref(c, value):
     if value in (None, ""):
         return None
     actor = H.resolve_actor(c, value)
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         raise Problem("not_found", f"No person or bot {value}", 404)
     return actor
 
@@ -781,6 +784,7 @@ def channel_create(c, actor, body):
         "why": body.why,
         "guardrail_kpi_id": _kpi_ref(c, body.guardrail_kpi_id, "guardrail_kpi_id"),
         "guardrail_max": body.guardrail_max,
+        "input_kpi_id": _kpi_ref(c, body.input_kpi_id, "input_kpi_id"),
         "sort": body.sort,
         "created_at": H.now(),
     }
@@ -802,6 +806,8 @@ def channel_update(c, actor, slug, fields):
         fields["source_id"] = _source_ref(c, fields["source_id"])
     if "guardrail_kpi_id" in fields:
         fields["guardrail_kpi_id"] = _kpi_ref(c, fields["guardrail_kpi_id"], "guardrail_kpi_id")
+    if "input_kpi_id" in fields:
+        fields["input_kpi_id"] = _kpi_ref(c, fields["input_kpi_id"], "input_kpi_id")
     for required in ("name", "track", "stage", "why", "sort"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
@@ -1161,6 +1167,7 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
+    from . import growth_brief as BRIEF
     from . import growth_setup as SETUP
     from .goal_routes import _hidden_owners, kpi_editable
 
@@ -1181,6 +1188,15 @@ def install(app, store, auth, mutate):
 
     def reader(who):
         auth.domain(who)
+
+    def counted(who, view):
+        """A channel or segment read counted for the spec's first measure; never fails the read."""
+        if getattr(who, "support", None):
+            return
+        try:
+            store.write(who, lambda w: BRIEF.count_read(w, who.actor, view))
+        except Exception:  # noqa: BLE001 - a count must never fail the read
+            logging.getLogger(__name__).warning("growth view read was not counted", exc_info=True)
 
     def editor(who, what):
         auth.domain(who)
@@ -1207,8 +1223,32 @@ def install(app, store, auth, mutate):
             row = channel(c, slug)
             if not row:
                 raise Problem("not_found", f"No channel {slug}", 404)
-            out = {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+            out = {
+                **channel_view(row),
+                "tasks": channel_tasks(c, auth, who, slug),
+                **BRIEF.channel(c, auth, who, row, _hidden_owners(c, auth, who)),
+            }
+        counted(who, "channel")
         return answer(who, out, seen=True)
+
+    @app.get("/api/v2/growth/segments/{label}")
+    def growth_segment(request: Request, label: str):
+        """One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV, the change from
+        the month before, and that spend is not split by segment. A cohort under the minimum shows counts only."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            out = BRIEF.segment(c, auth, who, label)
+        counted(who, "segment")
+        return answer(who, out)
+
+    @app.get("/api/v2/growth/view-reads")
+    def growth_view_reads(request: Request, days: int = 30):
+        """How often each caller read a channel or segment view in the last `days` days, and in how many runs."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            return BRIEF.reads(c, max(1, min(int(days), 366)))
 
     @app.post("/api/v2/growth/channels")
     def growth_channel_add(request: Request, body: M.GrowthChannelCreate):
@@ -1223,7 +1263,7 @@ def install(app, store, auth, mutate):
 
     @app.patch("/api/v2/growth/channels/{slug}")
     def growth_channel_update(request: Request, slug: str, body: M.GrowthChannelUpdate):
-        """Owner or admin: any field. The bot that owns the channel: its why, stage and budget."""
+        """Owner or admin: any field. The bot that owns the channel: its why, stage, budget and input KPI."""
         who = request.state.identity
 
         def work(c):
@@ -1240,7 +1280,7 @@ def install(app, store, auth, mutate):
                 if set(fields) - OWNER_PATCH:
                     raise Problem(
                         "forbidden",
-                        "The bot that owns a channel changes its why, stage and budget_month; "
+                        "The bot that owns a channel changes its why, stage, budget_month and input_kpi_id; "
                         "an admin changes the rest",
                         403,
                     )
@@ -1381,7 +1421,7 @@ def install(app, store, auth, mutate):
                     text = raw.decode("utf-8-sig")
                 except UnicodeDecodeError:
                     raise Problem("validation", "The file is not UTF-8 text", 422) from None
-                return GS.run(c, row.get("owner_ref") or H.KEEPER, row, csv_text=text)
+                return GS.run(c, row.get("owner_ref") or H.TICO_ACTOR, row, csv_text=text)
 
         return await asyncio.to_thread(take)
 

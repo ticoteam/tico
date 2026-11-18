@@ -5,8 +5,7 @@
 // Tasks, bot status lines and Needs you arrive here as they change, for every page; the messages and runs of the
 // conversations on screen too (each view says which with liveFollow). One EventSource carries them all. It resumes
 // from the last change number it was given, so a reconnect misses nothing; `reset` means it was away longer than
-// the server keeps (a day) and each view reads in full. A browser with no EventSource keeps the old polls
-// (liveFallback); everywhere else nothing polls for what this stream carries.
+// the server keeps (a day) and each view reads in full. Nothing else polls for what this stream carries.
 type LiveEventData = {seq?: number | string; needs_version?: unknown; [key: string]: unknown};
 // Each view's handler takes the data its own event carries (a list, a row, an event), so the parameter is bivariant.
 type LiveHandler = Function;
@@ -26,6 +25,7 @@ interface LiveState {
   handlers: Map<string, Set<LiveHandler>>;
   conversations: Map<string, number>;
   threads: Map<string, number>;
+  tasks: Map<string, number>;
   taskKey: string;
   urlTopics?: string[];
   readyTopics?: string[];
@@ -34,7 +34,7 @@ interface LiveState {
 interface ThrottleEntry { at: number; timer: number; hidden: boolean; fn?: () => void; ms?: number; }
 const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs', 'letters'];
 const LIVE: LiveState = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
-              handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: '', waiting: false};
+              handlers: new Map(), conversations: new Map(), threads: new Map(), tasks: new Map(), taskKey: '', waiting: false};
 // The first reads that may add a topic (liveTopicAdd), still on their way: the first stream waits for them, up to
 // LIVE_PROBE_WAIT_MS, so it opens once with every topic rather than once without and again with. A read that hangs
 // holds the first stream (and every live update) for that long; if it is the rail, the stream then opens from now, not
@@ -46,7 +46,6 @@ function liveProbe(read: Promise<unknown>): void {
   LIVE_PROBES.add(read);
   void read.catch(() => {}).finally(() => LIVE_PROBES.delete(read));
 }
-const liveAvailable = () => typeof EventSource !== 'undefined';
 const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
 function liveOn(topic: string, fn: LiveHandler): () => void {
@@ -98,8 +97,23 @@ function liveFollowThread(id: string | number | null | undefined): () => void {
     else { LIVE.threads.delete(id); liveRestart(); }
   };
 }
-// A topic only some servers send (`threads`, once the server answers GET /v2/threads): asking an older server for it
-// would fail the whole stream (422), so it joins only when the server has shown it has it.
+// The changes of this task while a card shows it (the Market page's sizing task), wherever the page is; returns the release.
+function liveFollowTask(id: string | number | null | undefined): () => void {
+  if (!id) return () => {};
+  id = String(id);
+  const had = LIVE.tasks.has(id);
+  LIVE.tasks.set(id, (LIVE.tasks.get(id) || 0) + 1);
+  if (!had) { if (LIVE.started) liveTasksSync(); else liveStart(); }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const n = (LIVE.tasks.get(id) || 1) - 1;
+    if (n > 0) LIVE.tasks.set(id, n);
+    else { LIVE.tasks.delete(id); liveTasksSync(); }
+  };
+}
+// A topic joins once a read has shown the server sends it (`threads`, from GET /v2/threads/rail).
 // `seq`: the change number the read that showed it is as of (GET /v2/threads/rail `seq`). Before the first stream opens,
 // that stream resumes from it, so it carries the topic over from that read (`carried` on its `needs` connect) and replays
 // whatever changed since, in every topic, rather than starting from now and leaving a gap after the read.
@@ -110,10 +124,6 @@ function liveTopicAdd(topic: string, seq?: number | null): void {
   // Threads keep the sidebar live on every install, cloud or not.
   if (LIVE.started) liveRestart(); else liveStart();
 }
-// Only where the stream cannot run: the poll it replaced. Returns the timer (0 when the stream carries it).
-// A hidden tab does not poll: goals / task modal / Updates fell back every few seconds across background tabs
-// whenever live was down.
-const liveFallback = (fn: () => void, ms: number) => liveAvailable() ? 0 : setInterval(() => { if (!document.hidden) fn(); }, ms);
 // Run `fn` once after a burst: every call within `ms` of the first folds into it.
 const LIVE_SOON = new Map<string, number>();
 function liveSoon(key: string, fn: () => void, ms = 250): void {
@@ -141,7 +151,7 @@ document.addEventListener('visibilitychange', () => {
   for (const [key, t] of LIVE_THROTTLE) if (t.hidden && t.fn) { t.hidden = false; liveThrottle(key, t.fn, t.ms); }   // the caller's own pace
 });
 function liveStart(): void {
-  if (LIVE.started || !liveAvailable()) return;
+  if (LIVE.started) return;
   LIVE.started = true;
   if (!LIVE_PROBES.size) { liveEventsConnect(); return; }
   LIVE.waiting = true;
@@ -154,17 +164,18 @@ function liveRestart(): void {
   LIVE.restart = setTimeout(liveEventsConnect, 30);       // several views following at once reconnect once
 }
 // The task changes this page shows (refresh.js liveTasksApply): every task's on a task list, a bot's or a person's
-// own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
+// own on their page, the open task's and each followed one's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope(): TaskScope {
   const r = typeof S !== 'undefined' && S.route || '';
   if (isTasksRoute(r) || r.startsWith('#/meetings')) return {all: true};
   if (r.startsWith('#/task/')) return {task: [decodeURIComponent(String(r.slice(7).split(/[/?]/)[0]))], party: []};
-  const open: string[] = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
+  const chat: string[] = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
+  const open = [...new Set([...chat, ...LIVE.tasks.keys()])];   // and the tasks a card follows (liveFollowTask)
   // A bot's route may name it by slug (a link made from a label); its actor is its id.
   const botRef = r.startsWith('#/bot/') ? decodeURIComponent(String(r.slice(6).split(/[/?]/)[0])) : '';
   const party = botRef ? 'bot:' + (botByRef(botRef)?.id || botRef)
     : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(String(r.slice(9).split(/[/?]/)[0]))
-    // My dashboard: the reader's own tasks, for its My tasks card (dashboard.ts dashTasksLive).
+    // Company: the reader's own tasks, for its My tasks card (dashboard.ts dashTasksLive).
     : r === HOME ? myActor() : '';
   return {task: open, party: party ? [party] : []};
 }
@@ -184,8 +195,9 @@ function liveUrl(): string {
     .filter(t => t !== 'letters' || LIVE.handlers.get('letters')?.size);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
   LIVE.urlTopics = topics;
-  // Run steps as compact signals (which step moved, not its contents): no screen here reads a step's payload; each one
-  // notes that the run moved and reads its own summary (backend/events.py _step_output).
+  // Run steps as compact signals (which step moved, not its contents): a screen notes that the run moved and reads its
+  // own summary (backend/events.py _step_output). The reply's text comes whole, for a thread's live reply row
+  // (thread-view.ts thvLiveStep).
   const q = new URLSearchParams({topics: topics.join(','), needs: 'changes', output: 'compact'});
   if (LIVE.after != null) q.set('after', String(LIVE.after));
   if (conversations.length) q.set('conversation', conversations.join(','));
@@ -282,4 +294,4 @@ function liveResume(): void {
 }
 // A tab coming back from sleep or a dropped network reconnects now rather than at the end of its backoff.
 window.addEventListener('online', () => { if (LIVE.started && !LIVE.connected && !SESSION.out) liveEventsConnect(); });
-window.liveEvents = {on: liveOn, follow: liveFollow, available: liveAvailable, connected: liveConnected};
+window.liveEvents = {on: liveOn, follow: liveFollow, connected: liveConnected};

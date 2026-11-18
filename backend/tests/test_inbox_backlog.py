@@ -239,6 +239,6 @@ def test_a_persons_inbox_leaves_out_threads_they_cannot_read(api):
             1,
             body=lambda i: "Cara's private words",
         )
-    inbox = api.get("/api/v2/inbox", headers=headers("ben-test")).json()
+    inbox = api.get("/api/v2/messages?unread=1", headers=headers("ben-test")).json()
     bodies = [m["body"] for m in inbox["messages"]]
     assert "For Ben" in bodies and "Cara's private words" not in bodies

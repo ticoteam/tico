@@ -1,5 +1,5 @@
-"""Compress the standalone UI scripts and styles, and the vendor scripts and styles (marked.min.js is on every cold
-open); leave API streams, files and fonts (woff2 is compressed already) to their routes."""
+"""Compress the UI files served as they are and the vendor scripts and styles; leave the bundle (gzip copies of its
+own), API streams, files and fonts (woff2 is compressed already) to their routes."""
 
 import re
 
@@ -7,7 +7,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
 from .json_response import accepts_gzip
-from .ui_bundle import is_part
+from .ui_build import BUNDLE_PREFIX
 
 VENDOR_TEXT = re.compile(r"/vendor/.+\.(?:js|css|mjs)")
 
@@ -22,7 +22,7 @@ class UiCompression:
             scope["type"] != "http"
             or scope["method"] != "GET"
             or not (scope["path"].startswith("/tico/ui/") or VENDOR_TEXT.fullmatch(scope["path"]))
-            or is_part(scope["path"])
+            or scope["path"].startswith(BUNDLE_PREFIX)  # sent as the build's own gzip copies
         ):
             return await self.app(scope, receive, send)
 

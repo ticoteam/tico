@@ -58,6 +58,14 @@ SCOPE_KEYS = (
     "timeout_seconds",
     "read_preference",
 )
+# Any other short lowercase name is a scope field too (`page`, `ad_account`): a scope narrows what a tool is for and holds
+# no credential, so a new kind of scope needs no change here. An entry's own fields are never scope.
+SCOPE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+ENTRY_FIELDS = ("service", "identity", "can", "env", "note", "mcp", "scope", "vault")
+# A scope named like a credential is one: its value goes in a key, never in an entry.
+SECRET_NAME = re.compile(
+    r"(^|_)(secret|password|passwd|passphrase|token|apikey|api_key|private_key|authorization|bearer|credential)s?($|_)"
+)
 MAX_CAN = 20
 MAX_SCOPE = 20
 SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,59}$")
@@ -110,6 +118,9 @@ HEADER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
 NOT_SETTABLE = {"host", "content-length", "transfer-encoding", "connection"}
 TOKEN_PARTS = re.compile(r"[\s,;()\"'<>]+")
 TOKEN_CHARS = re.compile(r"^[A-Za-z0-9_+/=-]+$")
+# Public identifiers with a random-looking body, never a secret: a Twilio SID (two capitals, 32 hex digits: an Account
+# SID is the Basic username its auth token goes with).
+ID_SHAPES = re.compile(r"^[A-Z]{2}[0-9a-f]{32}$")
 
 
 class EntryError(ValueError):
@@ -135,6 +146,7 @@ def secret_in(text):
     for token in TOKEN_PARTS.split(text):
         if (
             len(token) >= 24
+            and not ID_SHAPES.match(token)
             and TOKEN_CHARS.match(token)
             and re.search(r"[a-z]", token)
             and re.search(r"[A-Z]", token)
@@ -155,11 +167,25 @@ def scalar(value, limit):
     return one_line(value, limit) if isinstance(value, (str, int, float)) else ""
 
 
+def scope_keys(entry):
+    """The keys of `entry` that are scope: the known ones in their order, then any other simple name (SCOPE_KEY_RE) that
+    is not one of the entry's own fields, in the entry's order."""
+    others = [
+        str(key)
+        for key in entry
+        if str(key) not in SCOPE_KEYS and str(key) not in ENTRY_FIELDS and SCOPE_KEY_RE.match(str(key))
+    ]
+    return [key for key in SCOPE_KEYS if key in entry] + others
+
+
 def scope_of(entry):
-    """The scope fields of an entry as {key: text | [text]}, capped; the runner's report and the form agree."""
+    """The scope fields of an entry as {key: text | [text]}, capped; the runner's report and the form agree. A value
+    that looks like a credential is left out (`secret_in`), so a scope never carries one to a page."""
     result = {}
-    for key in SCOPE_KEYS:
+    for key in scope_keys(entry):
         value = entry.get(key)
+        if key not in SCOPE_KEYS and secret_in(" ".join(map(str, value)) if isinstance(value, list) else value):
+            continue
         if isinstance(value, (list, tuple)):
             items = [scalar(item, 100) for item in value[:20]]
             items = [item for item in items if item]
@@ -277,9 +303,29 @@ def clean(entry):
     scope = entry.get("scope") or {}
     if not isinstance(scope, dict):
         raise EntryError("scope is an object such as {\"database\": \"warehouse\"}")
-    unknown = sorted(str(key) for key in scope if key not in SCOPE_KEYS)
+    unknown = sorted(str(key) for key in scope if str(key) not in scope_keys(scope))
     if unknown:
-        raise EntryError(f"scope does not take {', '.join(unknown)}; it takes {', '.join(SCOPE_KEYS)}")
+        raise EntryError(
+            f"scope does not take {', '.join(unknown)}: a scope key is a short lowercase name (letters, digits and _, "
+            f"up to 40), such as page or ad_account, and not one of {', '.join(ENTRY_FIELDS)}"
+        )
+    if len(scope) > MAX_SCOPE:
+        raise EntryError(f"scope holds at most {MAX_SCOPE} keys")
+    named = sorted(str(key) for key in scope if SECRET_NAME.search(str(key)))
+    if named:
+        raise EntryError(
+            f"scope does not take {', '.join(named)}: a credential is stored as a key and granted to the bot, and "
+            "the entry names only its variable (`env`)",
+            "secret",
+        )
+    for key, value in scope.items():
+        why = secret_in(" ".join(map(str, value)) if isinstance(value, list) else value)
+        if why:
+            raise EntryError(
+                f"scope.{key} is not accepted: {why}. Tico never takes a credential value; store it as a key and "
+                "grant it to the bot",
+                "secret",
+            )
     kept = scope_of(scope)
     given = {key for key, value in scope.items() if value not in (None, "", [])}
     if given - set(kept):

@@ -239,14 +239,13 @@ def computer_detail(row, section=None, offset=0):
 
 @tool(
     "tico_computer_list",
-    "Company computers and their latest CPU/memory/swap, running turns and overloaded flag, one short row each: id, label, "
-    "online and last seen, operator, release (Tico), version (runner software), wanted release, update (current, "
-    "update_available, updating, failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), "
-    "how many bots run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
-    "whether each team service is ok. "
-    "For one computer in full (the bots on it, repositories, each bot's readiness, runtimes, update error, recent "
-    "errors) pass "
-    "`computer`: large sections come capped, and `truncated` says how to read the rest with `section` and `offset`.",
+    "Company computers, one short row each: id, label, online and last seen, operator, release "
+    "(Tico), version (runner), wanted release, update (current, update_available, updating, "
+    "failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), bots "
+    "running, running turns, overloaded, AI tools signed in, warning, error and log-error counts, "
+    "latest CPU, memory and swap, and each team service's status. Pass `computer` for one in full "
+    "(each bot's readiness and update error, repositories, runtimes, recent errors); long "
+    "sections are capped, and `truncated` says how to read the rest with `section` and `offset`.",
     {
         "computer": _s("One computer's label or id: its full detail instead of the list"),
         "section": {
@@ -292,9 +291,10 @@ def computers(api, args):
 
 @tool(
     "tico_computer_performance",
-    "A computer's CPU, memory, load, swap and free disk over the last hours (up to 336): "
-    "a summary of when it was overloaded and what ran then, its overloads, the bots with the most turns there and "
-    "the busiest processes, and up to 96 points (columns named in `columns`). Numbers and process names only.",
+    "A computer's CPU, memory, load, swap and free disk over the last hours (up to 336): a "
+    "summary of when it was overloaded and what ran then, its overloads, the bots with the most "
+    "turns there and the busiest processes, and up to 96 points (columns named in `columns`). "
+    "Numbers and process names only.",
     {
         "computer": _s("The computer's label or id (tico computer list)"),
         "hours": {
@@ -337,9 +337,9 @@ def computer_performance(api, args):
 @tool(
     "tico_health_check",
     "What is wrong, most urgent first: bots with no computer, computers offline, failing runs, a "
-    "credential a bot needs, setup that never finished, paused or stopped bots, failing watchers or queued work, "
-    "and computers low on disk space. Includes the same checks as Health and their fixes. Fix what you may, then report. "
-    "The Assistant also gets the live snapshot of the team's bots.",
+    "credential a bot needs, setup never finished, paused or stopped bots, failing watchers or "
+    "queued work, computers low on disk. Includes Health's checks, with their fixes. Fix what you "
+    "may, then report. The Assistant also gets the live snapshot of the team's bots.",
     {},
 )
 def health_check(api, args):
@@ -348,24 +348,30 @@ def health_check(api, args):
 
 @tool(
     "tico_health_metrics",
-    "The server's flight recorder, for owners, admins and bots: per route request counts, errors, p50/p95 and "
+    "The server's flight recorder, for owners, admins and bots: per route request counts, errors, p50/p95/p99 and "
     "bytes by caller kind; slow requests; CPU, memory, event-loop lag and stalls with thread stacks; top SQL by total "
-    "time; write-lock waits; database size and growth by table; and each start's release and image check.",
+    "time; write-lock waits; database size and growth by table; each start's release and image check; and people's "
+    "browser timings (LCP, INP) per screen.",
     {
         "minutes": {"type": "integer", "description": "Look back this many minutes (default 60, at most 20160)"},
-        "section": _s("all (default) or a comma list of requests, slow, process, sql, db, events"),
+        "section": _s("all (default) or a comma list of requests, slow, process, sql, db, events, web"),
+        "caller": _s(
+            "only this kind of caller's requests, ranked by its count: human, bot, runner, service or anonymous"
+        ),
     },
 )
 def health_metrics(api, args):
-    query = {k: args[k] for k in ("minutes", "section") if args.get(k)}
+    query = {k: args[k] for k in ("minutes", "section", "caller") if args.get(k)}
     return _as_person(api).get("system/metrics", **query)
 
 
 @tool(
     "tico_support_file",
     "Tell the Tico team about something the product cannot do, or a fault you cannot fix. BotOps files it as the "
-    "person who asked, with their rights; with its own rights it is refused. Say what they asked for, what you tried, what the "
-    "product answered, the bot and the version. No secrets, no other people's details.",
+    "person who asked, with their rights; with its own rights it is refused. The person reads it on a Confirm card before "
+    "it is sent, so start with one short plain sentence anyone can follow: what is broken. Then say what they asked "
+    "for, what you tried, what the product answered, the bot and the version. No secrets, no other people's details, "
+    "no internal words such as keeper.",
     {"message": _s("What happened and what is missing, in plain words")},
     required=("message",),
     writes=True,
@@ -540,8 +546,9 @@ def maintenance_set(api, args):
 
 @tool(
     "tico_maintenance_runs",
-    "Maintenance: recent runs, newest first: when each started, what started it (the schedule or Run now), "
-    "whether it finished, and each step's status, reason, counts and cost. Page with `before` from `next`.",
+    "Maintenance: recent runs, newest first: when each started, what started it (the schedule or "
+    "Run now), whether it finished, and each step's status, reason, counts and cost. Page with "
+    "`before` from `next`.",
     {"limit": {"type": "integer", "minimum": 1, "maximum": 200}, "before": _s("`next` from the page before")},
 )
 def maintenance_runs(api, args):

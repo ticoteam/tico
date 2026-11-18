@@ -4,7 +4,7 @@
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
-    doer       people, hand-offs, asks, results        batched 5 min        yes               yes     any
+    doer       people, hand-offs, asks, results        note                 yes               yes     any
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
@@ -14,8 +14,8 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
 
-A profile has no wake numbers of its own (spec v4, Product #248): every bot's notices wait the one built-in wait and
-its routines keep the one repeat guard (backend/wake_presets.py). The one number left is a lead's digest hour, which a
+A profile has no wake numbers of its own (spec v4, Product #248): a notice a rule batches waits the one built-in wait,
+news about a task's pull request is its owner's turn (Product #546), and its routines keep the one repeat guard (backend/wake_presets.py). The one number left is a lead's digest hour, which a
 Lead or Custom bot may set (`profile_options`). Every profile wakes on its task roundup, the one grouped wake per
 bot per run; `sweeps` says whether the roundup also lists it its late, exception, backlog, assigned, restate, missed and quiet
 tasks (a profile with sweeps off gets its questions and its own follow-ups on it). `pulls`, `sweeps` and `takes` are fixed by the profile
@@ -36,6 +36,7 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
     "doer",
@@ -97,7 +98,7 @@ SPEC = {
     DOER: {
         **BASE,
         "label": "Doer",
-        "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
+        "description": "Works the tasks it is given. News about them wakes it at once on its turn; people and hand-offs wake it at once.",
     },
     REVIEWER: {
         **BASE,
@@ -225,14 +226,14 @@ def effective(config):
 
 def summary(name, spec):
     """One line saying what the numbers mean for this profile."""
-    from .wake_presets import NOTICE_SECONDS, REPEAT_SECONDS, _duration
+    from .wake_presets import REPEAT_SECONDS, _duration
 
     sweep = f"; a routine runs at least {_duration(REPEAT_SECONDS)} after its last run" if spec["sweeps"] else ""
     if name == CUSTOM and spec["digest_hour"] is not None:  # checked first: a digest is what its news waits for
         hour = spec["digest_hour"]
         return f"The rest of the news arrives once a day, at {hour:02d}:00 team time."
     if name in (DOER, CUSTOM):
-        return f"News about its tasks waits {_duration(NOTICE_SECONDS)}{sweep}."
+        return f"News about its tasks wakes it at once, on its turn; the rest is a note for its next run{sweep}."
     return ""
 
 
@@ -330,7 +331,7 @@ def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, o
             f"{name} answers people in chat and takes no tasks (its profile is Responder), so it never "
             "sees tasks. Write to it in its chat, or give this task to a bot that works tasks.",
         )
-    if actor == H.KEEPER or routine:
+    if actor == H.TICO_ACTOR or routine:
         return None
     if takes == "review":
         if is_review_task(c, {"id": task, "title": title, "owner_id": owner}, parent_id=parent, labels=labels):
@@ -587,7 +588,7 @@ def migrate(c, tell=True):
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row["bot"],))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
             materialise(c, row["bot"], source)
-        H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
+        H.event(c, H.TICO_ACTOR, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
         if row["state"] == "archived":
             continue
         owner = row["owner_id"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
@@ -598,7 +599,7 @@ def migrate(c, tell=True):
         more = f"\n...and {len(bots) - 40} more." if len(bots) > 40 else ""
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             H.human_actor(owner),
             "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n"
             + "\n".join(lines)
@@ -649,7 +650,7 @@ def mismatches(c):
         elif name == DOER:
             seen = c.execute(
                 "SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
-                "AND created_at>? AND settled_at IS NOT NULL AND coalesce(purpose,'')<>'keep warm'",
+                "AND created_at>? AND settled_at IS NOT NULL",
                 (bot, since),
             ).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()
@@ -673,13 +674,24 @@ def install(app, store, auth, mutate, settings_admin):
             raise Problem("not_found", "Bot not found", 404)
         auth.require_see(c, who, bot)
 
-    @app.get("/api/v2/profiles")
+    @app.get(
+        "/api/v2/profiles",
+        **api_v2(
+            "Bots",
+            "listProfiles",
+            "Every bot profile with its one-line description, its values and the wake rows it adds, for a picker",
+            "ProfileChoices",
+        ),
+    )
     def profile_choices(request: Request):
         """Every profile with its one-line description, its values and the wake rows it adds, for a picker."""
         auth.domain(request.state.identity)
         return {"profiles": choices()}
 
-    @app.get("/api/v2/bots/{bot}/profile")
+    @app.get(
+        "/api/v2/bots/{bot}/profile",
+        **api_v2("Bots", "getBotProfile", "A bot's profile and the values it runs on", "BotProfileState"),
+    )
     def bot_profile(request: Request, bot: str):
         """The bot's profile and the values it runs on."""
         who = request.state.identity
@@ -688,7 +700,15 @@ def install(app, store, auth, mutate, settings_admin):
             seeing(c, who, bot)
             return view(c, bot, settings_admin._config(c, bot))
 
-    @app.post("/api/v2/bots/{bot}/profile")
+    @app.post(
+        "/api/v2/bots/{bot}/profile",
+        **api_v2(
+            "Bots",
+            "setBotProfile",
+            "Set the bot's profile (doer, reviewer, lead, manager, responder, monitor, custom); leaving custom deletes the wake rules it copied and needs confirm_drop_rules",
+            "BotProfileState",
+        ),
+    )
     def bot_profile_set(request: Request, bot: str, body: BotProfile):
         """Set the bot's profile; the revision you read must still be current (409 version_conflict otherwise)."""
         who = request.state.identity

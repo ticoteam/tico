@@ -35,14 +35,10 @@ MARK = "release.decision_todos"  # registry_metadata: {"since", "done", "wait_un
 JUDGED = "decision_todos.judged"  # one event per judged to-do
 PER_PASS = 20  # calls one pass makes at most
 RETRY = timedelta(hours=1)  # after a failed call, the next pass that asks
-NOTE = (
-    "Closed by Tico: this is a decision for {person}, so {bot} asks it as a question on its own task, with why it "
-    "matters, its choices and its recommendation."
-)
+NOTE = "Closed by Tico: this is a decision for {person}, so {bot} asks it with a ❓ message on its own task."
 TOLD = (
-    "Your to-do “{title}” for {person} was a decision, so Tico closed it. Ask it as a question on your own "
-    "task: tico task ask <task> --to {handle}, with why it matters, 2 to 4 choices each saying what happens, and your "
-    "recommendation."
+    "Your to-do “{title}” for {person} was a decision, so Tico closed it. Ask it on your own task: "
+    'tico task ask <task> --to {handle} "<question>". Say why, the options and your pick in the message.'
 )
 
 
@@ -69,7 +65,7 @@ def _save(c: Any, value: dict[str, Any]) -> None:
 def candidates(c: Any, since: str) -> list[dict[str, Any]]:
     """The open to-dos a bot filed for a person before `since` that no pass has judged, oldest first."""
     rows = c.execute(
-        "SELECT t.id, t.title, t.body, t.requester_id, t.owner_id FROM tasks t "
+        "SELECT t.id, t.title, t.requester_id, t.owner_id FROM tasks t "
         "WHERE t.status='open' AND t.pipeline_id=? AND t.requester_id LIKE 'bot:%' AND t.owner_id LIKE 'human:%' "
         "AND t.created_at<? "
         "AND NOT EXISTS (SELECT 1 FROM goal_asks g WHERE g.task_id=t.id) "
@@ -80,13 +76,14 @@ def candidates(c: Any, since: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
         task = {k: row[k] for k in row.keys()}
+        task["body"] = H.task_request_text(c, task["id"])  # what it asks: its first message
         if H.human(c, H.actor_id(task["owner_id"])):
             out.append(task)
     return out
 
 
 def _judged(c: Any, task_id: str, outcome: str) -> None:
-    H.event(c, H.KEEPER, JUDGED, task_id, {"outcome": outcome})
+    H.event(c, H.TICO_ACTOR, JUDGED, task_id, {"outcome": outcome})
 
 
 def _close(c: Any, task: dict[str, Any]) -> bool:
@@ -96,9 +93,9 @@ def _close(c: Any, task: dict[str, Any]) -> bool:
         return False
     person = H.person_name(c, H.actor_id(task["owner_id"])) or H.actor_id(task["owner_id"])
     bot = H.actor_name(c, task["requester_id"]) or H.actor_id(task["requester_id"])
-    H.task_close(c, H.KEEPER, task["id"], NOTE.format(person=person, bot=bot), row.get("version"))
+    H.task_close(c, H.TICO_ACTOR, task["id"], NOTE.format(person=person, bot=bot), row.get("version"))
     told = TOLD.format(title=task["title"], person=person, handle=H.actor_id(task["owner_id"]))
-    H.say(c, H.KEEPER, task["requester_id"], told, kind="notice", refs={"task": task["id"], "needs_action": True})
+    H.say(c, H.TICO_ACTOR, task["requester_id"], told, kind="notice", refs={"task": task["id"], "needs_action": True})
     return True
 
 

@@ -15,10 +15,10 @@ per action and reuse that id with the same arguments for a retry. Replace `<batc
    Omit `bot` for that default, name a bot for its items, or use `all:true` for all bots. The response contains `item`, `total`,
    `position`, `alerts`, `lineup` and `resumed`. An existing open batch resumes; `fresh:true` abandons it and starts again.
    The human's own tasks are separate: use `tico_task_list` for them.
-2. Read the current item's question or exact proposed action. For a question the human answers, record their own words:
+2. Read the current item's exact proposed action. A question (❓) is answered in its chat, not in a batch: skip it or take it later. To record an OK:
 
    ```json
-   {"batch":"<batch-id>","kind":"decide","decision":"answer","text":"Use the example app's welcome guide.","operation_id":"example-answer-1"}
+   {"batch":"<batch-id>","kind":"decide","decision":"ok","operation_id":"example-ok-1"}
    ```
 
    Call `tico_needs_you_respond` with that body. Recording a response does not apply it. For an OK use `decision:ok`, or
@@ -50,7 +50,7 @@ original key returns the first receipt; a changed body with that key returns `40
 | Abandon | `POST /api/v2/batch/<id>/abandon` | `{}` |
 
 `kind` is `decide`, `needs_info`, `instruct`, `rule`, `skip` or `later`. `decide` takes `ok` or `send_back` on an OK,
-`answer` on a question, and `done` or `close` on a task filed for the person. `needs_info`, `instruct` and `rule` send
+and `done` or `close` on a task filed for the person. `needs_info`, `instruct` and `rule` send
 the human's text to the originating bot on commit.
 `later` takes a timezone-bearing ISO `until`; `skip` leaves the item for another pass. HTTP also accepts `heard` for a voice readback.
 Responses can be replaced while the batch is open. A batch belongs to its human: another human gets `404`; an operation on a closed

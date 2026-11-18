@@ -7,8 +7,8 @@ seven rules are checked (`never_stuck.rules_hold`), every open task must wait on
 more than 7 bot runs without a change before a person was asked.
 
 At the end the faults stop and the bots only stop early. The clock runs on until nothing is due, and every task must be
-Done, Closed, Snoozed, in a by-hand stage or a person's turn, or wait only on room or on tasks whose own chain ends in
-one of those."""
+Done, Closed, Snoozed, in a by-hand stage, a person's turn or resting at the ladder's end (with its bot, for the
+quiet-task rule to tell the manager), or wait only on room or on tasks whose own chain ends in one of those."""
 
 import random
 import sqlite3
@@ -39,7 +39,7 @@ REASSIGN, CLOSE, BACK = "reassign", "close", "move back"
 SILENT = "stay silent"
 LEASE_S = 90  # a run's lease, renewed while its computer checks in
 RUN_CAP_S = 3600  # a run is cut off at 60 minutes
-MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/pipelines-v3.md)
+MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/dev/pipelines-v3.md)
 
 
 # Engine bugs the rig has found and that are still open, by name (see README.md), each with a test that tells its
@@ -134,12 +134,12 @@ def wake_kind(c: sqlite3.Connection, job_id: str) -> str:
 
 
 def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
-    """For each task on the engine, what counts as a change (docs/pipelines-v3.md, C4, as R1 settles it): its visit,
+    """For each task on the engine, what counts as a change (docs/dev/pipelines-v3.md, C4, as R1 settles it): its visit,
     status and owner (a move, a reassign), the answers, added requirements and who each is asked of (a person giving an
-    ask to someone else is a person acting, so a change) and filed tasks of its open visit. Not a
-    snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises it). Read
-    by the rig itself, not through the engine's own progress mark. The last part says a person has it now (the ladder
-    or Late got to a person)."""
+    ask to someone else is a person acting, so a change), filed tasks of its open visit, and a person's reply to a ❓ on
+    it. Not a snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises
+    it). Read by the rig itself, not through the engine's own progress mark. The last part says a person has it now (the
+    ladder or Late got to a person)."""
     rows = c.execute(
         "SELECT t.id, v.id, t.status, t.owner_id, "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
@@ -151,6 +151,7 @@ def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
         "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
         "(SELECT COUNT(*) FROM links l LEFT JOIN tasks k ON k.id = l.to_task_id "
         " WHERE l.visit_id = v.id AND COALESCE(k.status, 'gone') <> 'open'), "
+        "(SELECT COUNT(*) FROM question_marks q WHERE q.task_id = t.id AND q.cleared_message_id IS NOT NULL), "
         "v.level = 'person' "
         "FROM tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL WHERE t.pipeline_id IS NOT NULL"
     ).fetchall()
@@ -544,15 +545,26 @@ class Sim:
             self.act(bot, "puts it on ice", lambda c: E.snooze(c, task, bot, "Parked until spring", None, seen), task)
             return
         if behaviour == ASK:
-            kind = rng.choice(("ok", "answer"))
+            from backend import question_marks as Q
+
             person = rng.choice((ANA, BEN, CARA, REVIEWER))
-            line = "Is this the right plan?" if kind == "answer" else "OK to go ahead?"
-            self.act(
-                bot,
-                f"asks {person} for an {kind}",
-                lambda c: E.add_requirement(c, task, bot, kind, person, line, seen_version=seen),
-                task,
-            )
+            if rng.random() < 0.5:  # an OK shows what it approves; a question is a ❓ message on the task
+                self.act(
+                    bot,
+                    f"asks {person} for an OK",
+                    lambda c: E.add_requirement(
+                        c, task, bot, "ok", person, "OK to go ahead?", shows=_plan(c, bot), seen_version=seen
+                    ),
+                    task,
+                )
+            else:
+                # The bot's reach is not what the rig checks: Tico words the ❓ for it (checked=False).
+                self.act(
+                    bot,
+                    f"asks {person} a ❓",
+                    lambda c: Q.ask(c, bot, task, person, "Is this the right plan?", checked=False),
+                    task,
+                )
             return
         if behaviour == FILE:
             self.file_under(bot, task)
@@ -584,8 +596,6 @@ class Sim:
                     self.act(
                         bot, "OKs it", lambda c, rid=rid: A.answer(c, task, rid, bot, "ok", seen_version=seen), task
                     )
-            elif kind == "answer" and rid:
-                self.act(bot, "answers", lambda c, rid=rid: A.answer(c, task, rid, bot, "Yes", seen_version=seen), task)
             elif kind == "linked_done":
                 if rng.random() < 0.2:
                     self.act(
@@ -657,7 +667,8 @@ class Sim:
         for person in PEOPLE:
             if self.rng.random() >= self.person_rate[person]:
                 continue
-            items = self.world.read(lambda c, person=person: W.needs(c, person))
+            # Their Needs you, and the tasks whose work is theirs (in Tasks): a person works both.
+            items = self.world.read(lambda c, person=person: W.needs(c, person, own_work=True))
             if person == ANA:
                 items = items + [{"kind": "by_hand", "task_id": t} for t in self.by_hand_tasks()]
             if not items:
@@ -698,10 +709,16 @@ class Sim:
                 self.act(person, "says done", lambda c: A.answer(c, task, rid, person, "done"), task)
             self.act(person, "moves it on", lambda c: E.move(c, task, E.NEXT, person, None, version), task)
             return
+        if kind == "question":  # a ❓ on the task: their reply clears it
+            choice = rng.choice(("reply", "reply", SILENT))
+            self.stats.add(self.stats.people, f"question: {choice}")
+            if choice != SILENT:
+                self.act(person, "replies", lambda c: _h().task_comment(c, person, task, "Yes, that plan."), task)
+            return
         if kind == "ask":
             rid = str(item["requirement_id"])
             requirement = self.world.read(lambda c: R.get(c, rid)) or {}
-            choice = rng.choice(("answer", "answer", "no", "give", "push past", "thumbs down", SILENT))
+            choice = rng.choice(("answer", "answer", "no", "give", "push past", SILENT))
             self.stats.add(self.stats.people, f"ask: {choice}")
             if choice == SILENT:
                 return
@@ -710,19 +727,14 @@ class Sim:
                 self.act(person, f"gives it to {other}", lambda c: A.give_to(c, task, rid, person, other), task)
             elif choice == "push past":
                 self.act(person, "pushes past", lambda c: E.move(c, task, E.NEXT, person, "Go ahead", version), task)
-            elif choice == "thumbs down":
-                self.act(
-                    person, "gives a thumbs down", lambda c: A.thumbs_down(c, task, rid, person, "Not useful"), task
-                )
             elif choice == "no" and requirement.get("kind") == "ok":
                 self.act(
                     person, "sends it back", lambda c: A.answer(c, task, rid, person, "no", "Change the plan"), task
                 )
             else:
-                value = "ok" if requirement.get("kind") == "ok" else "Yes, go"
-                self.act(person, f"answers {value}", lambda c: A.answer(c, task, rid, person, value), task)
+                self.act(person, "answers ok", lambda c: A.answer(c, task, rid, person, "ok"), task)
             return
-        # The task is theirs: their own, or the ladder or Late brought it to them.
+        # The task is theirs: their own, or one they must let someone see.
         choice = rng.choice(("try again", "done", "reassign", "close", "snooze", "push past", SILENT, SILENT))
         self.stats.add(self.stats.people, f"task: {choice}")
         if choice == SILENT:
@@ -1014,8 +1026,8 @@ class Sim:
         return min(max(gap, 10.0), 3600.0)
 
     def final_check(self) -> None:
-        """Every task is Done, Closed, Snoozed, in a by-hand stage or a person's turn, or waits only on room or tasks
-        whose own chain ends in one of those."""
+        """Every task is Done, Closed, Snoozed, in a by-hand stage, a person's turn or resting at the ladder's end, or
+        waits only on room or tasks whose own chain ends in one of those."""
         from backend import waiting_on as W
 
         def settled(task: str, seen: set[str]) -> str | None:
@@ -1031,8 +1043,10 @@ class Sim:
             states = {x.state for x in waits}
             if states & {W.SNOOZED, W.BY_HAND, W.PERSON, W.PAUSED}:
                 return None
-            if W.BOT in states:
+            if W.BOT in states and (row.get("visit") or {}).get("level") != "person":
                 return f"{self.name(task)} is left waiting on a bot: {[(x.who, x.line) for x in waits]}"
+            if W.BOT in states:
+                return None  # the ladder rests on it: its bot has it, and the quiet-task rule tells the manager
             for x in waits:
                 if x.state == W.TASKS and x.who:
                     problem = settled(x.who, seen)
@@ -1100,3 +1114,10 @@ def run_seed(seed: int, *, explain: bool = False, steps: int | None = None) -> d
             "ended": sim.stats.ended,
             "restarts": world.restarts,
         }
+
+
+def _plan(c: Any, bot: str) -> list[str]:
+    """What a bot's OK shows: a page of the bot's own (task_engine.shows_a_file)."""
+    from backend.tests.helpers.engine import shown
+
+    return shown(c, "Plan", bot=bot.split(":", 1)[-1])

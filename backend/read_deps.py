@@ -25,12 +25,10 @@ refuses to drop a column a trigger names, so a migration dropping one of these c
 first; a rename is carried.
 """
 
-import json
-import sqlite3
-import threading
 import time
 
 from . import hubdb as H
+from . import row_clock
 from .store import Problem
 
 # A walk that read a message naming a file records this node; such a row is not settled, and the node is not kept.
@@ -38,7 +36,6 @@ FILE = "file:"
 BATCH = 100
 SPAN = 20000
 HOLD_MS = 200  # a sweep write gives the lock back once a row ends past this long, and queues again behind any waiter
-RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
 def names_file(refs):
@@ -50,134 +47,6 @@ def names_file(refs):
     if text in (None, "", "{}"):
         return False
     return "\\" in text or any(f'"{key}"' in text for key in PAGE_MESSAGE_KEYS)
-
-
-def _touch(node):
-    """Unsettle and queue every row that touched `node` (an SQL expression)."""
-    return (
-        f"INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep={node}; "
-        f"DELETE FROM read_index WHERE key IN (SELECT key FROM read_deps WHERE dep={node}); "
-    )
-
-
-def _touch_all(nodes):
-    """Unsettle and queue every row that touched one of `nodes` (an SQL SELECT of node strings)."""
-    return (
-        f"INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep IN ({nodes}); "
-        f"DELETE FROM read_index WHERE key IN (SELECT key FROM read_deps WHERE dep IN ({nodes})); "
-    )
-
-
-TURN = ("id", "meeting_id", "bot")
-
-
-def _turn_rooms(side):
-    """The rooms of the keeper inputs naming this turn, as nodes; the partial index holds only such inputs."""
-    turn = "json_extract(m.refs,'$.live_meeting.turn_id')"
-    return f"SELECT 'c:'||m.conversation_id FROM messages m WHERE {turn} IS NOT NULL AND {turn}={side}.id"
-
-
-def _changed(columns):
-    return " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in columns)
-
-
-MESSAGE = ("id", "conversation_id", "refs", "in_reply_to", "sender_id", "recipient_id")
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS read_index(key TEXT PRIMARY KEY) WITHOUT ROWID",
-    "CREATE TABLE IF NOT EXISTS read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID",
-    "CREATE INDEX IF NOT EXISTS read_deps_key ON read_deps(key)",
-    "CREATE TABLE IF NOT EXISTS read_dirty(key TEXT PRIMARY KEY) WITHOUT ROWID",
-    # A keeper input naming a live meeting turns its room into a meeting room for every message that reads it.
-    "CREATE TRIGGER IF NOT EXISTS read_deps_message_insert AFTER INSERT ON messages BEGIN "
-    "INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); "
-    + _touch("'m:'||NEW.id")
-    + _touch("'t:'||NEW.id")
-    + "INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id "
-    "AND instr(coalesce(NEW.refs,''),'live_meeting')>0; "
-    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs,''),'live_meeting')>0 AND key IN "
-    "(SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id); END",
-    f"CREATE TRIGGER IF NOT EXISTS read_deps_message_update AFTER UPDATE OF {','.join(MESSAGE)} ON messages "
-    f"WHEN {_changed(MESSAGE)} BEGIN INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); "
-    + _touch("'m:'||OLD.id")
-    + _touch("'m:'||NEW.id")
-    + _touch("'t:'||OLD.id")
-    + _touch("'t:'||NEW.id")
-    + _touch("'c:'||OLD.conversation_id")
-    + _touch("'c:'||NEW.conversation_id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_message_delete AFTER DELETE ON messages BEGIN "
-    + _touch("'m:'||OLD.id")
-    + _touch("'t:'||OLD.id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_conversation_insert AFTER INSERT ON conversations BEGIN "
-    + _touch("'c:'||NEW.id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_conversation_update AFTER UPDATE OF id, task_id, room_key ON conversations "
-    f"WHEN {_changed(('id', 'task_id', 'room_key'))} BEGIN " + _touch("'c:'||OLD.id") + _touch("'c:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_conversation_delete AFTER DELETE ON conversations BEGIN "
-    + _touch("'c:'||OLD.id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_insert AFTER INSERT ON tasks BEGIN " + _touch("'t:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_update AFTER UPDATE OF id ON tasks "
-    f"WHEN {_changed(('id',))} BEGIN " + _touch("'t:'||OLD.id") + _touch("'t:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_delete AFTER DELETE ON tasks BEGIN " + _touch("'t:'||OLD.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_insert AFTER INSERT ON attempts BEGIN "
-    "INSERT OR IGNORE INTO read_dirty VALUES('a:'||NEW.id); " + _touch("'a:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot_id, job_id, state ON attempts "
-    f"WHEN {_changed(('id', 'bot_id', 'job_id', 'state'))} BEGIN "
-    + _touch("'a:'||OLD.id")
-    + _touch("'a:'||NEW.id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_delete AFTER DELETE ON attempts BEGIN "
-    + _touch("'a:'||OLD.id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_input_insert AFTER INSERT ON attempt_inputs BEGIN "
-    + _touch("'a:'||NEW.attempt_id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_input_update AFTER UPDATE ON attempt_inputs BEGIN "
-    + _touch("'a:'||OLD.attempt_id")
-    + _touch("'a:'||NEW.attempt_id")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_input_delete AFTER DELETE ON attempt_inputs BEGIN "
-    + _touch("'a:'||OLD.attempt_id")
-    + "END",
-    *(
-        f"CREATE TRIGGER IF NOT EXISTS read_deps_job_{op.lower()} AFTER {op}{' OF id, message_id' if op == 'UPDATE' else ''} "
-        f"ON jobs BEGIN "
-        + "".join(
-            f"INSERT OR IGNORE INTO read_dirty SELECT d.key FROM read_deps d JOIN attempts a ON d.dep='a:'||a.id "
-            f"WHERE a.job_id={side}.id; DELETE FROM read_index WHERE key IN (SELECT d.key FROM read_deps d "
-            f"JOIN attempts a ON d.dep='a:'||a.id WHERE a.job_id={side}.id); "
-            for side in ({"INSERT": ("NEW",), "UPDATE": ("OLD", "NEW"), "DELETE": ("OLD",)}[op])
-        )
-        + "END"
-        for op in ("INSERT", "UPDATE", "DELETE")
-    ),
-    *(
-        f"CREATE TRIGGER IF NOT EXISTS read_deps_event_{op.lower()} AFTER {op} ON events WHEN "
-        + " OR ".join(f"{side}.action IN {RUN_EVENTS}" for side in sides)
-        + " BEGIN "
-        + "".join(_touch(f"'a:'||{side}.target") for side in sides)
-        + "END"
-        for op, sides in (("INSERT", ("NEW",)), ("UPDATE", ("OLD", "NEW")), ("DELETE", ("OLD",)))
-    ),
-    # A turn makes a room a meeting room through the keeper inputs that name it (live_privacy `_conversation_uncached`):
-    # only those rooms' readers change, and a claim, reply or skip changes none of the columns that check reads.
-    *(
-        f"CREATE TRIGGER IF NOT EXISTS read_deps_meeting_turn_{op.lower()} AFTER {op}"
-        f"{' OF ' + ','.join(TURN) if op == 'UPDATE' else ''} ON live_meeting_turns "
-        f"{'WHEN ' + _changed(TURN) + ' ' if op == 'UPDATE' else ''}BEGIN "
-        + "".join(_touch_all(_turn_rooms(side)) for side in sides)
-        + "END"
-        for op, sides in (("INSERT", ("NEW",)), ("UPDATE", ("OLD", "NEW")), ("DELETE", ("OLD",)))
-    ),
-)
-
-
-def ensure(conn):
-    """Tables and triggers; idempotent."""
-    for statement in SCHEMA:
-        conn.execute(statement)
 
 
 class _Recorded(dict):
@@ -210,14 +79,19 @@ class Walk:
         from .auth import Identity
         from .privacy_index import ReadIndex
 
-        self.index = ReadIndex(c, Identity("keeper", "owner"), rooms=True)
+        # Built under the sweep's write lock, once per write: no per-task readability (every task is private here,
+        # and nothing is denied), and the task ids and room map the server already shares (backend/row_clock.py). A
+        # Walk that worked out every private task's readers and read every room held the lock 0.25 s on TIDY before
+        # its first row (0.03 s now), seconds on a busy host, so each write settled one row while other writers, the
+        # Slack gateway's among them, gave up after their 10 s wait ("database is locked").
+        self.index = ReadIndex(c, Identity("keeper", "owner"), rooms=True, denials=False)
         self.c, self.nodes = c, set()
         index = self.index
         index.private = _Everything(self.nodes)
         index.denied = set()
-        tasks = set(index.task_ids)
+        tasks, rooms = row_clock.refs(c)
         index.known_task = lambda tid: self.nodes.add("t:" + str(tid)) or tid in tasks
-        index.conversation_tasks = _Recorded(dict(c.execute("SELECT id,task_id FROM conversations")), self.nodes)
+        index.conversation_tasks = _Recorded(rooms, self.nodes)
         index.target_message = self._message
         index.string_sources = index._string_sources
         index.message_sources = index._message_sources

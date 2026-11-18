@@ -168,8 +168,8 @@ def recognise(line):
 def sources(task):
     """The task's own evidence and scoped evidence from review children.
 
-    Collectors supply scoped messages. Keeper notices are accepted only when they
-    describe ready-for-review evidence, never arbitrary keeper chatter.
+    Collectors supply scoped messages. Tico notices are accepted only when they
+    describe ready-for-review evidence, never arbitrary Tico chatter.
     `receipt_authors` is supplied by the review gate's permission-aware collector;
     callers without one retain the owner-only rule.
     """
@@ -177,7 +177,7 @@ def sources(task):
     # The review gate marks each child it collected as a review of the board's review steps and names those steps;
     # a caller that did not classify them gets the Dev board's generic review titles.
     names = [re.escape(n) for n in task.get("review_steps") or ()] or [r"Review \d+"]
-    keeper_words = re.compile(r"ready[ -]for[ -]review|" + "|".join(names), re.I)
+    tico_words = re.compile(r"ready[ -]for[ -]review|" + "|".join(names), re.I)
     for item in [task, *task.get("children", [])]:
         review = item.get("review_check")
         if item is not task and not (
@@ -200,9 +200,9 @@ def sources(task):
                 continue
             actor = message.get("sender_id")
             text = message.get("body", "")
-            keeper = actor == "keeper" and keeper_words.search(text)
+            tico = actor == "keeper" and tico_words.search(text)
             allowed = {item.get("owner_id"), task.get("owner_id"), *item.get("receipt_authors", [])}
-            if actor not in allowed and not keeper:
+            if actor not in allowed and not tico:
                 continue
             out.append(
                 {

@@ -63,7 +63,7 @@ declare function providersCollect(root: HTMLElement): {preset: string; enabled: 
         url: 'https://updates.tico.team/v1/gateway', default_url: 'https://updates.tico.team/v1/gateway', preview: '', revision: 0,
         state: 'none', working: false, message: 'No gateway key saved.'});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

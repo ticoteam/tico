@@ -3,12 +3,8 @@ display_name: "Content Owner"
 labels: [owner:content-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
-# Declared off. Starting setup (or going live) switches on both, once, unless a person changed one first
-# (Onboarding.arm_routines). `tico bot create` seeds them once; from then on Tico's rows are the routines
-# (docs/routines.md).
 routines:
   - id: watch
     title: Watch Content
@@ -25,9 +21,6 @@ routines:
     labels: [priority:p3]
     enabled: false
 
-# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
-# arrives in, never the value. Store a Credential in Tico and grant it to this bot;
-# the runner delivers it during a run. Declaring access here does not create a grant.
 # tools:
 #   - service: mail
 #     identity: "desk@example.com"

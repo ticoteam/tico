@@ -21,7 +21,7 @@ use serde_json::{json, Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStdout, Command};
 
-use super::{event, failed, hub_mcp_server, is_limit, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server_by_name, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{log, text_of, truthy};
 
@@ -276,14 +276,8 @@ pub fn muse_config(servers: &[Value], env: &Env) -> (Map<String, Value>, Env) {
 /// the bot's remote servers. Secrets stay in the environment as `${VAR}`.
 pub fn mcp_overrides(settings: &Settings) -> (Vec<String>, Env) {
     let mut args = vec![];
-    if let Some(hub) = hub_mcp_server(&settings.env) {
-        let vars: Map<String, Value> = hub["env"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
-            .collect();
-        let server = json!({"transport": "stdio", "command": hub["command"], "args": hub["args"], "env": vars});
+    if let Some(hub) = hub_mcp_server_by_name(&settings.env) {
+        let server = json!({"transport": "stdio", "command": hub["command"], "args": hub["args"], "env": hub["env"]});
         args.extend(["-c".into(), format!("mcp_servers.tico={server}")]);
     }
     let (config, extra) = muse_config(&settings.mcp_servers, &settings.env);

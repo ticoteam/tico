@@ -73,5 +73,5 @@ def as_cause(actor):
 
 
 def news(c, task, body="Step moved: In Progress -> Review 1", refs=None):
-    """A keeper notice about `task` to its owner, the kind a step move or relation change writes."""
+    """A Tico notice about `task` to its owner, the kind a step move or relation change writes."""
     return H._wake(c, task, task["owner_id"], body, refs=refs)

@@ -47,25 +47,6 @@ ANA = H.human_actor("ana")
 CMO = H.bot_actor("cmo")
 
 
-# The run table as an install from before migration 0072 had it: a run's record in `turns` (the attempts table keeps
-# the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
-LEGACY_TURNS = (
-    "CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
-    "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
-    "cached_tokens INTEGER, output_tokens INTEGER, model TEXT, provider TEXT, est_cost_usd REAL, "
-    "billing TEXT, trigger_kind TEXT, trigger_source TEXT, writes INTEGER, outcome TEXT, "
-    "did_nothing INTEGER, purpose TEXT)"
-)
-
-
-def with_legacy_run_tables(conn):
-    """Put back `turns` and what the cut-over took away (empty) on a file `H.connect` made, and forget migration 0072,
-    so the numbered steps and the migrations run on them again as on an install from before it."""
-    forget_from(conn, "0072")
-    conn.execute(LEGACY_TURNS)
-    conn.commit()
-
-
 class HubCase(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

@@ -1,1 +1,1 @@
-"""Redesign scenarios (PLAN §7): written before the code and run against a disposable hub (world.py). See README.md."""
+"""The redesign test world: the Acme org on a disposable hub (world.py). See README.md."""

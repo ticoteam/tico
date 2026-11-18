@@ -215,9 +215,9 @@ it off. Only codes are logged, never the key.
 Bot settings, new bots, fallbacks and bulk model changes use three separate fields:
 **Harness / provider**, then **Model**, then **Effort**. Model choices follow the selected harness
 and the team's enabled providers; effort choices follow that model. For an existing bot's primary model, choose
-all three and press **Apply** to use the existing confirmation and checkpoint transition. Changing
+all three and press **Apply** to confirm the change, which applies at once with a fresh session. Changing
 a field alone does not switch the running bot. Cancel restores the saved selection. In the bot editor,
-**Save bot** with a model picked but not applied opens the same confirmation; press **Prepare change** to
+**Save bot** with a model picked but not applied opens the same confirmation; press **Change** to
 save the bot and start the change, or **Cancel** to keep the editor open with "Model change not applied".
 Everything else in the bot editor (fallback, task model, access, owners, computer, profile, run budget) is held until
 **Save bot**, which saves it all together; a line above the button lists what is not saved yet. If something can't be
@@ -227,24 +227,26 @@ A subscription quota response is a usage limit. The runner uses its configured f
 signed-in provider when automatic fallback is on. Without a fallback it keeps the work queued; an explicit
 usage-window reset holds it until that time. **Try now** still lifts the hold after a person renews the plan.
 
-The current OpenAI and Claude choices, reviewed 2026-10-03, are:
+The current OpenAI and Claude choices, reviewed 2026-11-17, are:
 
 | Harness | Model | Model ID | Released |
 |---|---|---|---|
 | Claude Code (Anthropic) | Opus 5.5 | `claude-opus-5-5` | 2026-09-22 |
 | Claude Code (Anthropic) | Sonnet 5.5 | `claude-sonnet-5-5` | 2026-09-28 |
-| Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
+| Claude Code (Anthropic) | Fable 5.2 | `claude-fable-5-2` | 2026-11-09 |
 | Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
-| Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
+| Codex (OpenAI) | Sol 6.2 | `gpt-6.2-sol` | 2026-11-17 |
+| Codex (OpenAI) | Astra 6.2 | `gpt-6.2-astra` | 2026-11-17 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 
 Release dates: [Claude release notes](https://platform.claude.com/docs/en/release-notes/overview)
 and [OpenAI changelog](https://developers.openai.com/api/docs/changelog).
 The offered effort levels are low, medium, high, xhigh and max, supported by the existing runner
 adapters and documented for [Claude](https://platform.claude.com/docs/en/build-with-claude/effort),
-[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
+[Sol 6.2](https://developers.openai.com/api/docs/models/gpt-6.2-sol),
+[Astra 6.2](https://developers.openai.com/api/docs/models/gpt-6.2-astra) (Sol 6.2 and Astra 6.2 also take ultra) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
-Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
+Astra 6, Sol 6, Sol 6.1, Fable 5.1 and Opus 5 remain readable for existing configurations but cannot be newly selected.
 Terra 6.1 (`gpt-6.1-terra`) is offered on Codex with your own ChatGPT plan. The Tico AI Gateway does not offer it.
 No existing bot is migrated automatically.
 
@@ -376,6 +378,16 @@ to 2.1.316 (no turn on this computer has used it for 64 minutes)` or `(no turn r
 hours)`. A first install and the owner's **Update** or pin do not wait, and pinning a harness drops a daily update
 still waiting for it.
 
+Each manifest's `[version]` table can name the oldest release Tico supports (`minimum`) and releases known to be
+broken (`broken`: a version, `"2.1.301"`, or a range, `">=2.1.300 <2.1.305"`), checked in with the runner and never
+fetched (`runner-rs/src/cli_compat.rs`). The daily update skips a broken release and stays on the installed one; the
+runner logs why once and the harness's status says it (`Claude Code 2.1.301 is a known-broken release (...); staying on
+2.1.299`), with no update offered. An install or **Update** whose newest release is broken takes the newest earlier
+one that is not. An installed release below the minimum or on the list, the runner's or a person's own, is named in
+the status the same way. A flag or feature only newer releases have is passed or used only with one that has it, read
+from the CLI's own version line (`2.1.326 (Claude Code)`), so a wrapper's number never decides: `--effort` needs Claude
+Code 2.1.38, steering 2.1.296 and native goals 2.1.212. An unreadable version leaves each one off.
+
 A harness can be **pinned** to a version: the runner keeps that version and only reports that a newer one exists.
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per
 computer.
@@ -405,6 +417,8 @@ what they print with the runner's own code (`runner-rs/src/cli_contract.rs`):
 - signed out, `claude auth status --json` and `codex login status` answer in the words the status check reads;
 - `claude setup-token`, in the terminal the runner opens, shows a link and a prompt for the code; a made-up code is
   masked and gives the "OAuth error … Press Enter to retry" screen;
+- `claude auth login --claudeai` (a full Claude login's Connect) shows a link back to the manual-code page and a
+  prompt; a made-up code is masked;
 - `codex login --device-auth` shows a link and a one-time code (never entered);
 - a turn with no login ends as a refused sign-in for both, not as a general failure.
 
@@ -445,6 +459,8 @@ A harness is a manifest plus a host adapter.
    [version]
    args = ["--version"]
    pattern = '(\d+\.\d+\.\d+)'  # one capture group
+   minimum = "1.2.0"            # optional: the oldest release Tico supports
+   broken = []                  # optional: releases updates skip, "1.2.3" or ">=1.2.3 <1.2.5"
 
    [update]
    policy = "latest"            # latest | pinned (a pinned manifest also needs pin = "1.2.3")
@@ -519,7 +535,6 @@ another bot's home; all turns use the original login in its own home.
 | `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
-| `one_turn_per_login` | Optional queue, disabled for Codex (`false`). A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
 | `isolated_user` | The CLI keeps no owner-only sign-in state in the bot's home, so on a Docker runner with a turn-user pool each turn runs as its own leased OS user that cannot enter another bot's checkout. Only pi sets it: Claude Code, Codex, Gemini CLI, Cursor, Grok, Muse Code and Antigravity keep 0600 sign-in files shared across turns | The turn runs as `bot`; readiness reports it as not isolated |
 | `compaction` | The bot's Compact at setting applies | Setting hidden |
 | `compaction_events` | The harness says in its stream when it compacts a session (Claude Code's `compact_boundary`, pi's `compaction_end` with a result), so a resumed turn whose standing instructions and task are unchanged and still in the session gets one line for each instead; after a compaction the next turn gets them in full | Every turn gets the whole prompt |

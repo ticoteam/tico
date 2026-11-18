@@ -21,7 +21,7 @@ For each live goal:
   bet. That replaces a Why line: a goal with a bet needs none. You never set it yourself. A goal that serves no bet
   is a note, never a flag: the page shows "not tied to a bet" as a filter, not a nag.
 
-**Bets** (when the owner asks for goals through their Assistant, or after a version is published): prefer goals that serve an
+**Bets** (when the owner asks for goals through their Assistant, or after the strategy changes): prefer goals that serve an
 active bet, measured by a KPI, since only KPI-backed goals give a bet its health. For each active bet with no
 KPI-backed goal (`goals_by_bet` and `health_by_bet` in `tico strategy show`), suggest one or two, each with the bet
 named, `bet_id` set in the goal you put in front of them (`tico goal create ... --bet <id>` on their click, or the

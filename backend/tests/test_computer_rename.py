@@ -32,7 +32,7 @@ def test_an_owner_or_admin_renames_a_computer_and_a_member_cannot(api):  # noqa:
         ).fetchone()
     assert event["actor"] == "human:ana" and '"before": "Test Mac"' in event["detail"]
     # The old spelling still answers; an admin may rename too.
-    post(api, f"runners/{rid}/label", {"label": "Build box"}, token="ben-test")
+    post(api, f"computers/{rid}/label", {"label": "Build box"}, token="ben-test")
     assert label_of(api, rid) == "Build box"
     refused = rename(api, rid, "Cara's now", token="cara-test", expected=403)
     assert refused["error"]["code"] == "forbidden" and label_of(api, rid) == "Build box"

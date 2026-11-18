@@ -25,7 +25,7 @@ const MESSAGES = [
 ];
 const BOT = {bot: 'support-owner', name: 'Support Owner', description: 'Owns the support queue and drafts every reply.', state: 'active', can_manage: true,
   sources: [{id: 'slack:CSUP', kind: 'slack', name: '#support', post: false}, {id: 'email:support@acme.example', kind: 'email', name: 'support@acme.example', synced_at: ago(2)}],
-  last_run: ago(4), next_run: null, slack_interval_minutes: 60};
+  last_run: ago(4), next_run: null};
 
 async function open(browser: Browser, viewport: {width: number; height: number}, w: World, theme: string): Promise<{page: Page; errors: string[]; context: import('playwright').BrowserContext}> {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760});
@@ -57,7 +57,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     if (p === '/api/v2/mail/agent') return json({updated_at: ago(3), instructions: 'Answer every support message within the hour.\nAsk before refunds.'});
     if (p === '/api/v2/messaging/bots') return json({bots: [{bot: BOT.bot, state: BOT.state, revision: 4}]});
     if (p === `/api/v2/messaging/bots/${BOT.bot}`) return json({bot: BOT, slack: [{ts: String(Date.now() / 1000 - 3600), thread_ts: '1', channel: 'CSUP', author: 'Kim', text: 'The calibration steps again?'}],
-      slack_posts: [], slack_digests: [], mail: [], instructions: {published: false, content: 'Owns the support queue and drafts every reply.'}});
+      slack_posts: [], mail: [], instructions: {published: false, content: 'Owns the support queue and drafts every reply.'}});
     if (p === `/api/v2/bots/${BOT.bot}/definition` && method === 'POST') { w.posts.push({path: p, body: JSON.parse(route.request().postData() || '{}')}); return json({}); }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -90,7 +90,7 @@ async function shot(page: Page, name: string) {
     for (const [size, viewport] of [['desktop', {width: 1280, height: 900}], ['phone', {width: 390, height: 844}]] as const) {
       for (const theme of ['light', 'dark'] as const) {
         const where = `${size}-${theme}`;
-        // ---- Mail, one mailbox and nothing synced: one header, no tabs, no side box, the empty state once.
+        // ---- Mail, one mailbox and no messages in its Gmail: one header, no tabs, no side box, the empty state once.
         {
           const w: World = {boxes: [ANA], messages: [], reads: [], posts: []};
           const {page, errors, context} = await open(browser, viewport, w, theme);
@@ -101,7 +101,8 @@ async function shot(page: Page, name: string) {
           assert.equal(await page.locator('.mail-boxes').isVisible(), false, `${where}: no mailboxes box for one mailbox`);
           const text = await page.locator('#main').innerText();
           assert.equal(text.match(/Message bots/g)?.length, 1, `${where}: the title is said once`);
-          assert.equal(text.match(/synced/gi)?.length, 1, `${where}: the empty state is said once: ${text}`);
+          assert.equal(text.match(/No messages/g)?.length, 1, `${where}: the empty state is said once: ${text}`);
+          assert.doesNotMatch(text, /sync/i, `${where}: mail is read live from Gmail, never "synced": ${text}`);
           assert.doesNotMatch(text, /Select a message/, `${where}: no text in an empty reading pane`);
           assert.equal(await page.locator('#mail-thread').isVisible(), false, `${where}: no reading pane beside an empty list`);
           assert.equal(await page.locator('#mail-fresh').isVisible(), false, `${where}: no sync caption`);
@@ -113,7 +114,7 @@ async function shot(page: Page, name: string) {
           assert.deepEqual(errors, [], where);
           await context.close();
         }
-        // ---- Mail, two mailboxes, one with instructions and a failed sync: the list beside, tabs, the filter.
+        // ---- Mail, two mailboxes, one with instructions and a failed Gmail check: the list beside, tabs, the filter.
         {
           const w: World = {boxes: [SUPPORT, {...ANA, synced_at: ago(5), error: 'The Gmail key was refused'}], messages: MESSAGES, reads: [], posts: []};
           const {page, errors, context} = await open(browser, viewport, w, theme);
@@ -150,10 +151,10 @@ async function shot(page: Page, name: string) {
           await shot(page, `mail-instructions-${where}`);
           await page.locator('#main .ph-tab', {hasText: 'Messages'}).click();
           await page.locator('#mail-inbox-view').waitFor();      // the open thread stays open (over the list on a phone)
-          // The other mailbox's sync failed: said in red, and it stays.
-          await page.locator('[data-mailbox="all"]').click();
+          // The other mailbox's Gmail check failed: why is said in red, and it stays.
+          await page.locator(`[data-mailbox="${ANA.address}"]`).click();
           await page.locator('#mail-fresh').waitFor();
-          assert.match(await page.locator('#mail-fresh').innerText(), /Ana Rivera: Last sync failed/, `${where}: a failed sync is said`);
+          assert.match(await page.locator('#mail-fresh').innerText(), /Ana Rivera: The Gmail key was refused/, `${where}: a failed check says why`);
           assert.equal(await page.locator('#mail-fresh').evaluate(el => el.classList.contains('err')), true);
           assert.equal(await sideways(page), false, `${where}: nothing scrolls sideways`);
           await shot(page, `mail-list-${where}`);

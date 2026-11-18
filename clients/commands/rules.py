@@ -72,7 +72,7 @@ STAGE_FIELDS = {
     "cond": {
         "type": "object",
         "description": "Stage rule: If, fixed conditions such as owner_on_team or owner_not_on_team (a team id; "
-        "empty: the manager's team), owner_kind, label, requester_person, sent_back, snooze_hours_over, turn",
+        "empty: the manager's team), owner_kind, label, requester_person, snooze_hours_over, turn (timers only)",
     },
     "jev": _s("Stage rule: one question Jev answers (one Jev call per event); empty for none"),
     "then": {
@@ -98,10 +98,10 @@ def _stage_decide(api, args, action):
 
 @tool(
     "tico_rules_list",
-    "The org rules in force, newest first, paged: internal (between teammates) and external "
-    "(what someone outside requires). mine=true reads your bot's rules, and its settings as sentences. kind=stage "
-    "lists stage rules: with pipeline (and stage), those that apply there, most specific first, each with its cost; "
-    "with mine, the ones you wrote or suggested.",
+    "The org rules in force, newest first, paged: internal (between teammates) and external (what "
+    "someone outside requires). mine=true reads your bot's rules and its settings as sentences. "
+    "kind=stage lists stage rules: with pipeline (and stage), those that apply there, most "
+    "specific first, each with its cost; with mine, the ones you wrote or suggested.",
     {
         "kind": {"type": "string", "enum": ["internal", "external", "stage"]},
         "pipeline": _s("kind=stage: the pipeline's id"),
@@ -177,9 +177,10 @@ def rules_get(api, args):
 
 @tool(
     "tico_rules_read",
-    "Add a document for the Rules Owner to read: a file you can read, or a public link (fetched now, saved as a "
-    "file version). The Rules Owner suggests the obligations in it as rules, each with its quote, for a person to add or skip. "
-    "The Assistant adds it as the person, citing their words (on_behalf_of).",
+    "Add a document for the Rules Owner to read: a file you can read, or a public link (fetched "
+    "now, saved as a file version). The Rules Owner suggests the obligations in it as rules, each "
+    "with its quote, for a person to add or skip. The Assistant adds it as the person, citing "
+    "their words (on_behalf_of).",
     {
         "id": _s("A file id, or a public link"),
         "source": _s("The From, by name or id"),
@@ -210,9 +211,10 @@ def rules_read(api, args):
 
 @tool(
     "tico_rules_ask",
-    "A can-I question about the company's rules: the active rules that share words with it, cited, "
-    "and the Rules Owner's answer on a task. The Rules Owner answers from the rules only, and says it is not legal advice. The "
-    "Assistant asks as the person, citing their words (on_behalf_of).",
+    "A can-I question about the company's rules: the active rules that share words with it, "
+    "cited, and the Rules Owner's answer on a task. The Rules Owner answers from the rules only, "
+    "and says it is not legal advice. The Assistant asks as the person, citing their words "
+    "(on_behalf_of).",
     {"question": _s("The question, in one sentence"), "on_behalf_of": ASKED},
     required=("question",),
     writes=True,
@@ -225,9 +227,10 @@ def rules_ask(api, args):
 @tool(
     "tico_rules_add",
     "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
-    "(source_id, a name or id). A bot's add is a suggestion; only the owner and admins add an Everyone rule. The "
-    "Assistant adds one as the person, citing their words (on_behalf_of). kind=stage adds a stage rule: name, "
-    "pipeline, stages, event (When), cond and jev (If), then and reason; a bot's is a suggestion a person accepts.",
+    "(source_id, a name or id). A bot's add is a suggestion; only the owner and admins add an "
+    "Everyone rule. The Assistant adds one as the person, citing their words (on_behalf_of). "
+    "kind=stage adds a stage rule: name, pipeline, stages, event (When), cond and jev (If), then "
+    "and reason.",
     {
         "kind": {"type": "string", "enum": ["internal", "external", "stage"]},
         "text": _s("The rule in one sentence"),

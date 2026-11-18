@@ -35,7 +35,7 @@ the parallel suite is the release check's job on a full-size machine. The PR che
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
 pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
 checks only. PR checks and the queue run a test listed in `ci/quarantine/` (it failed and passed on one commit) without failing on it; release validation still fails on it (`scripts/flake_quarantine.py`, `.github/workflows/flaky-tests.yml`). The fix for a quarantined test deletes its entry file. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
-dependency map (imports, plus files run or read by path) says use the change within two levels (not through a hub such as `backend/app.py`), capped at nineteen VMs, with the smoke set when that drops any; release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
+dependency map (imports, plus files run or read by path) says use the change within two levels. The queue stops at hubs such as `backend/app.py` and follows the input–hub pairs in `QUEUE_HUB_INPUTS` to their direct tests up to level three. The plan is capped at nineteen VMs and includes the smoke set when it drops tests. Release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
 and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
@@ -86,7 +86,7 @@ marks the PR ready after a pass. A Tico bot never runs that script: it marks its
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
-Release Owner (docs/pipelines-v3.md).
+Release Owner (docs/dev/pipelines-v3.md).
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
@@ -126,7 +126,7 @@ flight file, not the database.
 
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
-  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
+  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep applied files and checksums unchanged; never edit `baseline.sql`. Each migration
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
 - Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
 - The Python lint and type baselines are per source file: `baselines/ruff/<path>.json` and `baselines/pyright/<path>.json`. After fixing findings, run `python3 scripts/lint_baseline.py --write` (types: `scripts/check_types.sh --writebaseline`). Never commit `ruff-baseline.toml` or `.basedpyright/baseline.json`: they are generated and git-ignored. A bare `uvx ruff@0.15.9 check` reads `ruff.toml` alone and reports every finding, baselined or not; `scripts/lint.sh` is the gate that counts them against the baseline (`ruff-baseline.toml` extends `ruff.toml`, never the other way round).
@@ -134,11 +134,14 @@ flight file, not the database.
   the fictional team Acme (`acme.example`).
 - The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new
   UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
-  compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
-  server refuses a missing or stale build (ui/README.md).
+  builds the page and its bundle into `build/ui/`, the only UI files the server serves (`npm run watch:ui` while editing,
+  then reload; tests and `backend.server` build it when they can), and the server refuses to start on a missing or
+  stale build (ui/README.md).
 - Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh`, and the API spec is generated by
   `python3 -m backend.openapi_v2` (served at `GET /api/v2/openapi.json`). Neither is committed, so never edit or hand-merge
-  them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved.
+  them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved. A route joins the stable API on its
+  own decorator, `@app.get(path, **api_v2(tag, operationId, summary, answer))` (backend/api_contract.py), which also
+  takes what FastAPI cannot see in the handler (a body read by hand, extra errors, no sign-in, an optional key).
 - Every UI script is strict TypeScript, enforced by `scripts/check_ui_strict.py`: a `.js` under `ui/` fails unless it is
   vendor code, a Node test, or in the `KEPT_JS` list (the classic scripts that stay JavaScript, each with its reason).
   Each `.ts` must pass `ui/tsconfig.strict.json`; one with findings has a piece under `ui/baselines/strict/` that only

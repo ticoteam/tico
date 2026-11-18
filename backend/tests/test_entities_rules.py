@@ -1,7 +1,7 @@
 """Directory rules (track 5): path resolution along inheriting links, the depth cap and its truncation, the fail-closed
 check, privacy on restricted steps, contact resolution, and the verdicts `check` gives.
 
-The hub is the track 3 fixture (test_directory_tables_migration). Jane works at Acme Lights, which is self; Sam works at
+The hub is a new one with a small graph (helpers/directory_graph.py). Jane works at Acme Lights, which is self; Sam works at
 River Capital, which is not. The link keys these tests walk are made inheriting in the fixture, as the built-in link
 types are meant to be.
 """
@@ -15,7 +15,7 @@ from backend.config import Settings
 from backend.entities import rules as D
 from backend.entities import store as S
 from backend.store import Store
-from backend.tests.helpers.directory_tables_migration import FIXTURE, SAMPLE, _boot, copy_of
+from backend.tests.helpers.directory_graph import boot, copy_of
 
 NOW = "2026-10-01T00:00:00Z"
 ACTOR = "bot:ops"
@@ -40,9 +40,9 @@ def _link(c, link_id, source, key, target):
 
 @pytest.fixture(scope="module")
 def booted_hub(tmp_path_factory) -> Path:
-    """The hub boots once for the module (the migrations are the slow part); each test works on its own copy."""
+    """The hub boots once for the module; each test works on its own copy."""
     path = tmp_path_factory.mktemp("directory-rules") / "booted.db"
-    _boot(path)
+    boot(path)
     return path
 
 

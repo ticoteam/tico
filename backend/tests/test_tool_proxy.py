@@ -8,10 +8,10 @@ import json
 import httpx
 import pytest
 
-from backend import egress
+from backend import api_tools, egress
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
-from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.credentials import explicit_only, setup
 
 FULL = "close-synthetic-full-key-4815162342"
 READ = "close-synthetic-read-key-2718281828"
@@ -165,6 +165,7 @@ def test_a_token_works_only_for_its_tool_and_its_live_run(api):
     with api.app.state.store.transaction() as c:
         stolen = tool_proxy.mint(c, api.app.state.vault, "close-crm", "bot:ops", attempt=other["id"])
     assert call(api, "GET", "api/v1/me/", stolen).status_code == 401
+    explicit_only(api)  # what explicit grants alone give
     # Taking the level away stops the next call, naming the setting.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE credential_grants SET revoked_at=? WHERE subject='bot:ops'", (H.now(),))
@@ -209,6 +210,114 @@ def test_read_level_picks_the_read_key_and_with_only_a_full_key_refuses_writes(a
     assert vendor.seen[-1].headers["authorization"] == "Basic " + base64.b64encode(f"{FULL}:".encode()).decode()
 
 
+def test_read_on_a_computer_tool_goes_through_the_proxy_unless_a_read_key_or_no_address(api):
+    """A computer tool's keys reach runs as they are, except to a bot held at Read: the read key when there is one,
+    else a proxy token so only reads get through; with no API address nothing can hold it to reads, and Who can use
+    it says so."""
+    setup(api)
+    tool(api, delivery="computer")
+    full = key(api, "close-crm", FULL)
+    give(api, full, "bot:ops", "read")
+    give(api, full, "bot:finance", "read_write")
+    vendor = Vendor()
+    api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
+    _, ops = run(api)
+    item = handed(api, ops)
+    assert item["value"].startswith("tpx1.") and item["url_env"] == "TICO_TOOL_CLOSE_CRM_URL"
+    assert item["base_url"] == "https://api.close.example"
+    assert call(api, "GET", "api/v1/me/", item["value"]).status_code == 200
+    assert call(api, "POST", "api/v1/lead/", item["value"], json={"name": "Acme"}).status_code == 403
+    _, finance = run(api, "finance")
+    assert handed(api, finance)["value"] == FULL  # Read and write on a computer tool: the key itself
+    # A read key of the tool goes instead of the Read and write one.
+    read = key(api, "close-crm", READ, level="read", env="CLOSE_READ_KEY")
+    give(api, read, "bot:ops", "read")
+    items = get(api, "credential-runtime", ops["token"])["credentials"]
+    assert [(i["env"], i["value"]) for i in items] == [("CLOSE_READ_KEY", READ)]
+    # No address to call through: the key itself, and the row is marked.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM credential_grants WHERE credential_id=?", (read,))
+        c.execute("UPDATE tools SET base_url='' WHERE id='close-crm'")
+    assert handed(api, ops)["value"] == FULL
+    rows = {r["subject"]: r for r in get(api, "api-tools/close-crm")["access"]}
+    assert rows["bot:ops"].get("read_not_enforced") is True and "read_not_enforced" not in rows["bot:finance"]
+
+
+class McpVendor:
+    """A fake MCP server: answers JSON-RPC by method; its listing marks `search` read-only and `delete_issue` not."""
+
+    def __init__(self, sse=False):
+        self.seen, self.sse = [], sse
+
+    def __call__(self, request):
+        body = json.loads(request.content or b"{}")
+        self.seen.append(body.get("method"))
+        if body.get("method") == "tools/list":
+            result = {
+                "tools": [
+                    {"name": "search", "annotations": {"readOnlyHint": True}},
+                    {"name": "delete_issue", "annotations": {"destructiveHint": True}},
+                ]
+            }
+        else:
+            result = {}
+        message = {"jsonrpc": "2.0", "id": body.get("id"), "result": result}
+        if self.sse:
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, text=f"data: {json.dumps(message)}\n\n"
+            )
+        return httpx.Response(200, json=message)
+
+
+@pytest.mark.parametrize("sse", [False, True])
+def test_mcp_at_read_passes_set_up_listings_and_read_only_tools_and_refuses_the_rest(api, sse):
+    from backend import tool_proxy
+
+    tool_proxy.READ_ONLY_TOOLS.clear()
+    setup(api)
+    tool(api, scheme="bearer", base="https://mcp.close.example")
+    give(api, key(api, "close-crm", FULL), "bot:ops", "read")
+    vendor = McpVendor(sse)
+    api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
+    _, ops = run(api)
+    token = handed(api, ops)["value"]
+
+    def rpc(method, **params):
+        return call(api, "POST", "mcp", token, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+
+    assert rpc("initialize").status_code == 200
+    assert (
+        call(api, "POST", "mcp", token, json={"jsonrpc": "2.0", "method": "notifications/initialized"}).status_code
+        == 200
+    )
+    # Before the listing nothing is known to be read-only.
+    assert rpc("tools/call", name="search").status_code == 403
+    assert rpc("tools/list").status_code == 200
+    assert rpc("tools/call", name="search", arguments={"q": "x"}).status_code == 200
+    r = rpc("tools/call", name="delete_issue")
+    assert (
+        r.status_code == 403
+        and "the MCP tool delete_issue, which its server does not mark read-only" in r.json()["error"]["detail"]
+    )
+    batch = [
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "delete_issue"}},
+    ]
+    assert call(api, "POST", "mcp", token, json=batch).status_code == 403
+    assert vendor.seen == ["initialize", "notifications/initialized", "tools/list", "tools/call"]
+    # A Read and write caller is not filtered.
+    give(api, key(api, "close-crm", FULL + "-w", env="CLOSE_W"), "bot:finance", "read_write")
+    _, finance = run(api, "finance")
+    w = call(
+        api,
+        "POST",
+        "mcp",
+        handed(api, finance, "CLOSE_W")["value"],
+        json={"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "delete_issue"}},
+    )
+    assert w.status_code == 200
+
+
 def test_header_query_and_twilio_style_schemes_rewrite_only_the_token(api):
     from backend import tool_proxy
 
@@ -249,3 +358,69 @@ def test_a_name_that_resolves_to_a_private_address_is_refused_and_nothing_is_sen
     from backend import tool_proxy
 
     assert "Change it on Tools > Meta" in tool_proxy.address_problem("https://metadata.internal/", "Meta")
+
+
+class Refusing:
+    """A vendor that answers every call 401 with `reply`, and `challenge` as its WWW-Authenticate when it has one."""
+
+    def __init__(self, reply=b"", challenge=""):
+        self.reply, self.challenge, self.seen = reply, challenge, []
+
+    def __call__(self, request):
+        self.seen.append(request)
+        headers = {"www-authenticate": self.challenge} if self.challenge else {}
+        return httpx.Response(401, headers=headers, content=self.reply)
+
+
+class Pieces(httpx.AsyncByteStream):
+    """A vendor answer that arrives in pieces, as a stream does."""
+
+    def __init__(self, parts):
+        self.parts = parts
+
+    async def __aiter__(self):
+        for part in self.parts:
+            yield part
+
+
+# A restricted key's answer to a call its scope does not cover (ElevenLabs words it so); synthetic.
+OUT_OF_SCOPE = b'{"detail":{"status":"missing_permissions"}}'
+
+
+def health(api, tid="close-crm"):
+    with api.app.state.store.read() as c:
+        return api_tools.call_health(c, tid)
+
+
+def test_three_out_of_scope_401s_are_no_rejected_key_and_three_plain_401s_are(api):
+    setup(api)
+    tool(api)
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    api.app.state.tool_proxy_transport = httpx.MockTransport(Refusing(OUT_OF_SCOPE))
+    for _ in range(3):
+        assert call(api, "GET", "api/v1/lead/", token, how="basic").status_code == 401
+    assert health(api) is None  # the vendor knows the key: three of these are no rejection
+    with api.app.state.store.read() as c:
+        assert [row[0] for row in c.execute("SELECT detail FROM tool_calls")] == [api_tools.MISSING_SCOPE] * 3
+    assert "missing_permissions" not in dump(api, "tool_calls")  # the reply's text is never kept
+    api.app.state.tool_proxy_transport = httpx.MockTransport(Refusing(b'{"detail":"Invalid API key"}'))
+    for _ in range(3):
+        assert call(api, "GET", "api/v1/lead/", token, how="basic").status_code == 401
+    assert health(api) == "rejected"
+
+
+def test_a_streamed_401_reaches_the_caller_unchanged_with_the_phrase_split_across_pieces(api):
+    setup(api)
+    tool(api)
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    # The phrase is cut in two, and the body runs well past what the scope check reads.
+    parts = [OUT_OF_SCOPE[:25], OUT_OF_SCOPE[25:], b"." * 1000, b"0123456789" * 500]
+    api.app.state.tool_proxy_transport = httpx.MockTransport(lambda request: httpx.Response(401, stream=Pieces(parts)))
+    r = call(api, "GET", "api/v1/lead/", token, how="basic")
+    assert r.status_code == 401 and r.content == b"".join(parts)
+    with api.app.state.store.read() as c:
+        assert [row[0] for row in c.execute("SELECT detail FROM tool_calls")] == [api_tools.MISSING_SCOPE]

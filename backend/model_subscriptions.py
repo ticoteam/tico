@@ -5,9 +5,11 @@ setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a 
 OpenAI API key. It belongs to the company; `added_by` only says who saved it. A plan (Claude or ChatGPT) has an owner
 (`owner_id`), the person whose plan it is: the one who adds it, unless an owner or admin names another active person of
 the company, then or later. A plan is meant for its owner's own bots, not shared ones (the Add pop-up says so). An API
-key bills per use and has no owner; a company may save many. The value is sealed with the credential
-vault's data key (CredentialCipher.seal, context `model_subscription:<id>`), never shown again, never in a list, an
-event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
+key bills per use and has no owner; a company may save many. The value is a service row of the credential vault
+(`credential_id`, CREDENTIAL + the subscription's id; backend/credentials.py `keep_service`), never shown again, never
+in a list, an event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
+Before D11-11 it was sealed in the subscription's own row (`sealed`, context `model_subscription:<id>`): a row the move
+left (backend/migrations/20261117103033_one_encrypted_store.py) opens as before, and its next save moves it.
 
 A computer (runner) is given at most one subscription per runtime (`computer_subscriptions`); one subscription may be
 given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime, its
@@ -30,6 +32,15 @@ A bot there that was Rate limited on the
 old sign-in is re-judged against the one it runs on now, so a bot waiting on the old plan's limit resumes on the new
 plan at once (execution.lift_limited_on_computer).
 
+A computer given a person's plans moves to another of them on its own, between turns (`settle`). For Claude that move
+keeps every session: Claude Code keeps a session's transcript in the bot's own `~/.claude/projects` whichever plan
+signs it in (a setup-token from the environment, a full login through a config home that links `projects`), and
+resumes it under another account, of another organization too. A runner that says `plan_switch_resume_v1` keys a
+Claude thread by no one plan, so the next turn on the new plan resumes the same session; should that resume fail (the
+transcript is gone, or Claude refuses it), the turn starts a new session told what the room said since, and says so
+(runner-rs/src/continuity.rs). Codex keeps its threads in each plan's own home, so a move there, or on an older runner,
+still starts that runtime's sessions fresh. Only a person's change asks first (`confirm_restart`) and starts fresh.
+
 Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
 to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
 run on the computer's own login, else the Gateway under the company's choice, else wait. Saving a new value ends its
@@ -48,7 +59,8 @@ Delivery: the claim records what it handed each attempt (`attempt_subscriptions`
 (`subscriptions`, ids and kinds only). The run reads values with its own run token from `GET credential-runtime`. An
 environment subscription (a token or Anthropic key) is set in the turn's environment for that CLI; a home subscription
 (a ChatGPT login or OpenAI key for Codex) becomes `auth.json` in a home of its own per subscription on that computer,
-there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). Codex refreshes a ChatGPT login in that
+there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). A ChatGPT login is also handed to every
+turn on its computer, whatever runtime the turn runs, so a bot on Claude can run `codex` from its shell (`for_shell`). Codex refreshes a ChatGPT login in that
 file; the runner sends the refreshed file back (`POST runner-model-subscription-refresh`) so the next computer starts
 from it. Only a live run still given the subscription on that computer, at the revision it was handed, writes back
 (`refreshed`).
@@ -59,8 +71,7 @@ account's value. A refresh is the same account: a run still going that reads aft
 its record moves with it (`run_values`), so its write-back and its verdict (`turn_rejected`, `turn_worked`) match
 what it ran on.
 
-Only a runner that says it can (`CAPABILITY`) is handed subscriptions; an older one runs as before and the page says it
-needs an update. One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
+One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
 
 A run the provider refuses on a subscription marks it `needs_reconnect` and leaves the computer's own login alone: it is
 passed over until someone saves a new value (Reconnect), and a run on it that completes marks it working. Only a run on
@@ -76,11 +87,11 @@ from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
 from . import hubdb as H
+from .credentials import SERVICE, keep_service
 from .models import Contract, ID
 from .store import Problem, readiness_document
+from .api_contract import api_v2
 
-CAPABILITY = "model_subscriptions_v1"
-ACTIVATION_CAPABILITY = "model_subscription_activation_v1"
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
 MAX_VALUE = 64 * 1024
@@ -98,6 +109,20 @@ KINDS = {
         "secret_label": "Setup token",
         "help": "Run `claude setup-token` on any computer and paste the token.",
         "connect": True,
+    },
+    # A full login (`claude auth login --claudeai`), made only by Connect on a computer that can (backend/claude_login.py):
+    # a turn gets its access token in a `.credentials.json` of its own, in the home CLAUDE_CONFIG_DIR names.
+    "claude_login": {
+        "name": "Claude",
+        "runtime": "claude",
+        "label": "Claude plan",
+        "file": ".credentials.json",
+        "home_env": "CLAUDE_CONFIG_DIR",
+        "billing": "subscription",
+        "secret_label": "Sign-in",
+        "help": "Connect signs the plan in on one of your computers.",
+        "connect": True,
+        "hidden": True,
     },
     "codex_login": {
         "name": "ChatGPT",
@@ -127,31 +152,28 @@ KINDS = {
         "secret_label": "API key",
         "help": "An OpenAI API key (sk-…).",
     },
+    "cursor_key": {
+        "name": "Cursor API",
+        "runtime": "cursor",
+        "label": "Cursor API key",
+        "env": "CURSOR_API_KEY",
+        "billing": "api",
+        "secret_label": "API key",
+        "help": "A Cursor API key.",
+    },
+    "meta_key": {
+        "name": "Meta API",
+        "runtime": "musecode",
+        "label": "Meta API key",
+        "env": "META_API_KEY",
+        "billing": "api",
+        "secret_label": "API key",
+        "help": "A Meta API key.",
+    },
 }
 RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
-RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "musecode": "Muse Code"}
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS model_subscriptions(
- id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT NOT NULL,
- preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'new',
- status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', credential_at TEXT);
-CREATE TABLE IF NOT EXISTS computer_subscriptions(
- runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, set_by TEXT NOT NULL,
- updated_at TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', PRIMARY KEY(runner_id, runtime));
-CREATE INDEX IF NOT EXISTS computer_subscriptions_sub ON computer_subscriptions(subscription_id);
-CREATE TABLE IF NOT EXISTS attempt_subscriptions(
- attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, revision INTEGER NOT NULL,
- PRIMARY KEY(attempt_id, runtime));
-CREATE INDEX IF NOT EXISTS attempt_subscriptions_sub ON attempt_subscriptions(subscription_id);
-CREATE TABLE IF NOT EXISTS pending_subscription_fallbacks(
- attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, PRIMARY KEY(attempt_id, runtime));
-CREATE TABLE IF NOT EXISTS subscription_connects(
- login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', subscription_id TEXT NOT NULL DEFAULT '',
- owner_id TEXT NOT NULL DEFAULT '');
-"""
 
 
 class SubscriptionWrite(Contract):
@@ -191,7 +213,7 @@ class ComputerSubscription(Contract):
     computer's live runs on that runtime stop and start again."""
 
     runner_id: ID
-    runtime: str = Field(pattern="^(claude|codex)$")
+    runtime: str = Field(pattern="^(claude|codex|cursor|musecode)$")
     subscription: ID | None = None
     person: str | None = Field(default=None, max_length=120)
     confirm: bool = False
@@ -209,6 +231,34 @@ class SubscriptionRefresh(Contract):
 # ------------------------------------------------------------------------------------------------ values
 def _context(sid):
     return "model_subscription:" + sid
+
+
+# A subscription's own value is the service row CREDENTIAL + its id. A `credential_id` naming any other row is a key kept
+# in the vault as a credential (added in Settings > Computers before D11-4, "keys on computers" below): it still follows
+# its computer's login (`_given`), reaches runners of v0.6.0-rc.1 as their key (`keys_for`) and gives way to a bot's own
+# key grant (`for_claim`). KEPT_KEY is that test in SQL, on the alias it is formatted with.
+CREDENTIAL = "model-subscription-"
+KEPT_KEY = "{0}credential_id IS NOT NULL AND {0}credential_id<>'" + CREDENTIAL + "'||{0}id"
+
+
+def _kept_key(sub):
+    return bool(sub["credential_id"]) and sub["credential_id"] != CREDENTIAL + sub["id"]
+
+
+def _keep_value(c, vault, sub, value, preview, actor, now):
+    """Put `value` where `sub` keeps it: its own service row (made on its first save), or the vault credential of a kept
+    key, where a computer's key fetch reads it too. Returns the subscription's `credential_id`."""
+    if _kept_key(sub):
+        ciphertext, nonce = vault.cipher.encrypt(c, sub["credential_id"], value)
+        c.execute(
+            "UPDATE credentials SET ciphertext=?,nonce=?,preview=?,revision=revision+1,updated_at=?,updated_by=? "
+            "WHERE id=?",
+            (ciphertext, nonce, preview, now, actor, sub["credential_id"]),
+        )
+        return sub["credential_id"]
+    cid = CREDENTIAL + sub["id"]
+    keep_service(c, vault.cipher, cid, "Model subscription", value, actor, "model_subscriptions", now, False)
+    return cid
 
 
 def _jwt_email(token):
@@ -243,8 +293,12 @@ def _codex_login(text):
 def checked(kind, secret):
     """(value to seal, preview) for `kind`, or a Problem naming what is wrong. Whitespace around a token or key goes."""
     if kind not in KINDS:
-        raise Problem("kind", "Choose Claude plan, ChatGPT plan, Anthropic API key or OpenAI API key", 422)
+        raise Problem("kind", "Choose " + ", ".join(spec["label"] for spec in KINDS.values()), 422)
     text = str(secret or "")
+    if kind == "claude_login":
+        from . import claude_login
+
+        return claude_login.checked(text)
     if kind == "codex_login":
         value = _codex_login(text.strip())
         email = _jwt_email((value.get("tokens") or {}).get("id_token"))
@@ -252,7 +306,7 @@ def checked(kind, secret):
     text = text.strip()
     if not text or any(ch.isspace() for ch in text) or len(text) > 4096:
         raise Problem("secret", "Paste the token or key on its own", 422)
-    prefix = {"claude_token": "sk-ant-", "anthropic_key": "sk-ant-", "openai_key": "sk-"}[kind]
+    prefix = {"claude_token": "sk-ant-", "anthropic_key": "sk-ant-", "openai_key": "sk-"}.get(kind, "")
     if not text.startswith(prefix):
         what = {
             "claude_token": "A Claude setup-token (from `claude setup-token`)",
@@ -268,10 +322,33 @@ def delivered(kind, value):
     spec = KINDS[kind]
     if spec.get("env"):
         return {"env": spec["env"], "value": value}
+    if kind == "claude_login":
+        from . import claude_login
+
+        # The access token only: no turn can rotate the login under the others.
+        return {"file": spec["file"], "home_env": spec["home_env"], "value": claude_login.turn_file(value)}
     if kind == "openai_key":
         # The file `codex login --with-api-key` writes.
         return {"file": spec["file"], "value": json.dumps({"OPENAI_API_KEY": value}, separators=(",", ":"))}
     return {"file": spec["file"], "value": value}
+
+
+def value_of(c, cipher, sub):
+    """A subscription's value, from the vault row `credential_id` names: its own service row, or a kept key's
+    credential. None when that row is gone. A row from before D11-11 the move left opens from `sealed`."""
+    if sub["credential_id"]:
+        # The credential the subscription names at the revision `sub` was read at, in one statement: on a connection
+        # outside a transaction (a runner's poll, `Store.read`) a save between two reads would otherwise pair this
+        # row (its kind, its revision) with the value saved for the next one. A save since then: None, as if gone.
+        found = c.execute(
+            "SELECT * FROM credentials WHERE id=(SELECT credential_id FROM model_subscriptions WHERE id=? AND revision=?)"
+            " AND ciphertext IS NOT NULL",
+            (sub["id"], sub["revision"]),
+        ).fetchone()
+        if not found:
+            return None
+        return cipher.open_service(c, found) if found["kind"] == SERVICE else cipher.decrypt(c, found)
+    return cipher.unseal(c, _context(sub["id"]), sub["sealed"])
 
 
 # ------------------------------------------------------------------------------------------------ reads
@@ -279,13 +356,17 @@ def _present(c):
     return H._has_table(c, "model_subscriptions")
 
 
+# The plans as they are read: a full Claude login's account and times live beside its plan (`claude_logins`,
+# backend/claude_login.py) and are read with it, '' and NULL for any other plan.
+SUBS = (
+    "(SELECT s.*,coalesce(l.account,'') AS account,l.access_expires_at AS access_expires_at,"
+    "l.login_expires_at AS login_expires_at,l.refreshed_at AS refreshed_at "
+    "FROM model_subscriptions s LEFT JOIN claude_logins l ON l.subscription_id=s.id)"
+)
+
+
 def row(c, sid):
-    return H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,)) if _present(c) else None
-
-
-def runner_takes(runner):
-    caps = H._json(runner["capabilities"], []) if runner else []
-    return CAPABILITY in (caps or [])
+    return H._one(c, f"SELECT * FROM {SUBS} WHERE id=?", (sid,)) if _present(c) else None
 
 
 def _given(c):
@@ -304,10 +385,15 @@ def _given(c):
         people = set()
         for r in c.execute(
             "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
-            "s.status FROM computer_subscriptions g LEFT JOIN model_subscriptions s "
-            "ON s.id=g.subscription_id WHERE s.id IS NOT NULL OR g.person<>''"
+            "s.status,l.access_expires_at AS access_expires_at FROM computer_subscriptions g "
+            "LEFT JOIN model_subscriptions s ON s.id=g.subscription_id "
+            "LEFT JOIN claude_logins l ON l.subscription_id=s.id WHERE (s.id IS NOT NULL OR g.person<>'') "
+            # A computer's key follows its login: not while a person cleared it or signed it out there
+            # (backend/model_login.py model_login_cleared), as GET runner-model-credentials does (`keys_for`).
+            f"AND NOT ({KEPT_KEY.format('s.')} AND EXISTS (SELECT 1 FROM model_login_cleared m "
+            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile=''))"
         ):
-            sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status")}
+            sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "access_expires_at")}
             if r["person"]:
                 sub = {**{k: v or "" for k, v in sub.items()}, "person": r["person"], "members": []}
                 people.add(r["person"])
@@ -315,14 +401,28 @@ def _given(c):
         if people:
             members = {}
             for m in c.execute(
-                f"SELECT id,name,kind,revision,status,status_at,owner_id,created_at FROM model_subscriptions "
-                f"WHERE owner_id IN ({','.join('?' * len(people))}) ORDER BY created_at, id",
+                "SELECT s.id,s.name,s.kind,s.revision,s.status,s.status_at,s.owner_id,s.created_at,"
+                "l.access_expires_at AS access_expires_at FROM model_subscriptions s "
+                "LEFT JOIN claude_logins l ON l.subscription_id=s.id "
+                f"WHERE s.owner_id IN ({','.join('?' * len(people))}) ORDER BY s.created_at, s.id",
                 sorted(people),
             ):
                 runtime = (KINDS.get(m["kind"]) or {}).get("runtime")
                 if owned(m["kind"]):
                     members.setdefault((m["owner_id"], runtime), []).append(
-                        {k: m[k] for k in ("id", "name", "kind", "revision", "status", "status_at", "created_at")}
+                        {
+                            k: m[k]
+                            for k in (
+                                "id",
+                                "name",
+                                "kind",
+                                "revision",
+                                "status",
+                                "status_at",
+                                "created_at",
+                                "access_expires_at",
+                            )
+                        }
                     )
             for (_, runtime), sub in found.items():
                 if sub.get("person"):
@@ -346,6 +446,8 @@ def still_given(c, runner_id, runtime, subscription_id):
 
 RUNNER_READINESS_SQL = "SELECT readiness FROM runners_with_state WHERE id=?"
 RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners_with_state WHERE id=? AND revoked_at IS NULL"
+# A runner that keys a Claude thread by no one plan, so a move between plans resumes it (runner-rs/src/execute.rs).
+RESUME_CAPABILITY = "plan_switch_resume_v1"
 
 
 def _held(c, sid, runtime, loads=None):
@@ -354,14 +456,23 @@ def _held(c, sid, runtime, loads=None):
     return login_holds.holding(c, "", login_holds.subscription_login(sid), runtime, loads=loads) == "held"
 
 
+def _hold_end(c, sid, runtime, loads=None):
+    from . import login_holds
+
+    return login_holds.get(c, "", login_holds.subscription_login(sid), runtime, loads).get("until") or ""
+
+
 def available(c, sub, runtime, loads=None):
     """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
-    and of that runtime."""
+    of that runtime, and, for a full Claude login, with an access token that has not run out (its refresh is late)."""
+    from . import claude_login
+
     return (
         bool(sub)
         and bool(sub.get("id"))
         and sub["status"] != "needs_reconnect"
         and KINDS.get(sub["kind"], {}).get("runtime") == runtime
+        and not claude_login.expired(sub)
         and not _held(c, sub["id"], runtime, loads)
     )
 
@@ -372,8 +483,18 @@ def pick_key(sub, usage):
     (never used here, or its window has just reset) comes after every plan with one, oldest first."""
     resets = (usage or {}).get("weekly_resets_at") or ""
     used = (usage or {}).get("weekly_used_pct")
+    # A plan near a limit (`near`, backend/claude_login.py: 95% of a window, until back under 90%) comes after the others;
+    # only a live refusal holds one.
+    near = bool((usage or {}).get("near"))
     # A reset with no percent known sorts after one that names usage left at the same reset, not ahead of it.
-    return (not resets, resets, used if isinstance(used, (int, float)) else 100, sub.get("created_at") or "", sub["id"])
+    return (
+        near,
+        not resets,
+        resets,
+        used if isinstance(used, (int, float)) else 100,
+        sub.get("created_at") or "",
+        sub["id"],
+    )
 
 
 def _ordered(c, subs, runtime, ctx=None):
@@ -426,7 +547,50 @@ def in_effect(c, runner_id, runtime, loads=None):
         from .read_cache import one
 
         runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
-    return sub if runner_takes(runner) else None
+    if runner and sub["kind"] == "claude_login":
+        from . import claude_login
+
+        # A runner that cannot put the token in a turn's own file never gets one: its turns run as if none were given.
+        return sub if claude_login.takes_turns(runner) else None
+    return sub if runner else None
+
+
+def held_plan(c, runner_id, runtime, loads=None, profile=""):
+    """The login of the company plan (or, for a person's plans, the one whose hold ends first) given this computer for
+    `runtime` while its usage limit passes it over and the computer has no sign-in of its own for that runtime to run on
+    instead (no Gateway either: that is the claim's
+    models_preset.plans_out), or None. A turn then waits on that plan's hold (execution.login_key), and its first turn
+    after the reset is the hold's probe."""
+    from . import login_holds
+    from .models_preset import SIGNED_IN, computer_falls_back
+
+    given = loads.given if loads is not None else _given(c)
+    sub = given.get((runner_id, runtime)) if given else None
+    if sub and sub.get("person"):
+        # A person's set waits on the plan whose hold ends first, while none of its plans can sign the turn in.
+        if not passed_over(c, runner_id, runtime, loads):
+            return None
+        held = [m for m in sub["members"] if m.get("id") and _held(c, m["id"], runtime, loads)]
+        ends = {m["id"]: _hold_end(c, m["id"], runtime, loads) for m in held}
+        sub = min(held, key=lambda m: (ends[m["id"]], m["id"]), default=None)
+    if not sub or not sub.get("id") or not _held(c, sub["id"], runtime, loads):
+        return None
+    if computer_falls_back(c, runner_id):
+        return None  # its turns run on the Gateway meanwhile
+    if loads is not None:
+        runner = loads.runner_of(c, runner_id, live=True)
+    else:
+        from .read_cache import one
+
+        runner = one(c, "SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,))
+    ready = readiness_document(runner["readiness"]) if runner else {}
+    row = ((ready.get("runtimes") or {}).get(runtime) or {}) if runner else {}
+    own = (row.get("profiles") or {}).get(profile) if profile else None
+    # The login the turn would sign in with instead: `profile` (the default home a computer names, or a profile), read
+    # from its own row when the computer reports one, else the runtime's.
+    if not runner or (own if isinstance(own, dict) else row).get("authenticated") == SIGNED_IN:
+        return None
+    return login_holds.subscription_login(sub["id"])
 
 
 def passed_over(c, runner_id, runtime, loads=None):
@@ -445,13 +609,11 @@ def passed_over(c, runner_id, runtime, loads=None):
 
 def turn_runtimes(config, record=None):
     """Subscription runtimes this turn may use, including the company's automatic fallbacks when `record` is given.
-    Gateway models and desktop delivery never use these credentials."""
+    Gateway models never use these credentials."""
     from .gateway_connection import is_tico
     from .harnesses import runtime_of
 
     config = config if isinstance(config, dict) else {}
-    if config.get("app_delivery"):
-        return []
     out = [] if is_tico(config.get("model")) else [str(config.get("runtime") or "")]
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if fallback.get("harness") and not fallback.get("off") and not is_tico(fallback.get("model")):
@@ -529,7 +691,7 @@ def _listing(c, sid=None):
     computers there are (Settings > Models shows every plan's usage at once): the grants with their computers, each
     computer's readiness, its named logins' reported runtimes, the login holds, the API keys' month cost and the
     registry metadata. With `sid`, only that plan's grants and computers are read."""
-    from . import login_holds
+    from .claim_loads import open_holds
     from .subscriptions import subscription_meta
 
     # A plan in a person's set counts as given to each computer given that set, for its readings: the turns there that
@@ -583,13 +745,7 @@ def _listing(c, sid=None):
         )
     }
     costs = _api_costs(c, H.now()[:7] + "-01", sid)
-    holds = {
-        row["key"]: row["value"]
-        for row in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
-            (login_holds.PREFIX, login_holds.PREFIX[:-1] + ";"),
-        )
-    }
+    holds = open_holds(c)
     return {
         "grants": grants,
         "runners": runners,
@@ -665,7 +821,7 @@ def _plan_identity(sub):
     """The account a plan is signed in as, where Tico knows it: a ChatGPT login's email (its preview, from the id_token
     when it was saved). A Claude token names none, so for it only the time a reading was taken can say whose it is."""
     preview = sub.get("preview") or ""
-    return preview if sub.get("kind") == "codex_login" and "@" in preview else ""
+    return preview if sub.get("kind") in ("codex_login", "claude_login") and "@" in preview else ""
 
 
 def provenance(reading):
@@ -694,8 +850,8 @@ def _plan_usage(c, sub, runtime, ctx):
     The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
     computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,
     computers offline, or a computer yet to report."""
-    from . import model_login
-    from .subscriptions import WINDOWS, computer_logins
+    from . import claude_login, model_login, subscription_refresh as SR
+    from .subscriptions import WINDOWS, computer_logins, weekly_snapshot
 
     runners = ctx["runners"]
     computers = [g for g in ctx["grants"].get(sub["id"], []) if g["runtime"] == runtime and g["runner_id"] in runners]
@@ -703,13 +859,9 @@ def _plan_usage(c, sub, runtime, ctx):
         return _reason("Not on a computer yet")
     if sub["status"] == "needs_reconnect":
         return _reason("Reconnect to see usage")
-    readers = [
-        g
-        for g in computers
-        if runner_takes(runners[g["runner_id"]])
-        and computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])
-    ]
-    if not readers:
+    readers = [g for g in computers if computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])]
+    # A full login's usage is the plan's own read (backend/claude_login.py), whichever computers it is on.
+    if not readers and sub["kind"] != "claude_login":
         return _reason("Update the computer to see usage")
     now = datetime.now(timezone.utc)
     account_of_plan = _plan_identity(sub)
@@ -747,12 +899,44 @@ def _plan_usage(c, sub, runtime, ctx):
                 best = candidate
             if window == "weekly" and reading.get("resets_at") and (weekly is None or reported > weekly[1]):
                 weekly = candidate
+    # The plan's own read (subscription_refresh.request_plan_read, or a full login's usage read, backend/claude_login.py):
+    # this plan's by its asking, and not from before its token was replaced. A full login's read has its 5-hour window
+    # and each model's week too.
+    meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
+    since = _at(sub["credential_at"] or sub["created_at"])
+    for reading, window, label in (
+        (SR.plan_reading(meta), "weekly", "week"),
+        (meta.get("five_hour") if sub["kind"] == "claude_login" else None, "five_hour", "5h"),
+    ):
+        own = weekly_snapshot(reading, window)
+        if (
+            not own
+            or own["used_percent"] is None
+            or (own["resets_at"] and _at(own["resets_at"]) <= now)
+            or _at(own["reported_at"]) < since
+        ):
+            continue
+        taken = _at(own["reported_at"])
+        candidate = (own["used_percent"], taken, label, own["resets_at"])
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+        if window == "weekly" and own["resets_at"] and (weekly is None or taken > weekly[1]):
+            weekly = candidate
+    models = [
+        m
+        for m in (meta.get("models") or [] if sub["kind"] == "claude_login" else [])
+        if isinstance(m, dict) and m.get("resets_at") and _at(m["resets_at"]) > now
+    ]
+    extra = {
+        **({"models": models} if models else {}),
+        **({"near": True} if sub["kind"] == "claude_login" and claude_login.near(meta) else {}),
+    }
     if best:
         used, _, label, resets = best
         # The weekly window's reset decides where the plan comes in a person's set (`pick_key`), whichever window is
         # the most used.
         week = {"weekly_resets_at": weekly[3], "weekly_used_pct": weekly[0]} if weekly else {}
-        return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets, **week}
+        return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets, **week, **extra}
     if percent_missing:
         return _reason("No percentage from the plan")
     if outside:
@@ -764,6 +948,8 @@ def _plan_usage(c, sub, runtime, ctx):
 
 def view(c, sub, ctx=None):
     """A subscription as Settings > Models lists it: no value, a preview, its status, the computers given it."""
+    from . import claude_login, subscription_refresh as SR
+
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
     computers = [g["runner_id"] for g in ctx["grants"].get(sub["id"], [])]
@@ -782,6 +968,9 @@ def view(c, sub, ctx=None):
         "revision": sub["revision"],
         "computers": list(dict.fromkeys(computers)),
         "usage": _usage(c, sub, ctx),
+        "usage_refresh": SR.plan_view(ctx["meta"].get(SR.plan_key(sub["id"]))),
+        # A full login runs out about a month after its sign-in: when to reconnect, shown a few days before.
+        "reconnect_by": claude_login.reconnect_by(sub),
         "added_by": sub["added_by"],
         "added_by_name": added.get("name") or added.get("email") or "",
         "owner_id": sub.get("owner_id") or "",
@@ -795,12 +984,11 @@ def listed(c):
     """Every subscription as Settings > Models lists it, each plan with where it comes in its owner's plans for its
     runtime (`order`: the plans in use on a computer given that person's plans first, as they stay put, then the
     other available ones in pick order; None for one held or needing reconnecting) and the computers whose turns sign
-    in with it now (`in_use_on`)."""
+    in with it now (`in_use_on`), and `place`: its place among that person's plans of every tool, those in use first and
+    then by the soonest weekly reset (None when held or needing reconnecting)."""
     if not _present(c):
         return []
-    subs = H._rows(
-        c.execute("SELECT * FROM model_subscriptions ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,))
-    )
+    subs = H._rows(c.execute(f"SELECT * FROM {SUBS} ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,)))
     ctx = _listing(c) if subs else None
     views = [view(c, s, ctx) for s in subs]
     if ctx is None:
@@ -816,13 +1004,22 @@ def listed(c):
     groups = {}
     for v in views:
         v["in_use_on"] = using.get(v["id"], [])
-        v["order"] = None
+        v["order"] = v["place"] = None
         if owned(v["kind"]) and v["owner_id"] and available(c, v, v["runtime"], holds):
             groups.setdefault((v["owner_id"], v["runtime"]), []).append(v)
     for plans in groups.values():
         plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
         for n, v in enumerate(plans, 1):
             v["order"] = n
+    # A person's plans of every tool in one list (`place`): the Settings list groups by person and keeps this order.
+    people = {}
+    for plans in groups.values():
+        for v in plans:
+            people.setdefault(v["owner_id"], []).append(v)
+    for plans in people.values():
+        plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
+        for n, v in enumerate(plans, 1):
+            v["place"] = n
     return views
 
 
@@ -838,6 +1035,7 @@ def kinds():
             "owned": owned(k),
         }
         for k, v in KINDS.items()
+        if not v.get("hidden")
     ]
 
 
@@ -907,11 +1105,7 @@ def assignments(c):
                     "set": state,
                 }
             )
-    capable = [
-        r["id"]
-        for r in c.execute("SELECT id,capabilities FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id")
-        if runner_takes(r)
-    ]
+    capable = [r["id"] for r in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id")]
     people = {}
     for runtime in RUNTIMES:
         for owner, plans in plan_owners(c, runtime).items():
@@ -1063,7 +1257,7 @@ def _restart(c, settings, runner_id, runtime):
     line = _restart_line(c, runner_id, runtime)
     stopped = sum(quarantine_stops.restart(c, a, line) for a in _live(c, runner_id, runtime))
     reset = _reset(c, settings, runner_id, runtime)
-    lift_limited_on_computer(c, settings, H.KEEPER, runner_id, runtime)
+    lift_limited_on_computer(c, settings, H.TICO_ACTOR, runner_id, runtime)
     return {"stopped": stopped, "sessions_reset": reset}
 
 
@@ -1074,20 +1268,34 @@ def _signed_in_with(c, sid):
     return [
         (g["runner_id"], g["runtime"])
         for g in c.execute(
-            "SELECT g.runner_id,g.runtime,r.capabilities FROM computer_subscriptions g "
+            "SELECT g.runner_id,g.runtime FROM computer_subscriptions g "
             "JOIN runners_with_state r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
             (sid,),
         ).fetchall()
-        if runner_takes(g)
     ]
 
 
 def _effect_changed(c, settings, sid):
     """The subscription stopped counting (it needs reconnecting): each computer signing in with it now signs that
     runtime in another way, so its sessions there start fresh. Its runs are not stopped: the refused one already ended.
-    (A reconnect restarts them, `save`.)"""
+    (A reconnect restarts them, `save`.) A computer given a person's plans whose next plan keeps its sessions
+    (`keeps_sessions`) is left as it is: its next claim moves the set (`settle`)."""
     for runner_id, runtime in _signed_in_with(c, sid):
-        _reset(c, settings, runner_id, runtime)
+        on_set = c.execute(
+            "SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=? AND person<>''", (runner_id, runtime)
+        ).fetchone()
+        if not (on_set and keeps_sessions(c, runner_id, runtime)):
+            _reset(c, settings, runner_id, runtime)
+
+
+def keeps_sessions(c, runner_id, runtime):
+    """Whether an automatic move between plans for `runtime` on this computer keeps its sessions: Claude, whose
+    transcripts stay in the bot's own home whichever plan signs a turn in, on a runner that resumes a Claude thread on
+    the plan it moved to (`RESUME_CAPABILITY`). Codex keeps its threads in each plan's own home."""
+    if runtime != "claude":
+        return False
+    found = c.execute(RUNNER_CAPABILITIES_SQL, (runner_id,)).fetchone()
+    return bool(found) and RESUME_CAPABILITY in (H._json(found[0], []) or [])
 
 
 def _confirm(plan, extra=None):
@@ -1137,10 +1345,11 @@ def _confirm_reconnect(c, settings, given):
         _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
 
 
-def default_name(c, kind):
-    """The name of a new subscription whose adder gave none: its plan or provider ("Claude", "ChatGPT"), numbered from
-    the second of that name on ("Claude 2"). It is renamed under its row's Edit."""
-    base = KINDS[kind]["name"]
+def default_name(c, kind, preview=""):
+    """The name of a new subscription whose adder gave none: a ChatGPT login's account email (its `preview`, when it has
+    one), else its plan or provider ("Claude", "ChatGPT"), numbered from the second of that name on ("Claude 2"). It is
+    renamed under its row's Edit."""
+    base = preview if kind in ("codex_login", "claude_login") and "@" in preview else KINDS[kind]["name"]
     taken = {r["name"].strip().lower() for r in c.execute("SELECT name FROM model_subscriptions")}
     n, name = 1, base
     while name.lower() in taken:
@@ -1153,22 +1362,54 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
     its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. A plan added or given
     a new secret goes on the computers that need it (`spread`; `signed_on`: the computer a Connect ran on). Returns its
-    view."""
+    view.
+
+    A full Claude login (`claude_login`, backend/claude_login.py) is one plan per account: a new one whose account is
+    already connected is a Reconnect of that plan, and a Reconnect with another plan's account is refused. A Reconnect
+    with the same account is a refresh: the plan's turns keep running (they get the new access token) and its readings
+    stay. A setup-token plan reconnected with a full login becomes one, the same plan (`kind` given as `claude_login`):
+    its owner, computers and history stay; its old readings go, since the login may be another account. The emergency
+    path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way."""
+    from . import claude_login
+
     now = H.now()
+    if sid and not body.kind and body.secret is not None and (row(c, sid) or {}).get("kind") == "claude_login":
+        if not body.secret.get_secret_value().lstrip().startswith("{"):
+            body = body.model_copy(update={"kind": "claude_token"})
+    kind = body.kind or (row(c, sid) or {}).get("kind") if sid else body.kind
+    login = None
+    if kind == "claude_login" and body.secret is not None:
+        login = claude_login.facts(checked("claude_login", body.secret.get_secret_value())[0])
+        taken = claude_login.same_account(c, login["account"], sid)
+        if taken and sid:
+            raise Problem("account", f"Already connected as {taken['name']}", 409)
+        if taken:
+            # A second Connect of the same account: a Reconnect of the plan it is.
+            body = body.model_copy(update={"name": None, "owner_id": None})
+            return save(c, vault, settings, who, body, taken["id"], signed_on)
     if sid:
         sub = row(c, sid)
         if not sub:
             raise Problem("not_found", "Subscription not found", 404)
-        if body.kind and body.kind != sub["kind"]:
+        converting = (
+            body.secret is not None
+            and {body.kind, sub["kind"]} == {"claude_login", "claude_token"}
+            and body.kind != sub["kind"]
+        )
+        if body.kind and body.kind != sub["kind"] and not converting:
             raise Problem("kind", "A subscription keeps its kind; add a new one instead", 422)
         name = body.name.strip() if body.name is not None else None
         if body.name is not None and not name:
             raise Problem("name", "Enter a name", 422)
         owner = owner_of(c, body.owner_id, sub["kind"]) if body.owner_id is not None else None
         given = []
+        value = preview = ""
+        same = bool(login) and not converting and login["account"] == sub["account"]
         if body.secret is not None:
-            value, preview = checked(sub["kind"], body.secret.get_secret_value())
-            given = _signed_in_with(c, sid)
+            value, preview = checked(kind, body.secret.get_secret_value())
+            if converting and kind == "claude_login":
+                claude_login.can_convert(c, sid)
+            given = [] if same else _signed_in_with(c, sid)
             if not body.confirm:
                 _confirm_reconnect(c, settings, given)
         if name is not None:
@@ -1176,14 +1417,58 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
         if owner is not None and owner != sub["owner_id"]:
             c.execute("UPDATE model_subscriptions SET owner_id=?,updated_at=? WHERE id=?", (owner, now, sid))
             H.event(c, who.actor, "subscription.owner_changed", sid, {"from": sub["owner_id"], "to": owner})
+        if body.secret is not None and same:
+            # The same account signed in again (its monthly Reconnect): a refresh, not a change. Its runs go on and get
+            # the new access token; its readings stay.
+            store_refreshed(c, vault, sub, value, preview, who.actor, now)
+            claude_login.stamp(c, sid, value, refreshed=True)
+            c.execute(
+                "UPDATE model_subscriptions SET status='new',status_detail='',status_at=? WHERE id=? "
+                "AND status='needs_reconnect'",
+                (now, sid),
+            )
+            claude_login.forget(c, sid)  # a refresh under way began from the old login
+            claude_login.pushed(c, sid)
+            H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "same_account": True})
+            spread(c, settings, sid, who.actor, signed_on)
+            _follow(c, settings, who.actor)
+            return view(c, row(c, sid))
         if body.secret is not None:
+            retired = ""
+            keyed = []
+            if converting:
+                # A setup-token plan becomes a full login, the same plan: owner, computers and history stay. Its readings
+                # and asked reads were the token's, and the login may be another account: they go.
+                c.execute("UPDATE model_subscriptions SET kind=? WHERE id=?", (body.kind, sid))
+                claude_login.reset_usage(c, sid)
+                H.event(c, who.actor, "subscription.converted", sid, {"from": sub["kind"], "to": body.kind})
+            if kind == "claude_login" and _kept_key(sub):
+                # A key kept in the vault reaches older runners and bots' grants as a key (`keys_for`, `for_claim`):
+                # a full login, with its refresh token, never goes there. It is kept as the plan's own value, and the
+                # key is retired as Remove retires one (its computers clear their copies; the vault row goes once
+                # nothing else holds it).
+                retired = sub["credential_id"]
+                keyed = c.execute(
+                    "SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,)
+                ).fetchall()
+                sub = {**dict(sub), "credential_id": None}
             # The credential's own time: readings taken before it are the old account's (`_plan_usage`). Only a replaced or
             # reconnected value moves it; a rename, an owner change or a same-account refresh (`refreshed`) does not.
             c.execute(
-                "UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
+                "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,status='new',"
                 "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
-                (vault.cipher.seal(c, _context(sid), value), preview, now, now, now, sid),
+                (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, now, now, sid),
             )
+            if retired:
+                from .model_login import mark_key_cleared
+
+                for g in keyed:
+                    mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+                drop_credential(c, retired)
+            # A new value may be another account, or no longer a full login: the old one's account, times and lease go.
+            claude_login.drop(c, sid)
+            if kind == "claude_login":
+                claude_login.stamp(c, sid, value)
             # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
             # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
             # live runs on that runtime (their work goes back in the queue; confirmed first) and starts its sessions
@@ -1203,19 +1488,31 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     if c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
-    name = (body.name or "").strip() or default_name(c, body.kind)
+    name = (body.name or "").strip() or default_name(c, body.kind, preview)
     owner = _default_owner(c, who, body, body.kind)
     sid = H.new_id()
+    cid = _keep_value(c, vault, {"id": sid, "credential_id": None}, value, preview, who.actor, now)
     c.execute(
         "INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,owner_id,created_at,updated_at,"
-        "credential_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, owner, now, now, now),
+        "credential_at,credential_id) VALUES(?,?,?,'',?,?,?,?,?,?,?)",
+        (sid, name, body.kind, preview, who.actor, owner, now, now, now, cid),
     )
+    if body.kind == "claude_login":
+        claude_login.stamp(c, sid, value)
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     spread(c, settings, sid, who.actor, signed_on)
     _follow(c, settings, who.actor)
     return view(c, row(c, sid))
+
+
+def store_refreshed(c, vault, sub, value, preview, actor, now):
+    """Keep a refreshed login of the same account: the next revision, the same credential time, so its readings stay
+    and a turn refused on the old token is known to have been caught by the rotation (claude_login.gap)."""
+    c.execute(
+        "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
+        (_keep_value(c, vault, sub, value, preview, actor, now), preview, now, sub["id"]),
+    )
 
 
 def remove(c, settings, who, sid, confirm=False):
@@ -1232,6 +1529,15 @@ def remove(c, settings, who, sid, confirm=False):
         running = sum(p["running"] for p in plans)
         if running:
             _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": computers})
+    # A key kept in the vault reached its computers as their key too (GET runner-model-credentials): each is cleared as
+    # Clear key does, so a v0.6.0-rc.1 runner logs out the Codex login the key made instead of keeping it.
+    keyed = (
+        c.execute(
+            "SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,)
+        ).fetchall()
+        if _kept_key(sub)
+        else []
+    )
     # A computer given the owner's plans keeps them: its set moves on at the next turn (`settle`).
     c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,))
     c.execute("UPDATE computer_subscriptions SET subscription_id='' WHERE subscription_id=?", (sid,))
@@ -1240,6 +1546,15 @@ def remove(c, settings, who, sid, confirm=False):
         done = _restart(c, settings, runner_id, runtime)
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
+    from . import claude_login
+
+    claude_login.drop(c, sid)
+    if sub["credential_id"]:
+        from .model_login import mark_key_cleared
+
+        for g in keyed:
+            mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+        drop_credential(c, sub["credential_id"])  # its own service row always; a kept key once nobody else holds it
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
     )
@@ -1324,8 +1639,7 @@ def give(c, settings, who, body):
             "stopped": 0,
             "sessions_reset": 0,
         }
-    takes = runner_takes(runner)
-    if takes and not body.confirm:
+    if not body.confirm:
         plan = _plan(c, settings, body.runner_id, body.runtime)
         if plan["running"]:
             _confirm(plan)
@@ -1342,7 +1656,7 @@ def give(c, settings, who, body):
         _set(c, body.runner_id, body.runtime, want, who.actor)
     else:
         c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (body.runner_id, body.runtime))
-    done = _restart(c, settings, body.runner_id, body.runtime) if takes else {"stopped": 0, "sessions_reset": 0}
+    done = _restart(c, settings, body.runner_id, body.runtime)
     if person:
         action, target = "subscription.person_given", person
     else:
@@ -1389,9 +1703,11 @@ def moves_on(c, runner_id, runtime):
 def settle(c, settings, runner_id, chosen):
     """A claim on a computer given a person's plans: when the turn signs in with another plan than the set was on (the
     old one is held, needs reconnecting, is gone or left the set, or a hold has ended after every plan was held), the
-    set moves to it, between turns, never in one: every session of that runtime on the computer starts fresh, as a
-    change of subscription does, and the move is an event (`subscription.set_moved`: computer, tool, person, from, to,
-    why). Runs already going on the old plan are left to finish. Call it before the claim reads its session epochs."""
+    set moves to it, between turns, never in one, and the move is an event (`subscription.set_moved`: computer, tool,
+    person, from, to, why, and how many sessions were reset). Claude's sessions are kept, so the next turn resumes each
+    on the new plan (`keeps_sessions`); otherwise every session of that runtime on the computer starts fresh, as a
+    change of subscription does. Runs already going on the old plan are left to finish. Call it before the claim reads
+    its session epochs."""
     for item in chosen:
         runtime, sub = item["runtime"], item["subscription"]
         entry = _given(c).get((runner_id, runtime))
@@ -1402,10 +1718,11 @@ def settle(c, settings, runner_id, chosen):
             "UPDATE computer_subscriptions SET subscription_id=? WHERE runner_id=? AND runtime=?",
             (sub["id"], runner_id, runtime),
         )
-        reset = _reset(c, settings, runner_id, runtime)
+        kept = keeps_sessions(c, runner_id, runtime)
+        reset = 0 if kept else _reset(c, settings, runner_id, runtime)
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "subscription.set_moved",
             sub["id"],
             {
@@ -1416,6 +1733,7 @@ def settle(c, settings, runner_id, chosen):
                 "to": sub["id"],
                 "why": why,
                 "sessions_reset": reset,
+                "sessions_kept": kept,
             },
         )
 
@@ -1492,7 +1810,7 @@ def lend(c, runner_id, runtime, actor, shared, others, only=None):
     ]
     subs = H._rows(
         c.execute(
-            f"SELECT * FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
+            f"SELECT * FROM {SUBS} WHERE kind IN ({','.join('?' * len(kinds))}) "
             "AND status<>'needs_reconnect'" + (" AND id=?" if only else "") + " ORDER BY created_at DESC",
             [*kinds, *([only] if only else [])],
         )
@@ -1559,13 +1877,147 @@ def spread(c, settings, sid, actor, signed_on=""):
     ]
 
 
+# ------------------------------------------------------------------------------------------------ keys on computers
+# A key kept in the vault (`credential_id`) is a subscription like any other here. Before D11-4 a key was added from a
+# computer in Settings > Computers (its credential's source is `computer:<runner id>`: that computer's own key); any
+# other key given to computers is shared. Two things still read it that way: runners of v0.6.0-rc.1 on, which fetch
+# their key from `GET runner-model-credentials` and write it to their key files (`keys_for`), and the Computers page,
+# which says which key each computer uses (`key_listing`).
+OWN = "computer:"
+# The key a computer is given for a runtime: its subscription and its vault credential (`id` is the credential's).
+KEY_SQL = (
+    "SELECT cr.*, s.id AS subscription_id, s.revision AS subscription_revision, g.updated_at AS given_at "
+    "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+    "JOIN credentials cr ON cr.id=s.credential_id WHERE g.person='' AND cr.ciphertext IS NOT NULL "
+    "AND cr.kind<>'service'"
+)
+
+
+def drop_credential(c, credential_id):
+    """Delete a key's vault value once no subscription points at it and nobody else holds a grant to it."""
+    if c.execute("SELECT 1 FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone():
+        return
+    if c.execute(
+        "SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL "
+        "AND subject<>'computers' AND subject NOT LIKE 'computer:%'",
+        (credential_id,),
+    ).fetchone():
+        return
+    c.execute("DELETE FROM credential_grants WHERE credential_id=?", (credential_id,))
+    c.execute("DELETE FROM credentials WHERE id=?", (credential_id,))
+
+
+def before_delete(c, who, credential_id):
+    """Credentials > Delete on a key given to computers: its subscription goes with it, and each computer given it is
+    cleared (`model_login.mark_key_cleared`): told at its next key fetch to delete its copies and log out the login the
+    key made, which a v0.6.0-rc.1 runner keeps for Codex until told so."""
+    if not _present(c):
+        return
+    sub = c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone()
+    if not sub:
+        return
+    given = c.execute(
+        "SELECT runner_id, runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],)
+    ).fetchall()
+    c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],))
+    c.execute("DELETE FROM model_subscriptions WHERE id=?", (sub["id"],))
+    from . import claude_login
+
+    claude_login.drop(c, sub["id"])
+    from .model_login import mark_key_cleared
+
+    for g in given:
+        mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+        H.event(
+            c,
+            who.actor,
+            "computer_key.deleted",
+            g["runner_id"],
+            {"runtime": g["runtime"], "credential": credential_id, "cleared": True},
+        )
+
+
+def keys_for(c, vault, runner_id, runtime, login_id=""):
+    """What `GET runner-model-credentials` hands this computer for `runtime`: nothing while a person cleared its key
+    or signed its login out (`clear_key` tells one that missed it while offline to clear its copy now), else the key it
+    is given, as `computer` (its own) or `shared`. A fetch for a key job (`login_id`) gets nothing: no job stages a key
+    any more. The reply keeps the shape runners of v0.6.0-rc.1 read. Returns (reply, credential ids sent)."""
+    from . import providers
+
+    if login_id:
+        return {"credentials": []}, []
+    mark = c.execute(
+        "SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, runtime)
+    ).fetchone()
+    if mark:
+        return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
+    found = c.execute(KEY_SQL + " AND g.runner_id=? AND g.runtime=?", (runner_id, runtime)).fetchone()
+    if not found or found["env"] not in providers.MODEL_KEYS.get(runtime, ()):
+        return {"credentials": []}, []
+    source = "computer" if found["source"] == OWN + runner_id else "shared"
+    return {"credentials": [{"env": found["env"], "value": vault.cipher.decrypt(c, found), "source": source}]}, [
+        found["id"]
+    ]
+
+
+def key_listing(c):
+    """{runner id: {keys, shared_keys, shared_with}} of every computer given a key, read in one pass for the Computers
+    page (Operations listing); never a value. `keys`: {runtime: {env, preview, since}} of its own keys. `shared_keys`:
+    {runtime: {env, preview}} of the shared key given to it. `shared_with`: {runtime: {id, name, computers}} of the
+    shared key it runs on (not while a person cleared its key or signed it out there) and every live computer that
+    runs on the same one."""
+    if not _present(c):
+        return {}
+    out, served, used = {}, {}, []
+    for row in c.execute(
+        "SELECT g.runner_id, g.runtime, g.updated_at AS given_at, cr.id, cr.name, cr.env, cr.preview, cr.source, "
+        "r.label, r.revoked_at, EXISTS (SELECT 1 FROM model_login_cleared m WHERE m.runner_id=g.runner_id "
+        "AND m.runtime=g.runtime AND m.profile='') AS cleared "
+        "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+        "JOIN credentials cr ON cr.id=s.credential_id JOIN runners r ON r.id=g.runner_id "
+        "WHERE g.person='' AND cr.ciphertext IS NOT NULL AND cr.kind<>'service' "
+        "ORDER BY lower(r.label), r.id, g.runtime"
+    ):
+        rid, runtime = row["runner_id"], row["runtime"]
+        found = out.setdefault(rid, {"keys": {}, "shared_keys": {}, "shared_with": {}})
+        if row["source"] == OWN + rid:
+            found["keys"][runtime] = {"env": row["env"], "preview": row["preview"], "since": row["given_at"]}
+            continue
+        found["shared_keys"][runtime] = {"env": row["env"], "preview": row["preview"]}
+        if row["revoked_at"] is None and not row["cleared"]:
+            served.setdefault(row["id"], []).append({"id": rid, "label": row["label"]})
+            used.append((rid, runtime, row))
+    for rid, runtime, row in used:
+        out[rid]["shared_with"][runtime] = {"id": row["id"], "name": row["name"], "computers": served[row["id"]]}
+    return out
+
+
 # ------------------------------------------------------------------------------------------------ claim and run
-def for_claim(c, runner, config, loads=None):
+def _bot_key_names(c, bot):
+    """The model key variables `bot`'s own key grants set in its turns (backend/credentials.py `granted`)."""
+    from .credentials import granted
+
+    ids = sorted(granted(c, "bot:" + bot)) if bot else []
+    if not ids:
+        return set()
+    return {
+        r["env"]
+        for part in H.chunks(ids)
+        for r in c.execute(
+            f"SELECT env FROM credentials WHERE id IN ({','.join('?' * len(part))}) AND ciphertext IS NOT NULL", part
+        )
+    }
+
+
+def for_claim(c, runner, config, loads=None, bot=""):
     """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes. `loads`: the
-    claim's loaded values (claim_loads), when the caller has them."""
+    claim's loaded values (claim_loads), when the caller has them. A computer's key (one kept in the vault) is not
+    handed to a turn of `bot` when the bot's own key grant names that runtime's key: the grant signs it in, as it
+    always came before the computer's key (v0.6.0-rc.1 runners take out a granted key for a subscription handed)."""
     given = loads.given if loads is not None else _given(c)
     if not runner or not given:
         return []
+    from . import providers
     from .store import readiness_document
 
     own = turn_runtimes(config)
@@ -1573,21 +2025,44 @@ def for_claim(c, runner, config, loads=None):
         row = loads.runner_of(c, runner["id"])
         record = loads.plain_record(c)
     else:
-        from . import providers
         from .read_cache import one
 
         row = one(c, RUNNER_READINESS_SQL, (runner["id"],))
         record = providers.load(c)
     ready = readiness_document(row["readiness"]) if row else {}
     out = []
-    for runtime in turn_runtimes(config, record):
+    runtimes = turn_runtimes(config, record)
+    # A plan login the computer keeps in a home (a ChatGPT login) also signs its CLI in for the turn's own commands:
+    # a bot on Claude runs `codex exec` on it (runner-rs/src/model_subscriptions.rs `for_shell`).
+    shell = [rt for (rid, rt) in given if rid == runner["id"] and rt in RUNTIMES and rt not in runtimes]
+    for runtime in [*runtimes, *shell]:
         if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
             continue  # a subscription authenticates a CLI; it cannot install one
         sub = in_effect(c, runner["id"], runtime, loads=loads)
+        if sub and runtime in shell and not for_shell(sub):
+            continue
+        if (
+            sub
+            and bot
+            and c.execute(
+                f"SELECT 1 FROM model_subscriptions WHERE id=? AND {KEPT_KEY.format('')}", (sub["id"],)
+            ).fetchone()
+            and set(providers.MODEL_KEYS.get(runtime, ())) & _bot_key_names(c, bot)
+        ):
+            continue
         if sub:
-            lazy = runtime not in own and ACTIVATION_CAPABILITY in (H._json(runner["capabilities"], []) or [])
+            # Another runtime's value is sent only if the turn moves to it (`activate`), except a shell login, which
+            # every process of the turn gets from the start.
+            lazy = runtime not in own and not for_shell(sub)
             out.append({"runtime": runtime, "subscription": sub, "activate": lazy})
     return out
+
+
+def for_shell(sub):
+    """Whether a subscription signs its CLI in for any turn's own commands on its computer: a plan login kept in the
+    CLI's home (a ChatGPT login), never an API key, which spends per use."""
+    spec = KINDS.get(sub.get("kind")) or {}
+    return bool(spec.get("file")) and spec.get("billing") == "subscription"
 
 
 def hand_out(c, attempt_id, chosen):
@@ -1616,6 +2091,7 @@ def hand_out(c, attempt_id, chosen):
                 "billing": spec["billing"],
                 "source": "computer",
                 **({"env": spec["env"]} if spec.get("env") else {"file": spec["file"]}),
+                **({"home_env": spec["home_env"]} if spec.get("home_env") else {}),
             }
         )
     return out
@@ -1670,7 +2146,9 @@ def run_values(c, vault, who, subscription_runtime=None):
                 "UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
                 (sub["revision"], who.attempt_id, given["runtime"]),
             )
-        value = vault.cipher.unseal(c, _context(sub["id"]), sub["sealed"])
+        value = value_of(c, vault.cipher, sub)
+        if value is None:
+            continue
         spec = KINDS[sub["kind"]]
         out.append(
             {
@@ -1715,22 +2193,23 @@ def refreshed(c, vault, who, body):
     if (
         given["state"] not in ("leased", "running")
         or (given["lease_until"] or "") <= H.now()
-        or given["stop_requested_at"] == H.KEEPER
+        or given["stop_requested_at"] == H.TICO_ACTOR
         or not still_given(c, who.runner_id, given["runtime"], sub["id"])
     ):
         raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
     value, preview = checked("codex_login", body.value.get_secret_value())
-    old = json.loads(vault.cipher.unseal(c, _context(sub["id"]), sub["sealed"]) or "{}")
+    old = json.loads(value_of(c, vault.cipher, sub) or "{}")
     account = lambda v: (v.get("tokens") or {}).get("account_id") or ""
     if account(old) and account(json.loads(value)) != account(old):
         return {"stored": False}
     if value == json.dumps(old, separators=(",", ":")):
         return {"stored": False}
+    now = H.now()
     c.execute(
-        "UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,updated_at=? WHERE id=?",
-        (vault.cipher.seal(c, _context(sub["id"]), value), preview, H.now(), sub["id"]),
+        "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
+        (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, sub["id"]),
     )
     c.execute(
         "UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
@@ -1768,10 +2247,10 @@ def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     if sub["status"] != "needs_reconnect" and sub["revision"] == found["revision"]:
         _status(c, sub["id"], "needs_reconnect", reason or "The provider refused it")
         _effect_changed(c, settings, sub["id"])
-        _follow(c, settings, H.KEEPER)
+        _follow(c, settings, H.TICO_ACTOR)
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "subscription.rejected",
         sub["id"],
         {"attempt": attempt_id, "runtime": runtime, "bot": bot, "task": task_id or ""},
@@ -1816,11 +2295,7 @@ def _connect_computers(c, runtime, who=None):
     found = []
     for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
-        if (
-            model_login.connects(runner)
-            and model_login._online(runner)
-            and (report.get(runtime) or {}).get("installed")
-        ):
+        if model_login._online(runner) and (report.get(runtime) or {}).get("installed"):
             found.append(runner)
     found.sort(key=lambda r: r["last_seen_at"] or "", reverse=True)
     found.sort(key=lambda r: (r["owner_id"] != me, r["id"] in busy))
@@ -1829,15 +2304,24 @@ def _connect_computers(c, runtime, who=None):
 
 def connect_ready(c):
     """The kinds a person can Connect right now: their tool's sign-in has a computer to run on."""
-    return [kind for kind, spec in KINDS.items() if spec.get("connect") and _connect_computers(c, spec["runtime"])]
+    return [
+        kind
+        for kind, spec in KINDS.items()
+        if spec.get("connect") and not spec.get("hidden") and _connect_computers(c, spec["runtime"])
+    ]
 
 
 def connect(c, settings, who, body):
     """Start a Connect: queue the sign-in on a computer, remembering what its result becomes. Read back, given a code
     and cancelled like any sign-in (backend/model_login.py). Its row says where (`computer`) and what the subscription
     is called (`name`: the one given, else `default_name`). With no computer online on a company whose cloud computer
-    can be started, it starts that one and answers `waking` with no sign-in: asked again, it queues once that is up."""
-    from . import model_login
+    can be started, it starts that one and answers `waking` with no sign-in: asked again, it queues once that is up.
+
+    A Claude plan is signed in with a full login (`claude auth login --claudeai`, kind `claude_login`) on a computer
+    that can (backend/claude_login.py `can_sign_in`), and named by its email; only when none can does a new plan, or a
+    setup-token plan's Reconnect, fall back to `claude setup-token`. A setup-token plan reconnected this way becomes a full
+    login. A full login's Reconnect needs such a computer."""
+    from . import claude_login, model_login
 
     name, sid = (body.name or "").strip(), body.subscription or ""
     sub = None
@@ -1871,17 +2355,33 @@ def connect(c, settings, who, body):
     # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs. Looked for before a
     # name is made up for it: the one it was given is on its row.
     model_login.sweep(c)
+    claude = ("claude_token", "claude_login")
+    same = claude if kind in claude else (kind,)
     target = c.execute(
         f"SELECT l.id, s.name FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
-        f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind=? AND s.subscription_id=? "
-        f"AND {model_login.ACTIVE_SQL}" + (" AND s.name=?" if name else "") + " ORDER BY l.created_at",
-        (who.actor, kind, sid, *([name] if name else [])),
+        f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
+        f"AND s.subscription_id=? AND {model_login.ACTIVE_SQL}"
+        + (" AND s.name=?" if name else "")
+        + " ORDER BY l.created_at",
+        (who.actor, *same, sid, *([name] if name else [])),
     ).fetchone()
     if target:
         going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
         return answer(going, model_login._runner(c, going["runner_id"]))
-    target = {"name": name or ("" if sid else default_name(c, kind))}
     computers = _connect_computers(c, spec["runtime"], who)
+    if kind in claude:
+        full = [r for r in computers if claude_login.can_sign_in(r)]
+        if full or kind == "claude_login":
+            computers, kind = full, "claude_login"
+    # A ChatGPT login or a full Claude login is named for its account's email once it is saved (`connected`), so it
+    # gets no name yet.
+    target = {"name": name or ("" if sid or kind in ("codex_login", "claude_login") else default_name(c, kind))}
+    if not computers and kind == "claude_login" and sub and sub["kind"] == "claude_login":
+        raise Problem(
+            "offline",
+            "Reconnect needs a Linux computer online, on the latest Tico, with Claude Code installed",
+            409,
+        )
     if not computers:
         # No computer is online to run it, and the company has a cloud computer: it is started for the sign-in, and
         # the page asks again until it is up (`waking`, no sign-in yet).
@@ -1993,7 +2493,15 @@ def install(app, store, auth, mutate, settings):
 
     vault = app.state.vault
 
-    @app.get("/api/v2/model-subscriptions")
+    @app.get(
+        "/api/v2/model-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "listModelSubscriptions",
+            "Saved subscriptions and the kinds that can be added",
+            "ModelSubscriptionList",
+        ),
+    )
     def list_subscriptions(request: Request):
         who = request.state.identity
         auth.domain(who)
@@ -2001,7 +2509,15 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return {"subscriptions": listed(c), "kinds": kinds(), "connect": connect_ready(c)}
 
-    @app.post("/api/v2/model-subscriptions")
+    @app.post(
+        "/api/v2/model-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "addModelSubscription",
+            "Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)",
+            "ModelSubscription",
+        ),
+    )
     def add(request: Request, body: SubscriptionWrite):
         who = request.state.identity
         _admin(auth, who, secret=True)
@@ -2021,7 +2537,15 @@ def install(app, store, auth, mutate, settings):
         _admin(auth, who, secret=True)
         return mutate(request, body, lambda c: connect(c, settings, who, body))
 
-    @app.post("/api/v2/model-subscriptions/{sid}")
+    @app.post(
+        "/api/v2/model-subscriptions/{sid}",
+        **api_v2(
+            "Model subscriptions",
+            "changeModelSubscription",
+            "Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
+            "ModelSubscription",
+        ),
+    )
     def change(request: Request, sid: str, body: SubscriptionWrite):
         who = request.state.identity
         _admin(auth, who, secret=body.secret is not None)
@@ -2034,7 +2558,15 @@ def install(app, store, auth, mutate, settings):
             lambda c: save(c, vault, settings, who, body, sid),
         )
 
-    @app.delete("/api/v2/model-subscriptions/{sid}")
+    @app.delete(
+        "/api/v2/model-subscriptions/{sid}",
+        **api_v2(
+            "Model subscriptions",
+            "removeModelSubscription",
+            "Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`",
+            "ModelSubscriptionDeleted",
+        ),
+    )
     def delete(request: Request, sid: str, confirm: bool = False):
         who = request.state.identity
 
@@ -2045,7 +2577,29 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, Empty(), work)
 
-    @app.get("/api/v2/computer-subscriptions")
+    # Read a Claude plan's week now (subscription_refresh.request_plan_read): admins, as for changing the plan.
+    @app.post("/api/v2/model-subscriptions/{sid}/usage-refresh")
+    def refresh_usage(request: Request, sid: str):
+        from . import subscription_refresh as SR
+
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            _admin(auth, who)
+            return SR.request_plan_read(c, sid, who.actor)
+
+        return mutate(request, Empty(), work)
+
+    @app.get(
+        "/api/v2/computer-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "listComputerSubscriptions",
+            "Which subscription each computer uses per runtime (for a person's plans: the plan in use and why), the people who own plans per runtime, and the computers that can take one",
+            "ComputerSubscriptionList",
+        ),
+    )
     def computer_subscriptions(request: Request):
         who = request.state.identity
         auth.domain(who)
@@ -2053,7 +2607,15 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             return assignments(c)
 
-    @app.put("/api/v2/computer-subscriptions")
+    @app.put(
+        "/api/v2/computer-subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "setComputerSubscription",
+            "Give a computer a subscription for one runtime, or a person's plans for it (`person`: used in turn, the soonest weekly reset with usage left first), switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
+            "ComputerSubscriptionResult",
+        ),
+    )
     def set_computer_subscription(request: Request, body: ComputerSubscription):
         who = request.state.identity
 
@@ -2086,3 +2648,7 @@ def install(app, store, auth, mutate, settings):
             ):
                 raise Problem("forbidden", "Only a registered computer may send this", 403)
             return refreshed(c, vault, who, body)
+
+    from . import claude_login
+
+    claude_login.install(app, store)

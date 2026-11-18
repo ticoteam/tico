@@ -33,7 +33,8 @@ async function reread(page: Page) {
 
 const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
 const task = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'open',
-  pipeline_id: 'docs', stage_id: 'docs-doing', version: 2, created_at: at(60), updated_at: at(1), conversation_id: 'r-docs'};
+  pipeline_id: 'docs', stage_id: 'docs-doing', version: 2, created_at: at(60), updated_at: at(1), conversation_id: 'r-docs',
+  number: 561, label: 'O561'};
 const comments = [
   {id: 'k1', conversation_id: 'r-docs', sender_id: 'human:ana', kind: 'say', body: 'Refresh the docs please', created_at: at(50)},
   {id: 'k2', conversation_id: 'r-docs', sender_id: 'human:ben', kind: 'say', body: 'Include the API page too.', created_at: at(40)},
@@ -44,10 +45,13 @@ const comments = [
 ];
 // A move names the stage it went to by its id; the page reads the pipelines for its name.
 const events = [{id: 1, task_id: 't-docs', created_at: at(55), actor: 'human:ana', field: 'move', old: null, new: 'docs-todo', note: ''},
-  {id: 2, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'move', old: 'docs-todo', new: 'docs-doing', note: ''}];
+  {id: 2, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'move', old: 'docs-todo', new: 'docs-doing', note: ''},
+  // Its number, as installs before the fix wrote it: with the filer as the actor.
+  {id: 3, task_id: 't-docs', created_at: at(49), actor: 'human:ana', field: 'number', old: null, new: '561', note: ''}];
 const pipelines = [{id: 'docs', name: 'Docs', stages: [{id: 'docs-todo', name: 'To do', kind: 'work'}, {id: 'docs-doing', name: 'Doing', kind: 'work'},
   {id: 'docs-done', name: 'Done', kind: 'done'}, {id: 'docs-closed', name: 'Closed', kind: 'closed'}]}];
-const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
+// As the server sends it (backend/views.py conversation_execution): the bot is `bot_id`; `attempt_id` reads `run_id`.
+const execution = {job_id: 'j2', message_id: 'k1', bot_id: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
   parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
 
 async function run(viewport: Viewport, shot: string) {
@@ -55,7 +59,7 @@ async function run(viewport: Viewport, shot: string) {
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
     const errors: string[] = [], stops: unknown[] = [], stepReads: string[] = [];
-    let running = true, live2 = false;
+    let running = true, live2 = false, blocked = false;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -72,8 +76,12 @@ async function run(viewport: Viewport, shot: string) {
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/tasks') return json({tasks: [task]});
       if (p === '/api/v2/pipelines') return json({pipelines});
+      // Blocked by a task with no number: the server names it by its title (backend/task_depends.py line).
+      const turn = blocked ? {state: 'tasks', who: 't-printer', line: 'Blocked by Call the printer, in To do', since: at(1), until: null} : null;
+      if (p === '/api/v2/tasks/t-printer')
+        return json({task: {...task, id: 't-printer', title: 'Call the printer', number: null, label: null}, comments: [], events: [], can_comment: true, children: [], execution: null});
       if (p === '/api/v2/tasks/t-docs')
-        return json({task, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'canceled', label: 'Stopped'}
+        return json({task: {...task, turn}, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'canceled', label: 'Stopped'}
           : live2 ? {...execution, parts: [...execution.parts, {kind: 'tool', text: 'Ran grep', at: at(0)}]} : execution});
       const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
       if (steps) {
@@ -100,6 +108,10 @@ async function run(viewport: Viewport, shot: string) {
     assert.equal(await mine.locator('.th-who').innerText(), 'You', 'your own line is "You"');
     assert.equal(await thread.locator('.th-msg.bot .th-body', {hasText: 'Rebuilt the guide.'}).count(), 1);
     assert.equal(await thread.locator('.bubble').count(), 0, 'no bubbles');
+    // Tico gives the number, whoever filed the task: a quiet line in the task's label, never "You numbered it #561".
+    const numbered = thread.locator('.tcomment.tmark[data-event="number"]');
+    assert.match((await numbered.innerText()).replace(/\s+/g, ' ').trim(), /^Numbered O561 \S+$/);
+    assert.equal(await numbered.locator('.tcomment-who').count(), 0, 'the number names nobody');
 
     // A move is a one-line marker between the messages, in time order; the task's first stage is its creation, no marker.
     const order = await thread.evaluate(t => [...(t.children as HTMLCollection & Iterable<Element>)].map(x => x.textContent!.replace(/\s+/g, ' ').trim()));
@@ -122,8 +134,17 @@ async function run(viewport: Viewport, shot: string) {
 
     // The live run: "Working" and its newest step, opening to the steps so far.
     const live = thread.locator('.task-live');
-    if (shot) await page.screenshot({path: shot});
+    if (shot) {
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+      await page.screenshot({path: shot});
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+      await page.screenshot({path: shot.replace(/\.png$/, '-dark.png')});
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+    }
     assert.match(await live.innerText(), /BotOps\s*working\s*Ran hub task create/);
+    // The run is the bot's, though Ana's message started it: its face and name, never "You".
+    assert.equal(await live.locator('.th-who').innerText(), 'BotOps');
+    assert.equal(await live.locator('[data-task-stop]').getAttribute('data-bot'), 'botops');
     await live.locator('summary').click();
     await live.locator('.steps-list .step', {hasText: 'api page'}).waitFor();
     // Stop stops that run. Until it has ended the run moves on: the redraw shows its new step, keeps the steps read so
@@ -141,6 +162,20 @@ async function run(viewport: Viewport, shot: string) {
     await reread(page);
     await page.waitForFunction(() => !document.querySelector('#task-modal .task-live'));
     assert.ok(await fold.evaluate(x => (x as HTMLDetailsElement).open), 'an open fold stays open across the redraw');
+    // Blocked by a task with no number: the last row names it by its title, never its id, and opens it.
+    blocked = true;
+    await reread(page);
+    const wait = thread.locator('.task-wait [data-task-wait-open="t-printer"]');
+    await wait.waitFor();
+    assert.equal(await wait.innerText(), 'Blocked by Call the printer, in To do');
+    if (shot) {
+      await page.screenshot({path: shot.replace(/\.png$/, '-blocked.png')});
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+      await page.screenshot({path: shot.replace(/\.png$/, '-blocked-dark.png')});
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+    }
+    await Promise.all([page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/tasks/t-printer'), wait.click()]);
+    blocked = false;
     // A tab shown again replays what it missed at the caller's pace (the live line's 1.5 s), not the 15 s default.
     const replayed = await page.evaluate(async () => {
       let hidden = false, ran = 0;
@@ -171,7 +206,7 @@ async function answered(viewport: Viewport, shot: string) {
     const said = [{id: 'q1', conversation_id: 'r-ask', sender_id: 'bot:lead', kind: 'say', body: 'Which app is still open?', created_at: at(20)}];
     const mine = {id: 'c2', conversation_id: 'r-ask', sender_id: 'human:ana', recipient_id: 'bot:lead', kind: 'say', body: 'The billing one.', created_at: at(0)};
     const reply = {id: 'r3', conversation_id: 'r-ask', sender_id: 'bot:lead', kind: 'say', body: 'Thanks, closing it.', created_at: at(0)};
-    const run = {job_id: 'c2', message_id: 'c2', bot: 'lead', run_id: 'a9', from_person: true, text: '', parts: []};
+    const run = {job_id: 'c2', message_id: 'c2', bot_id: 'lead', run_id: 'a9', from_person: true, text: '', parts: []};
     const states = {
       idle: {comments: said, execution: null},
       queued: {comments: [...said, mine], execution: {...run, run_id: null, state: 'queued', label: 'Saved — queued'}},

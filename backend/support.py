@@ -41,17 +41,10 @@ from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
 from .store import H, Problem, encode, refusal_problem
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.support")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS support_tickets(
- id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
- message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
- hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
- seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
-CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
-"""
 MAX_MESSAGE = 4000
 PER_DAY = 10  # new tickets one person may file in a day; HQ limits the address as well
 # How often a ticket is asked about, at most. HQ counts every ask from this install (one address) together, so a ticket
@@ -501,9 +494,7 @@ class Support:
                 | {p.name for p in (ui / "app").glob("*.js")}
                 | {p.name for p in (ui / "app").glob("*.ts")}
                 | {"sw.js"}  # ui/sw.ts is served at the root as sw.js, the name a worker's error gives
-                | {"app.bundle.js"}
-                | {f"app.bundle.{n}.js" for n in range(2, 100)}
-                | page_parts(ui)  # the page parts (ui/parts.json), fetched as a page is first opened
+                | bundle_files(ui)  # the bundle's scripts, the page parts' included (scripts/build-ui.cjs)
             )
             bundle["browser"] = [
                 {**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser
@@ -1111,7 +1102,15 @@ def install(app, store, settings, census):
         require_on(settings)
         return support_asks.answer_feedback(store, support, who, body)
 
-    @app.post("/api/v2/support/reports")
+    @app.post(
+        "/api/v2/support/reports",
+        **api_v2(
+            "Support",
+            "draftSupportReport",
+            "Draft a report to Tico support, optionally on a task: filed at once when the team allows it, otherwise a person OKs its preview first",
+            "SupportReportResult",
+        ),
+    )
     def support_report(request: Request, body: SupportReport):
         """A bot, a person's token or the Assistant drafts a report to Tico support: filed at once under the team rule
         `bot_reports_direct`, otherwise a person OKs it from its preview first (docs/support.md)."""
@@ -1164,12 +1163,9 @@ def install(app, store, settings, census):
         return support.remove(who, ticket_id)
 
 
-def page_parts(ui):
-    """The file names of the page parts (backend/ui_bundle.py), as a browser event names them."""
-    import json
+def bundle_files(ui):
+    """The file names of the bundle's scripts this server serves (backend/ui_build.py), as a browser event names them."""
+    from . import ui_build
 
-    try:
-        parts = json.loads((ui / "parts.json").read_text())
-    except (OSError, ValueError):
-        return set()
-    return {f"app.bundle.{name}.js" for name in parts if not name.startswith("//")}
+    folder = ui_build.bundle_dir(ui)
+    return {p.name for p in folder.glob("app.bundle.*.js")} if folder.is_dir() else set()

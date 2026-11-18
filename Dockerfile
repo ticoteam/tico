@@ -15,7 +15,7 @@
 # binaries it built and tests (NATIVE=prebuilt, with dist/native/amd64/ and dist/native/arm64/ in the context), so a
 # release ships exactly the binaries its gate ran.
 ARG NATIVE=compiled
-ARG PYTHON_IMAGE=python:3.15.0-slim-trixie@sha256:d802f03223b9e00604cd54574bcac1a4638914c43683d3f0afd6ebee35f25313
+ARG PYTHON_IMAGE=python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 FROM ${PYTHON_IMAGE} AS download
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
@@ -46,7 +46,7 @@ RUN fetch-tool litestream /out
 FROM download AS node
 RUN fetch-tool node /opt/node
 
-# The UI's TypeScript files compiled to JavaScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
+# The UI build: the page, the bundle and the compiled TypeScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
 # no Node, so only build/ui goes on from here. npm ci installs the lock's pinned esbuild and runs no package scripts.
 FROM node AS ui-build
 ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -60,7 +60,7 @@ RUN node scripts/build-ui.cjs
 FROM download AS gh
 RUN fetch-tool gh /out
 
-FROM ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
 # The Python dependencies, kept apart from the source so a source change reuses this layer. uv installs the same
 # pinned requirements as pip, about ten times faster; it is only mounted here, so no image ships it.
@@ -123,7 +123,7 @@ PY
 RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
-    .venv/bin/python -c 'import backend.app, runner_support.connectors, runner_support.close_calls, runner_support.importers.service, runner.engine, clients.environments, yaml; yaml.CSafeLoader' \
+    .venv/bin/python -c 'import backend.app, runner_support.close_calls, runner_support.importers.service, runner_support.engine, clients.environments, yaml; yaml.CSafeLoader' \
     && .venv/bin/python -m backend.ui_build --check \
     && .venv/bin/python -m compileall -q backend runner_support runner clients
 

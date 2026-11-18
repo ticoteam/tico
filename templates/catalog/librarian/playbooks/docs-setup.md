@@ -15,7 +15,7 @@ you read and what you could not. Nothing else counts as good.
 
 ## 1. See what you were given
 
-1. Read the task: the sources (title, address, source id) and the person's words.
+1. Read the task's chat: the sources (title, address, source id) and the person's words.
 2. `tico doc link-list` shows each source and its status. A GitHub repository is `Preparing…` for a minute or two,
    then its files are searchable with `tico doc search`; one marked "GitHub access needed" or "No docs found" is
    a gap to report, not to work around.

@@ -154,7 +154,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--preset",
         metavar="recommended",
-        help="with --hosted: the recommended setup (sample company, subscriptions "
+        help="with --hosted: the recommended setup (subscriptions "
         "plus Tico Gateway from TICO_GATEWAY_INVITE in the environment, Tico Support, a computer on the server)",
     )
     p.add_argument("--sign-out", action="store_true", help="owner-link: also sign the owner out everywhere")

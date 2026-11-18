@@ -1,4 +1,4 @@
-/* ui/styles/task-files.css — A task's files strip and in-place viewer, file chips in comments, question blocks,
+/* ui/styles/task-files.css — A task's file viewer, file chips in comments, question blocks,
    board covers and the pinned views in the left rail.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* a lazy picture: a shimmer until it arrives; .failed shows what sits under it (a tile's type mark) */
@@ -7,24 +7,8 @@
 .tf-skel:not(.ready) img{opacity:0}
 .tf-skel.failed img{display:none}
 /* its shimmer: skeleton.css */
-/* the strip: one tile per file, its newest version */
-.task-files .rail-h{margin-bottom:6px}
-.task-files .tf-status{font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
-.task-files .prop-add[hidden]{display:none}
-.tf-empty{margin:0;font-size:var(--t-sm)}
 dialog.tmodal.over{outline:2px dashed var(--ink);outline-offset:-6px}
-.tf-strip{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:thin}
-.tf-tile{flex:none;display:flex;flex-direction:column;gap:2px;min-width:0;padding:0 0 4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;text-align:left;cursor:pointer;overflow:hidden}
-.tf-tile:hover{border-color:var(--g4)}
-.tf-tile.on{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
-.tf-tile:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.tf-thumb{position:relative;display:grid;place-items:center;height:72px;background:var(--surface2);border-bottom:1px solid var(--line)}
-.tf-thumb img{position:absolute;inset:0}
 .tf-glyph{font-size:var(--t-sm);font-weight:600;letter-spacing:var(--track-caps);color:var(--muted)}
-.tf-thumb.tf-skel:not(.failed) .tf-glyph{visibility:hidden}
-.tf-play{position:absolute;right:5px;bottom:4px;display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding-left:1px}
-.tf-name{padding:0 7px;font-size:var(--t-sm);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tf-meta{display:flex;align-items:center;gap:5px;padding:0 7px;font-size:var(--t-xs);color:var(--muted)}
 .ask-dot{display:inline-block;flex:none;width:7px;height:7px;border-radius:50%;background:var(--wait)}
 /* the open file: its own modal over the task, near full screen */
 dialog.tf-view{box-sizing:border-box;width:min(1200px,calc(100vw - 48px));max-width:none;height:calc(100dvh - 48px);max-height:none;margin:auto;padding:14px 18px 18px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:auto;overscroll-behavior:contain}
@@ -95,7 +79,7 @@ dialog.tf-view::backdrop{background:rgba(0,0,0,.6)}
 .tc-kind{font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);color:var(--ink)}
 .tc-titled{display:inline-flex;flex-direction:column;gap:2px;max-width:120px;min-width:0}
 .tc-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* a question: a chip, the question, its options; once answered, the answers. The message box (pill.js) shares the
+/* a question: a chip and the question; once answered, the answers. The message box (pill.js) shares the
    class name, not the card. */
 .ask:not([class*="pill-"]){display:flex;flex-direction:column;gap:8px;margin-top:8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--surface);font-size:var(--t-sm);line-height:var(--lh)}
 .ask.answered{border-color:var(--line)}
@@ -104,13 +88,6 @@ dialog.tf-view::backdrop{background:rgba(0,0,0,.6)}
 .ask-chip{flex:none;padding:0 6px;border-radius:4px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
 .ask.answered .ask-chip{background:var(--surface2);color:var(--muted)}
 .ask-text{font-weight:500;color:var(--ink)}
-.ask-opts{display:flex;flex-wrap:wrap;gap:6px}
-.ask-opt{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;max-width:100%;padding:4px 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.ask-opt.ro{cursor:default;background:transparent;color:var(--muted);border-color:var(--line)}
-.ask-l{font-weight:600}
-.ask-d{font-size:var(--t-sm);color:var(--muted)}
-.ask-pic{width:96px;height:54px;margin-bottom:3px;border-radius:4px}
-.ask.answered .ask-opts{display:none}
 .ask-answers{display:flex;flex-direction:column;gap:3px;margin:0;padding:0;list-style:none}
 .ask-answers li{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
 .ask-answers b{font-weight:600}

@@ -30,8 +30,8 @@ declare function v2Refresh(): Promise<void>;
 const now = new Date().toISOString(), ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
 // An ask to Ben in Needs you, as GET /v2/needs-you sends it: the item's id is the requirement's, `ask` its requirement.
 const need = (rid: string, task: string, who: string | null, line: string, since: string, extra: Record<string, unknown> = {}): AskNeed => ({kind: 'ask', id: rid,
-  task_id: task, requirement_id: rid, line, since, ask: {requirement_id: rid, kind: 'answer', line, asked_by: who, who: 'human:ben', choices: null,
-    may: ['answer', 'give'], met: false, shows: [], standing: 'Waiting on Ben', answer: null, ...extra}});
+  task_id: task, requirement_id: rid, line, since, ask: {requirement_id: rid, kind: 'ok', line, asked_by: who, who: 'human:ben',
+    may: ['ok', 'no', 'give'], met: false, shows: [], standing: 'Waiting on Ben', answer: null, ...extra}});
 const msg = (id: string, from: string, body: string, created: string = now): AskMsg => ({id, sender_id: from, body, refs: {}, created_at: created, kind: 'say'});
 
 async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, state: AskState) {
@@ -124,15 +124,15 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     // A computer. A Tico team ticket is open (it stays out of Ask), then Ben asked, BotOps left a card, and the Assistant
-    // answered. Three asks wait on Ben in Needs you: BotOps' question, an OK and a stage's Spec page.
+    // answered. Three asks wait on Ben in Needs you: BotOps' OK, the Assistant's OK and a stage's Spec page.
     let state: AskState = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:assistant', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [],
       tickets: [{id: 'sup_1', status: 'answered', unread: true, title: 'Board will not load', message: 'Board will not load', created_at: ago(30),
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
-      card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
+      card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/humans', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
       picked: [],
-      needs: [need('r9', 't9', 'bot:botops', 'Which inbox should the bot answer?', ago(12)),
-              need('r4', 't4', 'bot:assistant', 'OK the launch post', now, {kind: 'ok', may: ['ok', 'no', 'give']}),
+      needs: [need('r9', 't9', 'bot:botops', 'OK the inbox the bot answers', ago(12)),
+              need('r4', 't4', 'bot:assistant', 'OK the launch post', now),
               need('r5', 't5', null, 'Spec for Share Assistant chat, ready for your OK', ago(11), {kind: 'page', may: ['ok', 'no']})]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps or Assistant rows, no old Help link in the rail');
@@ -206,14 +206,14 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     const order = () => thread.evaluate(el => [...(el.children as unknown as HTMLElement[])].map(c => c.dataset.message || c.querySelector<HTMLElement>('[data-action-host]')?.dataset.actionHost || '?'));
     assert.deepEqual(await order(), ['a1', 'act9', 'a2'], 'only the conversation');
     assert.equal(await thread.locator('[data-ask-q], .ask-card').count(), 0, 'no Needs-you card in the chat');
-    assert.doesNotMatch(await thread.innerText(), /Which inbox|OK the launch post|Spec for|Review page|Open/, 'nothing of the asks is said');
+    assert.doesNotMatch(await thread.innerText(), /OK the inbox|OK the launch post|Spec for|Review page|Open/, 'nothing of the asks is said');
     assert.ok(await thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 4), 'opens at the newest');
     // BotOps' Confirm card, confirmed here.
     await thread.locator('[data-action-host="act9"]').getByRole('button', {name: 'Confirm'}).click();
     await page.waitForFunction(() => !document.querySelector('#ask-panel [data-action-host="act9"] [data-confirm]'));
     assert.deepEqual(state.decided, ['act9']);
     // An ask that arrives while the panel is open is not added to the chat either; it waits in Needs you.
-    state.needs = [...state.needs, need('r10', 't10', 'bot:botops', 'Anything else?', now, {choices: ['Yes', 'No']})];
+    state.needs = [...state.needs, need('r10', 't10', 'bot:botops', 'OK the follow-up', now)];
     const before = await order();
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     assert.deepEqual(await order(), before, 'an ask arriving mid-chat adds nothing');
@@ -334,7 +334,7 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     const working = page.locator('#ask-panel [data-ask-working]');
     await working.waitFor();
     assert.equal(await working.innerText(), 'Working · 4m · Closing tasks');
-    // The poll's next draw of the same chat, 5 s on, keeps the thread (and replies typed into it): only the line's time moves.
+    // The next draw of the same chat, 5 s on, keeps the thread (and replies typed into it): only the line's time moves.
     state.execution = {...state.execution!, started_at: ago(0.25)};
     await page.evaluate(() => ASK.refresh());
     await page.evaluate(() => { (document.querySelector<HTMLElement>('#ask-panel [data-ask-thread]')!.firstElementChild as HTMLElement).dataset.kept = '1';

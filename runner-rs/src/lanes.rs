@@ -1,5 +1,5 @@
 //! Task lanes (task_lanes_v2): a task-keyed turn runs in its own lane beside the bot's other work, one turn at
-//! a time per (bot, lane) on this computer (sessions::Lanes; runner_support/worktrees.py lane_lock). The claim names
+//! a time per (bot, lane) on this computer (sessions::Lanes). The claim names
 //! the lanes busy here (`busy_lanes`); the heartbeat advertises the capabilities, each dropped for ten minutes
 //! by a server that refuses it.
 
@@ -15,6 +15,9 @@ use crate::util::text_of;
 pub const FORK_SESSION: &str = "fork_session_v1";
 /// The runner starts a claim marked `fresh_session` on a new thread and keeps the conversation's saved one (execute.rs).
 pub const FRESH_SESSION: &str = "fresh_session_v1";
+/// A Claude thread is keyed by no one plan, so a move between plans resumes it (model_subscriptions::Delivered::binding);
+/// without it the server starts a computer's Claude sessions fresh on each move.
+pub const PLAN_SWITCH_RESUME: &str = "plan_switch_resume_v1";
 
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
@@ -28,6 +31,8 @@ pub const CAPABILITIES: &[&str] = &[
     crate::login::REMOVE_CAPABILITY,
     crate::login::SWITCH_TO_KEY_CAPABILITY,
     crate::login::CONNECT_CAPABILITY,
+    // Full Claude logins: a turn's own credentials file, refreshes and usage reads (claude_login.rs).
+    crate::claude_login::CAPABILITY,
     "turns_at_once_v1",
     // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
     "private_lanes_v1",
@@ -37,13 +42,13 @@ pub const CAPABILITIES: &[&str] = &[
     "browser_exit_v1",
     // Chats of a bot keep their own provider threads: a public thread never resumes a direct message's (execute.rs session_key).
     "threads_v1",
-    "memory_tidy_keep_v1",
     // Report the process allocation boundary so the hub can recheck memory on unused grants.
     "harness_allocation_v1",
     // Make page uses a fresh provider session in disposable scratch, apart from the private Assistant's session.
     "make_page",
     FORK_SESSION,
     FRESH_SESSION,
+    PLAN_SWITCH_RESUME,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -194,6 +199,8 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            PLAN_SWITCH_RESUME,
+            crate::claude_login::CAPABILITY,
             crate::browser::CAPABILITY,
             FRESH_SESSION,
             FORK_SESSION,
@@ -411,7 +418,14 @@ mod tests {
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| *c != FRESH_SESSION)
+            .filter(|c| {
+                ![
+                    FRESH_SESSION,
+                    crate::claude_login::CAPABILITY,
+                    PLAN_SWITCH_RESUME,
+                ]
+                .contains(c)
+            })
             .collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
@@ -435,8 +449,26 @@ mod tests {
     fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
         assert!(CAPABILITIES.contains(&FRESH_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
+        // The newest goes first: resuming across plans, full Claude logins, then a fresh session.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
+            Some(PLAN_SWITCH_RESUME)
+        );
+        let older: Vec<&str> = CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|c| *c != PLAN_SWITCH_RESUME)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::claude_login::CAPABILITY)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
+            .filter(|c| *c != crate::claude_login::CAPABILITY)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
             Some(FRESH_SESSION)
         );
         let index = CAPABILITIES

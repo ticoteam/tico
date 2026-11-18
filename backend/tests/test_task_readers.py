@@ -28,15 +28,35 @@ def readers(api, tid):
     }
 
 
-def seen(api, row, attempt):
-    """The version of the task the run was shown: a bot's write carries it."""
-    return get(api, "tasks/" + row["id"], attempt["token"])["task"]["version"]
+def asked(api, task, token="ben-test"):
+    """The ❓ on `task` in the person's Needs you (backend/question_marks.py)."""
+    return [i for i in get(api, "needs-you", token)["items"] if i["kind"] == "question" and i["task_id"] == task["id"]]
+
+
+def answer_ask(api, task, words, token="ben-test"):
+    """Ben answers the question the bot's subtask asks him (a ❓, backend/person_asks.py): his reply on the task's chat
+    clears it."""
+    [mark] = asked(api, task, token)
+    post(api, f"tasks/{task['id']}/comments", {"text": words, "ask": mark["id"]}, token)
+    assert asked(api, task, token) == []
+
+
+def question(api, row, to, text, attempt):
+    """The run's bot asks `to` on the task: a ❓ on its chat (POST /questions)."""
+    return api.post(
+        f"/api/v2/tasks/{row['id']}/questions", json={"to": to, "text": text}, headers=headers(attempt["token"])
+    )
 
 
 def sql_sees(api, token, words):
-    r = api.post("/api/v2/sql", json={"sql": "SELECT id,title,body FROM tasks"}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return words in r.text
+    """Whether `words` reach this person through SQL: a task's title, or its chat, where what it asks is the first
+    message."""
+    seen = ""
+    for sql in ("SELECT id,title FROM tasks", "SELECT body FROM messages"):
+        r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers(token))
+        assert r.status_code == 200, r.text
+        seen += r.text
+    return words in seen
 
 
 @pytest.mark.parametrize("requester", ["bot:cpo", "bot:ops"])  # another bot's task, and a bot's task to itself
@@ -51,7 +71,9 @@ def test_private_bot_task_reaches_one_named_person_and_nobody_else(api, requeste
     # Dry-run says what the create does: no privacy refusal, then the create goes through.
     assert not [p for p in dry_run(api, body, attempt["token"]) if "rivate" in p]
     child = post(api, "tasks", body, attempt["token"])
-    assert child["private"] and child["owner_id"] == "human:ben" and child["requester_id"] == "bot:ops"
+    # The bot's own subtask, with its question to Ben (backend/person_asks.py).
+    assert child["private"] and child["owner_id"] == "bot:ops" and child["requester_id"] == "bot:ops"
+    assert asked(api, child)
 
     # Ben, and only Ben, now reads the task and the subtask; its history says who it reached.
     assert get(api, "tasks/" + row["id"], "ben-test")["task"]["readers"] == ["human:ben"]
@@ -81,24 +103,14 @@ def test_the_readers_answer_comes_back_to_the_task_and_nowhere_wider(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
     child = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
-    done = post(
-        api,
-        "tasks/" + child["id"] + "/done",
-        {"version": child["version"], "note": "Approved: go with the plan."},
-        "ben-test",
-    )
-    assert (done.get("task") or done)["status"] == "done"
-    # Ben's answer wakes the bot that owns the task, which can act on its task with it: its turn on the task again.
+    answer_ask(api, child, "Approved: go with the plan.")
+    # Ben's answer wakes the bot that owns the subtask, which can act on its task with it: its turn on it again.
     with api.app.state.store.read() as c:
         queued = c.execute(
             "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state='queued'"
         ).fetchall()
-    assert any(
-        json.loads(r[0] or "{}").get("task") == row["id"] and json.loads(r[0] or "{}").get("wake") == "task_turn"
-        for r in queued
-    ), queued
-    answer = run_on(api)
-    post(api, f"tasks/{row['id']}/comments", {"text": "Ben approved; going ahead."}, answer["token"])
+    assert any(json.loads(r[0] or "{}").get("task") == child["id"] for r in queued), queued
+    answer = attempt  # the run that asked him, still going: its reply at the end is posted on its task
     # ...but not past the task's own readers.
     r = api.post(
         "/api/v2/messages",
@@ -124,31 +136,19 @@ def test_refused_hand_offs_match_their_dry_run(api):
 def test_only_the_owning_bot_brings_a_person_in(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     child = post(api, "tasks", subtask(row["id"], "ben"), bot_token(api, "cpo"))
-    assert child["owner_id"] == "human:ben"
-    # The requester bot's hand-off goes on as before (the subtask alone), and makes nobody a reader.
+    assert child["owner_id"] == "bot:cpo"  # its own subtask, with its question to Ben
+    # The requester bot's hand-off goes on as before (the subtask alone), and makes nobody a reader of the task.
     assert readers(api, row["id"]) == set()
 
 
 def test_an_ask_reaches_only_a_reader_and_reassignment_keeps_the_readers(api):
-    """An ask on a private task makes nobody a reader (task_engine.not_shared): the owning bot's sub-task brings the
-    one person in (Dev 172), an ask then reaches them, and an ask of anyone else is refused with the fix."""
+    """A question (a ❓) on a private task makes nobody a reader (task_engine.not_shared): the owning bot's sub-task
+    brings the one person in (Dev 172), a question then reaches them, and one to anyone else is refused with the fix."""
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
 
     def ask(to):
-        return api.post(
-            f"/api/v2/tasks/{row['id']}/asks",
-            json={
-                "to": to,
-                "line": "Approve the plan?",
-                "choices": ["Yes", "No"],
-                "why": "It decides what ships next.",
-                "details": ["It goes ahead.", "It waits."],
-                "recommend": "Yes",
-                "version": seen(api, row, attempt),
-            },
-            headers=headers(attempt["token"]),
-        )
+        return question(api, row, to, "Approve the plan? It decides what ships next.", attempt)
 
     r = ask("ben")
     assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben can't see" in r.text, r.text
@@ -198,7 +198,16 @@ def test_the_readers_answer_clears_the_wait(api):
 
     with api.app.state.store.read() as c:
         assert [(w.state, w.who) for w in waiting_on(c, row["id"])][:1] == [("tasks", card["id"])]
-    post(api, "tasks/" + card["id"] + "/done", {"version": card["version"], "note": "Approved."}, "ben-test")
+    answer_ask(api, card, "Approved.")
+    with api.app.state.store.read() as c:
+        # The subtask is the bot's: Ben's answer reaches it, and the bot closes its subtask, which ends the wait.
+        assert [(w.state, w.who) for w in waiting_on(c, card["id"])][:1] == [("bot", "bot:ops")]
+    post(
+        api,
+        "tasks/" + card["id"] + "/done",
+        {"version": get(api, "tasks/" + card["id"], attempt["token"])["task"]["version"], "note": "Ben approved."},
+        attempt["token"],
+    )
     with api.app.state.store.read() as c:
         assert card["id"] not in {w.who for w in waiting_on(c, row["id"])}
         assert H.task(c, row["id"])["status"] == "open"
@@ -214,27 +223,12 @@ def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
     body = subtask(own["id"], "ben", body="Ben, approve the vendor dispute reply? If yes, I will send it.")
     r = api.post("/api/v2/tasks", json=body, headers=headers(attempt["token"]))
     assert r.status_code == 403, r.text
-    r = api.post(
-        f"/api/v2/tasks/{own['id']}/asks",
-        json={
-            "to": "ben",
-            "line": "Send the reply?",
-            "choices": ["Yes", "No"],
-            "why": "It decides what ships next.",
-            "details": ["It goes ahead.", "It waits."],
-            "recommend": "Yes",
-            "version": seen(api, own, attempt),
-        },
-        headers=headers(attempt["token"]),
-    )
+    r = question(api, own, "ben", "Send the reply? It decides what ships next.", attempt)
     assert r.status_code == 422 and r.json()["error"]["code"] == "private", r.text
-    # Nothing reached Ben: no reader, no task of his, and no ask on the task.
+    # Nothing reached Ben: no reader, no task of his, and no question on the task.
     with api.app.state.store.read() as c:
         assert not H.task_readers(H.task(c, own["id"]))
-        assert not c.execute(
-            "SELECT 1 FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=? AND r.person_id='human:ben'",
-            (own["id"],),
-        ).fetchone()
+        assert not c.execute("SELECT 1 FROM question_marks WHERE task_id=?", (own["id"],)).fetchone()
     assert readers(api, own["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
     # Once Ben reads every task the run carries, the same sub-task reaches him.
     with api.app.state.store.transaction() as c:
@@ -244,24 +238,13 @@ def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
 
 
 def test_a_question_reaches_one_reader(api):
-    """A question is an ask on the task: it goes only to someone who can read it already, and makes nobody a reader."""
+    """A question is a ❓ on the task's chat: it goes only to someone who can read it already, and makes nobody a
+    reader."""
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
 
     def ask(to):
-        return api.post(
-            f"/api/v2/tasks/{row['id']}/asks",
-            json={
-                "to": to,
-                "line": "Ship the zip fix in the next release?",
-                "choices": ["Yes", "No"],
-                "why": "It decides what ships next.",
-                "details": ["It goes ahead.", "It waits."],
-                "recommend": "Yes",
-                "version": seen(api, row, attempt),
-            },
-            headers=headers(attempt["token"]),
-        )
+        return question(api, row, to, "Ship the zip fix in the next release? It decides what ships next.", attempt)
 
     r = ask("ben")
     assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben can't see" in r.text, r.text

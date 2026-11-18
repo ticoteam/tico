@@ -30,12 +30,10 @@
 .task-req[data-state="met"] .task-req-dot { color: var(--accent); }
 .task-req-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .task-req-name { min-width: 0; overflow-wrap: anywhere; }
-.task-req-val { max-width: 200px; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .task-req-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
 .task-req-ask[hidden] { display: none; }
 .task-req-ask input[name=line] { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px;
   border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
-.task-req-ok { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .task-req-err { font-size: 12px; color: var(--fail); }
 
 /* The "▶ N for you" buttons: the header's, beside the pipeline picker (#task-play), and a column's or a phone stage's compact
@@ -154,7 +152,7 @@
   .tl-pipeline-edit::before { content: ""; position: absolute; inset: -7px -8px; }
 }
 
-/* The pipeline editor (ui/app/pipeline-editor.ts, docs/pipelines-v3.md S11), its only styles: labels left-aligned above
+/* The pipeline editor (ui/app/pipeline-editor.ts, docs/dev/pipelines-v3.md S11), its only styles: labels left-aligned above
    their controls as in every form, short fields short, and each stage one dense row with a thin divider, opened by a
    click. Fields take the shared field look (forms.css): 44 px on a phone. */
 .pe-dialog{width:min(640px,calc(100vw - 32px))}
@@ -188,6 +186,15 @@
 .pe-stage[open]>summary .pe-stage-meta{display:none}
 .pe-tools{display:none;gap:2px}
 .pe-stage[open]>summary .pe-tools{display:inline-flex}
+/* A side stage's row (pipeline-editor.ts): indented under its stage, ↳ before its name in the quieter ink. Its Side
+   switch, on every row but the first, is on the closed row; an open row has the stage's tools there instead, and the
+   switch is beside Name and Goal. */
+.pe-stage.side>summary{padding-left:calc(var(--s3) + 20px)}
+.pe-stage.side .pe-stage-name{color:var(--link-quiet);font-weight:500}
+.pe-side{flex:none;color:var(--muted)}
+.pe-stage[open]>summary .pe-side{display:none}
+/* one stage's editor: beside Name and Goal, on their controls' line */
+.pe-row>.pe-side{align-self:flex-end;min-height:var(--ctl)}
 /* One stage's editor: the stage's fields are the dialog's body, with no row around them (pipeline-editor.ts). */
 .pe-stages.pe-one{border:0;background:none}
 .pe-stage-one>.pe-stage-body{padding:0}
@@ -223,12 +230,8 @@
 .pe-faces{flex:none;display:inline-flex;align-items:center}
 .pe-faces>*+*{margin-left:-5px}
 .pe-faces>*{box-shadow:0 0 0 2px var(--surface)}
-.pe-req-ed>.pe-req-sw,.pe-req-ed>.pe-row,.pe-req-ed>.pe-choices,.pe-req-ed>.pe-f:has(> input[data-pe-rf=question]){flex:1 1 100%}
+.pe-req-ed>.pe-req-sw{flex:1 1 100%}
 .pe-req-sw{display:flex;flex-wrap:wrap;align-items:center;gap:2px var(--s3)}
-.pe-req-ed .pe-row{gap:var(--s2)}
-.pe-choices{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
-.pe-choice{display:inline-flex;align-items:center;gap:2px}
-.pe-choice input{width:120px}
 .pe-add{align-self:flex-start}
 /* Read only (pipeline-editor.ts, the viewer may not change the pipeline): the same fields, off, laid out as the body. */
 .pe-ro{display:flex;flex-direction:column;gap:var(--s3);min-width:0;margin:0;padding:0;border:0}
@@ -245,6 +248,9 @@
 .pe-foot .err{margin:0 0 8px}
 .pe-foot .err[hidden]{display:none}
 .pe-foot-row{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
+/* A removed stage's tasks: where they go, on one line above Save (wraps on a phone). */
+.pe-move-out{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);margin:0 0 8px}
+.pe-move-out select{min-width:0;max-width:100%}
 /* Someone saved first (pipeline-editor.ts peClashHTML): what they changed, Load theirs and Save mine. */
 .pe-clash{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;padding:10px;border-radius:var(--r-ctl);background:var(--wait-bg);color:var(--wait-ink)}
 .pe-clash p{flex:1 1 260px;margin:0}

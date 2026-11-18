@@ -752,10 +752,10 @@ def test_only_owners_and_admins_manage_readers_and_the_list_pages(site):
 def test_the_assistant_gets_no_reader_data_without_the_persons_click():
     calls = []
     app = SimpleNamespace(
-        get=lambda path: lambda fn: calls.append(fn) or fn,
-        post=lambda path: lambda fn: fn,
-        patch=lambda path: lambda fn: fn,
-        delete=lambda path: lambda fn: fn,
+        get=lambda path, **_: lambda fn: calls.append(fn) or fn,
+        post=lambda path, **_: lambda fn: fn,
+        patch=lambda path, **_: lambda fn: fn,
+        delete=lambda path, **_: lambda fn: fn,
     )
     from backend.company_page import api_readers
     from backend.store import Problem
@@ -806,7 +806,7 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     real_judge = task_trigger_rules.judge
     monkeypatch.setattr(task_trigger_rules, "judge", lambda *a, **k: (calls.append("rule"), real_judge(*a, **k))[1])
     with site.store.transaction() as c:  # the spies do hear an ordinary task
-        H.task_create(c, H.KEEPER, "Check the spies", "Body", "human:ana", lint=False, deduplicate=False)
+        H.task_create(c, H.TICO_ACTOR, "Check the spies", "Body", "human:ana", lint=False, deduplicate=False)
     assert {"webhook", "automation", "rule"} <= set(calls)
     calls.clear()
     made = with_edition(site)
@@ -817,7 +817,10 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     message = site.rows("SELECT * FROM reader_messages")[0]
     assert message["kind"] == "reply" and message["edition_id"] == made.edition and message["body"] == hostile
     with site.store.read() as c:
-        task = H.task(c, message["task_id"])
+        task = {
+            **H.task(c, message["task_id"]),
+            "body": H.task_request_text(c, message["task_id"]),
+        }  # its first message
         requester = dict(c.execute("SELECT * FROM task_requesters WHERE task_id=?", (task["id"],)).fetchone())
     assert task["owner_id"].startswith("human:") and task["private"] == 1
     assert "pat@other.example" not in task["title"] + task["body"]
@@ -849,7 +852,7 @@ def test_a_warned_message_says_so_to_the_owner(site, monkeypatch):
     message = site.rows("SELECT * FROM reader_messages")[0]
     assert message["kind"] == "can_help" and message["ask_id"] == "ask-1" and message["body"] == "I can help."
     with site.store.read() as c:
-        assert "looks like a prompt injection" in H.task(c, message["task_id"])["body"]
+        assert "looks like a prompt injection" in H.task_request_text(c, message["task_id"])
 
 
 def test_replies_are_capped_at_ten_a_day_and_in_length(site):

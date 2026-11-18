@@ -1,5 +1,5 @@
-"""What each stage of the Product and Engineering presets is handed (backend/stage_inputs.py, docs/pipelines-v3.md
-"What a stage is handed"): the wake that wakes a stage's bot, and the task's own read, list the Spec page, the PR, each
+"""What each stage of the Product and Engineering presets is handed (backend/stage_inputs.py, docs/dev/pipelines-v3.md
+"What a stage is handed"): the wake that wakes a stage's bot, and the task's own read, list the Spec, the PR, each
 earlier Review page and what was said at done; a page an earlier stage never attached is named as missing.
 
 Acme rc.3 (case 1): in Fixes 1 the Builder could not see Review 1's page, said done with nothing changed, and the
@@ -56,12 +56,12 @@ def _handed(c, task_id):
     return [e["line"] for e in SI.of(c, E.task(c, task_id))]
 
 
-SPEC = "Spec page from Spec (Product): page:f-spec@3, read it with `tico file read f-spec`"
+SPEC = "Spec from Spec (Product): page:f-spec@3, read it with `tico file read f-spec`"
 PR_OPEN = f"PR {REPO}#12 https://github.com/{REPO}/pull/12: open, newest commit "
 REVIEW_1 = "Review page from Review 1: page:f-rev1@1, read it with `tico file read f-rev1`"
 REVIEW_2 = "Review page from Review 2: page:f-rev2@1, read it with `tico file read f-rev2`"
 FIXES_1 = "Fixes 1 was said done: bbb: fixed the empty cart; declined the rename (out of scope)"
-BUILT = "QA page from QA: page:f-built@2, read it with `tico file read f-built`"
+BUILT = "QA report from QA: page:f-built@2, read it with `tico file read f-built`"
 
 
 def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
@@ -69,7 +69,7 @@ def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
     # Build: the Spec, as the Product task OK'd it.
     _move(c, eng, "engineering-build")
     assert _handed(c, eng) == [SPEC]
-    assert "Spec page from Spec (Product): page:f-spec@3" in _wake(c, eng, "bot:builder")
+    assert "Spec from Spec (Product): page:f-spec@3" in _wake(c, eng, "bot:builder")
     _link_pr(c, eng, 12, "aaa")
 
     # Review 1: the PR (the number its playbook's `gh pr view <n> -R <repo>` needs) and the Spec.
@@ -127,7 +127,7 @@ def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
     _move(c, product, "product-validate")
     filed_pr = f"PR {REPO}#12 https://github.com/{REPO}/pull/12: merged as ccc111 (work this task filed)"
     assert _handed(c, product) == [
-        "Spec page from Spec: page:f-spec@3, read it with `tico file read f-spec`",
+        "Spec from Spec: page:f-spec@3, read it with `tico file read f-spec`",
         filed_pr + "; in no release yet",
     ]
     assert filed_pr + "; in no release yet" in _wake(c, product, "bot:pm")
@@ -183,7 +183,7 @@ def test_a_private_product_task_hands_on_none_of_its_pages(c):
     assert SI.of(c, E.task(c, eng), readable=lambda filer: False) == []
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (product,))
     _move(c, eng, "engineering-review-1")
-    assert "Spec page from Spec (Product)" not in _wake(c, eng, "bot:rev-a")
+    assert "Spec from Spec (Product)" not in _wake(c, eng, "bot:rev-a")
 
 
 def test_a_filed_task_the_reader_may_not_name_is_left_out(c):
@@ -233,10 +233,10 @@ def _sign_off(c, task_id, answer, by, version, notes):
 
 
 SENT_BACK = (
-    "QA page from QA (Saved carts, work this task filed): sent back at page:f-built@1: "
+    "QA report from QA (Saved carts, work this task filed): sent back at page:f-built@1: "
     "the empty cart still shows a total"
 )
-SIGNED = "QA page from QA (Saved carts, work this task filed): OK'd at page:f-built@2: ship it; watch the totals"
+SIGNED = "QA report from QA (Saved carts, work this task filed): OK'd at page:f-built@2: ship it; watch the totals"
 
 
 def test_the_product_task_is_handed_the_pre_release_sign_offs_of_the_work_it_filed(c):

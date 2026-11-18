@@ -214,7 +214,7 @@ def test_full_queue_keeps_work_and_human_system_and_recovery_controls_work(queue
     assert pending(api) == before
     post(api, 'messages', {'to': 'finance', 'text': 'Person recovery instructions'})
     with api.app.state.store.transaction() as c:
-        H.say(c, H.KEEPER, 'bot:finance', 'Fixture system notice', kind='notice')
+        H.say(c, H.TICO_ACTOR, 'bot:finance', 'Fixture system notice', kind='notice')
     if state == 'quarantined':
         post(api, 'bots/finance/quarantine/clear', {})
     else:

@@ -1,7 +1,5 @@
 """Urgent task news bypasses every profile's digest; ordinary progress remains batched."""
 
-import json
-
 import pytest
 
 from backend import hubdb as H, rules as R, wake_presets as W
@@ -85,22 +83,21 @@ def test_creation_tags_incident_titles_and_preserves_existing_tags(api):
         assert 'incident' not in H.task_labels(ordinary)
         # Wake-time classification uses the tag, not the title.
         c.execute("UPDATE tasks SET title='Renamed outage' WHERE id=?", (task['id'],))
-        assert R.judge(c, H.KEEPER, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
+        assert (
+            R.judge(c, H.TICO_ACTOR, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
+        )
 
 
 def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
-    from clients.watchers import events
     from backend.tests.helpers.watchers import hosted, report
 
     r = hosted(api)
     raw = {'op': 'task', 'key': 'error:outage', 'title': 'Error Monitor: Outage', 'incident': True}
-    parsed, _ = events('tico-event ' + json.dumps(raw))
-    assert parsed[0]['incident'] is True
-    first = report(api, r, parsed[0])
+    first = report(api, r, raw)
     tid = first['tasks']['error:outage']
     with api.app.state.store.transaction() as c:
         assert 'incident' in H.task_labels(H.task(c, tid))
-        H.task_close(c, H.KEEPER, tid, 'Not an outage.')
+        H.task_close(c, H.TICO_ACTOR, tid, 'Not an outage.')
     second = report(api, r, dict(raw, op='comment', ref='new', text='Recurred'))
     with api.app.state.store.read() as c:
         assert 'incident' in H.task_labels(H.task(c, second['tasks']['error:outage']))
@@ -114,14 +111,14 @@ def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable
         c.execute('DELETE FROM jobs')
         msg, job = sent_job(c, plain, 'bot:cpo', 'A blocker needs it', {'wake': 'blocker'})
         assert msg['refs']['rule'] == 'profile_lead_blocker' and job['held'] == 0
-        said = H.task_comment(c, H.KEEPER, incident['id'], 'A note on the outage')
+        said = H.task_comment(c, H.TICO_ACTOR, incident['id'], 'A note on the outage')
         kept = H.message(c, said['id'])
         assert kept['refs']['rule'] == 'incident_news' and H.is_comment(kept)
-        H.task_comment_edit(c, H.KEEPER, incident['id'], said['id'], 'Clearer words')
+        H.task_comment_edit(c, H.TICO_ACTOR, incident['id'], said['id'], 'Clearer words')
 
 
 def test_incident_news_to_a_requester_bot_without_the_turn_starts_no_run(api):
-    """docs/pipelines-v3.md "It only wakes whoever has the turn": urgent only skips the digest. News about an incident
+    """docs/dev/pipelines-v3.md "It only wakes whoever has the turn": urgent only skips the digest. News about an incident
     whose turn is its owner's starts no run for the bot that asked for it; the news stays on the task for its next
     look, and the owner's turn is untouched."""
     r = runner(api)

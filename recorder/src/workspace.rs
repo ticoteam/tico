@@ -84,7 +84,6 @@ pub struct Context {
     /// so it may be saved to Tico later as a meeting recorded here.
     pub live_removed: bool,
     pub locally_paused: bool,
-    pub legacy_import_complete: bool,
     pub finalize_payload: Option<Value>,
     /// Private, router-answered chat. Never sent to a shared meeting.
     pub chat: Vec<Turn>,

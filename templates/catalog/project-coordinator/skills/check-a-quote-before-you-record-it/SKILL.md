@@ -14,7 +14,7 @@ Steps:
 3. Note the timestamp of the turn. If the transcript has no timestamps, say so once in the write-up and cite the meeting
    and the turn number instead.
 4. Keep the quote to one sentence, or to the part that carries the point. Never paste the transcript into a message or a
-   task body.
+   task's first message.
 5. Check that the quote supports the line it sits under. A quote about a deadline does not support a decision about
    scope. If it does not, drop the line or move it to discussion.
 6. Mark any quote from a poor or cut-off part of the transcript "low confidence", as the playbook says.

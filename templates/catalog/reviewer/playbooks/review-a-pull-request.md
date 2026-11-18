@@ -1,17 +1,25 @@
 # Review a pull request
 
-Used in your Engineering review stage (Review 1 or Review 2), and for each pull request in
+Used in your pipeline's review stage, and for each pull request in
 `playbooks/weekday-review-queue.md`. Budget 15 minutes.
 
-Inputs: the pull request's diff, the Spec page and the failing checks first. Both are listed under "From earlier
-stages" in `tico task show <id>` (in Review 2, also Reviewer 1's page and what the task's owner said it fixed). Then the pull
-request's description and its linked issue. `knowledge/standards.md`, `knowledge/patterns.md` and
-`knowledge/review-practice.md` are read once per session. Read the rest of the repository only where the diff needs it.
+Start with the pull request's diff, the Spec page and the failing checks. Find the pull request and Spec under
+"From earlier stages" in `tico task show <id>`. Then read the pull request's description and linked issue.
+`knowledge/standards.md`, `knowledge/patterns.md` and `knowledge/review-practice.md` are read once per session.
+Read the rest of the repository only where the diff needs it.
 
-Outcome: one Review page at one head commit, built with `skills/build-the-page/SKILL.md` from its
-`templates/review.html`. It opens with what the change does and whether anything blocks, and its title names that
-commit; then the screens, when the change has any; then what was read and run, and the details. It names what was read
-and what was not.
+When Review requires a done subtask, file
+`tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
+and pass the linked PRs and their full head commits in `--body`. Choose a model different from yours. Ask for an
+independent review and have the child say done with its findings, the commits, and its model. Once it finishes, include
+both reviews in the same page, with the model and commit named for each PR. Use one finding per real defect, with
+`file:line`, severity, and why it matters. Leave out style nits and summaries of the diff. Say when there are no findings.
+
+In an older pipeline, attach one review per stage and read the earlier review and fixes when you reach Review 2.
+
+Outcome: one Review page at the current heads, built with `.claude/skills/build-the-page/SKILL.md` from its
+`templates/review.html`. It opens with whether anything blocks, then the screens when the change has any, how it was
+checked, and the findings. It names the reviewed commits and says what was read and what was skipped.
 
 Done when every changed file was read or named as skipped, each risky surface has its evidence or a blocking question, every
 comment has a label, a location and a quote, and the page is attached to the task (or, outside the pipeline, the task note
@@ -54,6 +62,9 @@ Start from the diff, the Spec page and the failing checks. Read other files only
      `waiting for #<fix pull request> to merge`. Never a guessed date.
    - Once main is fixed, the fix is the task owner's rebase and push (`git rebase origin/<base branch>`), never re-run: a
      re-run tests the same merge with the old main and fails again.
+8. **SQL changes:** when the diff changes a query, a schema or an index, the author's quick perf check
+   (`.claude/skills/quick-perf-check/SKILL.md`) must be on the task: each query's plan, its old and new time, and any N+1
+   scan. Missing numbers are a `question:` on the page, and the author posts them before the change merges.
 
 ## 2. Check against the team's standard
 
@@ -78,10 +89,7 @@ style chosen during setup (default labelled):
   - `issue (blocking):` each thing that ships a bug, breaks a stated rule, or costs money or data to undo. File, line, quoted code,
   what happens, and what would resolve it.
   - `issue:` a real problem that can wait for a later change.
-  - `question:` what you could not tell from the diff.
-  - `suggestion:` an improvement with a short example.
-  - `nit:` preferences, at most five, never blocking.
-  - `praise:` one specific line, when earned.
+  - Outside the combined Review stage, you can also include `question:`, `suggestion:`, `nit:` and `praise:` comments.
 - **Not checked**, in the details: tests you did not run, files skipped, pending checks.
 
 Every comment is polite, about the code, and specific. Never "this is wrong": say what happens and why. Follow
@@ -89,7 +97,7 @@ Every comment is polite, about the code, and specific. Never "this is wrong": sa
 
 ## 4b. Screens
 
-Only in Review 2, the last review before merge. If the diff touches `ui/`, take before and after
+In the combined Review stage or the second stage of a split review, if the diff touches `ui/`, take before and after
 screenshots of the changed screens with `python3 scripts/release_shots.py --base <merge base> --head <head commit> --version
 <next release> --out <dir>`. Put each changed screen's before and after pictures in the page's "What it looks like"
 section, with red numbered arrows on what changed (the skill's "Arrows"), and also attach `manifest.json` and every
@@ -100,10 +108,10 @@ computer, attach nothing and say so under Not checked. Never draw a screen.
 ## 5. Finish
 
 In a review stage: build, check, publish, look at and attach the page. `page.py build` and `page.py check --kind review`
-(the skill's steps 3 and 4), then `tico page publish reports/reviews/<file>.html --task <id> --title "Review <1|2>: <the
+(the skill's steps 3 and 4), then `tico page publish reports/reviews/<file>.html --task <id> --title "Review: <the
 change>"` prints the file id. Render the published page (`page.py render <file id> --kind review`) and look at it at
 both widths; a broken page is fixed and published again, never attached. Then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
-names. The page is the whole hand-off: the stage moves on when it covers the newest commit, and every finding on the pull
+names. The stage moves on when the page covers the newest commits and any required subtask is done. Every finding on the pull
 request goes to the task's owner through it, never to your Manager or a person as a separate task. Commit this repository.
 
 Outside the pipeline: `tico task done <id> -m "..." --version N`: the pull request, the head commit, the number of

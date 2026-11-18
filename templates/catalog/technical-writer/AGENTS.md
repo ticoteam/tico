@@ -38,8 +38,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 the requested work and granted Tools. Apply an owner's routine changes directly.
 
 These three need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts on the task:
-- **Committing, merging or publishing any change to the docs.** The starter access is read only, and
-  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted. Once granted, a
+- **Committing, merging or publishing any change to the docs.** The starter access is read only. Keep the draft on the task until write access is granted. Once granted, a
   docs-only pull request needs no approval: add a `Changelog:` line to its body, then merge it once its checks are green.
 - **Deleting, renaming or moving a page**, or changing a URL that other pages link to.
 - **Sharing a draft outside the team**, or contacting a user or customer about a page.
@@ -56,7 +55,7 @@ private tasks you cannot open: leave them out and never ask anyone for their nam
 - `skills/write-a-changelog-line/SKILL.md`: read before you write a changelog entry or a "what changed" section for a release.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/style.md`, `knowledge/docs-map.md` and
    the playbook the task names. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the report in progress.
@@ -79,7 +78,7 @@ stop, and their end wakes you.
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`
 and `gh pr diff <n> -R <repo>`. Read the docs in the repositories as far as your access reaches. For anything about how the team works
 (a process a README links to), ask the Librarian: `tico doc ask "<question>"`. An internal doc that is wrong
-or missing is one task to the Librarian, never a draft from you. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`,
+or missing is one task to the Librarian, never a draft from you. A question for the requester is `tico task ask <id> --to <person> "<question>"`,
 one open question per task. A page that needs a subject-matter answer is a task for the person who knows it:
 `tico task create --owner <person> --title "<the question>" --link <pull request url>`.
 Finish every task, quiet week or not.

@@ -22,10 +22,15 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     SCHEDULE                               schedule only: the cron that fired (the backstop)
     RUN_EVENT, RUN_CONCLUSION, RUN_TITLE,  workflow_run only: the Release validation run that finished
     RUN_URL
+    VALIDATION_RUN                         workflow_dispatch only: the id of the Release validation run on main that
+                                           just finished. ci.yml's last job dispatches the train with it, because a run
+                                           the train dispatched with GITHUB_TOKEN never fires workflow_run. Such a
+                                           dispatch counts as that finished run, not as a manual run
     CANARY_URL, CANARY_UPDATE_KEY          the canary install (Tico Team) and its update key (docs/service-keys.md)
     STABLE_URL, STABLE_UPDATE_KEY          the stable install and its update key
     RELEASE_HOLD                           any value holds promotion to stable (a hotfix too, unless override_hold)
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
+                                           (a dispatch naming VALIDATION_RUN is a finished run, not a manual one)
     RELEASE_NEEDS_PERSON                   `on`: every release waits for a person's approval. Anything else (the
                                            default): a release whose notes list no High risk item needs no person
     GITHUB_ACTOR                           hotfix only: who overrode a hold
@@ -138,7 +143,11 @@ def sleep(seconds):
 
 
 class Fail(Exception):
-    """A step failed: it is reported on the release-train issue."""
+    """A step failed: it is reported on the release-train issue. `status` is the HTTP code of a GitHub call that failed."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 # ---- versions, titles and the clock ----
@@ -312,7 +321,7 @@ class GitHub:
     def get(self, path):
         code, data, _ = self.call("GET", path)
         if code != 200:
-            raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")))
+            raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")), status=code)
         return data
 
     def pages(self, path, key=None, limit=10):
@@ -344,6 +353,10 @@ class GitHub:
     def contains(self, ref, sha):
         """Whether `ref` (main) has `sha` in its history."""
         return self.compare(sha, ref) in ("ahead", "identical")
+
+    def workflow_run(self, run_id):
+        """One Actions run, by id."""
+        return self.get("actions/runs/%d" % int(run_id))
 
     def validation_runs(self):
         """Release validation runs dispatched on main, newest first (only these count as candidates)."""
@@ -679,8 +692,24 @@ def catch_up_latest(gh, env):
 # ---- the train: what to do now ----
 
 
-def event_run(env):
-    """workflow_run only: the Release validation run that just finished, as {conclusion, title, url}."""
+def manual_run(env):
+    """A person's run of the train: a workflow_dispatch that does not hand over a finished validation run."""
+    return env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and not env.get("VALIDATION_RUN", "").strip()
+
+
+def event_run(env, gh=None):
+    """The Release validation run that just finished, as {conclusion, title, url}: a workflow_run's, or the one ci.yml's
+    last job handed over in VALIDATION_RUN (read from GitHub; train.yml waited for it to complete)."""
+    handed = env.get("VALIDATION_RUN", "").strip()
+    if env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and handed and gh is not None:
+        found = gh.workflow_run(handed)
+        if found.get("status") != "completed":
+            return None
+        return {
+            "conclusion": found.get("conclusion") or "",
+            "title": found.get("display_title") or "",
+            "url": found.get("html_url") or "",
+        }
     if env.get("GITHUB_EVENT_NAME") != "workflow_run" or env.get("RUN_EVENT") != "workflow_dispatch":
         return None
     return {
@@ -907,19 +936,19 @@ def hotfix_busy(gh):
 def cmd_guard(gh, env, now):
     """Read-only, outside the release concurrency group: decides whether the release job runs at all, so a push that
     finds nothing to do never enters the `release` environment or queues behind (or displaces) a hotfix."""
-    event = env.get("GITHUB_EVENT_NAME", "")
+    manual = manual_run(env)
     go = False
-    if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
+    if not manual and env.get("RELEASE_TRAINS", "").strip() != "on":
         note("The release train is off (repository variable RELEASE_TRAINS is not `on`)")
     else:
         busy = hotfix_busy(gh)
         if busy:
             note("A hotfix is running (%s); it reports itself, and the next event acts after it" % busy.get("html_url"))
-        elif event == "workflow_dispatch":
+        elif manual:
             go = True
             note("Train step: manual run")
         else:
-            plan = plan_step(gh, now, event_run(env))
+            plan = plan_step(gh, now, event_run(env, gh))
             lines = problems(plan)
             go = plan["action"] in ("ship", "dispatch") or bool(lines and not reported(gh, lines))
             note("Train step: %s" % plan["why"])
@@ -1372,10 +1401,22 @@ def cmd_step(gh, env, now=None):
     # Stable takes the canary's approved release before the canary moves on.
     step("promote", lambda: promote(gh, env))
     plan = {}
-    manual = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    manual = manual_run(env)
+
+    def validate(chosen):
+        dispatch_candidate(
+            gh,
+            chosen["sha"],
+            chosen["version"],
+            chosen["newest"],
+            anchor=chosen.get("anchor"),
+            carried=chosen.get("carried"),
+            anchor_previous=chosen.get("anchor_previous"),
+        )
+
     step(
         "plan",
-        lambda: plan.update(plan_step(gh, now, event_run(env), manual=manual, checkout=increment.Checkout(ROOT))),
+        lambda: plan.update(plan_step(gh, now, event_run(env, gh), manual=manual, checkout=increment.Checkout(ROOT))),
     )
     if plan:
         note("Train: " + plan["why"])
@@ -1415,19 +1456,19 @@ def cmd_step(gh, env, now=None):
                     record = "Release %s shipped, not marked latest (a newer release is)" % plan["version"]
 
             step("ship", ship)
+            if shipment:
+                # Main moved on while the candidate was validated: validate its head now. Waiting for the next event
+                # could take a while: a quiet main has no pushes, and GitHub drops most backstop schedules.
+                after = {}
+                step(
+                    "plan the next candidate",
+                    lambda: after.update(plan_step(gh, now, checkout=increment.Checkout(ROOT))),
+                )
+                if after.get("action") == "dispatch":
+                    note("Train: " + after["why"])
+                    step("validate", lambda: validate(after))
         elif plan["action"] == "dispatch":
-            step(
-                "validate",
-                lambda: dispatch_candidate(
-                    gh,
-                    plan["sha"],
-                    plan["version"],
-                    plan["newest"],
-                    anchor=plan.get("anchor"),
-                    carried=plan.get("carried"),
-                    anchor_previous=plan.get("anchor_previous"),
-                ),
-            )
+            step("validate", lambda: validate(plan))
     if failures:
         report(gh, False, list(LOG), key=failures)
     elif shipment:

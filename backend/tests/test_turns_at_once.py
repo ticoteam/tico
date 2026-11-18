@@ -63,16 +63,6 @@ def test_a_raised_computer_limit_admits_more_turns_on_a_runner_that_takes_it(api
     assert claim(api, machine) is None
 
 
-def test_a_runner_that_cannot_take_a_raised_limit_runs_at_the_capacity_it_reports(api):
-    machine = task_bot(api, lanes=True, capacity=2)
-    for title in ("first", "second", "third", "fourth", "fifth"):
-        new_task(api, title)
-    assert set_computer(api, machine, 5)["turn_limit"] == 2
-    # Twice the reported capacity (2) may be claimed; the fifth waits.
-    assert all(claim(api, machine) for _ in range(4))
-    assert claim(api, machine) is None
-
-
 def test_a_bot_at_its_limit_holds_its_work_while_another_bot_on_the_computer_runs(api):
     machine = task_bot(api, lanes=True, capacity=4, others=("finance",))
     ops_tasks = [new_task(api, "first"), new_task(api, "second")]

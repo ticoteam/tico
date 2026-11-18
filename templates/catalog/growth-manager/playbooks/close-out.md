@@ -7,7 +7,7 @@ failed, was inconclusive or was stopped.
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>                the task, its version and its comments
     tico growth numbers                the channel's numbers over the test

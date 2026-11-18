@@ -207,10 +207,6 @@ pub fn shared_path(bot: &str) -> Option<PathBuf> {
 /// The bot's checkout with its config (service.py local_path): a branch of a bot with branches works in the
 /// original's checkout.
 pub fn local_path(config: &crate::config::Config, bot: &str, bot_config: &Value) -> PathBuf {
-    if crate::appdriver::delivery(bot_config).is_some() {
-        // No repository: the bot lives in its app, and its turns run in an empty folder of their own.
-        return config.state_dir().join("appdelivery").join(bot);
-    }
     let checkout = shared_checkout(bot_config);
     let source = text_of(&bot_config["shared_from"]);
     let explicit = config.repo_for(if source.is_empty() { bot } else { &source });
@@ -1684,24 +1680,22 @@ impl Runner {
     pub async fn enter_lanes(&self, attempt: &Value, lost: &AtomicBool) -> Result<Place, String> {
         let bot = text_of(&attempt["bot"]);
         let lane = turn_lane(attempt);
-        let app = crate::appdriver::delivery(&attempt["config"]).is_some();
         let make_page = attempt["make_page"]["task"].is_object();
         let private = lane.starts_with(PRIVATE_LANE) || make_page;
-        // A bot delivered through an app has no checkout: every turn runs in its empty folder, with no worktree.
-        let task = if !slug_ok(&bot) || app || make_page {
+        let task = if !slug_ok(&bot) || make_page {
             String::new()
         } else if private {
             private_of(&lane)
         } else {
             task_of(&lane)
         };
-        if private && !app && !make_page && task.is_empty() {
+        if private && !make_page && task.is_empty() {
             return Err(format!("this private meeting's lane ({lane}) names no checkout this computer can keep for it"));
         }
         let person = crate::drive::from_person(&attempt["message"]);
         let lane_guard = hold(self.lanes.lane(&bot, &lane), lost).await?;
         // A task turn skips its refresh of the checkout while a person waits for it.
-        let checkout = if app || make_page {
+        let checkout = if make_page {
             None
         } else if task.is_empty() {
             Some(self.lanes.hold_checkout(&bot, person, lost).await?)
@@ -1732,11 +1726,6 @@ impl Runner {
                     &self.config.projects_dir().join(relative),
                 )?;
             }
-        }
-
-        if app {
-            std::fs::create_dir_all(&main_path)
-                .map_err(|e| format!("cannot create {}: {e}", main_path.display()))?;
         }
         Ok(Place {
             bot,

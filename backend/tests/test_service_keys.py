@@ -1,5 +1,6 @@
 """Service keys: another system files, updates, closes and reopens its tasks with one, and reaches nothing else."""
 
+from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
 
 
@@ -23,7 +24,8 @@ def test_one_task_per_piece_of_work_whatever_order_the_calls_come_in(api):
     assert set(first["task"]) == {"id"}
     task = get(api, "tasks/" + first["task"]["id"])["task"]
     assert first["created"] and (task["owner_id"], task["requester_id"]) == ("human:ben", "keeper")
-    assert task["body"] == "The report is ready.\n\n_Filed by Billing backend (service key)._"
+    # The other system's words are the task's request, its first message, with Tico's line naming the key.
+    assert task["request"]["text"] == "The report is ready.\n\n_Filed by Billing backend (service key)._"
     again = inbound(api, secret, **work)
     assert (again["task"]["id"], again["created"], again["changed"]) == (task["id"], False, False)
     # Another piece of work may share the title and the owner: the pair is what makes it one task.
@@ -33,7 +35,8 @@ def test_one_task_per_piece_of_work_whatever_order_the_calls_come_in(api):
     assert changed["changed"] and changed["task"] == {"id": task["id"]}
     updated = get(api, "tasks/" + task["id"])["task"]
     assert updated["labels"] == ["reports"]
-    assert updated["body"].startswith("The report is ready. Two charts moved.")
+    with api.app.state.store.read() as c:  # new words are said on the task (it has no description to rewrite)
+        assert "The report is ready. Two charts moved." in H.task_words(c, task["id"])
     closed = inbound(api, secret, key="report-41", close=True, note="Approved in billing.")
     assert closed["changed"] and get(api, "tasks/" + task["id"])["task"]["status"] == "closed"
     assert not inbound(api, secret, key="report-41", close=True)["changed"]
@@ -163,11 +166,12 @@ def test_a_later_call_reopens_reassigns_edits_and_closes_through_the_task_calls(
         return SimpleNamespace(**{**base, **fields})
 
     with company.transaction() as c:
-        task_id = H.task_create(c, H.KEEPER, "Review the report", "Please review.", "human:ben", lint=False)["id"]
-        H.task_close(c, H.KEEPER, task_id, "Approved in billing.")
+        task_id = H.task_create(c, H.TICO_ACTOR, "Review the report", "Please review.", "human:ben", lint=False)["id"]
+        H.task_close(c, H.TICO_ACTOR, task_id, "Approved in billing.")
         assert SK._apply(c, call(owner="human:cara", body="Two charts moved."), H.task(c, task_id), "", "Billing")
         row = H.task(c, task_id)
-        assert (row["status"], row["owner_id"], row["body"]) == ("open", "human:cara", "Two charts moved.")
+        assert (row["status"], row["owner_id"]) == ("open", "human:cara")
+        assert "Two charts moved." in H.task_words(c, task_id)  # said on the task, not a rewritten description
         kinds = [
             r[0] for r in c.execute("SELECT kind FROM history_events WHERE subject_id=? ORDER BY rowid", (task_id,))
         ]

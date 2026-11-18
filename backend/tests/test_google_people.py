@@ -60,9 +60,9 @@ def test_each_person_has_one_state_and_bots_hidden_and_gone_people_are_left_out(
     )
     connected(api, private)
     personal(api, "ana", "ana@acme.example")  # a live grant wins over the key
-    personal(api, "cara", "cara@other.example", status="failed", holder=None, grant=None)
-    personal(api, "gus", "gus@other.example", status="signing_in", holder=None, grant=None)
-    personal(api, "hal", "hal@acme.example", status="failed", holder=None, grant=None)  # covered: the key reads it
+    personal(api, "cara", "cara@other.example", status="failed", grant=None)
+    personal(api, "gus", "gus@other.example", status="signing_in", grant=None)
+    personal(api, "hal", "hal@acme.example", status="failed", grant=None)  # covered: the key reads it
     personal(api, "ida", "old-ida@other.example")  # a grant for an address that is not hers now
     answer = api.get(PEOPLE, headers=headers("ana-test")).json()
     assert answer["more"] is False
@@ -101,7 +101,7 @@ def test_a_reassigned_mailbox_shows_the_grant_on_it_as_the_server_picks_a_creden
     )
     connected(api, private)
     personal(api, "ana", "Old-Ana@acme.example", status="failed")
-    personal(api, "dan", "dan@other.example", status="signing_in", holder=None, grant=None)
+    personal(api, "dan", "dan@other.example", status="signing_in", grant=None)
     people = api.get(PEOPLE, headers=headers("ana-test")).json()["people"]
     got = {p["person_id"]: p["status"] for p in people}
     assert got == {"ana": "workspace", "ben": "failing", "cara": "workspace", "dan": "pending"}
@@ -115,6 +115,8 @@ def test_a_reassigned_mailbox_shows_the_grant_on_it_as_the_server_picks_a_creden
 
 def people_statements(api, monkeypatch, after=""):
     """The team list as an admin gets it, and the statements it took, from cold roster and row caches."""
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     store.roster_rows = {}
     store.row_cache = type(store.row_cache)()
@@ -125,7 +127,7 @@ def people_statements(api, monkeypatch, after=""):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -134,7 +136,8 @@ def people_statements(api, monkeypatch, after=""):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get(PEOPLE, params={"after": after} if after else None, headers=headers("ana-test"))
+        with measuring(seen):
+            response = api.get(PEOPLE, params={"after": after} if after else None, headers=headers("ana-test"))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 

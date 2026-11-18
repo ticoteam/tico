@@ -187,7 +187,7 @@ call. A rule can match only on these two things, never on a field inside the bod
 
 **Then.** Four actions are available:
 
-- `wake_bot {bot, text}` leaves a notice in the bot's room and wakes it. The notice is your `text`, then the call's content
+- `wake_bot {bot, text}` wakes the bot with a notice its run starts from (no chat shows it; the run's log does). The notice is your `text`, then the call's content
   (fenced as data), then, when the body was cut, the line `The rest: tico trigger delivery ... --part 2`.
 - `send_webhook {webhook, type, data}` posts an event to one of your [outgoing endpoints](#outgoing). `type` should be a
   `custom.*` name.
@@ -195,7 +195,7 @@ call. A rule can match only on these two things, never on a field inside the bod
   (anything that is not a JSON object arrives as `{"data": ...}`), and the type is `custom.forward.<webhook id>`, so the
   receiver knows which webhook it came through. It works only on `webhook.received`.
 - `create_task {owner, title, body}` files a task for the bot `owner`, in the rule maker's name. `title` and `body` are templates.
-  The body ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
+  The first message ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
   give that bot tasks. With [screening](permissions.md#screening) on, a long call's task opens a few seconds after the call is
   answered, once the check is in, and a held one goes to the rule's maker.
 
@@ -280,7 +280,7 @@ description and an example (`--group task` narrows it). A few:
 
 | Group | Events |
 |---|---|
-| `task` | `task.created`, `assigned`, `step_changed` (moved to another stage, Done and Closed included), `commented`, `done`, `closed`, `reopened` |
+| `task` | `task.created`, `assigned`, `step_changed` (moved to another stage, Done and Closed included), `moved` (to another pipeline: `change` has from_pipeline, from_stage, to_pipeline, to_stage, by, batch_id), `commented`, `done`, `closed`, `reopened` |
 | `bot` | `bot.run_failed`, `held`, `released` |
 | `thread` | `thread.created`, `message.created` (outgoing webhooks only), `message.held` ([Threads](threads.md)) |
 | other | `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |

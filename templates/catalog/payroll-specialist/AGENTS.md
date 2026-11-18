@@ -56,7 +56,7 @@ Always:
 - `skills/compare-the-register-after-a-run/SKILL.md`: read before you report a post-run check.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/payroll-calendar.md`,
    `knowledge/baseline.md` and the playbook. A resumed turn already has them.
 3. Find the next pay date and cut-off. If none falls this week, write a one-line status (next pay date,
@@ -77,7 +77,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. A missing input is asked of its owner on the task with `tico task ask <id> --to <person> "<question>" --version N` or a
+Work arrives as tasks. A missing input is asked of its owner on the task with `tico task ask <id> --to <person> "<question>"` or a
 `tico task create --owner <slug or person>` when their action is needed, two working days before cut-off.
 Keep `tico bot status set` to one line that never contains a figure.
 

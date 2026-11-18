@@ -24,7 +24,6 @@ DAY = {"from": "2026-10-31", "to": "2026-11-06"}
 PER_INSTALL = {
     "credential_keys",
     "granola_connections",
-    "slack_credentials",
 }  # this machine's keys and the secrets they seal
 # Bytes this machine's keys produce: a sealed secret (AES-GCM, a fresh nonce), and an idempotency fingerprint keyed
 # with the cipher key. Each install differs there by design, so they are compared as a mark, not as bytes.
@@ -127,7 +126,7 @@ def test_the_pricing_decision_waits_for_ana(ana):
         for item in ana.get("/api/v2/needs-you").json()["items"]
         if item["task"]["title"] == "Raise Home Pro from $449 to $479 for December?"
     ]
-    assert [item["kind"] for item in waiting] == ["task"]
+    assert [item["kind"] for item in waiting] == ["question"]  # the Pricing Analyst's ❓ to her
 
 
 def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
@@ -140,10 +139,11 @@ def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
         *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
     ]
     assert {task["status"] for task in tasks} == {"open", "done", "closed"}
-    assert {task["pipeline_id"] for task in tasks} == {"general", "product", "finance"}
+    floor = {"lead", "opportunity", "customer"}  # the work standing on Company › Floor
+    assert {task["pipeline_id"] for task in tasks} == {"general", "product", "finance"} | floor
     by_title = {task["title"]: task for task in tasks}
     stages = {title: by_title[title]["stage_id"] for title in ("Schedule shows from the app", "Faster scene upload")}
-    assert stages == {"Schedule shows from the app": "product-spec", "Faster scene upload": "product-ideas"}
+    assert stages == {"Schedule shows from the app": "product-spec", "Faster scene upload": "product-spec"}
     beta = by_title["Ship the calibration screen to every owner"]
     assert (beta["turn"]["state"], beta["turn"]["who"]) == ("person", "human:eli")
     assert by_title["Fix the Linux-only test that flakes"]["snoozed"]

@@ -99,7 +99,9 @@ def test_a_message_or_task_for_a_bot_over_its_limit_is_saved_and_the_sender_is_t
     assert sent["warning"] == (
         "ops is over its daily limit ($5.00 of $1.00); it starts again at 00:00 UTC or when a person raises the limit."
     )
-    err, made = call(api, "tico_task_create", {"owner": "ops", "title": "Review the Acme invoice", "body": "Please."})
+    err, made = call(
+        api, "tico_task_create", {"owner": "ops", "title": "Review the Acme invoice", "message": "Please."}
+    )
     assert not err and made["task"]["id"] and "over its daily limit" in made["warning"]
     assert paused(api)["limit"] == {**paused(api)["limit"], "period": "daily", "spent": 5, "limit": 1}
     put(api, "usage/limits/ops", {"daily_usd": 50})
@@ -176,7 +178,7 @@ def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     post(api, "tasks", {"title": "Review the patch", "body": "Look at the patch.", "owner": "bot:ops"})  # Ana's turn
     with api.app.state.store.transaction() as c:
         # A task Tico made on its own: its turn is the automatic wake.
-        task = H.task_create(c, H.KEEPER, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)
+        task = H.task_create(c, H.TICO_ACTOR, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)
         row = H.task(c, task["id"])
         before = (row["status"], row["stage_id"], row["owner_id"])
         automatic = {"id": turn_wake(c, task["id"])}
@@ -215,7 +217,7 @@ def test_clearing_a_group_leaves_other_groups_and_clears_held_jobs(api):
     messages = {}
     for bot in ("ops", "finance"):
         with api.app.state.store.transaction() as c:
-            task = H.task_create(c, H.KEEPER, "Review for " + bot, "Check it.", H.bot_actor(bot), lint=False)
+            task = H.task_create(c, H.TICO_ACTOR, "Review for " + bot, "Check it.", H.bot_actor(bot), lint=False)
             messages[bot] = turn_wake(c, task["id"])
             c.execute("UPDATE jobs SET held=1 WHERE message_id=?", (messages[bot],))
     result = post(api, "usage/queues/purge", {"scope": "group:eng"})

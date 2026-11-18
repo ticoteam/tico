@@ -12,7 +12,7 @@ gap is named; the drafts are attached to the task.
 
 ---
 
-## 1. Read the task and the record
+## 1. Read the task's chat and the record
 
     tico task show <id>
 

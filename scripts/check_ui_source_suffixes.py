@@ -44,7 +44,6 @@ KNOWN = (
     "backend/tests/test_beta.py",
     "backend/tests/test_settings_tab_links.py",
     "ui/tests/settings-no-dead-ends.cts",
-    "scripts/cleanup/rename.py",
     "scripts/build-icon-font.py",
     "scripts/check_ui_routes.py",
     "scripts/screenshots/select.cts",

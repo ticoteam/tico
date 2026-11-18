@@ -318,9 +318,12 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         if status != 202:
             if status == 404:
                 raise Problem("gateway_video_unavailable", "The Tico AI Gateway does not make videos yet", 503)
+            message = f"Video failed: {code or status}"
+            if answer.get("detail"):  # the Gateway's reason for refusing this request, so the caller can fix it
+                message += f": {answer['detail']}"
             raise Problem(
                 "gateway_video_failed",
-                f"Video failed: {code or status}",
+                message,
                 503 if status in (0, 429) or status >= 500 else 422,
             )
         return answer
@@ -351,7 +354,10 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             return Response(
                 data,
                 media_type="video/mp4",
-                headers={"X-Content-SHA256": hashlib.sha256(data).hexdigest(), "Cache-Control": "no-store"},
+                headers={
+                    "X-Content-SHA256": hashlib.sha256(data).hexdigest(),
+                    "Cache-Control": "no-store, no-transform",
+                },
             )
         if status == 404:
             raise Problem("gateway_video_not_found", "No such video", 404)

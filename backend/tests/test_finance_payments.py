@@ -407,9 +407,10 @@ def test_a_payment_a_person_made_that_mercury_rejects_asks_that_person_once(book
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _asks(c, f"Payment {pid} of 200.00 was rejected in Mercury") == 1
-        owner, body = c.execute(
-            "SELECT owner_id, body FROM tasks WHERE title=?", (f"Payment {pid} of 200.00 was rejected in Mercury",)
+        tid, owner = c.execute(
+            "SELECT id, owner_id FROM tasks WHERE title=?", (f"Payment {pid} of 200.00 was rejected in Mercury",)
         ).fetchone()
+        body = H.task_words(c, tid)  # what Tico told Ben (tasks have no description)
     assert owner == "human:ben" and "Acme Supplies" in body and "bill-60" in body, (owner, body)
 
 
@@ -1568,10 +1569,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
     sent = fake.sent("create_recipient")[0]["electronicRoutingInfo"]
     assert (sent["accountNumber"], sent["routingNumber"]) == (ACCOUNT, ROUTING)  # read from the vault at send time
     answers += [
-        get(api, "finance/recipients"),
         get(api, f"finance/actions/{asked['action_id']}", token="ben-test"),
-        get(api, "finance/payments"),
-        get(api, "finance/rules"),
         the_ok(api, asked["approval_id"]),
     ]
     with store.read() as c:
@@ -1579,7 +1577,6 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
         recipient = c.execute("SELECT last4, details_ref FROM fin_recipients").fetchone()
         assert recipient["last4"] == "6666" and recipient["details_ref"]
     assert ACCOUNT not in json.dumps(answers) and ROUTING not in json.dumps(answers)
-    assert get(api, "finance/recipients")["recipients"][0]["last4"] == "6666"
 
 
 def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api):

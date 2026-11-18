@@ -8,11 +8,12 @@ Engineering tasks waiting in Release need none of this: a person already signed 
 Cut their release with `tico task release <id> --version N` (with `--tag <version>` where the repository releases from a
 tag), once for the repository; every task waiting on it moves on when the release is published. The daily release hour's
 task is the same: ask once for a task in Release, then close the hour's task. Where the stage has no "Release with" set
-(a person's setting; never ask to change it), ask for nothing and tag nothing: the tasks wait for the next release.
+(a person's setting; never ask to change it), ask for nothing: the tasks wait for the next release. Tag or cut one there
+only when {{company_name}}'s own release skill or playbook says you do.
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>
 

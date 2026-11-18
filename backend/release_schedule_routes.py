@@ -1,5 +1,5 @@
 # pyright: strict
-"""The daily release hour and Release now (docs/pipelines-v3.md D13): GET/PATCH /api/v2/release-schedule and POST
+"""The daily release hour and Release now (docs/dev/pipelines-v3.md D13): GET/PATCH /api/v2/release-schedule and POST
 /api/v2/release/now, the paths and methods the CLI calls.
 
 The setting (`release-schedule`, a team setting in registry_metadata) is what it was: on or off, one or two hours in
@@ -21,6 +21,7 @@ from . import bot_settings as _BS
 from . import models as M
 from .store import H as _H
 from .store import Problem
+from .api_contract import api_v2
 
 H: Any = _H
 BS: Any = _BS
@@ -210,7 +211,15 @@ def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = No
 
 
 def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) -> None:
-    @app.get("/api/v2/release-schedule")
+    @app.get(
+        "/api/v2/release-schedule",
+        **api_v2(
+            "Pipelines",
+            "getReleaseSchedule",
+            "The daily release: on or off, its hours, the Release Owner and Technical Writer, the next hour, how many tasks you may read wait for a release, and what you may do",
+            "ReleaseSchedule",
+        ),
+    )
     def release_schedule(request: Request):
         """The team's release schedule, the Release Owner and Technical Writer found, the next hour, how many
         tasks wait for a release, and what this viewer may do (`can_change`, `can_release`)."""
@@ -219,7 +228,15 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         with store.read() as c:
             return view(c, who, auth)
 
-    @app.patch("/api/v2/release-schedule")
+    @app.patch(
+        "/api/v2/release-schedule",
+        **api_v2(
+            "Pipelines",
+            "updateReleaseSchedule",
+            "Turn the daily release on or off, set its hours, or name the Release Owner and Technical Writer (owner, Admins)",
+            "ReleaseSchedule",
+        ),
+    )
     def release_schedule_save(request: Request, body: M.ReleaseScheduleUpdate):
         """Turn the daily release on or off, set its hours, or name the Release Owner and Technical Writer. An
         owner or an admin; only what is sent changes."""
@@ -235,7 +252,15 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         with store.read() as c:
             return view(c, who, auth)
 
-    @app.post("/api/v2/release/now")
+    @app.post(
+        "/api/v2/release/now",
+        **api_v2(
+            "Pipelines",
+            "releaseNow",
+            "Ask the Release Owner for a release now: one task, or the open one named, or why nothing was sent",
+            "ReleaseNowResult",
+        ),
+    )
     def release_now(request: Request, body: M.ReleaseNow):
         """Ask the Release Owner for a release now, without waiting for the daily hour."""
         who = request.state.identity

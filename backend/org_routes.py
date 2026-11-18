@@ -4,7 +4,6 @@ import json
 from fastapi import Request
 from . import (
     agents,
-    app_delivery,
     lifecycle,
     profiles,
     report_managers,
@@ -18,10 +17,12 @@ from . import (
     views,
     wake_presets,
 )
+from . import runner_online
 from .bot_rows import BotRows
-from .harnesses import resolve_harness
+from .harnesses import output_style, resolve_harness, verbosity
 from .settings_admin import compact_at as compact_at_of
 from .store import H, P, Problem, repo_url
+from .api_contract import api_v2
 
 
 def register(app, auth, settings, settings_admin, store):
@@ -52,7 +53,7 @@ def register(app, auth, settings, settings_admin, store):
         was read for every bot in the answer."""
         row = dict(bot)
         # runtime, model and host are the bot's declaration (bot_settings); a bot with no declaration has none of them.
-        # The keeper is the only host there is, so a bot that declares none is a keeper bot.
+        # Tico is the only host there is, so a bot that declares none is a Tico bot.
         row.update({"model": "", "runtime": "", "host": "keeper"})
         config = rows.config(bot["id"])
         assignment = rows.assignments.get(bot["id"]) if level["read"] else None
@@ -109,6 +110,9 @@ def register(app, auth, settings, settings_admin, store):
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared, rows.model(c, settings, declared)),
+                    # Claude Code's output style and Codex's verbosity; null is the harness's own.
+                    "output_style": output_style(declared),
+                    "verbosity": verbosity(declared),
                     # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
                     "task_model": task_models.stored(declared),
                     "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
@@ -152,25 +156,26 @@ def register(app, auth, settings, settings_admin, store):
         row["status"] = privacy.status(c, who, dict(status), **rows.status_inputs[slug]) if status else status
         row["assignment"] = dict(assignment) if assignment else None
         row["online"] = bool(
-            assignment
-            and not assignment["revoked_at"]
-            and assignment["last_seen_at"]
-            and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
+            assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
         )
         row["queued"] = rows.queued[slug]
         row["notes"] = rows.notes[slug]
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
-        # Delivered through a desktop app (backend/app_delivery.py): where, and online is that computer's.
-        # `app_delivery_app`: the desktop app the bot could be delivered through, for its settings.
-        row["app_delivery"] = app_delivery.view(c, declared) if config and harness else None
-        row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
-        if external and not (row["app_delivery"] or {}).get("active"):
+        if external:
             row["online"] = external["online"]
         return row
 
-    @app.get("/api/v2/bots")
+    @app.get(
+        "/api/v2/bots",
+        **api_v2(
+            "Bots",
+            "listBots",
+            "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
+            "BotList",
+        ),
+    )
     def bots(request: Request, include_archived: str | None = None, can: str | None = None):
         """The bots the caller may see, each with `access` (their own see, read and write on it).
         `?can=read` or `?can=write` keeps only the bots they hold that level on."""
@@ -209,7 +214,7 @@ def register(app, auth, settings, settings_admin, store):
             ]
 
     def cant_run(c, bot, who):
-        """The bot page's top line (docs/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
+        """The bot page's top line (docs/dev/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
         (task_wakes.cannot_run), and the one fix a person makes, or None while it can run. A bot being made on a task
         says what that task waits on instead (`making`)."""
         from . import task_wakes as W
@@ -234,6 +239,7 @@ def register(app, auth, settings, settings_admin, store):
             W.CLOUD_STARTING: "open_computers",
             W.CLOUD_FAILED: "open_computers",
             W.RUNS_FAILING: "release_hold",
+            W.RUNAWAY: "release_hold",
             W.LOGIN: "reconnect",
             W.COMPANY_PAUSED: "resume_company",
             W.CLOUD_LOCKED: "unlock_cloud",
@@ -246,7 +252,7 @@ def register(app, auth, settings, settings_admin, store):
         on that task the bot waits on, the viewer's own first ("Builder 3 is waiting for your OK", with `open_ask`, the
         one button, opening it), else whose it is, else who is still making it. The task is named and linked only to
         a viewer who may open it. None when no task is making it (its go-live waits on the repository)."""
-        from . import setup_live, task_engine as E, waiting_on as WO
+        from . import question_marks, setup_live, task_engine as E, waiting_on as WO
 
         task_id = setup_live.making_task(c, bot)
         row = E.task(c, task_id) if task_id else None
@@ -257,8 +263,8 @@ def register(app, auth, settings, settings_admin, store):
         ask = next((w for w in asks if w.who == who.actor), None) or (asks[0] if asks else None)
         task = {"id": row["id"], "title": row.get("title") or ""} if privacy.task_readable(c, who, row) else None
         if ask:
-            found = c.execute("SELECT kind FROM requirements WHERE id=?", (ask.requirement_id,)).fetchone()
-            what = "OK" if found and found["kind"] in ("ok", "page") else "answer"
+            # A ❓ on the task's chat waits for an answer (question_marks.wait_id), any other ask for an OK.
+            what = "answer" if question_marks.mark_id(ask.requirement_id) else "OK"
             mine = ask.who == who.actor
             whose = "your" if mine else H.actor_name(c, ask.who) + "'s"
             out = {
@@ -275,7 +281,15 @@ def register(app, auth, settings, settings_admin, store):
             out = {"cause": f"{H.actor_name(c, row['owner_id'])} is still setting up {name}", "fix": None}
         return {**out, **({"task": task} if task else {})}
 
-    @app.get("/api/v2/bots/{bot}")
+    @app.get(
+        "/api/v2/bots/{bot}",
+        **api_v2(
+            "Bots",
+            "getBot",
+            "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
+            "BotDetail",
+        ),
+    )
     def bot_detail(request: Request, bot: str):
         """One bot: the profile a caller who can see it gets (name, role, who runs it, who it reports
         to, who it works for), and for one who can read it also its status, machine, queue, goals and
@@ -318,7 +332,15 @@ def register(app, auth, settings, settings_admin, store):
                 value["owner_name"] = (H.human(c, value["owner_id"]) or {}).get("name") or value["owner_id"]
             return teammate_access.bot_redactor(c, who, auth)(value)
 
-    @app.get("/api/v2/org")
+    @app.get(
+        "/api/v2/org",
+        **api_v2(
+            "Team chart",
+            "getOrg",
+            "Humans, the bots the caller can see and reports_to; ?can=read|write keeps the bots they can read or write to",
+            "Org",
+        ),
+    )
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
         """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `tico_team_show`) to
         find who handles a kind of work and how to reach them. Only the bots the caller may see,

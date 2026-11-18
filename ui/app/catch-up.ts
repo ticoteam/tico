@@ -69,7 +69,7 @@ function cuDialog() {
   return dlg;
 }
 async function catchUpOpen() {
-  if (THREADS.rail === false || CU.open) return;
+  if (CU.open) return;
   const dlg = cuDialog();
   Object.assign(CU, {open: true, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'loading', error: '', seen: new Set(), undo: null, drafts: new Map()});
   cuDraw();
@@ -107,6 +107,7 @@ const cuMsgHTML = (m: CUMsg) => {
 };
 function cuCardHTML(it: CUItem) {
   const t = it.thread, n = Number(it.new_count) || 0, more = Number(it.more) || 0, hash = threadOnRail(t);
+  const plus = it.new_count_partial ? '+' : '';  // the count stopped at the server's budget: at least this many
   const title = threadTitle(t, it.messages), name = hash ? '#' + title : title, left = cuLeft(), draft = CU.drafts.get(t.id) || '';
   const busy = CU.sending.has(t.id) ? ' disabled' : '';
   // Later needs a card to go behind (cuLater): on the last one, with no next page to come, it is left out.
@@ -114,9 +115,9 @@ function cuCardHTML(it: CUItem) {
   return `<div class="cu-stack">${left > 2 ? '<span class="cu-back cu-back2"></span>' : ''}${left > 1 ? '<span class="cu-back cu-back1"></span>' : ''}
     <section class="cu-card" aria-labelledby="cu-t" data-thread="${esc(t.id)}">
       <div class="cu-card-head"><h3 id="cu-t">${hash ? threadHashHTML(t) : threadMarkHTML(t, 18)}<span>${esc(title)}</span></h3>
-        ${n ? `<span class="cu-n">${n} new</span>` : ''}${it.mention ? '<span class="cu-you">@you</span>' : ''}<span class="spacer"></span>
+        ${n ? `<span class="cu-n">${n}${plus} new</span>` : ''}${it.mention ? '<span class="cu-you">@you</span>' : ''}<span class="spacer"></span>
         <a class="cu-open" href="${esc(threadHref(t))}" data-cu-open>Open</a></div>
-      <div class="cu-msgs">${(it.messages || []).map(cuMsgHTML).join('')}${more ? `<a class="cu-more" href="${esc(threadHref(t))}" data-cu-open>${more} more</a>` : ''}</div>
+      <div class="cu-msgs">${(it.messages || []).map(cuMsgHTML).join('')}${more ? `<a class="cu-more" href="${esc(threadHref(t))}" data-cu-open>${more}${plus} more</a>` : ''}</div>
       ${t.me?.can_post === false ? '' : `<form class="cu-reply${draft.trim() ? ' has-text' : ''}"><input type="text" name="text" value="${esc(draft)}" placeholder="Message ${esc(name)}" aria-label="Reply in ${esc(name)}" autocomplete="off" maxlength="20000"${busy}><button type="submit" class="primary cu-send" aria-label="Send"${busy}>${CU_SEND}</button></form>`}
       <div class="cu-foot">${later}<button type="button" class="cu-mute" data-cu-mute>Mute</button>
         <span class="spacer"></span><button type="button" class="primary cu-read" data-cu-read>Mark read${CU_ARROW}</button></div>

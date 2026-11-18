@@ -1,7 +1,8 @@
 /* ui/app/drag-pan.ts — a mouse drags a scrolling pane about (a finger pans it natively). Strategy › Org's chart and
    Rules › Internal's map use it. A drag starts after 5px; while it runs the pane has .dragging, and the click that ends
    it is swallowed, so a drag is never a tap on the card it started on. A still click goes through.
-   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
+   In the company page part (ui/parts.json): only its pages use it, so a cold open of Home does not download it (P05b). */
 'use strict';
 
 interface DragPanOpts {

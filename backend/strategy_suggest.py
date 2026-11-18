@@ -26,7 +26,7 @@ never raises its own level (backend/goal_routes.py refuses it)."""
 
 from datetime import timedelta
 
-from . import strategy_bot
+from . import person_asks, strategy_bot
 from . import hubdb as H
 
 KIND = "recovery"
@@ -234,16 +234,28 @@ def _apply(c, action, goal_id, approver, proposal_id):
         else ((H.human(c, H.actor_id(approver)) or {}).get("name") or H.actor_id(approver))
     )
     if action["do"] == "create":
-        made = H.task_create(
-            c,
-            STRATEGY_BOT,
-            action["title"],
-            (action["body"] + "\n\n" if action["body"] else "")
-            + f"Suggested by the {strategy_bot.name(c)} to recover a goal; approved by {who}.",
-            action["owner"],
-            goal_id=goal_id or None,
-            lane="company",
+        body = (action["body"] + "\n\n" if action["body"] else "") + (
+            f"Suggested by the {strategy_bot.name(c)} to recover a goal; approved by {who}."
         )
+        if H.is_human(action["owner"]):
+            # Work for a person is the Strategy Owner's task with its question to them (backend/person_asks.py).
+            made = person_asks.ask(
+                c,
+                STRATEGY_BOT,
+                action["owner"],
+                action["title"],
+                body,
+                action["title"],
+                f"It recovers a goal that fell behind; {who} approved it.",
+                bot=STRATEGY_BOT,
+                goal_id=goal_id or None,
+                lane="company",
+                lint=True,
+            )
+        else:
+            made = H.task_create(
+                c, STRATEGY_BOT, action["title"], body, action["owner"], goal_id=goal_id or None, lane="company"
+            )
         return {"task_id": made["id"]}
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"])
@@ -339,7 +351,7 @@ def withdraw(c):
     c.execute(
         "UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
         "WHERE status='pending' AND kind=?",
-        (H.KEEPER, H.now(), WITHDRAWN, KIND),
+        (H.TICO_ACTOR, H.now(), WITHDRAWN, KIND),
     )
 
 

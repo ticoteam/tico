@@ -18,7 +18,7 @@ description: "Puts several changes a human must confirm onto one Confirm card, g
 3. Group the rest by kind and age: "6 questions from one bot", "20 tasks with no activity for 60 days".
 4. Build one batch of up to 100 steps, each a path and a body, for the changes that need the click, for example:
    - `{"path": "/api/v2/tasks/<id>/move", "body": {"to": "closed", "why": "<reason>", "version": <N>}}`
-   - `{"path": "/api/v2/tasks/<id>/asks/<requirement id>/answer", "body": {"value": "<their words>", "version": <N>}}`
+   - `{"path": "/api/v2/tasks/<id>/comments", "body": {"text": "<their words>"}}` (a reply to a bot's ❓ on that task)
 5. Propose it once:
    `tico assistant propose --summary "<the groups, with counts, and the action>" --path /api/v2/assistant/batch --body '<the batch JSON>'`
 6. Tell the human in one line what happens on confirm: how many steps, and that any step that fails is listed while the rest still run.

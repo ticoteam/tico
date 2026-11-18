@@ -19,6 +19,7 @@ from . import providers, queue_purge, usage_limits, views
 from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
+from .api_contract import api_v2
 
 # A subscription run is its computer's subscription; a run with no lease (from before leases) names only its profile.
 DIMENSIONS = {
@@ -369,7 +370,15 @@ def install(app, store, auth, mutate, settings):
             return allowed
         return allowed | (led_bots(c, who) & {row["id"] for row in H.bots(c)})
 
-    @app.get("/api/v2/usage/limits")
+    @app.get(
+        "/api/v2/usage/limits",
+        **api_v2(
+            "Usage",
+            "getUsageLimits",
+            "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits (a lead who is not an administrator gets the groups it leads and those below)",
+            "UsageLimits",
+        ),
+    )
     def limits(request: Request):
         """The company default, the limits of every bot the caller may see usage for (a lead's: also the bots in the
         groups it leads) and, for the owner and administrators, the team's and each group's combined limits; a lead gets
@@ -395,7 +404,15 @@ def install(app, store, auth, mutate, settings):
                 "bots": {bot: limit_view(c, who, bot, default, allowed) for bot in sorted(allowed)},
             }
 
-    @app.put("/api/v2/usage/limits")
+    @app.put(
+        "/api/v2/usage/limits",
+        **api_v2(
+            "Usage",
+            "setUsageDefault",
+            "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs count toward every limit (owner and bot administrators)",
+            "UsageDefaultView",
+        ),
+    )
     def set_default(request: Request, body: M.UsageDefault):
         """The default for bots with no limit of their own (owner and bot administrators)."""
         who = request.state.identity
@@ -429,17 +446,41 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         return mutate(request, body, lambda c: save_pool(c, auth, who, scope, body))
 
-    @app.put("/api/v2/usage/pools/company")
+    @app.put(
+        "/api/v2/usage/pools/company",
+        **api_v2(
+            "Usage",
+            "setTeamUsageLimit",
+            "A limit on every bot's estimated spend together, per hour, day, week and month; null removes a field, one left out stays. Over it, no bot takes a new job (owner and bot administrators)",
+            "UsagePoolLimit",
+        ),
+    )
     def set_company_pool(request: Request, body: M.UsageLimit):
         """A limit on every bot's spend together: over it, no bot takes a new job."""
         return set_pool(request, usage_limits.COMPANY, body)
 
-    @app.put("/api/v2/usage/pools/groups/{group}")
+    @app.put(
+        "/api/v2/usage/pools/groups/{group}",
+        **api_v2(
+            "Usage",
+            "setGroupUsageLimit",
+            "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none of them takes a new job (owner and bot administrators; also the lead of the group or one above it, within the parent group's limit)",
+            "UsagePoolLimit",
+        ),
+    )
     def set_group_pool(request: Request, group: str, body: M.UsageLimit):
         """A limit on the spend of a group's bots together, nested groups included: over it, none of them takes a new job."""
         return set_pool(request, "group:" + group, body)
 
-    @app.post("/api/v2/usage/queues/purge")
+    @app.post(
+        "/api/v2/usage/queues/purge",
+        **api_v2(
+            "Usage",
+            "purgeAutomaticQueue",
+            "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it (scope group:<id>). Tasks stay on their current step. Messages from people, and Tico's notices of a person's own act, stay queued. A run that has already started finishes (owner and bot administrators)",
+            "QueuePurgeResult",
+        ),
+    )
     def purge_queue(request: Request, body: M.QueuePurge):
         """Cancel queued automatic wakes and waits for the team or one group. Tasks stay. Messages from people stay
         queued. A run that has already started finishes."""
@@ -457,7 +498,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.put("/api/v2/usage/limits/{bot}")
+    @app.put(
+        "/api/v2/usage/limits/{bot}",
+        **api_v2(
+            "Usage",
+            "setBotUsageLimit",
+            "A bot's own 30-minute, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and administrators, the person who runs the bot within the team default, and a group lead for the bots in the group and those below. A bot over a limit takes no new job until the period turns over or the limit is raised",
+            "BotUsageLimit",
+        ),
+    )
     def set_limit(request: Request, bot: str, body: M.UsageLimit):
         """A bot's own 30-minute, daily, weekly and monthly limit in estimated USD; a field set to null follows the company default, a field left out keeps it. A
         person who runs the bot but is not an administrator may not go above the company default. A group's lead may set
@@ -472,7 +521,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/usage")
+    @app.get(
+        "/api/v2/usage",
+        **api_v2(
+            "Usage",
+            "getUsage",
+            "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series, top routines, top 10 tasks (the rest summed) and models instead",
+            "Usage",
+        ),
+    )
     def usage(request: Request, group: str = "bot", department: str | None = None, bot: str | None = None):
         """Estimated model spend per bot, per day, per routine, per task (its top TOP_TASKS by spend) or per dimension
         over `from`..`to` (UTC dates, default the last seven days); `bots` (slugs, comma separated) narrows it to those

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Checks the page parts (ui/parts.json, backend/ui_bundle.py): code outside a part may use the part's names only
+// Checks the page parts (ui/parts.json, scripts/build-ui.cjs): code outside a part may use the part's names only
 // through its entries, since the part is not loaded until a person goes to one of its pages.
 //
-//   npx --yes -p typescript@5.9.3 -c 'node scripts/check_ui_parts.cjs'     (scripts/check_ui_types.sh runs it)
+//   node scripts/check_ui_parts.cjs     (scripts/check_ui_types.sh runs it)
 //
 // The files are the scripts index.html bundles, which share their top-level names. For every name a page part declares
 // at its top level, each use from a file outside that part (the shell, or a part that does not list it in its deps)
@@ -23,17 +23,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-function typescript() {
-  try { return require('typescript'); } catch { /* not installed here: the one npx put on PATH */ }
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    const bin = path.join(dir, 'tsc');
-    if (fs.existsSync(bin)) return require(path.join(path.dirname(fs.realpathSync(bin)), '..', 'lib', 'typescript.js'));
-  }
-  throw new Error('typescript is not installed: run this under npx -p typescript (see the top of this file)');
-}
+const ts = require('@typescript/typescript6');
 
 function main() {
-  const ts = typescript();
   const root = path.join(__dirname, '..');
   const ui = process.argv.slice(2).find(a => !a.startsWith('--')) || path.join(root, 'ui');
   const html = fs.readFileSync(path.join(ui, 'index.html'), 'utf8');
@@ -145,7 +137,7 @@ function main() {
       const name = n.text, home = owner.get(name);
       const theirs = home && partOf.get(home);
       const at = `ui/${file}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
-      // Served as separate files (TICO_UI_BUNDLE=off), every file runs in index.html's order, page parts included: a
+      // Every file runs in index.html's order (the shell's, and each part's within it): a
       // name used as a file runs must come from a file listed before it. `typeof NAME` only asks whether it is there.
       if (!inFn && home && home !== file && order.indexOf(home) > order.indexOf(file)) {
         const around = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;

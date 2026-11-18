@@ -29,14 +29,15 @@ Every idea has all of these, or you do not file it:
 
 - **A title** a person can say in one line.
 - **A channel**: one or more `channel:<slug>` labels from step 1.
-- **A source**: where the signal came from, as a link or an id in the body. No source, no idea.
-- **A body** that says what changes, in one or two lines.
+- **A source**: where the signal came from, as a link or an id in the first message. No source, no idea.
+- **A first message** that says what changes, in one or two lines.
 
-No score, prediction or bet is needed, and an idea does not link to a bet.
+No score, prediction or bet is needed, and an idea does not link to a bet. The prediction comes later, as a number, on
+the test's Go-live page in Building.
 
     tico task create --owner growth-manager --label growth:ideas --label channel:<slug> \
       --title "Price calculator on the pricing page" \
-      --body "Changes: show the saving against a typical cleaner on the pricing page. Signal: <match id, link or task id>."
+      --message "Changes: show the saving against a typical cleaner on the pricing page. Signal: <match id, link or task id>."
 
 A follow-up is filed the same way, then linked to the closed task: `tico task relate <new id> <closed id> --kind follow_up`.
 

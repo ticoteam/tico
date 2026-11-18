@@ -1,7 +1,7 @@
 /* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
    then Where we play beside the bets, the competitors beside related news, then seven fixed sections and any the owner
-   adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
-   published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
+   adds. The owner edits in place and each save is live at once as the next numbered version; everyone else reads the
+   live version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
    Related news is what Listening found. Lenses (ui/lenses-page.ts) and Market (ui/market-page.ts) are the section's
    other tabs. */
 'use strict';
@@ -44,7 +44,7 @@ interface StratExtra { title?: string; body?: string }
 
 type StratSections = {[K in StratKey]?: string} & {extra?: Record<string, StratExtra>} & {[key: string]: string | Record<string, StratExtra> | undefined};
 
-/** The draft or a published version. */
+/** The draft or a version. */
 interface StratVersion {
   n?: number;
   note?: string;
@@ -81,7 +81,6 @@ interface StratState {
   adding: boolean;
   editSection: string;
   addSection: boolean;
-  publishing: boolean;
   retiredOpen?: boolean;
   versions?: StratVersionRow[];
 }
@@ -153,9 +152,6 @@ interface StratWrongControls extends HTMLFormControlsCollection {
   wrong_text: HTMLInputElement;
 }
 
-/** The publish form's named control (strategyPublishHtml). */
-interface StratPublishControls extends HTMLFormControlsCollection { note: HTMLInputElement }
-
 /** The section form's named controls (strategySectionsHtml): the title only on an extra section. */
 interface StratSectionControls extends HTMLFormControlsCollection { text: HTMLTextAreaElement; title: HTMLInputElement }
 
@@ -190,6 +186,9 @@ const STRAT_WRONG_KINDS: Record<string, string> = {kpi: 'KPI', thesis: 'Market',
 const STRAT_CHECK_DAYS = 90;
 const stratCheckBy = () => new Date(Date.now() + STRAT_CHECK_DAYS * 864e5).toISOString().slice(0, 10);
 const STRAT_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const STRAT_PEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>';
+// The segment of Where we play whose name is being edited, if any.
+let STRAT_SEG_RENAME = '';
 const STRAT_NEWS_MAX = 8;
 const STRAT_TAGS: Record<string, string> = {hot: 'Hot', lead: 'Lead', rival: 'Rival', market: 'Market'};
 
@@ -198,6 +197,7 @@ window.strategyHeadHtml = (tab: string) => redesignStrategyHead(tab);
 
 window.strategyStop = function strategyStop() {
   STRAT_LOAD++;
+  STRAT_SEG_RENAME = '';
   if (STRAT) S.lastRead.strategy = {data: STRAT.data, market: STRAT_MKT};   // the next visit paints it at once
   STRAT = null;
   const dlg = document.getElementById('strat-versions');
@@ -214,7 +214,7 @@ window.pageStrategy = async function pageStrategy(): Promise<void> {
   STRAT_MKT = {...(kept?.market || {})};
   main.innerHTML = strategyHeadHtml('strategy') + `<div id="strat-body" class="strat-body">${kept ? '' : skelRows(6, {dot: false})}</div>`;
   const open = (data: StratData) => {
-    STRAT = {data, kpis: [], load, adding: false, editSection: '', addSection: false, publishing: false};
+    STRAT = {data, kpis: [], load, adding: false, editSection: '', addSection: false};
     strategyRender();
     // #/strategy?bet=<id> (a goal's bet chip) scrolls to that bet and flashes it.
     const bet = new URLSearchParams(S.route.split('?')[1] || '').get('bet');
@@ -235,7 +235,7 @@ window.pageStrategy = async function pageStrategy(): Promise<void> {
   if (!STRAT) { open(data); return; }
   // Something opened for editing meanwhile keeps the page as drawn; the save reads the strategy again.
   const state = STRAT;
-  if (state.adding || state.editSection || state.addSection || state.publishing) return;
+  if (state.adding || state.editSection || state.addSection) return;
   const same = sameData(data, state.data);
   state.data = data;
   if (!same) strategyRender();
@@ -246,15 +246,8 @@ const strategyMayEdit = (data: StratData | null | undefined) => data?.may_edit ?
 const stratText = (s: unknown): string => String(s ?? '').trim();
 const stratRank = (a: {rank?: number | null}, b: {rank?: number | null}) => (a.rank ?? 1e9) - (b.rank ?? 1e9);
 const stratExtra = (version: StratVersion | null | undefined): Record<string, StratExtra> => version?.sections?.extra || {};
-// Blank: nothing written at all. The vision counts, though the page no longer shows it (the Goals page reads it).
-function strategyBlank(version: StratVersion | null | undefined, bets: StratBet[] = []) {
-  if (!version) return true;
-  const s: StratSections = version.sections || {};
-  return !stratText(version.summary) && !stratText(version.vision) && !STRAT_SECTIONS.some(sec => stratText(s[sec.key]))
-    && !Object.values(stratExtra(version)).some(x => stratText(x?.body) || stratText(x?.title)) && !bets.length;
-}
-// What the reader sees: the owner the draft and the live bets; everyone else the latest published version and its
-// snapshot of the bets.
+// What the reader sees: the owner the draft and the bets; everyone else the live version and its snapshot of the bets
+// (the same words, since every save is live).
 function strategyView(data: StratData): StratView {
   const owner = strategyMayEdit(data) && !!data.draft;
   const version = owner ? data.draft : data.current;
@@ -276,29 +269,6 @@ function stratActiveRefusal(bet: {id: string}, bets: {id: string; status?: strin
   if (others >= STRAT_MAX_ACTIVE) return `At most ${STRAT_MAX_ACTIVE} can be active`;
   return '';
 }
-// The server's rule for publishing, said before the click: one active bet, and What we won't do written.
-function strategyPublishRefusal(data: {bets?: {status?: string}[]; draft?: {sections?: {not?: unknown} | null} | null}, view: {one: string}) {
-  if (!(data.bets || []).some(b => b.status === 'active')) return `Needs an active ${view.one.toLowerCase()}`;
-  if (!stratText(data.draft?.sections?.not)) return "Needs What we won't do";
-  return '';
-}
-
-// Whether the draft says anything the latest published version does not: its words, its sections, or its bets.
-function strategyDiffers(data: StratData): boolean {
-  const a = data.draft, b = data.current;
-  if (!b) return !strategyBlank(a, data.bets || []);
-  if (!a) return false;
-  if (stratText(a.summary) !== stratText(b.summary) || stratText(a.vision) !== stratText(b.vision)) return true;
-  if ((a.guide || '') !== (b.guide || '')) return true;
-  for (const sec of STRAT_SECTIONS) if (stratText(a.sections?.[sec.key]) !== stratText(b.sections?.[sec.key])) return true;
-  const extra = (v: StratVersion | null | undefined) => JSON.stringify(Object.entries(stratExtra(v)).map(([k, x]) => [k, stratText(x?.title), stratText(x?.body)]).sort());
-  if (extra(a) !== extra(b)) return true;
-  // A version keeps every bet not retired; one retired since is missing from the live side, so it still differs.
-  const sig = (list: StratBet[] | undefined) => (list || []).filter(c => c.status !== 'retired').sort(stratRank)
-    .map(c => [c.id, stratText(c.statement), stratText(c.why), stratText(c.rules_out), JSON.stringify(c.wrong_if || null), JSON.stringify(c.cites || []), c.status].join('\u0001')).join('\u0002');
-  return sig(data.bets) !== sig(b.bets);
-}
-
 const stratDate = (d: string | null | undefined): string => {
   if (!d) return '';
   const at = new Date(/^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T00:00' : d);
@@ -326,40 +296,18 @@ function strategyWrongIfHtml(w: StratWrongIf | null | undefined) {
   return `${esc(w.text)}${by || ' <span class="muted">· Not yet measurable</span>'}`;
 }
 
-function strategyStatusText(data: StratData, view: StratView) {
-  if (!view.owner) return '';
-  if (data.current && strategyDiffers(data)) return `Draft differs from v${data.current.n}`;
-  if (!data.current && !strategyBlank(data.draft, data.bets || [])) return 'Not published';
-  return '';
-}
-// The line above the page: the published version and who published it, then (for the owner) where the draft stands.
-function strategyMetaHtml(data: StratData, view: StratView) {
-  const v = data.current, status = strategyStatusText(data, view);
-  const head = v ? `v${esc(v.n)}${v.published_at ? ` · published <time datetime="${esc(v.published_at)}" title="${esc(fmt(v.published_at))}">${esc(stratDate(v.published_at))}</time>` : ''}${v.published_by ? ` by ${esc(firstName(goalActorName(v.published_by)) || goalActorName(v.published_by))}` : ''}` : '';
-  if (!head && !status) return '';
-  return `<p class="strat-meta">${head}${head && status ? ' · ' : ''}${status ? `<span class="strat-status" data-strat-status>${esc(status)}</span>` : ''}</p>`;
+// The line above the page: the live version, when it went live and who saved it.
+function strategyMetaHtml(data: StratData) {
+  const v = data.current;
+  const head = v ? `v${esc(v.n)}${v.published_at ? ` · <time datetime="${esc(v.published_at)}" title="${esc(fmt(v.published_at))}">${esc(stratDate(v.published_at))}</time>` : ''}${v.published_by ? ` by ${esc(firstName(goalActorName(v.published_by)) || goalActorName(v.published_by))}` : ''}` : '';
+  return head ? `<p class="strat-meta">${head}</p>` : '';
 }
 
-// The header's ⋯ (page-head.ts): Lenses, then Versions once there is a published strategy. Neither is daily, so neither
+// The header's ⋯ (page-head.ts): Lenses, then Versions once there is a version. Neither is daily, so neither
 // sits on the bar (style guide, "Top bars: one line").
 function strategyMoreHtml(data: StratData) {
   return `<a href="${LENSES_ROUTE}" data-strat-lenses>Lenses</a>${data.current ? '<button type="button" data-strat-versions>Versions</button>' : ''}`;
 }
-// The header's filled button: Publish, for the owner.
-function strategyActionsHtml(data: StratData, view: StratView) {
-  if (!view.owner) return '';
-  const refusal = strategyPublishRefusal(data, view), fresh = strategyDiffers(data);
-  const why = refusal || (fresh ? '' : 'Nothing new to publish');
-  // Why Publish is off sits in a (?) beside it, not a line of its own.
-  return `<button class="primary ph-go" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
-}
-
-function strategyPublishHtml() {
-  return `<form class="strat-publish" data-strat-publish-form novalidate>
-      <input type="text" name="note" maxlength="200" autocomplete="off" placeholder="What changed" aria-label="What changed" required>
-      <button class="ghost" type="button" data-strat-publish-cancel>Cancel</button><button class="primary" type="submit">Publish</button></form>`;
-}
-
 // A goal's colour is its status (red, yellow, green); none yet is gray.
 function strategyGoalsHtml(goals: StratGoal[] | undefined) {
   if (!goals?.length) return '';
@@ -473,6 +421,15 @@ function strategyAddRowHtml(kind: string, placeholder: string) {
   return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
       <button type="submit" class="strat-add">Add</button></form>`;
 }
+// The owner's segment row: a name, an optional one-line summary, and the segment it sits under (POST /v2/market/segments).
+function strategySegAddHtml(segs: StratSeg[]) {
+  const parents = segs.filter(s => (s.depth || 1) < 4);
+  return `<form class="strat-addrow strat-addseg" data-add="seg" novalidate><input type="text" name="name" maxlength="120" autocomplete="off" placeholder="Add a segment" aria-label="Add a segment">
+      <input type="text" name="summary" maxlength="300" autocomplete="off" placeholder="Summary" aria-label="Summary">
+      ${parents.length ? `<select name="parent" aria-label="Under"><option value="">Top level</option>${parents.map(s =>
+        `<option value="${esc(s.id)}">${'\u2003'.repeat(Math.max(0, (s.depth || 1) - 1))}${esc(s.name)}</option>`).join('')}</select>` : ''}
+      <button type="submit" class="strat-add">Add</button></form>`;
+}
 const stratSk = () => skelRows(3, {dot: false});
 // The sources behind a segment's dollar figure, counted the way the spend API counts it (market_spend.py, rolled spend):
 // the selected size's own evidence when that size has a spend, else the sum of its parts' sources. A part with no source
@@ -506,8 +463,8 @@ function strategyWhereHtml(owner: boolean) {
   // No helper line: what a tile does is its name (aria-pressed, and its title on hover).
   const head = '<div class="strat-card-head"><h2 class="strat-k">Where we play</h2></div>';
   if (spend === undefined) return head + stratSk();
-  const add = owner ? strategyAddRowHtml('seg', 'Add a segment') : '';
-  if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
+  const add = owner ? strategySegAddHtml(segs) : '';
+  if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet</p>${add}`;
   const {drawn: sized}: {drawn: StratGroup[]} = mktTree(spend);
   const W = 200, H = 100, shown = new Set<string>();
   const pos = (r: StratRect) => `left:${(r.x / W * 100).toFixed(3)}%;top:${(r.y / H * 100).toFixed(3)}%;width:${(r.w / W * 100).toFixed(3)}%;height:${(r.h / H * 100).toFixed(3)}%`;
@@ -521,9 +478,13 @@ function strategyWhereHtml(owner: boolean) {
     // No source, no dollar figure: the name stays, the figure goes.
     const figure = urls.length && value ? value : 0;
     const title = `${seg.name}${figure ? `: about ${mktMoney(figure)} a year, an estimate, from ${urls.map(strategyHost).join(', ')}` : ''}`;
+    // The owner renames a segment in place (POST /v2/market/entities/{id} {name}).
+    const name = owner && STRAT_SEG_RENAME === seg.id
+      ? `<form class="strat-tm-rename" data-seg-rename novalidate><input type="text" name="name" maxlength="300" autocomplete="off" aria-label="Name" value="${esc(seg.name)}"></form>`
+      : `<b>${esc(seg.name)}</b>`;
     return `<div class="strat-tm${seg.self ? ' ours' : seg.next ? ' next' : ''}${owner ? ' pick' : ''}" data-seg="${esc(seg.id)}"${r ? ` style="${pos(r)}"` : ''}${owner
-      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}<b>${esc(seg.name)}</b>${figure ? ` <span class="strat-est">~${mktMoney(figure)}</span>${strategySourceLine(urls)}` : ''}${owner
-      ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button>` : ''}</div>`;
+      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}${name}${figure ? ` <span class="strat-est">~${mktMoney(figure)}</span>${strategySourceLine(urls)}` : ''}${owner
+      ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button><button type="button" class="strat-pen" data-seg-edit aria-label="Rename ${esc(seg.name)}">${STRAT_PEN}</button>` : ''}</div>`;
   };
   // One sized segment is not a map: then every segment is a plain tile.
   const mapped = drawn.length >= 2 ? drawn : [];
@@ -554,7 +515,7 @@ function strategyRivalsHtml(owner: boolean) {
   const chips = (list || []).map(c => `<li class="strat-chip" data-rival="${esc(c.id)}">${/^https?:\/\//i.test(c.url || '')
     ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.name)}</a>` : `<span>${esc(c.name)}</span>`}${owner
     ? `<button type="button" class="strat-x tap-mark" data-rival-x aria-label="Remove ${esc(c.name)}">${STRAT_X}</button>` : ''}</li>`).join('');
-  return `${head}${chips ? `<ul class="strat-chips">${chips}</ul>` : '<p class="strat-none-s">None yet.</p>'}${owner ? strategyAddRowHtml('rival', 'Add a competitor or its site') : ''}`;
+  return `${head}${chips ? `<ul class="strat-chips">${chips}</ul>` : '<p class="strat-none-s">None yet</p>'}${owner ? strategyAddRowHtml('rival', 'Add a competitor or its site') : ''}`;
 }
 // What Listening found: the posts routed to someone who reads them (GET /v2/listening/stats), and the posts setup filed
 // as market insights ("Listening: <tag>", backend/company_import.py). Hot first, then the newest.
@@ -606,8 +567,8 @@ function strategyPaintMarket(key: string) {
   if (!STRAT) return;
   const owner = strategyView(STRAT.data).owner;
   if (key === 'growth') {
-    const g = STRAT_MKT.growth;
-    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) : '');
+    const g = STRAT_MKT.growth, setup = g ? brandSetupHtml(g.brand) : '';
+    if ($('#strat-setup')) patchHTML($('#strat-setup'), setup);
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
     return;
   }
@@ -616,6 +577,19 @@ function strategyPaintMarket(key: string) {
   const el = $(box);
   if (!el) return;
   patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
+}
+// The Brand card's Set up opens the brand's editor; the card is drawn when the brand read lands, after the page binds.
+document.addEventListener('click', ev => {
+  if (eventElement(ev)?.closest('[data-brand-setup-go]')) location.hash = BRAND_ROUTE + '/edit';
+});
+// The brand draft was saved (brand-page.ts): the setup row stops asking now (the Strategy tab's mark goes with the
+// `setup` event, ui/app/setup-gaps.ts), and the brand this page paints from is the saved one, so a return to Strategy
+// does not show the row it had before.
+function strategyBrandSaved(brand: BrandDoc | null): void {
+  STRAT_MKT.growth = {brand};
+  const setup = brandSetupHtml(brand);
+  if ($('#strat-setup')) patchHTML($('#strat-setup'), setup);
+  if ($('#strat-brand')) patchHTML($('#strat-brand'), brandStripHtml(brand));
 }
 
 // ---------------------------------------------------------------- the sections
@@ -659,10 +633,9 @@ const STRAT_FRAME = `<div id="strat-pub"></div>
   <div class="strat-memo" id="strat-doc">
     <section class="card strat-card strat-top strat-summary" id="strat-top"></section>
     <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
-    <div class="strat-setup" id="strat-setup"></div>
     <div class="strat-brand" id="strat-brand"></div>
     <div class="strat-row"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div>
-    <div class="strat-secs" id="strat-secs"></div>
+    <div class="strat-grid"><div class="strat-setup" id="strat-setup"></div><div class="strat-secs" id="strat-secs"></div></div>
     <div class="strat-add-sec" id="strat-add-sec"></div>
   </div>`;
 
@@ -670,17 +643,16 @@ function strategyRender() {
   const body = $('#strat-body');
   if (!body || !STRAT) return;
   const data = STRAT.data, view = strategyView(data);
-  patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
   // ⋯ is drawn again only when what it holds changes, so an open menu is left alone by a redraw.
   const head = $('.rd-strat-head'), more = strategyMoreHtml(data);
   if (head && head.dataset.stratMore !== more) { head.dataset.stratMore = more; pageHeadSet(head, 'more', more); }
-  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
+  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet</p>'; strategyBind(); return; }
   if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};
   // Words typed and not yet saved survive a redraw (their save is on its way).
   const key = (f: HTMLElement): string => f.dataset.stratField || f.closest<HTMLElement>('[data-bet]')?.dataset.bet || 'new';
   const typed = [...body.querySelectorAll('[data-strat-field], [data-bet-st]')].filter(f => f.value !== f.defaultValue).map((f): [string, string] => [key(f), f.value]);
-  patchHTML($('#strat-pub'), `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}`);
+  patchHTML($('#strat-pub'), strategyMetaHtml(data));
   // The summary at reading size, named like every other part of the page.
   patchHTML($('#strat-top'), '<h3 class="strat-k">Summary</h3>' + (view.owner
     ? `<textarea class="strat-ed strat-big" data-strat-field="summary" rows="1" maxlength="400" placeholder="Your strategy in one sentence" aria-label="Summary">${esc(v.summary || '')}</textarea>`
@@ -717,7 +689,7 @@ async function strategyWrite(run: () => unknown, {fail = 'Could not save'} = {})
   catch (error) {
     if (errorStatus(error) === 409 && state && STRAT === state) {
       toast('Changed elsewhere, reloaded');
-      state.editSection = ''; state.addSection = false; state.publishing = false; state.adding = false;
+      state.editSection = ''; state.addSection = false; state.adding = false;
       // What was typed lost to the newer draft: the fields draw what is there now.
       for (const f of document.querySelectorAll<HTMLTextAreaElement>('[data-strat-field], [data-bet-st]')) f.value = f.defaultValue;
       await strategyReload(state);
@@ -737,12 +709,9 @@ const strategyBetPost = (id: string | undefined, change: Record<string, unknown>
 const stratAutosize = (el: HTMLTextAreaElement) => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 2 + 'px'; };
 
 function strategyBindActions() {
-  const state = STRAT;
-  if (!state) return;
+  if (!STRAT) return;
   const versions = $('.rd-strat-head [data-strat-versions]');
   if (versions) versions.onclick = () => void strategyVersionsOpen();
-  const publish = $('#strat-actions [data-strat-publish]');
-  if (publish) publish.onclick = () => { state.publishing = true; strategyRender(); $('[data-strat-publish-form] input')?.focus(); };
 }
 
 // One line of text that is its own field: Enter saves (by leaving it), Escape puts it back.
@@ -762,23 +731,6 @@ function strategyBind() {
   strategyBindActions();
   const data = state.data, view = strategyView(data);
 
-  const form = body.querySelector<HTMLFormElement>('[data-strat-publish-form]');
-  if (form) {
-    const done = () => { state.publishing = false; strategyRender(); };
-    stratEl<HTMLElement>('[data-strat-publish-cancel]', form).onclick = done;
-    form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
-    form.onsubmit = async ev => {
-      ev.preventDefault();
-      const noteField = (form.elements as unknown as StratPublishControls).note;
-      const note = noteField.value.trim();
-      if (!note) { noteField.focus(); return; }
-      form.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
-      let out = null as {n?: number; version?: {n?: number}} | null;
-      const ok = await strategyWrite(async () => { out = await post('/v2/strategy/publish', {note, revision: state.data?.draft?.revision ?? null}); }, {fail: 'Could not publish'});
-      if (ok) { state.publishing = false; strategyRender(); toast(`Published v${out?.n ?? out?.version?.n ?? ''}`.trim()); }
-      else form.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
-    };
-  }
   if (!view.owner) return;
 
   const summary = body.querySelector<HTMLTextAreaElement>('[data-strat-field="summary"]');
@@ -980,8 +932,9 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
     where.onclick = ev => {
       if (!STRAT || STRAT !== state) return;
       const target = eventElement(ev);
-      if (target?.closest('a')) return;   // a source link opens out; it does not target its tile
+      if (target?.closest('a, [data-seg-rename]')) return;   // a source link opens out, and a name being edited stays put
       const x = target?.closest('[data-seg-x]'), tile = target?.closest<HTMLElement>('[data-seg]');
+      if (target?.closest('[data-seg-edit]') && tile?.dataset.seg) { renameOpen(tile.dataset.seg); return; }
       if (x && tile) {
         const id = tile.dataset.seg, now = spend(), all = now?.segments || [], seg = all.find(s => s.id === id);
         if (!now || !seg) return;
@@ -994,11 +947,36 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
       if (tile) cycle(tile);
     };
     where.onkeydown = ev => {
+      if (ev.key === 'Escape' && eventElement(ev)?.closest('[data-seg-rename]')) { ev.preventDefault(); renameClose(); return; }
       const tile = eventElement(ev)?.closest<HTMLElement>('[data-seg]');
       if (!tile || ev.target !== tile || (ev.key !== 'Enter' && ev.key !== ' ')) return;
       ev.preventDefault();
       cycle(tile);
     };
+  }
+  // A name edited in place: Enter or leaving the field saves it, Escape keeps the old one.
+  const renameField = () => document.querySelector<HTMLInputElement>('#strat-where [data-seg-rename] input[name="name"]');
+  function renameOpen(id: string) {
+    STRAT_SEG_RENAME = id;
+    strategyPaintMarket('spend');
+    const field = renameField();
+    if (field) { field.focus(); field.select(); field.onblur = () => { void renameSave(); }; }
+  }
+  function renameClose() {
+    const id = STRAT_SEG_RENAME;
+    STRAT_SEG_RENAME = '';
+    strategyPaintMarket('spend');
+    if (id) $(`#strat-where [data-seg="${CSS.escape(id)}"]`)?.focus();
+  }
+  async function renameSave() {
+    const id = STRAT_SEG_RENAME, seg = (spend()?.segments || []).find(s => s.id === id);
+    const name = (renameField()?.value || '').replace(/\s+/g, ' ').trim();
+    if (!id) return;
+    if (!seg || !name || name === seg.name) { renameClose(); return; }
+    seg.name = name;
+    renameClose();
+    try { await post('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/'), {name}); await again('spend'); }
+    catch (error) { failed('spend', error); }
   }
   const rivals = body.querySelector<HTMLElement>('#strat-rivals');
   if (rivals) rivals.onclick = ev => {
@@ -1017,34 +995,42 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
   for (const [box, kind] of [['#strat-where', 'seg'], ['#strat-rivals', 'rival']] as const) {
     const card = body.querySelector<HTMLElement>(box);
     if (card) card.onsubmit = async ev => {
+      if (kind === 'seg' && eventElement(ev)?.closest('[data-seg-rename]')) { ev.preventDefault(); void renameSave(); return; }
       const f = eventElement(ev)?.closest<HTMLFormElement>(`[data-add="${kind}"]`);
       if (!f) return;
       ev.preventDefault();
       const nameField = (f.elements as unknown as StratAddControls).name;
       const name = nameField.value.replace(/\s+/g, ' ').trim();
       if (!name) { nameField.focus(); return; }
-      f.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = true; });
+      // A segment's summary and parent are optional (strategySegAddHtml).
+      const summary = f.querySelector<HTMLInputElement>('input[name="summary"]')?.value.replace(/\s+/g, ' ').trim() || '';
+      const parent = f.querySelector<HTMLSelectElement>('select[name="parent"]')?.value || '';
+      f.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select').forEach(el => { el.disabled = true; });
       try {
         if (kind === 'seg') {
           if (!spend()?.definition) await put('/v2/market/definition', {root_name: `${companyName() || 'Our'} market`});
-          await post('/v2/market/segments', {name});
+          await post('/v2/market/segments', {name, ...(summary ? {summary} : {}), ...(parent ? {parent_id: parent} : {})});
         } else await post('/v2/market/competitors', {name});
       } catch (error) {
         toast(errorStatus(error) === 409 ? 'Already there' : errorMessage(error, 'Could not add it'), errorStatus(error) !== 409);
-        f.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = false; });
+        f.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select').forEach(el => { el.disabled = false; });
         nameField.focus();
         return;
       }
       await again(kind === 'seg' ? 'spend' : 'rivals');
       // The row may be the same node as before (its markup did not change): emptied and on again, for the next one.
       const row = $(`${box} [data-add="${kind}"]`);
-      if (row) { row.querySelectorAll('input, button').forEach((el: HTMLInputElement | HTMLButtonElement) => { el.disabled = false; }); row.elements.name.value = ''; row.elements.name.focus(); }
+      if (row) {
+        row.querySelectorAll('input, button, select').forEach((el: HTMLInputElement | HTMLButtonElement | HTMLSelectElement) => { el.disabled = false; });
+        row.querySelectorAll('input, select').forEach((el: HTMLInputElement | HTMLSelectElement) => { el.value = ''; });
+        row.elements.name.focus();
+      }
     };
   }
 }
 
 // ---------------------------------------------------------------- versions
-// A drawer: the published versions, newest first; one opens read-only.
+// A drawer: the versions, newest first; one opens read-only.
 function strategyVersionsDialog(): HTMLDialogElement {
   let dlg = document.getElementById('strat-versions') as HTMLDialogElement | null;
   if (!dlg) {

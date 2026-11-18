@@ -139,7 +139,7 @@ def test_the_managers_nudge_on_a_private_ticket_names_no_title(api, monkeypatch)
         ci_runs._nudge(c, ci_runs._task(c, row["id"]), "bot:ops", 120, H.now())
         made = c.execute(
             "SELECT title, body FROM tasks WHERE owner_id IN ('bot:cpo','cpo') AND requester_id=? ORDER BY created_at DESC",
-            (H.KEEPER,),
+            (H.TICO_ACTOR,),
         ).fetchone()
     assert made is not None
     assert "Secret acquisition" not in made["title"] and "Secret acquisition" not in made["body"]

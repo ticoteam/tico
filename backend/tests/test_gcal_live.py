@@ -1,11 +1,13 @@
 """Live Google Calendar reads and writes: the viewer's token, Google's sharing, the contract's occurrence shape."""
 
+import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
 from backend import gcal_live as G
+from backend import google_tokens
 from backend import google_workspace as W
 from backend.store import Problem
 
@@ -16,13 +18,14 @@ END = datetime(2026, 11, 16, tzinfo=timezone.utc)
 
 @pytest.fixture
 def minted(monkeypatch):
+    """The token door (backend/google_tokens.py), recording (mailbox, service, write) for each token asked."""
     calls = []
 
-    def mint(c, mailbox, service, row=None, scopes=None):
-        calls.append((mailbox, service, scopes))
-        return {"access_token": "write-token" if scopes == W.WORKSPACE_SCOPES["calendar"] else "read-token"}
+    def token(c, mailbox, service, write=False):
+        calls.append((mailbox, service, write))
+        return "write-token" if write else "read-token"
 
-    monkeypatch.setattr(W, "mint", mint)
+    monkeypatch.setattr(google_tokens, "token", token)
     return calls
 
 
@@ -92,7 +95,7 @@ def test_a_timed_event_becomes_one_occurrence_with_the_viewers_reply_and_authuse
     assert query["singleEvents"] == ["true"] and query["orderBy"] == ["startTime"]
     assert query["timeMin"] == ["2026-11-09T00:00:00Z"] and query["timeMax"] == ["2026-11-16T00:00:00Z"]
     assert "q" not in query
-    assert minted == [(ANA, "calendar", W.READ_ONLY_SCOPES["calendar"])]
+    assert minted == [(ANA, "calendar", False)]
 
 
 def test_all_day_recurring_cancelled_and_out_of_office(google):
@@ -239,7 +242,7 @@ def test_insert_builds_googles_body_with_the_write_scope(google, minted):
     assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=TH"] and body["visibility"] == "private"
     assert body["conferenceData"]["createRequest"]["conferenceSolutionKey"] == {"type": "hangoutsMeet"}
     assert body["extendedProperties"] == {"private": {"tico_actor": "bot:b-1", "tico_bot": "b-1"}}
-    assert minted == [(ANA, "calendar", W.WORKSPACE_SCOPES["calendar"])]
+    assert minted == [(ANA, "calendar", True)]
 
 
 def test_an_all_day_insert_without_meet_sends_dates_and_no_conference_version(google):
@@ -306,6 +309,14 @@ def test_connected_needs_the_company_key_for_this_address_and_a_calendar_scope(m
     assert not G.connected(None, "someone@other.example")
     row["authorized_scopes"] = '["https://www.googleapis.com/auth/gmail.modify"]'
     assert not G.connected(None, ANA)
+    from backend import google_connect as GC
+
     monkeypatch.setattr(W, "authority", lambda c, address: "personal")
     row["authorized_scopes"] = None
-    assert not G.connected(None, ANA)  # a person's own Connect Google keeps the computer path
+    grant = {"grant_scopes": json.dumps(GC.READ_SCOPES)}
+    monkeypatch.setattr(google_tokens, "grant_row", lambda c, address: grant)
+    assert G.connected(None, ANA)  # a person's own Connect Google grant is read on the server too
+    grant["grant_scopes"] = json.dumps([GC.G + "gmail.readonly", GC.G + "calendar.freebusy"])
+    assert not G.connected(None, ANA)  # a grant that cannot list events
+    monkeypatch.setattr(google_tokens, "grant_row", lambda c, address: None)
+    assert not G.connected(None, ANA)

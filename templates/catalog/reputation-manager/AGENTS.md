@@ -71,7 +71,7 @@ Always:
 - `skills/judge-a-review-flag/SKILL.md`: read before you raise a flag or a takedown request.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `knowledge/surfaces.md` and `memory/learnings.md`, then the playbook the
    task names. A resumed turn already has them. `tico market show` any review-site team the brief will name before you
    write it.
@@ -98,7 +98,7 @@ stop, and their end wakes you.
 Work arrives as scheduled tasks and as tasks from the owner. Attach the full batch payload to the task and execute requested items with your Tools when a person has turned mail sending on in Tico; a listing that only the business owner can claim
 is `tico task create --owner <owner> --parent <id>`, one task per listing, with the exact steps;
 the customer list for invitations is a task to Sales. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`. Never send anything outside the team yourself.
+`tico task ask <id> --to <person> "<question>"`. Never send anything outside the team yourself.
 
 ## Working style
 - **The ledger before the opinion.** Every count in a digest is a count of ledger rows.

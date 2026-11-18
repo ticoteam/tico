@@ -10,7 +10,9 @@ the test to put `approve` (writes auth.json) or `deny` (fails) in $CODEX_HOME.
 
 Scripted prompts: HANG streams one delta and then waits, once per $FAKE_LOG, until its parent goes away; LIMIT
 fails the turn with a usage limit (after some token usage when $FAKE_LIMIT_SPENDS names codex); SLOW streams one delta and answers after $FAKE_SLOW seconds (2), or at once
-after a steer, whose text the answer then carries."""
+after a steer, whose text the answer then carries. Credential markers (CALL, FILE, MCPCALL, LOGIN, ECHO;
+credential_use.py) use what the turn was given, its remote MCP servers read from the thread's `config.mcp_servers` as
+Codex reads them, and add a line each to the reply."""
 
 import json
 import os
@@ -18,6 +20,8 @@ import queue
 import sys
 import threading
 import time
+
+import credential_use
 
 GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "HOME", "CODEX_HOME")
 
@@ -120,7 +124,7 @@ def main():
         lines.put(None)
 
     threading.Thread(target=read, daemon=True).start()
-    threads, turns, parent, cwds = 0, 0, os.getppid(), {}
+    threads, turns, parent, cwds, configs = 0, 0, os.getppid(), {}, {}
     goals = {}
     slow = None  # (thread, turn, number, due) of the turn answering later
     while True:
@@ -147,6 +151,7 @@ def main():
             threads += 1
             thread = thread or "acme-thread-%d-%d" % (os.getpid(), threads)
             cwds[thread] = params.get("cwd") or os.getcwd()
+            configs[thread] = params.get("config") or {}
             record({"harness": "codex", "method": method, "thread": thread})
             send({"id": rid, "result": {"thread": {"id": thread}}})
         elif method == "thread/goal/set":
@@ -294,7 +299,7 @@ def main():
                 os.makedirs(os.path.join(cwds.get(thread) or os.getcwd(), "reports"), exist_ok=True)
                 with open(os.path.join(cwds.get(thread) or os.getcwd(), "reports", "acme.md"), "w") as report:
                     report.write("# Acme report\n")
-            reply = "Acme reply."
+            reply = "Acme reply." + credential_use.act(text, credential_use.codex_servers(configs.get(thread)), record)
             if os.environ.get("ACME_API_KEY"):
                 reply += " The key is " + os.environ["ACME_API_KEY"]
             finish(thread, turn, turns, reply)

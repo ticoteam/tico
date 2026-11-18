@@ -8,7 +8,9 @@ on:
         type: string
 permissions:
   contents: read
-  id-token: write
+# Inputs reach shell steps only through the environment, never pasted into a script.
+env:
+  COMPANY: ${{ inputs.company }}
 jobs:
   # Checks the company icon before any build. A download outage skips this company's build and publish with a
   # warning instead of failing the release run. The builds fetch their own copy with the same validation.
@@ -25,7 +27,7 @@ jobs:
       - name: Check the private company icon
         id: icon
         shell: bash
-        run: python3 scripts/company_apps.py icon --company '${{ inputs.company }}'
+        run: python3 scripts/company_apps.py icon --company "$COMPANY"
   build:
     needs: icon
     if: needs.icon.outputs.available == 'true'
@@ -45,6 +47,8 @@ jobs:
     # Do not cache branded binaries into caches a generic public build could restore (the cache step only restores).
     runs-on: ${{ matrix.os }}
     env:
+      TARGET: ${{ matrix.target }}
+      BUNDLES: ${{ matrix.bundles }}
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -55,17 +59,18 @@ jobs:
           python-version: '3.15'
       - name: Configure private company app
         shell: bash
-        run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
+        run: python scripts/company_apps.py configure --company "$COMPANY"
       - name: Artifact encryption dependency
         shell: bash
         run: python -m pip install "$(grep '^cryptography==' backend/requirements.txt)"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       # Restores the generic desktop build's cache (dependencies and the Tauri CLI) and never saves: branded
       # build output must not reach a cache a public build could restore. The app crate itself always recompiles,
       # since its build script reruns when the company identity in the environment changes.
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: app
           shared-key: desktop
@@ -117,11 +122,11 @@ jobs:
           true
       - name: Build private company app
         shell: bash
-        run: python scripts/company_apps.py build --company '${{ inputs.company }}' --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}'
+        run: python scripts/company_apps.py build --company "$COMPANY" --target "$TARGET" --bundles "$BUNDLES"
       - name: Encrypt company bundles
         shell: bash
-        run: python scripts/company_apps.py pack --company '${{ inputs.company }}' --target '${{ matrix.target }}'
-      - uses: actions/upload-artifact@v4
+        run: python scripts/company_apps.py pack --company "$COMPANY" --target "$TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: company-${{ inputs.company }}-${{ matrix.target }}
           path: out/bundles.enc
@@ -132,6 +137,10 @@ jobs:
     needs: [icon, build]
     if: ${{ !cancelled() && needs.icon.outputs.available == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    # Only this job assumes the company's AWS publisher role, so only it gets an OIDC token.
+    permissions:
+      contents: read
+      id-token: write
     env:
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -141,7 +150,7 @@ jobs:
         with:
           python-version: '3.15'
       - name: Configure and mask private publish values
-        run: python scripts/company_apps.py configure --publishing --company '${{ inputs.company }}'
+        run: python scripts/company_apps.py configure --publishing --company "$COMPANY"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: company-${{ inputs.company }}-*
@@ -149,7 +158,7 @@ jobs:
       - name: Artifact encryption dependency
         run: python -m pip install "$(grep '^cryptography==' backend/requirements.txt)"
       - name: Decrypt this company's bundles
-        run: python scripts/company_apps.py unpack --company '${{ inputs.company }}'
+        run: python scripts/company_apps.py unpack --company "$COMPANY"
       - name: Assume this company's publisher role
         uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
         with:
@@ -162,7 +171,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
-        run: python scripts/company_apps.py publish --company '${{ inputs.company }}'
+        run: python scripts/company_apps.py publish --company "$COMPANY"
       - name: Report company publication failure
         if: failure()
-        run: echo '::error::Company publication failed for ${{ inputs.company }}; public release and other companies continue.'
+        run: echo "::error::Company publication failed for $COMPANY; public release and other companies continue."

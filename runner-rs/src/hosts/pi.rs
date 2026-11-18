@@ -31,7 +31,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::oneshot::{base_env, int_of, Thread, Turn, Wire};
-use super::{event, failed, hub_mcp_server, is_limit, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server_by_name, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{log, text_of, truthy};
 
@@ -308,14 +308,8 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
         })
         .collect();
     servers.extend(crate::mcp::pi_config(&settings.mcp_servers));
-    if let Some(hub) = hub_mcp_server(env) {
-        let vars: serde_json::Map<String, Value> = hub["env"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
-            .collect();
-        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "deferred", "description": HUB_DESCRIPTION}));
+    if let Some(hub) = hub_mcp_server_by_name(env) {
+        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": hub["env"], "exposure": "deferred", "description": HUB_DESCRIPTION}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
     // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
@@ -1627,11 +1621,7 @@ impl PiHost {
         let ask = uuid::Uuid::new_v4().to_string();
         *proc.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(self.0.tx.clone());
         live.queued.clear();
-        let state = Turn {
-            bot: self.0.bot.clone(),
-            cmd: self.0.cmd.clone(),
-            ..Default::default()
-        };
+        let state = Turn::default();
         live.run = Some(Run {
             host: self.clone(),
             thread: thread_id.into(),

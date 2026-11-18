@@ -104,12 +104,10 @@ def parts_of(saying: Row) -> list[str]:
 
 def last_sent_back(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> str | None:
     """The newest send-back note on this page requirement of the task, any visit, not undone."""
-    found = conn.execute(
-        "SELECT a.notes FROM answers a JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.requirement_id=? "
-        "AND a.answer='no' AND a.undone_at IS NULL ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
-        (task_id, requirement_id),
-    ).fetchone()
-    return str(found[0]) if found and found[0] else None
+    from . import task_requirements
+
+    found = task_requirements.last_sent_back(conn, requirement_id, task_id=task_id)
+    return str(found["notes"]) if found and found["notes"] else None
 
 
 def _rows(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> list[Row]:
@@ -125,7 +123,7 @@ def _jev(verdict: Row | None) -> Row:
     said_ = str(verdict["verdict"])
     reason = " ".join(str(verdict.get("last_error") if said_ == "failed" else verdict.get("reasons") or "").split())
     if said_ == "failed":
-        reason = f"Jev couldn't check this: {reason}" if reason else "Jev couldn't check this"
+        reason = f"Decision model couldn't check this: {reason}" if reason else "Decision model couldn't check this"
     else:
         reason = _P_VALUE.sub("", reason, count=1)
     return {"verdict": said_, "reason": reason}
@@ -136,6 +134,7 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
     replaced, note, changed, answered, jev: {verdict, reason}, answers: [{by, answer, note, at}]}. `answers` are the
     people's and bots' OKs (`ok`) and send backs (`no`) given while that version counted, not undone."""
     from . import page_verdicts as V
+    from . import task_pages as P
 
     pages = _rows(
         conn,
@@ -161,27 +160,32 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
             saying[(str(data["file_id"]), int(data.get("version") or 0))] = data
     answers = _rows(
         conn,
-        "SELECT a.by_id, a.answer, a.notes, a.page_version, a.created_at, a.visit_id FROM answers a "
+        "SELECT a.id, a.requirement_id, a.by_id, a.answer, a.notes, a.page_version, a.created_at, a.visit_id FROM answers a "
         "JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.requirement_id=? AND a.undone_at IS NULL "
         "AND a.answer IN ('ok', 'no') ORDER BY a.created_at, a.id",
         (task_id, requirement_id),
     )
+    snapshots = {a["id"]: P.answer_pages(conn, task_id, a) for a in answers}
     # The same version attached again (a new commit to judge it against) is one round: from its first attach, with
     # its newest verdict.
     runs: list[tuple[str, Row]] = []
+    positions: dict[tuple[str, int], int] = {}
     for page in pages:
-        if runs and (runs[-1][1]["file_id"], runs[-1][1]["version"]) == (page["file_id"], page["version"]):
-            runs[-1] = (runs[-1][0], page)
+        key = (str(page["file_id"]), int(page["version"]))
+        if key in positions:
+            index = positions[key]
+            runs[index] = (runs[index][0], page)
         else:
+            positions[key] = len(runs)
             runs.append((str(page["created_at"]), page))
     out: list[Row] = []
     for index, (start, page) in enumerate(runs):
-        end = runs[index + 1][0] if index + 1 < len(runs) else None
+        end = next((at for at, later in runs[index + 1 :] if later["file_id"] == page["file_id"]), None)
         version = int(page["version"])
         given = [
             {"by": a["by_id"], "answer": a["answer"], "note": a["notes"] or "", "at": a["created_at"]}
             for a in answers
-            if a["page_version"] == version
+            if snapshots[a["id"]].get(page["file_id"]) == version
             and str(a["created_at"]) >= start
             and (end is None or str(a["created_at"]) < end)
         ]
@@ -222,5 +226,5 @@ def notices(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> li
     out = list(mine.notices)
     held = next((s for s in standings if pr_conflicts.held(s)), None)
     if held is not None:
-        out.append(pr_conflicts.ask_line(conn, held, str(mine.requirement.get("kind") or "")))
+        out.append(pr_conflicts.ask_line(conn, held))
     return out

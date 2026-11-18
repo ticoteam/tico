@@ -69,7 +69,7 @@ def test_a_300_seat_chart_reaches_the_server_by_the_plan_bucket_and_never_by_its
     env = envfile.parse(param["Value"])
     assert "TICO_COMPANY_FILE_B64" not in env and "Tier" not in param and len(param["Value"]) < 4096
     assert env["TICO_COMPANY_FILE_S3"] == f"s3://{BUCKET}/{put['Key']}" and env["TICO_COMPANY_FILE_SHA256"] == sha
-    assert env["TICO_COMPANY_FILE_S3_REGION"] == "us-west-2" and env["TICO_SAMPLE_COMPANY"] == "off"
+    assert env["TICO_COMPANY_FILE_S3_REGION"] == "us-west-2"
     assert env["TICO_COMPANY_FILE"] == "/run/tico/company-file/plan.b64"
     # The server's own role reads its own plan only; the boundary limits, it never grants.
     (inline,) = iam.called("put_role_policy")

@@ -66,14 +66,6 @@
                 }
             },
             {
-                "code": "reportOperatorIssue",
-                "range": {
-                    "startColumn": 37,
-                    "endColumn": 51,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAssignmentType",
                 "range": {
                     "startColumn": 8,
@@ -220,14 +212,6 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 27,
-                    "endColumn": 34,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
                     "startColumn": 48,
                     "endColumn": 55,
                     "lineCount": 1
@@ -308,8 +292,8 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 81,
-                    "endColumn": 85,
+                    "startColumn": 33,
+                    "endColumn": 37,
                     "lineCount": 1
                 }
             },

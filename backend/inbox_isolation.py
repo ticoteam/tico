@@ -2,7 +2,7 @@
 
 Every bot on a computer runs as the same operating-system user, and an inbox bot reads mail with a
 Google Workspace key that acts as any mailbox in the company. A team that wants that key walled off
-keeps a computer for its inbox bots (`POST runners/<id>/inbox-only {"enabled": true}`); the server then
+keeps a computer for its inbox bots (`POST computers/<id>/inbox-only {"enabled": true}`); the server then
 places no other bot there. It is a choice, not a rule: an inbox bot may share any other computer.
 
 Installs from before this choice existed keep what they had: the first time the setting is needed, every
@@ -81,6 +81,6 @@ def check(c, bot, runner_id, people):
         "inbox_isolation",
         f"This computer is kept for inbox bots, whose mail key can open every mailbox in "
         f"the team, so {bot} cannot go there. Pick another computer, or stop keeping this one for inbox bots: "
-        f"`tico api POST runners/{runner_id}/inbox-only '{{\"enabled\": false}}'`.",
+        f"`tico api POST computers/{runner_id}/inbox-only '{{\"enabled\": false}}'`.",
         409,
     )

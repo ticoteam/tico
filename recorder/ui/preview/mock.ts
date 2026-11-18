@@ -456,13 +456,13 @@ interface PreviewState {
       a.waiting = a.items.filter((i) => !i.sent).length;
     },
     // Create: the proposal becomes a private task in Tico, with its number.
-    task_picker: ({ query, kind, offset }) => ({ tasks: offset ? [] : [
-      { id: 't42', number: 42, title: 'Review pricing', status: 'open', type: 'general' },
-      { id: 't43', number: 43, title: 'Test recovery', status: 'review', type: 'bug' },
-      { id: 't44', number: 44, title: 'Property manager bots: pricing page', status: 'doing', type: 'general' },
-      { id: 't45', number: 45, title: 'Fix pricing rounding', status: 'open', type: 'bug' },
-    ].filter((t) => (!kind || t.type === kind) && (!query || (/^#?\d+$/.test(query.trim()) ? String(t.number) === query.trim().replace('#', '') : query.toLowerCase().split(/\s+/).every((w) => t.title.toLowerCase().includes(w))))), next_offset: null }),
-    task_types: () => [{ id: 'general', name: 'General' }, { id: 'bug', name: 'Bug' }],
+    task_picker: ({ query, pipeline, offset }) => ({ tasks: offset ? [] : [
+      { id: 't42', number: 42, title: 'Review pricing', status: 'open', pipeline: 'general' },
+      { id: 't43', number: 43, title: 'Test recovery', status: 'review', pipeline: 'product' },
+      { id: 't44', number: 44, title: 'Property manager bots: pricing page', status: 'doing', pipeline: 'general' },
+      { id: 't45', number: 45, title: 'Fix pricing rounding', status: 'open', pipeline: 'product' },
+    ].filter((t) => (!pipeline || t.pipeline === pipeline) && (!query || (/^#?\d+$/.test(query.trim()) ? String(t.number) === query.trim().replace('#', '') : query.toLowerCase().split(/\s+/).every((w) => t.title.toLowerCase().includes(w))))), next_offset: null }),
+    task_pipelines: () => [{ id: 'general', name: 'General' }, { id: 'product', name: 'Product' }],
     link_selected_tasks: ({ ids }) => {
       for (const id of ids) open().actions.items.push(item({ id, task_id: id, number: id.slice(1), title: id === 't42' ? 'Review pricing' : 'Test recovery', status: 'open', kind: 'link', sent: true }));
     },

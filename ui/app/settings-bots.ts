@@ -30,6 +30,7 @@ interface SettingsBot extends CloudMachineBot {
   model?: string; runtime?: string; effort?: string; reasoning_effort?: string; resolved_model?: string; resolved_runtime?: string | null;
   fallback?: SettingsBotChoice | null; task_model?: SettingsTaskModel | null; task_model_warning?: string | null;
   compact_at?: number | null;   // its chosen window; none: its model's default
+  output_style?: string | null; verbosity?: string | null;   // Claude Code's output style, Codex's verbosity; none: the harness's own
   revision?: number; role?: string; description?: string; can_manage?: boolean;
   readiness?: { gateway?: string | null; problems?: string[] } | null;
   agent?: (BotAgent & { model?: string; harness?: string }) | null;

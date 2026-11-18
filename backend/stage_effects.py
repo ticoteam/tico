@@ -1,5 +1,5 @@
 # pyright: strict
-"""What entering a stage does, and how leaving it backwards undoes that (docs/pipelines-v3.md, "Entering a stage").
+"""What entering a stage does, and how leaving it backwards undoes that (docs/dev/pipelines-v3.md, "Entering a stage").
 
 A stage's on-enter action is nothing, "file a linked task into pipeline X", or a source's action ("queue the PRs to
 merge"). It happens once
@@ -23,6 +23,7 @@ A source's action (`{"act": "github.queue"}`, Engineering's Merge queues the tas
 undo (backend/source_actions.py).
 """
 
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ def _spec_page(conn: "sqlite3.Connection", task: Row) -> Row | None:
     (`requirement_pages` row: `file_id`, `version`, `visit_id`), or None when there is none."""
     from . import task_engine, task_pages
 
-    work = [s for s in task_engine.stages(conn, task["pipeline_id"]) if s["kind"] == "work"]
+    work = task_engine.main_work(task_engine.stages(conn, task["pipeline_id"]))
     at = next((i for i, s in enumerate(work) if s["id"] == task["stage_id"]), 0)
     for stage in reversed(work[:at]):
         if not conn.execute(
@@ -133,16 +134,38 @@ def _sent_back(conn: "sqlite3.Connection", task: Row) -> str:
 
 
 def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
-    """The filed task's body: the filing task's, why it came back when it did (`_sent_back`), the `Spec:` line, and what each person said with their OK of the
+    """The filed task's first message: the filing task's request (its first message), why it came back when it did (`_sent_back`), the `Spec:` line, and what each person said with their OK of the
     spec, marked as theirs, so whoever builds it does not ask again what was already answered there."""
     H = _h()
-    parts = [str(task.get("body") or "").rstrip()]
+    parts = [H.task_request_text(conn, task["id"]).rstrip()]
     back = _sent_back(conn, task)
     if back:
         parts.append(back)
+    from . import page_links as L
+
+    ids = L.pages_for(conn, "task:" + task["id"], "Spec")
+    specs = conn.execute(
+        "SELECT f.id,f.current_version FROM bot_files f JOIN pages p ON p.file_id=f.id "
+        "WHERE f.id IN (SELECT value FROM json_each(?)) AND f.archived=0 AND p.archived=0 AND p.deleted_at IS NULL "
+        "ORDER BY f.id",
+        (json.dumps(ids),),
+    ).fetchall()
     page = _spec_page(conn, task)
+    if specs:
+        from . import task_documents as TD
+
+        approved = TD.approved_versions(conn, task["id"], "Spec")
+        parts.extend(f"Spec: page:{p['id']}@{approved.get(p['id'], p['current_version'])}" for p in specs)
+    elif page:
+        from . import task_requirements as R
+
+        # Legacy page requirements have no role link; a document explicitly unlinked from the task stays out.
+        requirement = R.get(conn, str(page["requirement_id"]))
+        if requirement and R.document_of(requirement):
+            page = None
+        else:
+            parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
     if page:
-        parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
         for said in sign_off_notes(conn, str(page["visit_id"])):
             parts.append(f"{H.actor_name(conn, said['by'])}'s notes on the spec, given with their OK:\n{said['notes']}")
     return "\n\n".join(part for part in parts if part)
@@ -157,7 +180,7 @@ def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
     for actor in candidates:
         if actor and (H.is_bot(actor) or H.is_human(actor)) and H._actor_exists(conn, actor):
             return str(actor)
-    return str(H.KEEPER)
+    return str(H.TICO_ACTOR)
 
 
 def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[str | None, str]:
@@ -171,7 +194,7 @@ def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[
     # A task given to someone in General is theirs, as on any General task; elsewhere nobody picks an owner where the
     # target has no manager. In both, the filer stays the assignee.
     unassigned = target != "general" and bool((task_engine.pipeline(conn, target) or {}).get("manager_id"))
-    for actor in dict.fromkeys((filer, str(H.KEEPER))):
+    for actor in dict.fromkeys((filer, str(H.TICO_ACTOR))):
         conn.execute("SAVEPOINT stage_effects_file")
         try:
             made = H.task_create(
@@ -239,15 +262,16 @@ def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
 
 def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
     """Whether a filed task has a linked PR that merged: its work is in the code, so undoing the filing leaves it open
-    (docs/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
+    (docs/dev/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
     from .item_sources import github as GS
 
     return any(link["metadata"] and link["metadata"]["state"] == "merged" for link in GS.prs_of(conn, task_id))
 
 
-def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
+def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str, *, sub_tasks: bool = True) -> None:
     """Undo what the task's open visit did on entering: close the tasks filed in it that are still open, except one
-    whose PR already merged."""
+    whose PR already merged. `sub_tasks=False` (a move to another pipeline, task_engine.refile) closes only the hand-offs
+    the stage filed on entering: the sub-tasks stay open in their own pipelines, linked as they were."""
     from . import task_engine
 
     visit = task.get("visit")
@@ -256,7 +280,17 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
     from . import source_actions
 
     source_actions.undo_stage(conn, task)
+    handoffs: set[str] = (
+        set()
+        if sub_tasks
+        else {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT to_task_id FROM links WHERE visit_id=? AND kind='handoff'", (visit["id"],)
+            ).fetchall()
+        }
+    )
     for filed in filed_open(conn, visit["id"]):
-        if merged_work(conn, filed):
+        if merged_work(conn, filed) or not (sub_tasks or filed in handoffs):
             continue
         task_engine.move(conn, filed, task_engine.CLOSED, by, note, cascade=True)

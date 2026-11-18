@@ -326,7 +326,7 @@ def test_a_person_marked_left_loses_the_session_and_cannot_return(signin):
     signin.login(claims={"email": "cara@acme.example"})
     assert me(signin.api).json()["actor"] == "human:cara"
     cookie = signin.api.cookies.get("tico_session")
-    post(signin.api, "people/cara", {"left": True})
+    post(signin.api, "humans/cara", {"left": True})
     assert signin.sessions() == []
     assert me(signin.api, headers={"cookie": "tico_session=" + cookie}).status_code == 401
     again = signin.login(claims={"email": "cara@acme.example"})
@@ -396,7 +396,7 @@ def test_a_changed_address_already_held_by_someone_else_is_refused(signin):
 
 def test_a_left_person_stays_out_when_their_account_comes_back_on_a_new_address(signin):
     signin.login(claims={"sub": "acct-cara", "email": "cara@acme.example"})
-    post(signin.api, "people/cara", {"left": True})
+    post(signin.api, "humans/cara", {"left": True})
     signin.api.cookies.clear()
     again = signin.login(claims={"sub": "acct-cara", "email": "cara.new@acme.example"})
     assert again.status_code == 403

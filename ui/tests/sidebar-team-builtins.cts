@@ -13,11 +13,11 @@ const bot = (id: string, display_name: string, team: string, org_parent: string,
   ({id, name: id, slug: id, display_name, team, org_parent, reports_to, helper, host: 'cloud', status: 'active', state: 'active', can_chat: true,
     my_access: FULL, users: [{id: 'chris', name: 'Chris'}], owner_id: 'chris', revision: 1});
 const REPORTS = [['botops', 'BotOps'], ['strategy-owner', 'Strategy Owner'], ['librarian', 'Librarian'], ['rules-owner', 'Rules Owner'],
-  ['design-owner', 'Design Owner'], ['updates-owner', 'Updates Owner'], ['automations-owner', 'Automations Owner']] as const;
+  ['design-owner', 'Design Owner'], ['updates-owner', 'Updates Owner'], ['automations-owner', 'Automations Owner'], ['tools-owner', 'Tools Owner']] as const;
 const BOTS = [
   bot('assistant', 'Assistant', '', 'p:chris', 'human:chris'),
   bot('general-manager', 'General Manager', 'built-in', 'p:chris', 'human:chris', true),
-  ...REPORTS.map(([id, name]) => bot(id, name, 'built-in', 'b:general-manager', 'general-manager', ['rules-owner', 'design-owner', 'updates-owner', 'automations-owner'].includes(id))),
+  ...REPORTS.map(([id, name]) => bot(id, name, 'built-in', 'b:general-manager', 'general-manager', ['rules-owner', 'design-owner', 'updates-owner', 'automations-owner', 'tools-owner'].includes(id))),
   bot('hop', 'Head of Product', 'leadership', 'p:chris', 'human:chris'),
   bot('cm', 'Content Owner', 'leadership', 'p:chris', 'human:chris'),
   bot('sa', 'Support Agent', 'leadership', 'p:chris', 'human:chris'),
@@ -43,7 +43,7 @@ const PEOPLE = [{id: 'chris', name: 'Chris', email: 'chris@example.test', title:
       if (p === '/api/me') return json({id: 'chris', owner_id: 'chris', role: 'owner', name: 'Chris', email: 'chris@example.test', registered: true, config: {version: 'dev', company_name: 'Acme'}});
       if (p === '/api/v2/config') return json({version: 'dev', company_name: 'Acme'});
       if (p === '/api/employees') return json(BOTS);
-      if (p === '/api/humans' || p === '/api/people') return json({people: PEOPLE, org_groups: GROUPS, teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: PEOPLE, org_groups: GROUPS, teams: {}});
       if (p === '/api/status') return json({keeper_alive: true, active: [], queued: [], recent_runs: [], health_issues: []});
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

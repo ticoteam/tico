@@ -8,11 +8,13 @@ import httpx
 import pytest
 
 from backend import assistant, support
-from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
-from backend.tests.helpers.support import FakeHQ
-from backend.store import H
 from backend import bot_settings as BS
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
 from backend.tests.helpers.assistant import asked, assistant_turn, room, say, turn_message
+from backend.tests.helpers.engine import ok_ask
+from backend.tests.helpers.support import FakeHQ
 
 
 def jobs(api):
@@ -382,23 +384,19 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
     assert revoked.value.status == 409
 
 
-def test_the_assistant_answers_what_a_bot_asks_the_person_and_no_one_elses_asks(api):
-    """A bot's question to ben, asked on its task, is his Assistant's to answer on his words. Ana's ask on her private task
-    is neither readable nor answerable on his turn."""
+def test_the_assistant_sends_back_what_a_bot_asks_the_person_and_no_one_elses_asks(api):
+    """A bot's OK ask of ben, on its task, is his Assistant's to send back on his words (an OK itself stays his own
+    click). Ana's ask on her private task is neither readable nor answerable on his turn."""
     with api.app.state.store.transaction() as c:
         ship = H.task_create(c, "human:ben", "Ship the zip fix", "For the next release.", "bot:ops")
-        mine = H.task_ask(
-            c, "bot:ops", ship["id"], "human:ben", "Ship the zip fix in the next release?", seen_version=ship["version"]
-        )
+        mine = ok_ask(c, ship["id"], "bot:ops", "human:ben", "OK to ship the zip fix in the next release?")
         budget = H.task_create(c, "human:ana", "Plan the budget", "Q4.", "bot:ops", private=True)
-        hers = H.task_ask(
-            c, "bot:ops", budget["id"], "human:ana", "Is the Q4 budget right?", seen_version=budget["version"]
-        )
+        hers = ok_ask(c, budget["id"], "bot:ops", "human:ana", "OK the Q4 budget?")
         secret = H.task_create(
             c, "human:ben", "Review the confidential packet", "Confidential packet.", "human:ben", private=True
         )
         ship_version, budget_version = H.task(c, ship["id"])["version"], H.task(c, budget["id"])["version"]
-    r, attempt = assistant_turn(api, "ben-test", "Yes, ship the zip fix")
+    r, attempt = assistant_turn(api, "ben-test", "Send the zip fix back: not this release")
     token = attempt["token"]
     assert get(api, "tasks/" + ship["id"], token)["task"]["id"] == ship["id"]
     for task in (budget, secret):
@@ -408,23 +406,22 @@ def test_the_assistant_answers_what_a_bot_asks_the_person_and_no_one_elses_asks(
     asked(
         api,
         f"tasks/{ship['id']}/asks/{mine['requirement_id']}/answer",
-        {"value": "Yes, ship the zip fix", "version": ship_version},
+        {"value": "no", "note": "Not this release", "version": ship_version},
         token,
         "turn",
     )
     denied = api.post(
         f"/api/v2/tasks/{budget['id']}/asks/{hers['requirement_id']}/answer",
-        json={"value": "Yes", "version": budget_version},
+        json={"value": "no", "note": "Not yet", "version": budget_version},
         headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"},
     )
     assert denied.status_code in (403, 404), denied.text
     with api.app.state.store.read() as c:
-        answered = {r["requirement_id"]: r for r in H.task_view(c, ship["id"], "human:ben")["to_leave"]}
-        assert (
-            answered[mine["requirement_id"]]["met"] and answered[mine["requirement_id"]]["answer"]["by"] == "human:ben"
-        )
-        theirs = {r["requirement_id"]: r for r in H.task_view(c, budget["id"], "human:ana")["to_leave"]}
-        assert not theirs[hers["requirement_id"]]["met"]
+        said = c.execute(
+            "SELECT by_id, answer, notes FROM answers WHERE requirement_id=?", (mine["requirement_id"],)
+        ).fetchall()
+        assert [tuple(a) for a in said] == [("human:ben", "no", "Not this release")]
+        assert not c.execute("SELECT 1 FROM answers WHERE requirement_id=?", (hers["requirement_id"],)).fetchone()
 
 
 def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(api):
@@ -508,28 +505,27 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
 
     with api.app.state.store.transaction() as c:
         launch = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
-        ads = H.task_create(c, "human:ben", "Run the ads", "Ben picks the channel.", "bot:ops")
-        pick = H.task_ask(c, "bot:ops", ads["id"], "human:ben", "Search or social ads?", seen_version=ads["version"])
+        ads = H.task_create(c, "human:ben", "Run the ads", "Ben OKs the channel.", "bot:ops")
+        pick = ok_ask(c, ads["id"], "bot:ops", "human:ben", "OK to run search ads?")
         ads_version = H.task(c, ads["id"])["version"]
-    r, attempt = assistant_turn(api, "ben-test", "Close the launch task and say search ads")
+    r, attempt = assistant_turn(api, "ben-test", "Close the launch task and send the ads back: social, not search")
     turn = Turn(attempt["token"])
     hubtools.BY_NAME["tico_task_answer"]["fn"](
         turn,
         {
             "id": ads["id"],
             "requirement": pick["requirement_id"],
-            "value": "Search",
+            "value": "no",
+            "note": "Social, not search",
             "version": ads_version,
             "on_behalf_of": "turn",
         },
     )
     with api.app.state.store.read() as c:
-        found = next(
-            r
-            for r in H.task_view(c, ads["id"], "human:ben")["to_leave"]
-            if r["requirement_id"] == pick["requirement_id"]
-        )
-        assert found["met"] and found["answer"]["by"] == "human:ben"
+        said = c.execute(
+            "SELECT by_id, answer FROM answers WHERE requirement_id=?", (pick["requirement_id"],)
+        ).fetchall()
+        assert [tuple(a) for a in said] == [("human:ben", "no")]
     assert "tico_task_answer" in {t["name"] for t in hubtools.listing(kind="assistant")}
     assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     with pytest.raises(APIError) as refused:
@@ -622,7 +618,14 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
         secret = H.task_create(c, "human:ana", "Review the private mail", "Nothing for ben.", "bot:inbox")
         ads = H.task_create(c, "human:ben", "Run the ads", "Q4.", "bot:ops")
         spend = H.task_ask(
-            c, "bot:ops", ads["id"], "human:ben", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+            c,
+            "bot:ops",
+            ads["id"],
+            "human:ben",
+            "Spend $500 on ads?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=ads["version"],
         )
     r, attempt = assistant_turn(api, "ben-test", "Clear out all my old tasks")
     token = attempt["token"]

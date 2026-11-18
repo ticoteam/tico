@@ -73,6 +73,8 @@ def test_the_catalog_names_aliases_and_pass_throughs():
         "brand",
         "thread",
         "message",
+        "calendar",
+        "growth",
     }
     assert (
         all(e["example"] and e["description"] for e in C.listing()) and C.listing("task")[0]["name"] == "task.created"

@@ -18,10 +18,11 @@ import re
 import secrets
 import sqlite3
 import tempfile
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from collections.abc import Iterable
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from itertools import islice
 from typing import Annotated
 from urllib.parse import quote, unquote, urlsplit
 
@@ -37,6 +38,7 @@ from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
+from .api_contract import api_v2, error
 from clients import bot_files as BF
 
 LOG = logging.getLogger("tico.files")
@@ -77,36 +79,6 @@ def raw_media(request, imported=False):
     """True for a bot's raw upload of a video or audio file. It streams to disk up to the server's upload limit."""
     return BF.is_media(raw_name(dict(request.query_params), imported))
 
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bot_files(
- id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
- identity TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '',
- locator TEXT NOT NULL, url TEXT, provider TEXT, current_version INTEGER NOT NULL DEFAULT 0,
- state TEXT NOT NULL DEFAULT 'ready', task_id TEXT, conversation_id TEXT,
- first_activity_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
- UNIQUE(bot_id, scope, identity));
-CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot_id, archived, last_activity_at, id);
-CREATE INDEX IF NOT EXISTS bot_files_task ON bot_files(task_id, archived, locator);
-CREATE TABLE IF NOT EXISTS bot_file_versions(
- file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,
- blob_id TEXT NOT NULL REFERENCES blobs(id), digest TEXT NOT NULL, source_digest TEXT,
- size INTEGER NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, commit_sha TEXT, repo_path TEXT,
- attempt_id TEXT, actor TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(file_id, version));
-CREATE TABLE IF NOT EXISTS bot_file_activity(
- id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES bot_files(id),
- actor TEXT NOT NULL, action TEXT NOT NULL, attempt_id TEXT, task_id TEXT, version INTEGER,
- digest TEXT, created_at TEXT NOT NULL, detail TEXT);
-CREATE INDEX IF NOT EXISTS bot_file_activity_file ON bot_file_activity(file_id, id);
-CREATE TRIGGER IF NOT EXISTS bot_file_activity_append_only BEFORE UPDATE ON bot_file_activity
- BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_activity_no_delete BEFORE DELETE ON bot_file_activity
- BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_versions_immutable BEFORE UPDATE ON bot_file_versions
- BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions
- BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END;
-"""
 
 # pinned / unpinned: a page put on or taken off a place (backend/cards.py), with the place in its detail.
 # reviewed: a verdict on one version from an answer to a review question (backend/file_reviews.py), in its detail.
@@ -157,6 +129,26 @@ def is_file_id(value):
 def series(bot, relative):
     """The stable identity of a published path: the same report edited is the same file."""
     return "blob-series:" + hashlib.sha256((bot + "\0" + relative).encode()).hexdigest()[:20]
+
+
+def once_per_content(entries):
+    """A task's files as a reader sees them: two that hold the same bytes now are one file. A bot that writes its report
+    into its checkout's reports/ folder (published after its turn, reports/2026-11-17-how-it-works.md) and also attaches
+    it by name (`tico task attach`) has put the same bytes on the task twice. The one attached by name stays, else the
+    newest. `entries` are (row, digest, item) in the order shown, digest None for one that is never folded (archived);
+    the answer is the items kept, in that order."""
+    kept, at = [], {}
+    for row, digest, item in entries:
+        if digest is None:
+            kept.append((row, item))
+        elif digest not in at:
+            at[digest] = len(kept)
+            kept.append((row, item))
+        elif str(row["identity"]).startswith("task-file:") and not str(kept[at[digest]][0]["identity"]).startswith(
+            "task-file:"
+        ):
+            kept[at[digest]] = (row, item)
+    return [item for _, item in kept]
 
 
 EARLIEST_CONTENT_TIME = "2000-01-01T00:00:00.000000Z"
@@ -245,6 +237,15 @@ def prime_visible(c, rows):
     restricted_page_rows(c, sorted(versions))
     privacy.prime_blobs(c, {v["blob_id"] for found in versions.values() for v in found})
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
+
+
+def visible_rows(c, auth, who, sql, params):
+    """Read and authorize file candidates in chunks, stopping when the caller has enough rows."""
+    cursor = c.execute(sql, params)
+    cache = {}
+    while rows := cursor.fetchmany(50):
+        prime_visible(c, rows)
+        yield from (row for row in rows if file_visible(c, auth, who, row, cache))
 
 
 def asked_to_read(c, who, file_id, version=None, cache=None, auth=None):
@@ -582,6 +583,41 @@ def version_refusal(c, auth, who, row, number, v):
     if not v or row["locator"] != "tico_blob":
         return "no_version"
     return None
+
+
+def page_refs_readable(c, auth, who, refs):
+    """Whether `who` may read every file `refs` name, each at the version named (else its current one), through the
+    read check the file's own route makes (version_refusal): a page's audience, the task, chat or bot it lives on, its
+    blob and the run that made it. A page ref that names no stored version is refused. page_ref_denials is the cheap
+    check for a page that reads as the task naming it does; this one is for a page a task shows that may live
+    elsewhere (an OK's page from an earlier stage, what Flow's opinion reads)."""
+    if page_ref_denials(c, auth, who, refs):
+        return False
+    at = {}
+    for ref in refs:
+        if isinstance(ref, str) and ref.startswith("page:"):
+            file_id, _, version = ref[len("page:") :].partition("@")
+            at[file_id] = int(version) if version.isdigit() else None
+    for file_id in page_references(refs, c) - set(at):
+        at[file_id] = None
+    for file_id, version in at.items():
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
+        if row is None:
+            return False
+        number = row["current_version"] if version is None else version
+        if version_refusal(c, auth, who, row, number, stored_version(c, file_id, number)):
+            return False
+    return True
+
+
+def readable_earlier(c, auth, who, entry):
+    """A `to_leave` entry with the page it shows from an earlier stage (task_calls.earlier_page) taken out unless
+    `who` may read it in full (page_refs_readable): a reader who may not open it gets no reference to it, and the OK
+    shows the task's text. The entry is changed in place and returned."""
+    earlier = (entry or {}).get("earlier") if isinstance(entry, dict) else None
+    if earlier and not page_refs_readable(c, auth, who, earlier["source"]):
+        del entry["earlier"]
+    return entry
 
 
 def page_event_readable(c, auth, who, target, detail):
@@ -1139,28 +1175,75 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     return copy, file_version(c, task_id, copy, current)
 
 
-def file_added(c, who, task_id, item, number, poster=None):
-    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
-    the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
+def file_added(c, who, task_id, item, number, poster=None, *, document=None):
+    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line (a
+    "document" line naming it for a task's document), the task.file audit event and the preview worker's row. The
+    caller wakes the media worker once it commits."""
     provenance = {"file": item["id"], "version": number}
     if pages := page_references(item["id"], c):
         provenance["page_files"] = sorted(pages)
-    name, data = H.sourced_text(item["name"], [provenance], provenance)
-    H._task_event(c, task_id, who.actor, "file", None, name, "" if number == 1 else f"version {number}", data=data)
+    name, data = H.sourced_text(document or item["name"], [provenance], provenance)
+    note = "" if number == 1 else f"version {number}"
+    H._task_event(c, task_id, who.actor, "document" if document else "file", None, name, note, data=data)
     H.event(c, who.actor, "task.file", task_id, {**data, "name": name, "size": item["size"]})
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
+
+
+def _review_view(c, actor, note, comment_id):
+    if comment_id and not privacy.message_readable(c, actor, H.message(c, comment_id)):
+        note = comment_id = None
+    return {"note": note, "comment_id": comment_id}
 
 
 def version_review(c, fid, number, *, actor):
     """A file version's note and the comment it came with, as far as `actor` may read them."""
     row = c.execute("SELECT * FROM task_file_reviews WHERE file_id=? AND version=?", (fid, number)).fetchone()
-    comment_visible = row and (
-        not row["comment_id"] or privacy.message_readable(c, actor, H.message(c, row["comment_id"]))
+    return _review_view(c, actor, row["note"], row["comment_id"]) if row else {"note": None, "comment_id": None}
+
+
+TASK_UPLOAD_SERIES_SQL = (
+    "SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f JOIN bot_file_versions v "
+    "ON v.file_id=f.id AND v.version=f.current_version LEFT JOIN pages p ON p.file_id=f.id "
+    "WHERE f.task_id=? AND f.archived=0 AND v.name=? AND NOT EXISTS "
+    "(SELECT 1 FROM page_links l WHERE l.page_id=f.id AND l.target=? AND l.role NOT IN ('writer','related')) "
+    "ORDER BY f.last_activity_at DESC"
+)
+
+TASK_VERSIONS_SQL = (
+    "SELECT v.*,r.note,r.comment_id FROM json_each(?) ids JOIN bot_file_versions v ON v.file_id=ids.value "
+    "AND v.version>=CASE WHEN ? > 0 THEN coalesce((SELECT older.version FROM bot_file_versions older "
+    "WHERE older.file_id=ids.value ORDER BY older.version DESC LIMIT 1 OFFSET ?),0) ELSE 0 END "
+    "LEFT JOIN task_file_reviews r ON r.file_id=v.file_id AND r.version=v.version ORDER BY v.file_id,v.version DESC"
+)
+
+
+def task_file_versions(c, actor, file_ids, *, limit):
+    """Batch the latest version rows and their reviews for a task's visible files."""
+    if not file_ids:
+        return {}
+    rows = c.execute(TASK_VERSIONS_SQL, (json.dumps(sorted(set(file_ids))), limit, max(0, limit - 1))).fetchall()
+    H.prime_messages(c, {v["comment_id"] for v in rows if v["comment_id"]})
+    out = defaultdict(list)
+    for v in rows:
+        out[v["file_id"]].append({**dict(v), **_review_view(c, actor, v["note"], v["comment_id"])})
+    return out
+
+
+def task_listing_query(task_id, all_pages):
+    from . import page_links
+
+    membership, params = "f.task_id=?", (task_id,)
+    if all_pages:
+        membership = "f.id IN (" + page_links.TASK_FILE_IDS + ")"
+        params += ("task:" + task_id,) * 2
+    return (
+        "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "
+        "LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
+        "WHERE f.locator='tico_blob' AND f.current_version>0 AND "
+        + membership
+        + " ORDER BY f.last_activity_at DESC,f.id DESC",
+        params,
     )
-    return {
-        "note": row["note"] if comment_visible else None,
-        "comment_id": row["comment_id"] if comment_visible else None,
-    }
 
 
 def edit_file_version(c, auth, who, task_id, fid, number, body):
@@ -1256,22 +1339,9 @@ class Files:
             raise Problem("privacy", "This bot can no longer read the task for this turn", 403)
         return row["conversation_id"], H.message_task_id(message, conversation)
 
-    def target(self, c, who, bot, fields):
-        """(scope, task id, conversation id, attempt id) for a write. Never chosen by a parameter alone:
-        a task must be one this bot may see, and bot-wide is refused from inside a chat."""
-        attempt = (
-            who.attempt_id
-            if who.via == "assistant" or who.role == "bot" and not who.agent
-            else str(fields.get("attempt") or "")
-        )
-        if who.via == "assistant":
-            from .assistant import make_page_task
-
-            task = str(fields.get("task") or "").strip()
-            message = make_page_task(c, self.auth, who, task)
-            if fields.get("scope") not in (None, "", "task"):
-                raise Problem("validation", "Make page is filed on its task", 422)
-            return "task:" + task, task, message["conversation_id"], attempt
+    def write_turn(self, c, who, bot, fields):
+        """Validate the publishing turn before using its provenance, even when the file already exists."""
+        attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
         if attempt:
             request = c.execute(
                 "SELECT m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
@@ -1282,6 +1352,20 @@ class Files:
                 raise Problem("forbidden", "Make page publishes as the person who asked", 403)
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
         H._writer(c, self.actor_of(who, bot), task_id=turn_task, attempt_id=attempt)
+        return conversation, turn_task, attempt
+
+    def target(self, c, who, bot, fields):
+        """(scope, task id, conversation id, attempt id) for a write. Never chosen by a parameter alone:
+        a task must be one this bot may see, and bot-wide is refused from inside a chat."""
+        if who.via == "assistant":
+            from .assistant import make_page_task
+
+            task = str(fields.get("task") or "").strip()
+            message = make_page_task(c, self.auth, who, task)
+            if fields.get("scope") not in (None, "", "task"):
+                raise Problem("validation", "Make page is filed on its task", 422)
+            return "task:" + task, task, message["conversation_id"], who.attempt_id
+        conversation, turn_task, attempt = self.write_turn(c, who, bot, fields)
         task = str(fields.get("task") or "").strip()
         wanted = str(fields.get("scope") or "").strip()
         if wanted not in ("", "task", "bot"):
@@ -1386,33 +1470,47 @@ class Files:
         explicit_title=False,
         fid=None,
         modified=None,
+        existing_row=None,
+        version_actor=None,
+        version_time=None,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
-        file's id (for a caller that writes the file's id somewhere before the file exists). `modified` is when the
+        file's id (for a caller that writes the file's id somewhere before the file exists). `existing_row` continues
+        a page by its authorized id, independently of its storage bot and filename. `modified` is when the
         content last changed at its source (content_time): the file's activity time when it is new or changed, so a
         repository published for the first time lists by when each file was written, not by when it was copied. An
         unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when
         Tico copied the current version back to when that content was written."""
         now = H.now()
-        when = content_time(modified, now) or now
-        row, created = self.open_row(
-            c,
-            bot=bot,
-            scope=scope,
-            identity=identity,
-            title=title or name,
-            kind=BF.kind_of(name),
-            mime=mime,
-            locator="tico_blob",
-            task=task,
-            conversation=conversation,
-            now=when,
-            fid=fid,
+        when = version_time or content_time(modified, now) or now
+        row, created = (
+            (existing_row, False)
+            if existing_row is not None
+            else self.open_row(
+                c,
+                bot=bot,
+                scope=scope,
+                identity=identity,
+                title=title or name,
+                kind=BF.kind_of(name),
+                mime=mime,
+                locator="tico_blob",
+                task=task,
+                conversation=conversation,
+                now=when,
+                fid=fid,
+            )
         )
         last = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
-        changed = created or last is None or (source_digest or digest) != (last["source_digest"] or last["digest"])
+        changed = (
+            created
+            or last is None
+            or (source_digest or digest) != (last["source_digest"] or last["digest"])
+            or bool(version_actor and version_actor != last["actor"])
+            or bool(version_time and version_time != last["created_at"])
+        )
         version = row["current_version"]
         if changed:
             version += 1
@@ -1430,8 +1528,8 @@ class Files:
                     commit or None,
                     repo_path or None,
                     attempt or None,
-                    actor,
-                    now,
+                    version_actor or actor,
+                    version_time or now,
                 ),
             )
         action = "created" if created else "modified" if changed else "published"
@@ -1538,35 +1636,42 @@ class Files:
         fid, _ = self.attach_task(c, who, task_id, item, digest, bot)
         return fid
 
-    def attach_task(self, c, who, task_id, item, digest, bot):
-        """A visible file with the same task and display name continues its series."""
-        row = c.execute(
-            "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
-            "ON v.file_id=f.id AND v.version=f.current_version "
-            "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-            "ORDER BY f.last_activity_at DESC",
-            (task_id, item["name"]),
-        ).fetchall()
-        row = next((r for r in row if self.visible(c, who, r, {})), None)
-        created = row is None
-        legacy = None
-        if row is None:
-            legacy = c.execute(
-                "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
-                "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
-                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                "ORDER BY b.created_at DESC",
-                (task_id, item["name"], item["id"]),
-            ).fetchall()
-            legacy = next(
+    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
+        """Continue a writable series on this task unless it is linked here as a document.
+        A named document is passed as `file` after cleaning. With `series` off and no `file`, start a new series."""
+        row = file
+        if row is None and series:
+            from . import page_links
+
+            rows = c.execute(TASK_UPLOAD_SERIES_SQL, (task_id, item["name"], "task:" + task_id)).fetchall()
+            row = next(
                 (
-                    b
-                    for b in legacy
-                    if not page_ref_denials(c, self.auth, who, b["id"])
-                    and privacy.blob_readable(c, privacy.actor(who), b["id"])
+                    r
+                    for r in rows
+                    if self.visible(c, who, r, {}) and (not r["is_page"] or page_links.may_write(c, self.auth, who, r))
                 ),
                 None,
             )
+        created = row is None
+        legacy = None
+        if row is None:
+            if series:
+                found = c.execute(
+                    "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
+                    "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
+                    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
+                    "ORDER BY b.created_at DESC",
+                    (task_id, item["name"], item["id"]),
+                ).fetchall()
+                legacy = next(
+                    (
+                        b
+                        for b in found
+                        if not page_ref_denials(c, self.auth, who, b["id"])
+                        and privacy.blob_readable(c, privacy.actor(who), b["id"])
+                    ),
+                    None,
+                )
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
             c.execute(
                 "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
@@ -1640,60 +1745,82 @@ class Files:
                     (*[media[key] for key in FIELDS], fid, number),
                 )
 
-    def task_listing(self, c, who, task_id):
+    def task_listing(self, c, who, task_id, *, all_pages=False):
         self.auth.task(c, who, task_id)
-        out = []
-        for row in c.execute(
-            "SELECT * FROM bot_files WHERE task_id=? AND locator='tico_blob' ORDER BY last_activity_at DESC", (task_id,)
-        ):
-            if not self.visible(c, who, row, {}):
+        from . import page_links
+
+        limit = 200
+        sql, params = task_listing_query(task_id, all_pages)
+        candidates = visible_rows(c, self.auth, who, sql, params)
+        rows = list(islice(candidates, limit) if all_pages else candidates)
+        actor = privacy.actor(who)
+        histories = task_file_versions(c, actor, [r["id"] for r in rows], limit=50 if all_pages else 0)
+        if all_pages:
+            page_links.prime(c, [row for row in rows if row["page_id"]])
+        listed = []
+        for row in rows:
+            fid = row["id"]
+            history = histories.get(fid, [])
+            if not history:
                 continue
-            versions = []
-            for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (row["id"],)):
-                fields = dict(v)
-                versions.append(
+            current = next((v for v in history if v["version"] == row["current_version"]), history[0])
+            is_page = bool(row["page_id"])
+            archived = bool(row["archived"] or row["page_archived"])
+            details = {}
+            if all_pages and is_page:
+                details = {
+                    "title": row["title"],
+                    "links": page_links.links_of(c, self.auth, who, fid),
+                    "writers": page_links.writers_of(c, fid),
+                }
+            listed.append(
+                (
+                    row,
+                    None if archived or is_page else current["digest"],
                     {
-                        "n": v["version"],
-                        "size": v["size"],
-                        "mime": v["mime"],
-                        "sha256": v["digest"],
-                        "created_at": v["created_at"],
-                        "by": v["actor"],
-                        **version_review(c, row["id"], v["version"], actor=privacy.actor(who)),
-                        **{k: fields.get(k) for k in ("width", "height", "duration_ms", "media_state")},
-                        "poster_url": f"/api/v2/files/{row['id']}/poster?v={v['version']}"
-                        if fields.get("poster_blob_id")
-                        else None,
-                        "thumb_url": f"/api/v2/files/{row['id']}/thumb?v={v['version']}"
-                        if fields.get("thumb_blob_id")
-                        else None,
-                        "url": f"/api/v2/files/{row['id']}?v={v['version']}",
-                    }
-                )
-            if versions:
-                name = c.execute(
-                    "SELECT name FROM bot_file_versions WHERE file_id=? AND version=?",
-                    (row["id"], row["current_version"]),
-                ).fetchone()[0]
-                out.append(
-                    {
-                        "id": row["id"],
-                        "name": name,
+                        "id": fid,
+                        **details,
+                        "name": current["name"],
                         "mime": row["mime"],
                         "current_version": row["current_version"],
-                        "archived": bool(row["archived"]),
-                        "versions": versions,
-                    }
+                        "archived": archived,
+                        "versions": [
+                            {
+                                "n": v["version"],
+                                "size": v["size"],
+                                "mime": v["mime"],
+                                "sha256": v["digest"],
+                                "created_at": v["created_at"],
+                                "by": v["actor"],
+                                **{
+                                    k: v[k]
+                                    for k in ("note", "comment_id", "width", "height", "duration_ms", "media_state")
+                                },
+                                "poster_url": f"/api/v2/files/{fid}/poster?v={v['version']}"
+                                if v["poster_blob_id"]
+                                else None,
+                                "thumb_url": f"/api/v2/files/{fid}/thumb?v={v['version']}"
+                                if v["thumb_blob_id"]
+                                else None,
+                                "url": f"/api/v2/files/{fid}?v={v['version']}",
+                            }
+                            for v in history
+                        ],
+                    },
                 )
-        for b in c.execute(
-            "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
-            "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
+            )
+        out = once_per_content(listed)
+        assets = c.execute(
+            "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id,r.note,r.comment_id "
+            "FROM task_assets a JOIN blobs b ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id "
+            "LEFT JOIN task_file_reviews r ON r.file_id=b.id AND r.version=1 WHERE a.task_id=? "
             "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)",
             (task_id,),
-        ):
-            if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(
-                c, privacy.actor(who), b["id"]
-            ):
+        )
+        for b in assets:
+            if all_pages and len(out) >= limit:
+                break
+            if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(c, actor, b["id"]):
                 continue
             out.append(
                 {
@@ -1710,7 +1837,7 @@ class Files:
                             "sha256": b["digest"],
                             "created_at": b["created_at"],
                             "by": b["owner"],
-                            **version_review(c, b["id"], 1, actor=privacy.actor(who)),
+                            **_review_view(c, actor, b["note"], b["comment_id"]),
                             **{k: b[k] for k in ("width", "height", "duration_ms", "media_state")},
                             "poster_url": f"/api/v2/files/{b['id']}/poster?v=1" if b["poster_blob_id"] else None,
                             "thumb_url": f"/api/v2/files/{b['id']}/thumb?v=1" if b["thumb_blob_id"] else None,
@@ -1742,16 +1869,86 @@ class Files:
             return fields, data
         return dict(query), raw
 
-    def publish(self, request, who, fields, data, *, imported=False, extra=None, extra_body=None):
-        """Bytes into the blob store, then one idempotent transaction that lists them. `extra(c, row, changed)` adds
-        to the same write (a page's row, backend/pages.py) and its answer; `extra_body` is what it adds to the
-        request a retry must repeat."""
+    def page_task(self, c, who, task, role):
+        if not task:
+            if role:
+                raise Problem("validation", "as requires a task", 422)
+            return ""
+        task_id = self.auth.resolve_task(c, who, task)
+        if role:
+            from .task_reads import comment_rights
+
+            comment_rights(c, self.auth, who, task_id)
+        else:
+            self.auth.task(c, who, task_id)
+        return task_id
+
+    def page_for_role(self, c, who, task, role):
+        candidates = c.execute(
+            "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
+            "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
+            ("task:" + task, role),
+        ).fetchall()
+        visible = [r for r in candidates if self.visible(c, who, r, {})]
+        if len(visible) > 1:
+            raise Problem(
+                "ambiguous", "Choose which page to update", 409, extra={"pages": sorted(r["id"] for r in visible)}
+            )
+        return visible[0] if visible else None
+
+    def require_page_writer(self, c, who, row):
+        from . import page_links
+
+        if not row or row["state"] == "deleted" or not self.visible(c, who, row, {}):
+            raise Problem("not_found", "Page not found", 404)
+        if not page_links.may_write(c, self.auth, who, row):
+            raise Problem("forbidden", "Only page writers may write a version", 403)
+
+    def publish(
+        self,
+        request,
+        who,
+        fields,
+        data,
+        *,
+        imported=False,
+        extra=None,
+        extra_body=None,
+        page_publish=False,
+        task_role="",
+    ):
+        """Bytes into the blob store, then one idempotent transaction that lists them. `extra` adds a page's row,
+        links and response to the same write. `extra_body` is what a retry must repeat."""
         fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items()}
         failed = str(fields.get("sync") or "") == "failed"
         staged = isinstance(data, Staged)
         size = data.size if staged else len(data)
+        human_page = page_publish and who.role in ("human", "owner") and who.via != "assistant"
+        requested_task = str(fields.get("task") or "").strip()
         with self.store.read() as c:
-            bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
+            if human_page:
+                from . import assistant
+
+                linked_task = self.page_task(c, who, requested_task, task_role)
+                existing = None
+                if fields.get("page"):
+                    existing = c.execute(
+                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
+                        (str(fields["page"]),),
+                    ).fetchone()
+                    self.require_page_writer(c, who, existing)
+                elif task_role:
+                    existing = self.page_for_role(c, who, linked_task, task_role)
+                if existing is not None:
+                    bot = existing["bot_id"]
+                else:
+                    info = assistant.availability(c, self.store.settings, who)
+                    if not info["available"]:
+                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+                    self.auth.require_write(c, who, info["bot"])
+                    bot = info["bot"]
+            else:
+                bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
             if who.via == "assistant":
                 self.target(c, who, bot, fields)
                 if extra is None:
@@ -1768,7 +1965,7 @@ class Files:
             else:
                 name = str(fields.get("name") or relative.rsplit("/", 1)[-1])
                 identity = series(bot, relative or name)
-                if who.via == "assistant":
+                if who.via == "assistant" or page_publish and who.role in ("human", "owner"):
                     # A filename must not overwrite another person’s page from the shared Assistant.
                     identity += ":person:" + who.actor
             name, mime = BF.check_name(name)
@@ -1795,23 +1992,74 @@ class Files:
         }
 
         def work(c):
-            scope, task, conversation, attempt = self.target(c, who, bot, fields)
-            existing = self.find(c, bot, scope, identity)
-            if existing and who.via == "assistant" and not self.visible(c, who, existing, {}):
-                raise Problem("not_found", "Page not found", 404)
+            existing_page = None
+            page_who, linked_task = who, ""
+            if page_publish and who.role == "runner":
+                run = str(fields.get("attempt") or "")
+                if not run:
+                    raise Problem("forbidden", "A computer publishes a page for one of its turns", 403)
+                self.turn_context(c, who, bot, run)
+                page_who = Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=run)
+            if page_publish:
+                linked_task = self.page_task(c, page_who, requested_task, task_role)
+                fid = str(fields.get("page") or "")
+                if fid:
+                    existing_page = c.execute(
+                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?", (fid,)
+                    ).fetchone()
+                    self.require_page_writer(c, page_who, existing_page)
+                elif task_role:
+                    existing_page = self.page_for_role(c, page_who, linked_task, task_role)
+                    if existing_page is not None:
+                        self.require_page_writer(c, page_who, existing_page)
+            if existing_page is not None:
+                # Preserve the original file's privacy scope even when this version is written through another task.
+                scope, task, conversation = (
+                    existing_page["scope"],
+                    existing_page["task_id"],
+                    existing_page["conversation_id"],
+                )
+                attempt = who.attempt_id
+                if who.role in ("bot", "runner"):
+                    turn_conversation, _, attempt = self.write_turn(c, who, bot, fields)
+                    if (
+                        attempt
+                        and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt))
+                        and (not turn_conversation or scope != "conversation:" + turn_conversation)
+                    ):
+                        raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
+            elif human_page:
+                task = linked_task or None
+                scope, conversation, attempt = ("task:" + task if task else "bot"), None, ""
+            else:
+                scope, task, conversation, attempt = self.target(
+                    c, who, bot, {**fields, "task": linked_task} if page_publish else fields
+                )
+            file_identity = identity
+            if page_publish and task_role and existing_page is None:
+                # A role without a readable page starts its own series, even when the filename is already in use.
+                file_identity = "document:" + new_id()
+            existing = existing_page if existing_page is not None else self.find(c, bot, scope, file_identity)
+            if existing and page_publish and existing_page is None:
+                if c.execute("SELECT 1 FROM pages WHERE file_id=?", (existing["id"],)).fetchone():
+                    self.require_page_writer(c, page_who, existing)
+                elif who.via == "assistant" and not self.visible(c, who, existing, {}):
+                    raise Problem("not_found", "Page not found", 404)
             stored_task = existing["task_id"] if existing else None
             H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
             with H.refusal_task(task or stored_task):
-                return write_file(c, scope, task, conversation, attempt)
+                return write_file(
+                    c, scope, task, conversation, attempt, existing_page, file_identity, page_who, linked_task
+                )
 
-        def write_file(c, scope, task, conversation, attempt):
+        def write_file(c, scope, task, conversation, attempt, existing_page, file_identity, page_who, linked_task):
             actor = self.actor_of(who, bot)
             if failed:
                 row, created = self.open_row(
                     c,
                     bot=bot,
                     scope=scope,
-                    identity=identity,
+                    identity=file_identity,
                     title=str(fields.get("title") or name),
                     kind=BF.kind_of(name),
                     mime=mime,
@@ -1831,7 +2079,7 @@ class Files:
                 task=task,
                 conversation=conversation,
                 attempt=attempt,
-                identity=identity,
+                identity=file_identity,
                 title=str(fields.get("title") or ""),
                 name=name,
                 mime=mime,
@@ -1845,6 +2093,9 @@ class Files:
                 repo_path=relative,
                 explicit_title=bool(fields.get("title")),
                 modified=fields.get("modified"),
+                existing_row=existing_page,
+                version_actor=str(fields.get("written_by") or "") if page_publish else None,
+                version_time=str(fields.get("written_at") or "") if page_publish else None,
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:
@@ -1860,7 +2111,7 @@ class Files:
                 file_library.retitle(c, row["id"], row["title"])
             result = {"file": self.brief(c, row), "created": created, "changed": changed, "synced": True}
             if extra:
-                result.update(extra(c, row, changed) or {})
+                result.update(extra(c, row, changed, page_who, linked_task) or {})
             return result
 
         return self.write(request, who, body, work)
@@ -2021,6 +2272,8 @@ class Files:
             raise Problem("forbidden", "Only the owner or a bot administrator manages a bot's files", 403)
 
     def edit(self, request, fid, body):
+        from . import task_pages
+
         who = request.state.identity
 
         def work(c):
@@ -2043,6 +2296,7 @@ class Files:
                 c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), stored["task_id"]))
                 self.activity(c, fid, who.actor, "archived", task=stored["task_id"])
                 removed_event(c, stored["task_id"], who.actor, fid, stored["title"])
+                task_pages.submit_linked(c, fid, None, who.actor)
                 H.event(c, who.actor, "task.file_archived", stored["task_id"], {"file": fid})
                 return {"file": {"id": fid, "archived": True}}
             if not is_file_id(fid) and not stored:
@@ -2084,6 +2338,7 @@ class Files:
                             (task["task_id"], published["id"]),
                         )
                         self.activity(c, published["id"], who.actor, "archived", task=task["task_id"])
+                        task_pages.submit_linked(c, published["id"], None, who.actor)
                     H.event(c, who.actor, "task.file_archived", task["task_id"], {"file": fid})
                 return {"file": {"id": fid, "archived": True}}
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -2124,6 +2379,8 @@ class Files:
             c.execute(
                 "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), fid)
             )
+            if "archived" in fields and not row["archived"]:
+                task_pages.submit_linked(c, fid, None, actor)
             if "title" in fields:
                 file_library.retitle(c, fid, fields["title"])
             if body.promote:
@@ -2469,12 +2726,40 @@ class Files:
         return serve(request, self.blobs, blob, version is not None)
 
 
+MENTIONS_DESCRIPTION = (
+    "Turns the file paths and names a bot wrote (in a message, a page, a report) into its files, for links. "
+    "A value with a folder (`reports/pack.docx`, `/home/bot/checkout/reports/pack.docx`) matches the file published "
+    "from that path in the bot's checkout, else the one file whose path it ends with or that ends with it. A bare name "
+    "(`pack.docx`) matches only when exactly one of the bot's files has that name. Only the files the caller may see "
+    "count, by each file's current version; archived files and links never match. A value that is not exactly one "
+    "file is absent from `files`: none, two or more (never a guess), or one the caller may not read all look the same. "
+    "Tico's web app also tries a bare name inside a folder named earlier in the same paragraph; this route does not, "
+    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` "
+    "empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the caller may not see, "
+    "422 more than 60 m values."
+)
+
+
 def install_files(app, store, auth, blobs, mutate):
     from . import file_reviews
 
     file_reviews.AUTH = auth  # an OK's giver is checked against the file at the OK, its use and its verdict
     files = Files(app, store, auth, blobs, mutate)
     app.state.files = files
+
+    # Before the library's DELETE /api/v2/files/{fid}: the API document lists a path's methods in this order.
+    @app.patch(
+        "/api/v2/files/{fid}",
+        **api_v2(
+            "Files",
+            "editBotFile",
+            "Change a file's title or task, remove it from the list (archive) or promote it bot-wide (owner and bot administrators)",
+            "BotFileResult",
+        ),
+    )
+    def edit(request: Request, fid: str, body: FileEdit):
+        return files.edit(request, fid, body)
+
     # Before media.py's GET /api/v2/files/{bid}, which would otherwise take /api/v2/files/search.
     file_library.install_library(app, store, auth, files)
     from .pages import install_pages
@@ -2502,7 +2787,16 @@ def install_files(app, store, auth, blobs, mutate):
         }
     }
 
-    @app.post("/api/v2/files/uploads", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/files/uploads",
+        **api_v2(
+            "Files",
+            "uploadBotFile",
+            "A bot (or its computer) publishes a file: raw bytes with the fields in the query, or JSON text/content_base64",
+            "BotFileResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def upload(request: Request):
         """A bot (or the computer running its turn) publishes a file. Raw bytes with the fields in
         the query, or JSON with text or content_base64. Up to 25 MB raw, 2 MB as JSON. Video and audio
@@ -2514,7 +2808,16 @@ def install_files(app, store, auth, blobs, mutate):
         )
         return await asyncio.to_thread(files.publish, request, request.state.identity, fields, data)
 
-    @app.post("/api/v2/files/imports", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/files/imports",
+        **api_v2(
+            "Files",
+            "importFile",
+            "Bytes the bot's computer copied from an S3 object; a changed etag is a new version",
+            "BotFileResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def imported(request: Request):
         """Bytes the bot's computer copied from an S3 object (`tico file import`), with its `source`
         (s3://bucket/key) and `etag`. A changed etag is a new version. Video and audio stream, as uploads do."""
@@ -2529,7 +2832,15 @@ def install_files(app, store, auth, blobs, mutate):
             raise Problem("validation", "Say the s3:// source", 422)
         return await asyncio.to_thread(files.publish, request, request.state.identity, fields, data, imported=True)
 
-    @app.post("/api/v2/files/links")
+    @app.post(
+        "/api/v2/files/links",
+        **api_v2(
+            "Files",
+            "addFileLink",
+            "Register or touch an https document (Google, Notion, Figma, any site); Tico keeps the address only",
+            "BotFileResult",
+        ),
+    )
     def links(request: Request, body: LinkBody):
         """Register or touch an https document (Google, Notion, Figma, anything). Tico stores the
         address only: it never fetches the document or holds a provider token."""
@@ -2540,7 +2851,15 @@ def install_files(app, store, auth, blobs, mutate):
         """When files the bot's computer already published were written, by digest and without their bytes."""
         return files.dates(request, body)
 
-    @app.get("/api/v2/bots/{bot}/files")
+    @app.get(
+        "/api/v2/bots/{bot}/files",
+        **api_v2(
+            "Files",
+            "listBotFiles",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) narrow the same list",
+            "BotFileList",
+        ),
+    )
     def bot_files(
         request: Request,
         bot: str,
@@ -2551,17 +2870,31 @@ def install_files(app, store, auth, blobs, mutate):
     ):
         return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
 
-    @app.get("/api/v2/bots/{bot}/files/mentions")
+    @app.get(
+        "/api/v2/bots/{bot}/files/mentions",
+        **api_v2(
+            "Files",
+            "resolveBotFileMentions",
+            "The bot's files that the paths and names it wrote name (m, up to 60): each name that is exactly one file the caller may see, keyed by the name as sent; any other name is absent",
+            "BotFileMentions",
+            description=MENTIONS_DESCRIPTION,
+            parameters={
+                "m": "A path or file name as the bot wrote it; repeat for each (m=a&m=b), at most 60. Values are "
+                "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
+                "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
+            },
+            responses={"404": error("not_found: no such bot, or one the caller may not see")},
+        ),
+    )
     def bot_file_mentions(
         request: Request, bot: str, m: Annotated[list[str] | None, Query(max_length=MENTIONS_MAX)] = None
     ):
         return files.mentions(request.state.identity, bot, m or [])
 
-    @app.patch("/api/v2/files/{fid}")
-    def edit(request: Request, fid: str, body: FileEdit):
-        return files.edit(request, fid, body)
-
-    @app.patch("/api/v2/files/{fid}/versions/{number}")
+    @app.patch(
+        "/api/v2/files/{fid}/versions/{number}",
+        **api_v2("Files", "editFileVersion", "Edit a version's note or question as its author", "VersionReview"),
+    )
     def edit_version(request: Request, fid: str, number: int, body: M.FileVersionEdit):
         who = request.state.identity
 
@@ -2636,20 +2969,45 @@ def install_files(app, store, auth, blobs, mutate):
             ),
         )
 
-    @app.get("/api/v2/files/{fid}/activity")
+    @app.get(
+        "/api/v2/files/{fid}/activity",
+        **api_v2("Files", "listFileActivity", "A file's append-only activity, newest first", "FileActivity"),
+    )
     def activity(request: Request, fid: str):
         return files.activity_log(request.state.identity, fid)
 
-    @app.get("/api/v2/files/{fid}/info")
+    @app.get(
+        "/api/v2/files/{fid}/info",
+        **api_v2(
+            "Files",
+            "getBotFile",
+            "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+            "BotFileResult",
+        ),
+    )
     def info(request: Request, fid: str):
         return files.info(request.state.identity, fid)
 
-    @app.get("/api/v2/files/{fid}/versions")
+    @app.get(
+        "/api/v2/files/{fid}/versions",
+        **api_v2("Files", "listFileVersions", "A file's versions, newest first", "FileVersions"),
+    )
     def versions(request: Request, fid: str):
         return files.versions(request.state.identity, fid)
 
     @app.head("/api/v2/files/{fid}/versions/{number}", include_in_schema=False)
-    @app.get("/api/v2/files/{fid}/versions/{number}")
+    @app.get(
+        "/api/v2/files/{fid}/versions/{number}",
+        **api_v2(
+            "Files",
+            "getFileVersion",
+            "The bytes of one version (a download, never a storage address)",
+            answer={
+                "description": "The file's bytes (application/octet-stream, sent as an attachment)",
+                "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+            },
+        ),
+    )
     def version_bytes(request: Request, fid: str, number: int):
         return files.serve(request.state.identity, fid, number, request=request)
 

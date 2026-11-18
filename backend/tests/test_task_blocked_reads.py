@@ -1,11 +1,10 @@
 """What the screens read of a dependency (backend/task_depends.py, part 3 of "A blocked task shows as Blocked, never
 Snoozed"): a board row says which tasks block it (`blocked_by`) and which it blocks (`blocks`), the task's relations
-say since when, and a person who owns a blocker reads "Blocks #307, #308" in their Needs you. No list says Snoozed for
-a blocked task."""
+say since when, and a blocker a person owns is in Tasks, not their Needs you (nothing is asked of them). No list says
+Snoozed for a blocked task."""
 
 import pytest
 
-from backend import task_depends as D
 from backend import task_engine as E
 from backend import task_reads
 from backend import task_relations as TR
@@ -42,19 +41,15 @@ def rows(c, *ids, visible_sql="1"):
     return {row["id"]: row for row in task_reads.brief(c, found, visible_sql)}
 
 
-def ref(c, task_id):
-    return D.ref(E.task(c, task_id))
-
-
 def test_a_board_row_names_the_tasks_that_block_it_and_those_it_blocks(c):
     build(c)
     blocker, blocked, other = task(c, "Part 1"), task(c, "Part 2"), task(c, "Part 3")
     TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     read = rows(c, blocker, blocked, other)
     number = E.task(c, blocker)["number"]
-    assert read[blocked].get("blocked_by", []) == [{"id": blocker, "number": number}]
+    assert read[blocked].get("blocked_by", []) == [{"id": blocker, "number": number, "label": None, "title": "Part 1"}]
     assert read[blocked].get("blocks", []) == []
-    assert read[blocker].get("blocks", []) == [{"id": blocked, "number": E.task(c, blocked)["number"]}]
+    assert read[blocker].get("blocks", []) == [{"id": blocked, "number": E.task(c, blocked)["number"], "label": None}]
     assert read[blocker].get("blocked_by", []) == []
     # A row with no dependency carries neither field: a 500-row list stays inside its byte budget.
     assert "blocked_by" not in read[other] and "blocks" not in read[other]
@@ -72,7 +67,8 @@ def test_a_reader_who_may_not_open_the_other_end_is_not_told_which_task_it_is(c)
     TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     hidden = f"id <> '{blocker}'"
     read = rows(c, blocked, visible_sql=hidden)
-    assert read[blocked].get("blocked_by", []) == [{"id": None, "number": None}]  # still blocked: the mark stays
+    hidden_row = {"id": None, "number": None, "label": None, "title": None}
+    assert read[blocked].get("blocked_by", []) == [hidden_row]  # still blocked: the mark stays, nothing names it
     read = rows(c, blocker, visible_sql=f"id <> '{blocked}'")
     assert read[blocker].get("blocks", []) == []
 
@@ -87,49 +83,18 @@ def test_a_dependency_says_since_when_from_both_ends(c):
     assert [e["since"] for e in both[blocker]["depends_on"]] == [since]
 
 
-def test_a_person_who_owns_a_blocker_reads_blocks_in_needs_you(c):
+def test_a_blocker_a_person_owns_is_in_nobodys_needs_you_and_neither_are_the_tasks_it_blocks(c):
+    """Its row says what it blocks (`blocks`); Needs you holds only what is asked of a person."""
     build(c)
     mine = task(c, "Write the copy", "general", assignee=X.ANA)
     first, second = task(c, "Part 2"), task(c, "Part 3")
     TR.relate(c, X.ANA, first, mine, "depends_on")
-    entries = [e for e in W.needs(c, X.ANA) if e.get("task_id") == mine]
-    assert [e["kind"] for e in entries] == ["task"]
-    assert entries[0]["line"].endswith(f"Blocks {ref(c, first)}.")
-    assert entries[0]["blocks"] == [ref(c, first)]
     TR.relate(c, X.ANA, second, mine, "depends_on")
-    entries = [e for e in W.needs(c, X.ANA) if e.get("task_id") == mine]
-    assert entries[0]["line"].endswith(f"Blocks {ref(c, first)}, {ref(c, second)}.")
-    # The blocked tasks are not in anyone's list, and nothing in it says Snoozed.
+    assert rows(c, mine)[mine]["blocks"]
     everyone = W.needs_by_person(c)
     listed = [e for items in everyone.values() for e in items]
-    assert not any(e.get("task_id") in (first, second) for e in listed)
-    assert not any("Snoozed" in (e.get("line") or "") for e in listed)
-    assert everyone[X.ANA] == W.needs(c, X.ANA)
-
-
-def test_a_person_blocker_that_is_not_their_turn_still_shows_blocks(c):
-    """A bot set the blocker aside, so its own work is out of the owner's list; they still read that it holds others
-    up."""
-    build(c)
-    mine = task(c, "Write the copy", "general", assignee=X.ANA)
-    first = task(c, "Part 2")
-    TR.relate(c, X.ANA, first, mine, "depends_on")
-    row = E.task(c, mine)
-    E.snooze(c, mine, B, "Vendor replies by Nov 14", "2026-11-14T00:00:00.000000Z", row["version"])
-    entries = [e for e in W.needs(c, X.ANA) if e.get("task_id") == mine]
-    assert [(e["kind"], e["line"], e["missing"]) for e in entries] == [("task", f"Blocks {ref(c, first)}.", [])]
-
-
-def test_a_blocker_owned_by_a_bot_or_itself_blocked_lists_no_blocks(c):
-    build(c)
-    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
-    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
-    assert not any("Blocks" in (e.get("line") or "") for e in W.needs(c, X.ANA))
-    # A person's blocker that is itself blocked is not theirs to move: the end of the chain is.
-    mine = task(c, "Write the copy", "general", assignee=X.ANA)
-    TR.relate(c, X.ANA, task(c, "Part 3"), mine, "depends_on")
-    TR.relate(c, X.ANA, mine, blocker, "depends_on")
-    assert not any(e.get("task_id") == mine for e in W.needs(c, X.ANA))
+    assert not any(e.get("task_id") in (mine, first, second) for e in listed)
+    assert not any("Snoozed" in (e.get("line") or "") or "Blocks" in (e.get("line") or "") for e in listed)
 
 
 def test_a_blocked_task_a_bot_snoozed_is_listed_as_blocked_never_snoozed(c):
@@ -154,9 +119,62 @@ def test_a_blocked_task_a_bot_snoozed_is_listed_as_blocked_never_snoozed(c):
     assert read[asleep]["snoozed"] is True
     # Its line is the dependency's, in the row and in the task's own read, never the snooze's why.
     turn = read[blocked]["turn"]
-    assert (turn["state"], turn["line"]) == (W.TASKS, f"Blocked by {ref(c, blocker)} Part 1, in Build")
+    assert (turn["state"], turn["line"]) == (W.TASKS, "Blocked by Part 1, in Build")
     assert [w.state for w in W.waiting_on(c, blocked)] == [W.TASKS]
     # Once the blocker ends, the snooze that is still open sets it aside again.
     E.move(c, blocker, E.DONE, X.ANA, "Finished")
     assert blocked in listed("only") and rows(c, blocked)[blocked]["snoozed"] is True
     assert W.waiting_on(c, blocked)[0].state == W.SNOOZED
+
+
+def test_a_blocker_is_named_by_its_label_or_by_its_title_never_by_its_id(c):
+    """A person reads "Blocked by O561 Write the launch post" or, for a task with no number, its title alone: a raw id
+    ("7a0009f1") says nothing to them. The row carries the label and title for the card's link to the blocker."""
+    build(c)
+    c.execute("UPDATE pipelines SET prefix='O' WHERE id='eng'")
+    numbered = task(c, "Write the launch post")
+    plain = task(c, "Call the printer", "general", assignee=X.ANA)
+    blocked = task(c, "Ship the launch")
+    TR.relate(c, X.ANA, blocked, numbered, "depends_on")
+    TR.relate(c, X.ANA, blocked, plain, "depends_on")
+    label = f"O{E.task(c, numbered)['number']}"
+    assert [w.line for w in W.waiting_on(c, blocked)] == [
+        f"Blocked by {label} Write the launch post, in Build",
+        "Blocked by Call the printer, in To do",
+    ]
+    assert not any(plain[:8] in w.line for w in W.waiting_on(c, blocked))
+    read = rows(c, blocked, numbered)
+    assert [(d["label"], d["title"]) for d in read[blocked]["blocked_by"]] == [
+        (label, "Write the launch post"),
+        (None, "Call the printer"),
+    ]
+    assert read[numbered]["blocks"] == [
+        {"id": blocked, "number": E.task(c, blocked)["number"], "label": f"O{E.task(c, blocked)['number']}"}
+    ]
+
+
+def test_a_page_of_blocked_rows_reads_the_same_statements_however_many_blockers(c):
+    """A board page's dependency lines ("Blocked by #304 ..., in Build") and relations ("#304 · Build") are read for
+    the whole page at once: on the General board each blocker cost two more statements per row before."""
+    build(c)
+
+    def statements(n):
+        blocked = [task(c, f"Waits {n}-{i}") for i in range(n)]
+        for i, tid in enumerate(blocked):
+            TR.relate(c, X.ANA, tid, task(c, f"Blocker {n}-{i}"), "depends_on")
+        found, seen = [dict(H.task(c, tid)) for tid in blocked], []
+        c.set_trace_callback(seen.append)
+        try:
+            read = {row["id"]: row for row in task_reads.brief(c, found, "1")}
+            relations = TR.grouped(c, blocked)
+        finally:
+            c.set_trace_callback(None)
+        for tid in blocked:
+            assert read[tid]["turn"]["line"].startswith("Blocked by ") and read[tid]["turn"]["line"].endswith(
+                ", in Build"
+            )
+            (dep,) = relations[tid]["depends_on"]
+            assert dep["stage"] == "Build" and dep["number"] == E.task(c, dep["id"])["number"]
+        return len(seen)
+
+    assert statements(8) == statements(2)

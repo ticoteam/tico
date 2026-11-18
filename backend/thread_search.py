@@ -1,6 +1,6 @@
 """Full-text search over thread messages: SQLite FTS5, kept in step with `messages` by triggers.
 
-A message is indexed while it has text, is not deleted, and is not a carrier (a keeper notice that starts a second
+A message is indexed while it has text, is not deleted, and is not a carrier (a Tico notice that starts a second
 bot's run, `refs.carries`, which no timeline shows). An edit re-indexes it, and a tombstone or a hard delete removes it,
 so search never returns text the thread no longer shows. Only the start of a long body is indexed (TEXT_MAX), which
 bounds what a write pays for.

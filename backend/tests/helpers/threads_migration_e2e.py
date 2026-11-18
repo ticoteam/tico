@@ -1,4 +1,4 @@
-"""Helpers that other tests share, moved out of test_threads_migration_e2e.py so they import no test file."""
+"""Helpers the threads tests share: the demo world they run on, its store and its identities."""
 
 import dataclasses
 from datetime import datetime, timezone

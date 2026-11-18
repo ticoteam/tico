@@ -352,7 +352,7 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
             flag="--allowed-domain",
         )
     if not s.company_file_data:
-        a.get("company", "Team/Company name", default="Sample Co" if s.preset else "Acme")
+        a.get("company", "Team/Company name", default="Acme")
     a.get(
         "owner_email",
         "Owner email (must be the account you will sign in with)",

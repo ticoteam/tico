@@ -163,14 +163,22 @@ async function themed(page: Page, name: string, phone = false) {
 }
 // A change on the `threads` topic for one call, as the server sends it.
 const callEvent = (sse: {queue: unknown[]}, kind: string, c: Call) => sse.queue.push({kind, call_id: c.id, thread_id: c.thread_id});
-// The stand-in stream says `ready` only with an event: one that changes nothing lets a fresh page connect, as a real
-// server's stream does at once (the ring reads GET /calls/ringing then).
-const connect = async (sse: {queue: unknown[]}, seen: {ringing: number}, page: Page) => {
+// The rail can open a stream before the thread view subscribes. Deliver `ready` on the stream that follows the
+// open thread, so the view's subscription cannot replace the stream while this event is in flight.
+const connect = async (sse: {queue: unknown[]; latest: import('playwright').Request | null}, seen: {ringing: number}, page: Page) => {
+  const followsThread = () => sse.latest && new URL(sse.latest.url()).searchParams.get('thread') === 't-plan';
+  for (let i = 0; i < 100 && !followsThread(); i++) await page.waitForTimeout(50);
+  assert.ok(followsThread(), 'the stream follows the open thread');
   const was = seen.ringing;
   sse.queue.push({kind: 'noop'});
   for (let i = 0; i < 100 && seen.ringing === was; i++) await page.waitForTimeout(50);
   assert.ok(seen.ringing > was, 'the ring read what rings on connect');
   await page.waitForTimeout(150);
+};
+const reload = async (page: Page, sse: {latest: import('playwright').Request | null}) => {
+  // A pending route from the old page cannot deliver the new page's reconnect event.
+  sse.latest = null;
+  await page.reload();
 };
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth);
 
@@ -277,14 +285,14 @@ let browser: import('playwright').Browser | null = null;
     await ring.waitFor({state: 'detached'});
     assert.equal(await page.evaluate(() => RING_SOUND.timer), 0);
     // A reload still knows it was dismissed (GET /calls/ringing still lists it).
-    await page.reload();
+    await reload(page, sse);
     await page.locator('#thread-rail .tr-row[data-thread="t-alerts"] .tr-call').waitFor();
     await connect(sse, seen, page);
     assert.equal(await page.locator('.call-ring-card').count(), 0, 'dismissed stays dismissed');
     // Another call rings from the page's first read; it goes when that call ends.
     const c4 = meetCall('c4', 't-alerts', 'human:cy', {ring: true});
     calls.set('c4', c4);
-    await page.reload();
+    await reload(page, sse);
     await page.locator('#thread-rail .tr-row[data-thread="t-alerts"]').waitFor();
     await connect(sse, seen, page);
     const ring4 = page.locator('.call-ring-card[data-ring="c4"]');
@@ -343,6 +351,7 @@ let browser: import('playwright').Browser | null = null;
     calls.set('c7', meetCall('c7', 't-alerts', 'human:bea', {status_source: 'google', live_count: 1, seen_at: at(60),
       participants: [{actor: 'human:bea', joined_at: at(60), in_call: 1}]}));
     await page.goto('https://tico-ui.test/#/thread/t-alerts?call=c7');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.call-ring-card[data-ring="c7"]').waitFor();
     assert.equal(await page.evaluate(() => RING_SOUND.timer), 0, 'no ring for a link');
     await page.locator('.thv-head .thv-call.on').waitFor();
@@ -369,6 +378,7 @@ let browser: import('playwright').Browser | null = null;
     // A server that lists no providers: the page cannot know whether Start makes a Google Meet.
     mode.providers = null;
     await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('#threads-shell').waitFor();
     const start = page.locator('.thv-head .thv-call[data-call="start"]');
     await start.waitFor();
     const order = () => page.evaluate(() => window.__order.splice(0));
@@ -385,6 +395,8 @@ let browser: import('playwright').Browser | null = null;
     await start.click();
     tab = await opened;
     await tab.waitForEvent('close');
+    // Joined here: the in-call code is a page part (ui/parts.json), so the join goes out once it has loaded.
+    await page.waitForFunction(() => window.__order.some(e => e.endsWith('/join')));
     assert.deepEqual((await order()).slice(0, 2), ['open ', 'POST /api/v2/threads/t-plan/calls']);
     // A Google Meet: the blank tab goes to it.
     mode.start = 'google_meet';

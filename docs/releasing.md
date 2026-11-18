@@ -19,7 +19,7 @@ GitHub Actions. No bot tags or rolls out Tico releases. Reviewed work reaches ma
 [merge queue](#merge-queue).
 
 The Engineering pipeline, whose Merge and Release stages queue the PRs and wait for a published release, comes in a
-later 0.6 phase ([Engineering](pipelines-v3.md#engineering)).
+later 0.6 phase ([Engineering](dev/pipelines-v3.md#engineering)).
 
 ## The release train
 
@@ -75,6 +75,12 @@ job decides first, so a push with nothing to do ends in seconds. Every job that 
 shares one concurrency group, so two never start a build or a release at once. One race remains: GitHub keeps one
 waiting job per group, so a hotfix queued behind a running train job can still be replaced by a train job whose
 read-only check ran just before the hotfix was queued; a hotfix that shows as cancelled that way is simply run again.
+
+A validation the train dispatched fires no `workflow_run` (GitHub starts none for a run started by `GITHUB_TOKEN`), so
+Release validation's last job dispatches the train itself with `validation_run` set to its run id. The train's guard
+waits for that run to complete, and it counts as a finished run, not a manual one: `RELEASE_TRAINS` still applies. A
+step that ships a candidate also validates main's head when main has moved past the candidate, without waiting for
+another event. A quiet main has no pushes, and GitHub drops many backstop schedules.
 
 Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
 and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
@@ -225,38 +231,42 @@ What a server accepts is what the code enforces. This is the matrix the release 
 
 | Part | Accepted | Enforced by |
 |---|---|---|
-| Database | schema version 71 (`MIN_BRIDGE_USER_VERSION`) and newer up to this release's; cloud steps up to 75 | `backend/migrations` `preflight`, before the first write |
-| Runner | release `MIN_RUNNER_RELEASE` (0.4.0) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
+| Database | made or upgraded by v0.6.0-rc.1 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
+| Runner | release `MIN_RUNNER_RELEASE` (0.6.0-rc.1) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
 | Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
 | Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
 
-A database below schema version 71 is refused: "This database is at schema version N, below 71, the oldest this server
-upgrades. Start it once with Tico v0.5.x (the release that writes version 71), then upgrade to this release." Open it once
-with a v0.5.x release, then upgrade. The legacy import (`manage.migrate_legacy`) is the only path that
-opens an older file directly. A newer database, one whose recorded migration this code does not know, and one whose
-migration file changed after it ran are all refused before anything is written.
+A database below the floor (made by Tico 0.5 or older, or not by Tico) is refused: "This database was made by a Tico
+older than 0.6.0, or not by Tico. Tico 0.6 does not carry tasks over: every company starts on a new database. Nothing
+was changed." A newer database, one whose recorded migration this code does not know, and one whose migration file
+changed after it ran are all refused before anything is written.
 
 ## Migrations
 
-Every persistent schema change is a file in `backend/migrations`: `YYYYMMDDHHMMSS_name.sql` (its statements) or `.py`
-(an `up(conn)` that does not commit), using a UTC timestamp. Create it with `python3 scripts/new_migration.py name`
-(add `--py` for Python). Existing `NNNN_` files keep their names and contents. Versions sort as full strings; legacy
-files precede timestamp files. Every unrecorded file runs, even if it sorts before one already applied. Each migration
-stands alone and must not depend on another unmerged migration's schema, so parallel PRs can merge in either order.
-CI rejects PR-added legacy names or duplicate timestamps against the current base tip and PR, with exact `git mv`
-suggestions. A file runs once, in its own transaction with its `schema_migrations` row, so a failure leaves neither.
-Never edit a file that has run: its checksum is
-recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
-(`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code. hubdb's `MIGRATIONS` list (user_version 71; a file from a
-release that ran growth segments as step 72 opens too, `NEWEST_USER_VERSION`) and the cloud steps in `Store.initialize`
-(75) no longer grow.
+A new database starts from the baseline, `backend/migrations/baseline.sql`: every table, index, view and trigger a new
+database had when it was written, the rows that schema holds, and a `schema_migrations` row for each migration it
+already contains. A new file loads it in one transaction, before anything else opens the file. Every persistent schema
+change after it is a file in `backend/migrations`: `YYYYMMDDHHMMSS_name.sql` (its statements) or `.py` (an `up(conn)`
+that does not commit), using a UTC timestamp. Create it with `python3 scripts/new_migration.py name` (add `--py` for
+Python). Every unrecorded file runs, on a new database and an upgraded one alike, even if it sorts before one already
+applied. Each migration stands alone and must not depend on another unmerged migration's schema, so parallel PRs can
+merge in either order. CI rejects PR-added non-timestamp names or duplicate timestamps against the current base tip and
+PR, with exact `git mv` suggestions. A file runs once, in its own transaction with its `schema_migrations` row, so a
+failure leaves neither. Never edit a file that has run: its checksum is recorded, and a start refuses the database if
+it changed. Make the change in a new file, never in the baseline. Temporary views and tables (`CREATE TEMP`,
+`backend/sql.py`) are per connection and stay in code.
 
-The files run right after hubdb's own steps, before the module schema code (`SCHEMA` scripts, `ensure_schema`,
-`add_column`), so a rename or move lands before code that uses the new names. On a new database a module's table does
-not exist yet at that point: a migration that touches one skips it when absent (`DROP ... IF EXISTS`, or a check of
-`sqlite_master`/`PRAGMA table_info`), and the module's `CREATE` makes the new shape. A `.py` file that rebuilds a table
-sets `FOREIGN_KEYS_OFF = True`: the runner turns foreign keys off before the transaction, checks `PRAGMA
-foreign_key_check` for references the migration broke before it commits, and restores the setting.
+The compatibility floor is v0.6.0-rc.1. The migration files it shipped are gone: `backend/migrations/retired.txt` lists
+them, a database at the floor recorded them and a new one has them in the baseline. When the floor moves:
+list the files the new floor release shipped in `retired.txt` and delete them, write the baseline again
+(`python3 scripts/schema_baseline.py`) and the floor's schema fixture (`python3 scripts/cleanup/gen_upgrade_fixture.py
+<tag>`). `backend/tests/test_schema_baseline.py` upgrades that fixture and compares it, table by table and index by
+index, with a new database: a difference means the baseline and the files disagree.
+
+A `.py` file that rebuilds a table sets `FOREIGN_KEYS_OFF = True`: the runner turns foreign keys off before the
+transaction, checks `PRAGMA foreign_key_check` for references the migration broke before it commits, and restores the
+setting. Triggers made from lists in the code follow the code at each start: the change log's, the status lists' and
+the wake hold's are rebuilt when their text changes, and the clocks' are made where missing.
 
 `backend/tests/test_ddl_guard.py` counts the `CREATE`, `ALTER TABLE` and `add_column` statements still outside
 migrations, per file, in `backend/migrations/ddl_allowlist.txt`. A new one fails the test; when a statement moves into a
@@ -400,9 +410,10 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script timings
-from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
-included), with collected test counts until timings exist. New files use the observed
+finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script
+timings averaged over the last three green queue groups (each group's **PR job timings** job saves them as its
+`queue-timings` artifact: the same hosted runners and pytest flags), over the committed table
+(`scripts/test-timings.json`), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
@@ -440,20 +451,22 @@ checks on that merge commit, and moves main only when they pass.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, and every other
   job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
   the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
-  The plan decides which of those the change reaches, so a job it does not reach starts no VM. Only the cosmetic timing
-  receipt is queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
-  request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
-  static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
+  The plan decides which of those the change reaches, so a job it does not reach starts no VM. The timing receipt,
+  flake artifact and merge commit checks are queue-only. A failed leg cancels the run, so `checks` fails within minutes.
+  A fork's pull request runs none of them.
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its merge commit checks job runs every
+  static check on that commit (`scripts/ci/merge_commit_checks.sh`) on its own VM, beside the plan and the tests. A job the change does
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
-- **Quarantined tests**: a test that failed and passed on the same commit (a rerun attempt, or two runs of one commit)
-  is flaky. Its entry in `ci/quarantine/` (one JSON file per test: test id, first seen, run urls, ticket) makes PR checks
-  and queue groups run it as a non-strict xfail (`scripts/pr_checks.py run --quarantine`), so it cannot fail them.
-  Release validation never passes the flag and still fails on it. `.github/workflows/flaky-tests.yml` reads PR-check runs
-  daily and proposes entries (`python3 scripts/flake_quarantine.py detect --write ci/quarantine` writes them), and its
-  weekly report fails when an entry is older than 14 days. The fix deletes the entry file.
+- **Quarantined tests**. PR checks and queue groups retry up to five failed tests per Python or browser leg once.
+  When all pass on retry, the leg passes and logs each flake. A Python leg also passes if all remaining failures
+  match on the base commit. Release validation and main-red track those failures. Queue groups save retry passes
+  in the `queue-flaky` artifact. `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily.
+  It reports Python and browser flakes and proposes `ci/quarantine/` entries for pytest tests that failed and passed on the same
+  commit. Write proposals with `python3 scripts/flake_quarantine.py detect --write ci/quarantine`. A listed test
+  runs as a non-strict xfail in PR checks and the queue. Release validation runs without retries or quarantine.
+  The weekly report fails when an entry is older than 14 days. The fix deletes the entry.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents open pull requests as drafts and run `python3 scripts/pr_checks.py local --ready` once the change is done; the
@@ -480,7 +493,12 @@ A validation run is full or [incremental](#incremental-validation); its jobs and
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
 interactive work. Its gate jobs run in parallel on ephemeral RunsOn Linux VMs in Tico's own AWS account (4-vCPU for every
 part), with read-only repository permissions and no production,
-AWS or provider credentials. It cannot tag, publish or deploy.
+AWS or provider credentials. It cannot tag, publish or deploy. The one exception is the live git check's GitHub App
+(repository secrets `TICO_GIT_CHECK_APP_ID`, `TICO_GIT_CHECK_PRIVATE_KEY`, `TICO_GIT_CHECK_REPOSITORY`, optional
+`TICO_GIT_CHECK_INSTALLATION_ID`; Contents, Pull requests and Issues: write, as a bot's turn token asks), installed
+on one scratch repository only and passed to the Python VMs: it pushes a
+branch there and deletes it, the way a bot's turn pushes ([e2e/bots/README.md](../e2e/bots/README.md#live-git-check)).
+Without the secrets that check skips and names them.
 
 ```sh
 gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48 -f version=v0.3.49
@@ -816,8 +834,8 @@ Setup, once:
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's
   `name`, `url`, `key_env` and whether it is the `canary` (see `knowledge/rollout.example.json`).
 
-A bot created before this template change does not get these files on its own: copy `playbooks/rollout.md`,
-`software/rollout.py` and the `.claude/settings.json` line that allows it from `templates/catalog/release-notes-writer`.
+A bot created before this template change does not get these files on its own: copy `playbooks/rollout.md`
+and `software/rollout.py` from `templates/catalog/release-notes-writer`.
 
 ## What installations do
 

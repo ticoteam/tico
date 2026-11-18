@@ -1,10 +1,9 @@
-//! Computer-owned task worktrees (runner_support/worktrees.py): the heartbeat's report of each worktree the server
+//! Computer-owned task worktrees: the heartbeat's report of each worktree the server
 //! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
 //! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
-//! preserving its history. Adding and setting up a worktree inside a turn stay in the tico CLI (`hub worktree
-//! add`), which takes the same task lock (`tasks/.locks/<sha[:2]>`) and writes the same markers; a worktree
-//! the server reserved for a waiting task (backend/worktree_waits.py) is checked out and set up here, while
-//! its bot is idle (`prepare`).
+//! preserving its history. A worktree the server reserved for a waiting task (backend/worktree_waits.py) is
+//! checked out and set up here, while its bot is idle (`prepare`); one a turn adds, attaches or sets up
+//! (`tico task worktree`, which runs `tico-runner worktree`) goes through the same code in `cli`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::OpenOptionsExt;
@@ -22,13 +21,17 @@ use crate::regular_file::{self, CONTENT, SMALL};
 use crate::repositories::{self, GB};
 use crate::util::text_of;
 
+pub mod cli;
+
 /// A failure: a message for a person (with git's own words for network commands), a cleanup to retry
-/// later, or an operating-system error named by kind.
+/// later, an operating-system error named by kind, or Tico's own answer (kept whole, so `tico-runner worktree`
+/// reports its code, status and whether to retry).
 #[derive(Debug, Clone)]
 pub enum WtErr {
     Msg(String, Option<String>),
     Deferred(String),
     Os(String),
+    Api(ApiError),
 }
 
 impl WtErr {
@@ -39,7 +42,14 @@ impl WtErr {
     pub fn text(&self) -> String {
         match self {
             WtErr::Msg(m, _) | WtErr::Deferred(m) | WtErr::Os(m) => m.clone(),
+            WtErr::Api(e) => e.detail.clone(),
         }
+    }
+}
+
+impl From<ApiError> for WtErr {
+    fn from(e: ApiError) -> WtErr {
+        WtErr::Api(e)
     }
 }
 
@@ -959,7 +969,7 @@ async fn recover_retired(
                         &json!({"snapshot_skipped": snapshot}),
                     )
                     .await
-                    .map_err(|e| WtErr::msg(e.detail))?;
+                    .map_err(WtErr::Api)?;
             }
             return Ok(());
         }
@@ -969,7 +979,7 @@ async fn recover_retired(
                 &json!({"recovery_branch_missing": true}),
             )
             .await
-            .map_err(|e| WtErr::msg(e.detail))?;
+            .map_err(WtErr::Api)?;
         link.insert("branch".into(), json!(checked_branch(&fallback).await?));
     } else if branch != fallback {
         return Err(WtErr::msg(
@@ -1011,7 +1021,7 @@ async fn patch_checkout(
     client
         .patch(&format!("tasks/{task}/links/{link}"), &body)
         .await
-        .map_err(|e| WtErr::msg(e.detail))?;
+        .map_err(WtErr::Api)?;
     Ok(())
 }
 
@@ -2407,8 +2417,8 @@ fn merge_tree_oid(out: &Out) -> Option<String> {
     shaped.then(|| tree.to_string())
 }
 
-/// Aborts a merge this removal finds abandoned in its own tree, before any switch, add or commit: the rules of
-/// runner_support/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
+/// Aborts a merge this removal finds abandoned in its own tree, before any switch, add or commit.
+/// Anything not provably abandoned is kept, untouched.
 async fn clear_merge(path: &Path, link: &str, release: bool, env: &Env) -> R<()> {
     let gitdir = PathBuf::from(
         git(
@@ -3411,7 +3421,7 @@ impl Worktrees {
                     None,
                 )
                 .await
-                .map_err(|e| WtErr::msg(e.detail))?;
+                .map_err(WtErr::Api)?;
             if granted["configured"] == false {
                 env = crate::safegit::machine_environment(&process);
                 repo.insert("machine_git".into(), json!(true));
@@ -3424,7 +3434,7 @@ impl Worktrees {
                     .client
                     .get("runners/me/repositories")
                     .await
-                    .map_err(|e| WtErr::msg(e.detail))?;
+                    .map_err(WtErr::Api)?;
                 if let Some(found) = listed["repositories"].as_array().and_then(|a| {
                     a.iter()
                         .find(|r| text_of(&r["full_name"]).to_lowercase() == name.to_lowercase())
@@ -3552,15 +3562,12 @@ impl Worktrees {
         let path = format!("tasks/{task}/links/{link}");
         if let Err(e) = self.client.patch(&path, &Value::Object(body)).await {
             if !(restore_pending && server_lacks_checkout_fields(&e)) {
-                return Err(WtErr::msg(e.detail));
+                return Err(WtErr::Api(e));
             }
             // A server from before checkout records: report the restore as it knew it, setup pending.
             let mut old = json!({"state": state, "cleanup": false, "setup_pending": true});
             old.as_object_mut().unwrap().extend(kept);
-            self.client
-                .patch(&path, &old)
-                .await
-                .map_err(|e| WtErr::msg(e.detail))?;
+            self.client.patch(&path, &old).await.map_err(WtErr::Api)?;
             restore_pending = false;
         }
         if restore_pending {

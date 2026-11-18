@@ -184,11 +184,11 @@ def test_a_bot_that_did_no_work_since_its_last_update_gets_no_request(api):
         assert not step.did_work(c, idle, "")
         turn(c, ops)
         assert step.did_work(c, ops, "")
-        # A keeper-room reply is an answer to a wake: a wake answered with "nothing new" is no work.
+        # A Tico-room reply is an answer to a wake: a wake answered with "nothing new" is no work.
         c.execute(
             "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('wake-reply',?,?,'say',"
             "'Nothing new.',?)",
-            (H.bot_actor(idle), H.KEEPER, H.now()),
+            (H.bot_actor(idle), H.TICO_ACTOR, H.now()),
         )
         assert not step.did_work(c, idle, ""), "a reply to the keeper is not work"
     result = run_step(api)
@@ -225,7 +225,7 @@ def test_a_wake_answered_with_nothing_new_is_no_update_request_even_with_a_memor
         c.execute(
             "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('waker-reply',?,?,'say',"
             "'Nothing new since yesterday.',?)",
-            (H.bot_actor(waker), H.KEEPER, H.now()),
+            (H.bot_actor(waker), H.TICO_ACTOR, H.now()),
         )
         assert not step.did_work(c, waker, ""), "a memory commit and a reply are not work"
         assert step.plan_request(c, waker, DAY) == "skip"
@@ -340,7 +340,7 @@ def test_the_request_is_a_taskless_notice_in_the_main_lane_path(api):
         msg = c.execute(
             "SELECT m.* FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.bot=? AND q.day=?", (ops, DAY)
         ).fetchone()
-        assert msg["sender_id"] == H.KEEPER and msg["kind"] == "notice" and msg["recipient_id"] == H.bot_actor(ops)
+        assert msg["sender_id"] == H.TICO_ACTOR and msg["kind"] == "notice" and msg["recipient_id"] == H.bot_actor(ops)
         conversation = c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone()
         message = {**dict(msg), "refs": json.loads(msg["refs"])}  # the decoded message the runner's rules read
         assert execution.work_task_id(message, dict(conversation)) is None, "no task: the notice takes no task lane"
@@ -526,34 +526,6 @@ def test_the_api_model_bounds_what_a_turn_reports(api):
     assert ok.learnings_saved == 15
     with pytest.raises(Exception):
         M.UpdatePost(body="- a", learnings_saved=16)
-
-
-def _migration(name):
-    spec = importlib.util.spec_from_file_location(
-        name, Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_migration_adds_the_columns_once_and_marks_old_updates_version_one():
-    conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT, kind TEXT, day TEXT, headline TEXT, body TEXT, "
-        "created_at TEXT, updated_at TEXT)"
-    )
-    conn.execute(
-        "CREATE TABLE update_queue(id TEXT PRIMARY KEY, bot TEXT, kind TEXT, day TEXT, rank INTEGER, state TEXT)"
-    )
-    conn.execute("INSERT INTO updates VALUES('u','ops','daily','2026-09-28','h','- one','t','t')")
-    migration = _migration("20261105010000_update_format_and_delivery")
-    migration.up(conn)
-    migration.up(conn)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(updates)")}
-    assert {"format_version", "learnings_saved", "suggestions_seen", "delivery_batch_id"} <= cols
-    assert conn.execute("SELECT format_version FROM updates").fetchone()[0] == 1
-    assert {"delivery_only", "run_id"} <= {r[1] for r in conn.execute("PRAGMA table_info(update_queue)")}
 
 
 def test_dispatch_with_build_off_never_starts_a_queue(api):

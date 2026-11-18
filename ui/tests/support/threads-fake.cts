@@ -53,6 +53,7 @@ function threadsFake({bot, me = 'human:ana', messages = [], home = [], sent = []
   const dm = (): Record<string, unknown> => view(dmId, messages, {audience: 'personal', members: [{actor: me}, {actor: 'bot:' + bot}]});
   const homeView = (): Record<string, unknown> => view(homeId, home, {audience: 'home', home: {actor: 'bot:' + bot}, members: []});
   return (p: string, url: string | URL, method = 'GET', body: unknown = null): unknown => {
+    if (p === '/api/v2/threads/rail' && method === 'GET') return {pinned: [], threads: [], catch_up: 0, catch_up_ids: [], next_cursor: null, dms: {}};
     if (p === '/api/v2/threads' && method === 'GET') return {attention: [], threads: [], dms: [dm()], next_cursor: null};
     if (p === '/api/v2/threads/dm' && method === 'GET') return dm();
     if (p === '/api/v2/threads/dm' && method === 'POST') { sent.push(body as ThreadsPost); return dm(); }

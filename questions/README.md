@@ -9,7 +9,7 @@ and what makes a decision reusable across bots, is the question set: a named, ve
 here that every caller loads and sends inline. The hub server knows nothing about these files;
 the `label` on each call (`id@version`) is what groups them in the audit.
 
-JSON, not YAML, so the `tico` CLI on a bare Python, a bot's own script, the mail venv and the
+JSON, not YAML, so the `tico` CLI on a bare Python, a bot's own script and the
 cloud service all read the same file with nothing installed.
 
 `load_set` checks `TICO_REGISTRY_DIR/questions/<name>.json` before the shipped copy, so a company can keep its own

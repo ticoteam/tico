@@ -8,9 +8,9 @@ It walks every first-parent commit from the previous release tag to the candidat
 such commit) and reports, naming the pull request or commit each time:
 
 1. NET REVERT: a change that undoes what a pull request or commit shipped in an earlier release did: all of it,
-   however small, or most of its meaningful lines (it deletes the lines that one added, or puts back the lines it
-   deleted). A stale tree committed over newer work looks exactly like this, and so does re-applying a fix that was
-   reverted. Every earlier release is compared unless --releases limits it.
+   however small, or most of its meaningful lines, restoring those regions to their pre-image. Deleting a pure
+   addition restores its empty pre-image. A stale tree committed over newer work looks exactly like this, as does a fix
+   re-applied after a revert. Every earlier release is compared unless --releases limits it.
 2. UNREVIEWED: a merged pull request whose final head has neither an approving GitHub review at that commit nor a
    review receipt from its ticket naming that commit. An approval of an earlier head counts only when the change at
    that head is the same as the change at the final head, line for line with whitespace (a merge of main into the
@@ -25,6 +25,9 @@ Review receipts come from the tickets when GitHub reviews aren't used, as a JSON
 
 A revert receipt names one pull request and the one earlier change it means to undo (removing a workflow nobody
 uses, say); every other revert that pull request makes is still reported.
+
+The verifier count accepts `Revert-Ok: <sha-or-#PR> <why ...>` commit trailers. A SHA prefix needs at least
+seven characters and can name the merge or any commit it brought in; the reason is required.
 
 Exit status: 0 when nothing is found, 1 with findings, 2 when it cannot check.
 """
@@ -70,20 +73,27 @@ def parse_log(text):
     commits, parts = [], text.split("\0")
     for i in range(1, len(parts) - 4, 5):
         sha, parents, subject, body, diff = parts[i : i + 5]
-        files, path = {}, None
+        files, hunks, path = {}, {}, None
+        hunk = None
         for line in diff.splitlines():
             if line.startswith("diff --git "):
                 path = None
+                hunk = None
             elif line.startswith("--- "):
                 path = line[6:] if line.startswith("--- a/") else None
             elif line.startswith("+++ "):
                 # A deleted file names itself only on its "---" line.
                 path = line[6:] if line.startswith("+++ b/") else path
+            elif line.startswith("@@ ") and path is not None and not TEST_PATH.search(path):
+                hunk = ([], [])
+                hunks.setdefault(path, []).append(hunk)
             elif line[:1] in "+-" and line and path is not None and not TEST_PATH.search(path):
                 text = line[1:].strip()
                 if text:
                     added, removed = files.setdefault(path, (Counter(), Counter()))
                     (added if line[0] == "+" else removed)[text] += 1
+                    if hunk is not None:
+                        hunk[line[0] == "-"].append(text)
         commits.append(
             {
                 "sha": sha.strip(),
@@ -91,6 +101,7 @@ def parse_log(text):
                 "subject": subject,
                 "body": body,
                 "files": files,
+                "hunks": hunks,
                 "meaningful": {
                     path: tuple(Counter({k: v for k, v in c.items() if meaningful(k)}) for c in pair)
                     for path, pair in files.items()
@@ -175,8 +186,37 @@ def undone(change, earlier, lines="files"):
     return added_undone, added_total, removed_undone, removed_total
 
 
+def preimage_change(change, earlier):
+    """Keep inverse hunks: replacements restore the old text; pure additions can be deleted in part."""
+    files = {}
+
+    def contains(lines, part):
+        return bool(part) and any(lines[i : i + len(part)] == part for i in range(len(lines) - len(part) + 1))
+
+    for path, hunks in change["hunks"].items():
+        for added, removed in hunks:
+            for old_added, old_removed in earlier["hunks"].get(path, ()):
+                if (
+                    (added == old_removed and removed == old_added and (added or removed))
+                    or (not added and not old_removed and contains(old_added, removed))
+                    or (not removed and not old_added and contains(old_removed, added))
+                ):
+                    pair = files.setdefault(path, (Counter(), Counter()))
+                    pair[0].update(added)
+                    pair[1].update(removed)
+                    break
+    return {
+        "files": files,
+        "meaningful": {
+            path: tuple(Counter({k: v for k, v in side.items() if meaningful(k)}) for side in pair)
+            for path, pair in files.items()
+        },
+    }
+
+
 def reverts(change, earlier):
     """The share of `earlier` that `change` undoes when it is a net revert, else None."""
+    change = preimage_change(change, earlier)
     added_undone, added_total, removed_undone, removed_total = undone(change, earlier)
     if added_total + removed_total and (added_undone, removed_undone) == (added_total, removed_total):
         return 1.0  # an exact inverse, whatever its size
@@ -382,6 +422,44 @@ def lookback_base(repo, previous, releases):
     tags = git(repo, "tag", "--merged", previous, "--list", "v[0-9]*", "--sort=-v:refname").split()
     older = [t for t in tags if t != previous]
     return older[releases - 1] if len(older) >= releases else None
+
+
+def revert_allowed(messages, earlier, repo, base=None):
+    """A Revert-Ok trailer permits only the commit or PR it names."""
+    tokens = re.findall(
+        r"^Revert-Ok:[ \t]*([0-9a-f]{7,64}|#\d+)[ \t]+\S[^\n\0]*$", messages, re.MULTILINE | re.IGNORECASE
+    )
+    if not tokens:
+        return False
+    merged = earlier
+    if len(earlier["parents"]) < 2 and base:
+        # Blame names the branch commit, whose subject need not name the PR that merged it.
+        merges = git(
+            repo,
+            "log",
+            "--merges",
+            "--reverse",
+            "--ancestry-path",
+            "--format=%H %P",
+            f"{earlier['sha']}..{base}",
+        ).splitlines()
+        for row in merges:
+            sha, parent, *other = row.split()
+            if git(repo, "merge-base", earlier["sha"], parent).strip() == earlier["sha"]:
+                continue
+            subject = git(repo, "log", "-1", "--format=%s", sha).strip()
+            if pr_number(repo, {"subject": subject, "body": ""}) is not None:
+                merged = {"sha": sha, "parents": [parent, *other], "subject": subject, "body": ""}
+                break
+    number = pr_number(repo, merged)
+    shas = {earlier["sha"], merged["sha"]}
+    if len(merged["parents"]) == 2:
+        first, second = merged["parents"]
+        shas.update(git(repo, "rev-list", f"{first}..{second}").split())
+    for token in tokens:
+        if (number is not None and token == f"#{number}") or any(sha.startswith(token.lower()) for sha in shas):
+            return True
+    return False
 
 
 def check(repo, head, previous=None, receipts=(), github=None, releases=None, fetch=True):

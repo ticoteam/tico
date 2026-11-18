@@ -53,7 +53,7 @@ declare function loadSettings(): void;
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', owner_id: 'ana', can_manage: true,
         users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
@@ -95,7 +95,7 @@ declare function loadSettings(): void;
     await page.evaluate(() => loadSettings());
     assert.equal(await line.locator('[data-data-problem=musecode]').innerText(), problem);
     assert.equal(await line.locator('.machine-chip-dot').count(), 1);
-    assert.equal(await line.locator('[data-model-login], [data-model-key-add]').count(), 0);
+    assert.equal(await line.locator('[data-model-login]').count(), 0);
 
     assert.deepEqual(errors, []);
     console.log('PASS: a Muse Code data folder its turns cannot write shows on the Computers page, naming the folder');

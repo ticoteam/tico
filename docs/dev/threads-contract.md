@@ -29,8 +29,9 @@ The columns, tables, triggers and indexes below are migration `backend/migration
 also makes the search index and the tables of the thread helpers, the Slack bridge and Tico Meet calls, and tables
 that migration 0058 drops. It runs once; a change to any of that SQL is a new migration. `threads_primary_delivery` is made again by
 `backend/migrations/0048_tasks_conversation.sql` with hubdb's `delivery_counts_sql` (the task-thread mention rule). The
-five message indexes are built by `threads.migrate` after its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
-in chunks that each commit with their progress.
+five message indexes are migration `backend/migrations/20261116172132_threads_legacy_out.py`. The one-time data migration
+(§7) ran up to v0.6.0-rc.1, recorded under `registry_metadata` key `threads-migration`; its code is gone, and what it
+left is still read.
 
 ### 1.1 `conversations` (a thread)
 
@@ -88,7 +89,11 @@ CREATE INDEX messages_thread_seq ON messages(conversation_id, seq);
 ```
 
 A **carrier** is a Tico notice that starts a run for a second woken bot (§4.4). It has `refs.carries=<message id>`
-and **no `seq`**: timelines, counters, search and SSE thread views never show it.
+and **no `seq`**: timelines, counters, search and SSE thread views never show it. Every other message from Tico to a
+bot (a task's turn, the never-stuck ladder, a health wake, a stage reminder) is the same: it is that bot's run input,
+with no `seq`, read by the bot in its run and its own reads of the room, never by a person. A run woken only by one
+posts its text only when it is for a person (`execution.told_only`); otherwise the text stays on the run, and the task's
+Runs show the notice it acted on.
 
 ### 1.3 New tables
 
@@ -261,7 +266,7 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
 - `thread_id`: the thread written to. With `parent_message_id`, the post goes to that message's sub-thread, created
   if it has none (§3.2), and `thread_id` must be the message's thread.
 - `kind`: `say|notice|steer`; `ask` and `answer` are refused (422 `kind`, with the replacement named), and their old rows are
-  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is an ask on a task, not a message. `to_actor`: the
+  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is a `say` the bot marks ❓ (`tico task ask` or `tico chat ask`), not an ask on a task. `to_actor`: the
   explicit addressee (optional); otherwise the first in-audience mention, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "actor"}` for replicated inbound (Slack); a repeat
@@ -542,7 +547,7 @@ first:
 
 SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...]}`, rendered per viewer, to the root's readers
 (`bots` only to a stream whose `?thread=` is under that root; the others get the event without it) whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
-every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
+every 1 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
 (`thread_bot_status.send_trailing`).
 
 ## 5. C4: order and read state
@@ -599,15 +604,18 @@ stays. Each batch writes one `thread.purged` event and one audit row.
 - `message_revisions` holds every `(origin_id, revision)` seen, durable for the life of the message.
 - Local holds and screening change only local delivery state, never the canonical message.
 
-## 7. Migration (same release, `threads.migrate(c)`, once)
+## 7. Migration (ran up to v0.6.0-rc.1; what it left is still read)
+Every database this release opens ran the steps below (`threads.migrate`) and the move of chats into Homes
+(`bot_home_merge.run_once`) at a start up to rc.1. Both writers are gone (the move is kept as a test fixture,
+`backend/tests/helpers/bot_home_merge.py`, to build a database as rc.1 left it); every rule below that reads their
+results stays.
+
 Existing conversations (and conversations any legacy writer inserts later) keep `audience` NULL. **Who reads a root
 with no stored audience is decided by the pre-threads rules, exactly** (`threads._legacy_denial`, and the legacy term
 of `threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner, the Strategy room
 owner-only; shared: `rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a
 bound meeting room by the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant.
-The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e test
-(`backend/tests/test_threads_migration_e2e.py`) reads the pre-threads reader sets live in the same run and checks
-`threads.readable` against them after `threads.migrate`. The audience *label* is still derived live from
+The only narrowing: a person who left, or whose sign-in is off, reads nothing. The audience *label* is still derived live from
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
 because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
 Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
@@ -632,8 +640,6 @@ live shared-room rule as before.
   `legacy_audience` on that Home's messages, from the Home's menu or its Earlier messages row. A notice once told each
   manager, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake); none is sent now, and an old one
   still shows its Open button.
-- The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
-  roster change.
 - Later, once (`bot_home_merge.run_once`, registry_metadata `bot-chats-to-home`, Nov 3 decision): each person's open
   personal room with a bot (`room_key` the bot) moves into that bot's Home and is read by the Home's readers. Messages
   keep ids, seqs and `legacy_audience`; the room closes with `room_key='<key>:home:<home id>'` and a `home_merges`
@@ -779,7 +785,7 @@ a sub-thread shows its root's.
 | `POST /api/v2/threads {..., "pin_for_members": true}` | `threads.create(..., pin_for_members=True)`: a pin row for the starter and every `human:` member |
 | `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "unread": [item], "dms": {actor: unread}, "next_cursor"}` |
 | `GET /api/v2/threads/browse?q=&cursor=&limit=50` | `thread_rail.browse(c, viewer, q=None, cursor=None, limit=50)` → `{"threads": [view + "member_count"], "next_cursor"}` |
-| `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
+| `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "new_count_partial": false, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
 
 Rail. Candidates are open roots the viewer reads (`readable_sql`, then `thread_readable`) with audience company, team
 or members, or a DM with two or more others (`_dm_members`); never a 1:1 DM, a Home, a task's thread or a meeting. The
@@ -795,7 +801,7 @@ later pages have `null`, `[]` and `{}`. The sidebar's first page has the same DM
 `person_dms`. `unread` (first page only, `[]` after) is each Catch up item the rail does not hold (a 1:1 DM, a Home, a
 task's thread, a thread the viewer is in only by a mention), in Catch up's order, from the same walk as `catch_up` and
 `catch_up_ids`, so the rows and the badge agree: `{id, title, name, audience, dm_with, dm_with_count, home_actor,
-new_count, mention, task_id, last_message_at}`. A client lists them under Threads while they are in its Catch up set.
+new_count, new_count_partial, mention, task_id, last_message_at}`. A client lists them under Threads while they are in its Catch up set.
 
 Live updates. A client reads the rail whole on first load, on `reset`, on `needs` and on a safety poll every few
 minutes, and patches it from the `threads` topic in between. One `activity` event stands for every activity row of
@@ -826,9 +832,15 @@ holds an open attention item for them (`_flags` in `thread_rail`, which runs its
 mention the viewer (an open mention, or a new message delivered to them as a mention or assignment; an old `ask` row counts too) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
 subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
-and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. `new_count` is how many new
-messages of the subtree the viewer may read (a plain message counts in SQL; a restricted one or a migrated Home's old history is
-read whole for its check, at most 200 a batch of roots), or 1 for an attention item alone. The sidebar's `me.unread`
+and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. Whether a root has something
+new needs only one message the viewer may read: a plain message counts in SQL; a restricted one or a migrated Home's old
+history is read whole for its check, each root's oldest first in rounds of 1, 4 and 16 a sub-thread, so every root has its
+turn before any has more, at most 2,000 over the whole walk (`CATCH_UP_HIDDEN`; a root still unproved past that is left
+out and logged as `catch_up_unchecked`). `new_count` is how many new messages of the subtree the viewer may read, or 1 for
+an attention item alone. It is counted whole only for the items a load shows (a Catch up page's cards, the rail's
+`unread` rows), at most 2,000 messages read for their check a load, shared evenly over their sub-threads
+(`CATCH_UP_COUNTED`); an item whose count stops there keeps what was found, with `new_count_partial` true (shown as
+"180+"), never 0. The sidebar's `me.unread`
 still counts before the per-message check (follow-up). `messages` are the new messages (past the viewer's mark in each thread, under the unread rule)
 plus an open mention's or ask's own message, each through the per-message check, in tree order (a message, then the
 sub-thread under it, each with `depth`): candidates are merged in tree order from every unread sub-thread (at most

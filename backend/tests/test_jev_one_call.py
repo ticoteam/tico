@@ -17,7 +17,6 @@ from backend import decide_groups as DG
 from backend import learnings as L
 from backend.tests.automation_fakes import Services
 from clients import judge as J
-from connectors.mail import judge as jd
 
 
 def answer(state, question):
@@ -489,52 +488,3 @@ def test_a_find_item_whose_step_changed_after_the_grouped_call_asks_again(monkey
     run = E.advance(flow(FIND, {**step, "questions": edited}), run, services)
     assert run["status"] == "ok" and len(services.jev.calls) == 2
     assert [r["outputs"] for r in run["steps"] if r["id"] == "triage"][-1] == item_alone(FOUND[1], edited)
-
-
-# ------------------------------------------------------------------------------------------- the bots' mail tool
-MAILS = [
-    {"id": f"m{n}", "from": f"sender{n}@acme.example", "subject": f"Subject {n}", "snippet": "Hello", "to": []}
-    for n in range(3)
-]
-
-
-def test_the_mail_tool_asks_every_set_about_a_message_in_one_call(tmp_path):
-    jev = Jev()
-    msgs = [dict(m) for m in MAILS]
-    stats = jd.judge_sets(msgs, ["mail-triage", "reply-intent"], jev, "ana@acme.example")
-    assert len(jev.calls) == 3, "one call per message, not one per message and set"
-    assert {call["label"] for call in jev.calls} == {"mail-triage@1+reply-intent@1"}
-    for m in msgs:
-        state = jd.message_state(m, "ana@acme.example")
-        for sid in ("mail-triage", "reply-intent"):
-            questions = J.load_set(sid)["questions"]
-            want = J.check_answers({qid: answer(state, q) for qid, q in questions.items()}, questions)
-            assert m["judgments"][sid] == J.summary(want)
-    assert {sid: (s["count"], s["errors"]) for sid, s in stats.items()} == {
-        "mail-triage": (3, 0),
-        "reply-intent": (3, 0),
-    }
-
-
-def test_the_mail_tool_asks_only_the_sets_not_cached_and_a_failed_call_fails_each_set(tmp_path):
-    from connectors.mail import db
-
-    conn = db.connect(tmp_path / "mail.db")
-    jev = Jev()
-    jd.judge_sets([dict(m) for m in MAILS], ["mail-triage"], jev, "box", conn)
-    assert len(jev.calls) == 3
-    jev.calls.clear()
-    msgs = [dict(m) for m in MAILS]
-    stats = jd.judge_sets(msgs, ["mail-triage", "reply-intent"], jev, "box", conn)
-    assert [sorted(call["questions"]) for call in jev.calls] == [["intent"]] * 3
-    assert stats["mail-triage"]["cached"] == 3 and all(
-        set(m["judgments"]) == {"mail-triage", "reply-intent"} for m in msgs
-    )
-
-    def down(state, questions, label=None):
-        raise J.JudgeError("unavailable", "down", retryable=True)
-
-    msgs = [dict(MAILS[0], id="new")]
-    stats = jd.judge_sets(msgs, ["mail-triage", "reply-intent"], down, "other-box", None)
-    assert msgs[0]["judge_errors"] == {"mail-triage": "unavailable", "reply-intent": "unavailable"}
-    assert stats["mail-triage"]["errors"] == stats["reply-intent"]["errors"] == 1

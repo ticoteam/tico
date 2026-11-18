@@ -109,11 +109,10 @@ def github(condition, **fields):
 def github_installed(c, repository="acme/app"):
     """The company's GitHub App, connected and installed, with `repository` In use (None: none is): a task with no PR
     linked is its bot's to open one, not Paused on Connect GitHub or Choose a repository (item_sources.github
-    first_fix)."""
+    first_fix). The app's own tables are made on first use (backend/github_app.py SCHEMA)."""
     from backend.github_app import SCHEMA
-    from backend.repositories_schema import SCHEMA as REPOSITORIES
 
-    for statement in (SCHEMA + ";" + REPOSITORIES).split(";"):
+    for statement in SCHEMA.split(";"):
         if statement.strip():
             c.execute(statement)
     c.execute(
@@ -216,6 +215,73 @@ def new_task(c, by, title, pipeline_id="general", assignee=None, parent=None):
     return E.task(c, row["id"])
 
 
+def ok_ask(c, task_id, by, person, line, shows=None, ends=False):
+    """An OK asked of `person` on the task's visit, written as task_engine.add_requirement writes one but without its
+    checks (a bot's OK of nothing, an ask of a bot, as older companies have): a `requirements` row of kind `ok` the task
+    waits on until it is answered. A person named without a kind is a person ("ben" is "human:ben"). Returns the task
+    with `requirement_id`."""
+    person = person if ":" in str(person) else "human:" + str(person)
+    return E._write_ask(c, E.task(c, task_id), by, "ok", person, line, shows=shows, ends=ends)
+
+
+def shown(c, title="Launch note", bot=None, task_id=None):
+    """A page a bot's OK can show (task_engine.shows_a_file): one version of a file of `bot`'s (its slug or actor; else
+    the company's first bot), bot-wide, or a task's when `task_id` is given. Rows only, no bytes. Returns
+    `["page:<id>"]`, as an OK's shows."""
+    bot = H.actor_id(bot) if bot else c.execute("SELECT id FROM bots ORDER BY id LIMIT 1").fetchone()[0]
+    now, blob = H.now(), H.new_id()
+    fid = "file-" + blob.replace("-", "")[:24]
+    c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+        (blob, "bot:" + bot, "sha256:" + blob, 1, "page.html", "text/html", now),
+    )
+    c.execute(
+        "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+        "last_activity_at, current_version, task_id) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?,1,?)",
+        (fid, bot, f"task:{task_id}" if task_id else "bot", fid, title, now, now, task_id),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+        "VALUES (?,1,?,?,1,'page.html','text/html',?,?)",
+        (fid, blob, "sha256:" + blob, "bot:" + bot, now),
+    )
+    return [f"page:{fid}"]
+
+
+def stub_document(c, task_id, requirement, file_id, by, version):
+    """Give a synthetic approval page its live document link, with the test supplying the submission and verdict."""
+    from backend import page_links as L
+    from backend import task_documents as D
+
+    settings = c.execute("SELECT settings FROM requirements WHERE id=?", (requirement,)).fetchone()[0]
+    document = json.loads(settings or "{}").get("document")
+    if not document:
+        return
+    now = H.now()
+    target = "task:" + task_id
+    c.execute(
+        "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+        "last_activity_at, current_version, task_id) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET current_version=excluded.current_version",
+        (file_id, H.actor_id(by), target, file_id, document, now, now, version, task_id),
+    )
+    blob = H.new_id()
+    digest = "sha256:" + blob
+    c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,1,'page.html','text/html',?)",
+        (blob, by, digest, now),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+        "VALUES (?,?,?,?,1,'page.html','text/html',?,?)",
+        (file_id, version, blob, digest, by, now),
+    )
+    for old in L.pages_for(c, target, document):
+        if old != file_id:
+            L.unlink(c, old, target, document, by)
+    D.record(c, task_id, document, file_id, by)
+
+
 def say_done(c, row, by=None):
     """The owner says the stage's work is finished: one `done` answer on the stage's owner_done requirement. The task is
     not moved; call `task_engine.advance` for that."""
@@ -284,3 +350,9 @@ def no_sign_in(c, actor):
 
 def guard_closed(c):
     return c.execute("SELECT open FROM task_move_guards WHERE id=1").fetchone()[0] == 0
+
+
+def shown_on(api, title="Launch note", bot=None):
+    """`shown` on an app's database, for a test that asks through the API: `["page:<id>"]`."""
+    with api.app.state.store.transaction() as c:
+        return shown(c, title, bot=bot)

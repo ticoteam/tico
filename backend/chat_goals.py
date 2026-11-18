@@ -9,6 +9,7 @@ from pydantic import Field
 from . import models as M, providers
 from .store import H, Problem, bot_readiness, readiness_document, encode
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 TICO_COMMANDS = [
     {
@@ -168,7 +169,7 @@ def task_goal_objective(task, objective):
 
 def task_goal_row(c, auth, conv, bot, task, objective):
     """The active native goal a bot's task turn runs under, in the task's own room, or None (the runner then
-    works the goal from its prompt line). Made here when there is none, or when the keeper's own goal was cleared
+    works the goal from its prompt line). Made here when there is none, or when Tico's own goal was cleared
     (the task's goal was off) or set for an older objective. A goal a person set, edited or cleared in the room is
     theirs and stands. A paused or stopped goal stays so: the task does not spin it up again; a person resumes it."""
     if conv.get("closed_at"):
@@ -178,15 +179,15 @@ def task_goal_row(c, auth, conv, bot, task, objective):
         return None
     objective = task_goal_objective(task, objective)
     goal = current(c, conv["id"])
-    if goal and (goal["set_by"] != H.KEEPER or goal["objective"] == objective and goal["status"] != "cleared"):
+    if goal and (goal["set_by"] != H.TICO_ACTOR or goal["objective"] == objective and goal["status"] != "cleared"):
         return goal if goal["status"] == "active" else None
     now = H.now()
     c.execute("DELETE FROM chat_goals WHERE conversation_id=?", (conv["id"],))
     c.execute(
         "INSERT INTO chat_goals VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (H.new_id(), conv["id"], bot, objective, "active", "", H.KEEPER, now, now, None),
+        (H.new_id(), conv["id"], bot, objective, "active", "", H.TICO_ACTOR, now, now, None),
     )
-    H.event(c, H.KEEPER, "chat.goal", conv["id"], {"status": "active", "task": task["id"]})
+    H.event(c, H.TICO_ACTOR, "chat.goal", conv["id"], {"status": "active", "task": task["id"]})
     return current(c, conv["id"])
 
 
@@ -195,11 +196,11 @@ def clear_task_goal(c, conv):
     is cleared and a "/goal clear" control queued in the room, so the runner clears the native goal too.
     A goal a person set in the room is theirs and stays."""
     goal = current(c, conv["id"])
-    if goal and goal["set_by"] != H.KEEPER and goal["status"] == "cleared":
+    if goal and goal["set_by"] != H.TICO_ACTOR and goal["status"] == "cleared":
         # A person's clear stands while the task's goal is on; once it is off, turning it on again starts a new one.
-        c.execute("UPDATE chat_goals SET set_by=? WHERE id=?", (H.KEEPER, goal["id"]))
+        c.execute("UPDATE chat_goals SET set_by=? WHERE id=?", (H.TICO_ACTOR, goal["id"]))
         return None
-    if not goal or goal["set_by"] != H.KEEPER or goal["status"] not in ("active", "paused"):
+    if not goal or goal["set_by"] != H.TICO_ACTOR or goal["status"] not in ("active", "paused"):
         return None
     now = H.now()
     c.execute(
@@ -213,7 +214,7 @@ def clear_task_goal(c, conv):
     )
     H._write_message(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "bot:" + goal["bot"],
         "/goal clear",
         conv,
@@ -229,7 +230,7 @@ def clear_task_goal(c, conv):
         None,
         None,
     )
-    H.event(c, H.KEEPER, "chat.goal", conv["id"], {"status": "cleared", "task": conv["task_id"]})
+    H.event(c, H.TICO_ACTOR, "chat.goal", conv["id"], {"status": "cleared", "task": conv["task_id"]})
     return current(c, conv["id"])
 
 
@@ -246,7 +247,11 @@ def task_goal_ended(c, goal, task_id, status, note):
         from .execution import current_task_goal
 
         wanted = current_task_goal(c, goal["bot"], row)
-        if goal["set_by"] == H.KEEPER and wanted and goal["objective"] == task_goal_objective(row, wanted["objective"]):
+        if (
+            goal["set_by"] == H.TICO_ACTOR
+            and wanted
+            and goal["objective"] == task_goal_objective(row, wanted["objective"])
+        ):
             # The bot's own word, inside the transaction that read the task: the version it just read. With a company
             # rule in force the note is the fixed "Goal met.": the harness's words were never checked against the
             # rules, and no check can run inside this write (backend/task_rule_gate.py).
@@ -258,7 +263,10 @@ def task_goal_ended(c, goal, task_id, status, note):
 
 
 def install(app, store, auth, mutate, send):
-    @app.get("/api/v2/conversations/{cid}/goal")
+    @app.get(
+        "/api/v2/conversations/{cid}/goal",
+        **api_v2("Conversations", "getChatGoal", "Read the pinned goal and commands", "ChatGoalResult"),
+    )
     def read(request: Request, cid: str):
         with store.read() as c:
             conv = auth.conversation(c, request.state.identity, cid)
@@ -267,7 +275,10 @@ def install(app, store, auth, mutate, send):
                 auth.require_read(c, request.state.identity, bot)
             return {"goal": current(c, cid), "supported": supported, "commands": commands}
 
-    @app.post("/api/v2/conversations/{cid}/goal")
+    @app.post(
+        "/api/v2/conversations/{cid}/goal",
+        **api_v2("Conversations", "setChatGoal", "Set, edit, pause, resume or clear a native goal", "ChatGoalResult"),
+    )
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
             who = request.state.identity

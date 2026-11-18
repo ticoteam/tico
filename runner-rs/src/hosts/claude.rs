@@ -2,7 +2,8 @@
 //! bot thread. The prompt goes in on stdin as a stream-json user message and stdin stays open for steers;
 //! `--replay-user-messages` echoes each message as Claude reads it, so a `result` ends the runner's turn only
 //! when no steer is unread and no background task of the session still runs, and then stdin closes and the process
-//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile.
+//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers and
+//! stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -17,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::{
-    event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions,
+    event, failed, hub_mcp_server_by_name, is_auth_retryable, is_limit, shell_outside_actions,
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::util::{iso, log, py_dumps, text_of};
@@ -35,6 +36,12 @@ pub const STREAM_ARGS: &[&str] = &[
 ];
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a stopped turn has to end on Claude's own interrupt before its process is closed and killed.
+const INTERRUPT_GRACE: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(10)
+};
 /// How long a turn waits, after a `result`, with a steer unread and nothing at all on stdout.
 pub const STEER_READ_TIMEOUT_S: u64 = 120;
 /// How long a turn waits for Claude's `result` after Claude reported a usage limit and did no further model work.
@@ -44,6 +51,9 @@ const LIMIT_SETTLE: Duration = if cfg!(test) {
     Duration::from_secs(20)
 };
 const STEER_MIN_VERSION: (u64, u64, u64) = (2, 1, 296);
+/// The first Claude Code with `--effort`; an older one refuses the whole command for an unknown option. Every other
+/// flag `argv` passes is as old as the manifest's `[version] minimum` (runner-rs/harnesses/claude-code.toml).
+const EFFORT_MIN_VERSION: (u64, u64, u64) = (2, 1, 38);
 /// The tools that start a subagent: `Agent`, called `Task` by older Claude Code.
 const AGENT_TOOLS: &[&str] = &["Agent", "Task"];
 /// The tools whose every call keeps running in the background.
@@ -51,9 +61,13 @@ const BACKGROUND_TOOLS: &[&str] = &["Monitor"];
 pub const RESTORING: &str =
     "Saved provider session is unavailable; restoring this conversation's context.";
 
-pub fn version_tuple(text: &str) -> Option<(u64, u64, u64)> {
+/// The version on Claude Code's own `--version` line, `2.1.326 (Claude Code)`, and nothing else: a launcher or wrapper
+/// in front of it (`npx`, `op run --`) that answers with its own number never decides which flags a turn passes.
+pub fn own_version(text: &str) -> Option<(u64, u64, u64)> {
     static R: OnceLock<regex::Regex> = OnceLock::new();
-    let r = R.get_or_init(|| regex::Regex::new(r"(\d+)\.(\d+)\.(\d+)").unwrap());
+    let r = R.get_or_init(|| {
+        regex::Regex::new(r"(?mi)(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?[ \t]+\(Claude Code\)").unwrap()
+    });
     let c = r.captures(text)?;
     Some((c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?))
 }
@@ -142,10 +156,22 @@ fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
         .then_some((id.filter(|id| !id.is_empty()), tokens))
 }
 
-pub fn user_line(mid: &str, text: &str) -> String {
-    py_dumps(
-        &json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}}),
-    ) + "\n"
+/// A user message for stdin. `priority` "now" is a steer as the Agent SDK sends one: it ends the running step at once
+/// and the turn goes on with the message; with none, Claude reads it once the step ends.
+pub fn user_line(mid: &str, text: &str, priority: Option<&str>) -> String {
+    let mut msg = json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}});
+    if let Some(p) = priority {
+        msg["priority"] = json!(p);
+    }
+    py_dumps(&msg) + "\n"
+}
+
+/// The stream-json control request that interrupts the running turn, as the Agent SDK's `interrupt()` sends it.
+/// `cancel_queued` drops the follow-ups Claude has not started on too (older Claude Code ignores it).
+pub fn interrupt_line(request_id: &str) -> String {
+    py_dumps(&json!({"type": "control_request", "request_id": request_id,
+                     "request": {"subtype": "interrupt", "cancel_queued": true}}))
+        + "\n"
 }
 
 #[derive(Clone)]
@@ -156,9 +182,6 @@ pub(crate) struct Thread {
     session_id: Option<String>,
     /// The saved session was not on this computer and the thread restarted as a new one under the same id.
     restored: bool,
-    /// The next turn is a keep-warm turn (crate::prompt::keep_warm): one model turn, `--max-turns 1`. The tools stay
-    /// as they are, so the cached prefix the turn is there to read is the same.
-    one_turn: bool,
 }
 
 /// One process's stdin: what is still to write, whether it takes more, and which messages Claude has not read.
@@ -192,6 +215,8 @@ struct Pipe {
     wait: Option<Duration>,
     /// Claude's pid, for finding its shells.
     pid: Option<u32>,
+    /// The id of the interrupt request a stop sent: the turn's `result`, or Claude's answer to it, closes stdin.
+    interrupting: Option<String>,
     /// The turn ended on its wait: Claude was killed so its shells run on, and these are the ones kept.
     kept: Option<Vec<Value>>,
     /// Claude runs under a reaping parent that writes its shells' exit codes here.
@@ -200,13 +225,13 @@ struct Pipe {
 
 impl Pipe {
     /// Writes a follow-up message after the prompt; Claude has not read it until it replays it.
-    fn follow_up(&mut self, text: &str) {
+    fn follow_up(&mut self, text: &str, priority: Option<&str>) {
         let mid = uuid::Uuid::new_v4().to_string();
         self.unread.insert(mid.clone());
         self.order.push(mid.clone());
         self.followups.push(text.to_string());
         self.answered = false;
-        let _ = self.lines.send(Some(user_line(&mid, text)));
+        let _ = self.lines.send(Some(user_line(&mid, text, priority)));
     }
 
     fn close(&mut self) {
@@ -224,9 +249,10 @@ impl Pipe {
     }
 
     /// The bot answered and nothing is left but shells it started in the background: no subagent works, no
-    /// follow-up is unread.
+    /// follow-up is unread. Not once stopped: a stop ends the shells too.
     fn only_waiting(&self) -> bool {
         self.open
+            && self.interrupting.is_none()
             && self.answered
             && self.unread.is_empty()
             && self.background > 0
@@ -504,8 +530,11 @@ struct Shared {
     cmd: Vec<String>,
     tx: Events,
     steer: std::sync::atomic::AtomicBool,
+    effort: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
+    /// The run this host's turn belongs to, for its timing marks (flight.rs); empty until the runner names it.
+    attempt: Mutex<String>,
 }
 
 #[derive(Clone)]
@@ -515,7 +544,10 @@ pub struct ClaudeHost(Arc<Shared>);
 #[derive(Clone)]
 struct Features {
     version: String,
+    /// Steering (STEER_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it off.
     steer: bool,
+    /// `--effort` (EFFORT_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it out.
+    effort: bool,
 }
 
 fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
@@ -523,11 +555,14 @@ fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Steering needs a Claude Code that replays its input (STEER_MIN_VERSION): read from the version alone.
+/// Steering (it needs a Claude Code that replays its input) and `--effort` are both read from the version line that is
+/// Claude Code's own: a wrapper's number never turns either on.
 fn read_features(version: &str) -> Features {
+    let own = own_version(version);
     Features {
         version: version.to_string(),
-        steer: version_tuple(version).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION,
+        steer: own.is_some_and(|v| v >= STEER_MIN_VERSION),
+        effort: own.is_some_and(|v| v >= EFFORT_MIN_VERSION),
     }
 }
 
@@ -557,9 +592,32 @@ impl ClaudeHost {
             cmd,
             tx,
             steer: false.into(),
+            effort: false.into(),
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
+            attempt: Mutex::new(String::new()),
         }))
+    }
+
+    /// Names the run this host's turns belong to, so its own marks land on that run's timings.
+    pub fn set_attempt(&self, aid: &str) {
+        *self.0.attempt.lock().unwrap_or_else(|p| p.into_inner()) = aid.to_string();
+    }
+
+    fn attempt(&self) -> String {
+        self.0
+            .attempt
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// A timing mark on the named run (crate::util::mark); nothing before `set_attempt`.
+    fn mark(&self, name: &str) {
+        let aid = self.attempt();
+        if !aid.is_empty() {
+            crate::util::mark(name, &aid);
+        }
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -604,6 +662,9 @@ impl ClaudeHost {
         self.0
             .steer
             .store(known.steer, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .effort
+            .store(known.effort, std::sync::atomic::Ordering::Relaxed);
         self.inner().up = true;
         Ok(())
     }
@@ -674,7 +735,6 @@ impl ClaudeHost {
                 fork_from,
                 session_id: None,
                 restored: false,
-                one_turn: false,
             },
         );
         id
@@ -689,7 +749,6 @@ impl ClaudeHost {
                 fork_from: None,
                 session_id: None,
                 restored: false,
-                one_turn: false,
             },
         );
         thread_id.into()
@@ -736,23 +795,6 @@ impl ClaudeHost {
         };
     }
 
-    /// Whether the session `thread_id` resumes is saved on this computer (its transcript is here). Claude itself finds
-    /// out only when a turn runs; a keep-warm turn must know before, so it never starts a session that is not there.
-    pub fn session_saved(&self, thread_id: &str) -> bool {
-        let inner = self.inner();
-        inner
-            .threads
-            .get(thread_id)
-            .is_some_and(|t| transcript(&t.settings, &session_of(thread_id, t)).is_some())
-    }
-
-    /// The next turn on `thread_id` makes one model turn and no more (a keep-warm turn).
-    pub fn one_turn(&self, thread_id: &str) {
-        if let Some(t) = self.inner().threads.get_mut(thread_id) {
-            t.one_turn = true;
-        }
-    }
-
     pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
         let mut inner = self.inner();
         match text {
@@ -766,7 +808,9 @@ impl ClaudeHost {
         argv.push("-p".into());
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
-        if let Some(hub) = hub_mcp_server(&t.settings.env) {
+        // `--mcp-config` is on the command line, which any user on the computer can read: the hub's token and other
+        // values go as `${VAR}`, which Claude expands from the turn's environment (`turn_env`).
+        if let Some(hub) = hub_mcp_server_by_name(&t.settings.env) {
             servers.insert("tico".into(), hub);
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
@@ -795,19 +839,24 @@ impl ClaudeHost {
         if let Some(m) = model_for(t.settings.model.as_deref()) {
             argv.extend(["--model".into(), m]);
         }
-        if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref())) {
+        // Only to a Claude Code that has the flag (start): an older one would refuse the turn, so it runs at its default.
+        if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref()))
+            .filter(|_| self.0.effort.load(std::sync::atomic::Ordering::Relaxed))
+        {
             argv.extend(["--effort".into(), e]);
         }
-        if t.one_turn {
-            argv.extend(["--max-turns".into(), "1".into()]);
-        }
         // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
-        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
+        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move,
+        // and the bot's output style goes in the same one `--settings` (a second would replace the first).
+        let mut flag = serde_json::Map::new();
         if let Some(dir) = t.settings.memory_dir.as_deref() {
-            argv.extend([
-                "--settings".into(),
-                py_dumps(&json!({"autoMemoryDirectory": dir})),
-            ]);
+            flag.insert("autoMemoryDirectory".into(), json!(dir));
+        }
+        if let Some(style) = t.settings.output_style.as_deref() {
+            flag.insert("outputStyle".into(), json!(style));
+        }
+        if !flag.is_empty() {
+            argv.extend(["--settings".into(), py_dumps(&Value::Object(flag))]);
         }
         if let Some(from) = &t.fork_from {
             argv.extend([
@@ -912,7 +961,7 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        let (child, stderr) = {
+        let (child, stderr, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
                 return Err(failed("claude host is not running"));
@@ -925,25 +974,26 @@ impl ClaudeHost {
                 .get(thread_id)
                 .cloned()
                 .ok_or_else(|| failed(format!("unknown claude thread {thread_id}")))?;
-            if let Some(size) = transcript(&t.settings, &session_of(thread_id, &t))
+            let size = transcript(&t.settings, &session_of(thread_id, &t))
                 .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.len())
-            {
+                .map(|m| m.len());
+            if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
             let (child, stderr, reaping) = self
                 .launch(thread_id, &t, effort)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
-            if let Some(kept) = inner.threads.get_mut(thread_id) {
-                kept.one_turn = false; // that turn only
-            }
             inner.reaping = reaping;
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
             inner.context.remove(thread_id);
-            (child, stderr)
+            (child, stderr, size.unwrap_or(0))
         };
+        // Spawned now: whatever the runner holds the turn for after this (a cold sign-in) is not Claude's boot.
+        self.mark("claude_spawned");
+        // The session Claude resumes, by size: whether resuming takes longer as a thread grows.
+        crate::flight::fact(&self.attempt(), "transcript_bytes", transcript_bytes);
         log(&format!(
             "claude[{}]: turn started pid {}",
             self.0.bot,
@@ -982,7 +1032,7 @@ impl ClaudeHost {
     ) {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let first = uuid::Uuid::new_v4().to_string();
-        let _ = tx.send(Some(user_line(&first, text)));
+        let _ = tx.send(Some(user_line(&first, text, None)));
         let mut stdin = stdin;
         let capture = self.capture();
         // Its own task: a prompt can be larger than the pipe's buffer, and nothing else waits on it.
@@ -1026,9 +1076,11 @@ impl ClaudeHost {
             pid,
             kept: None,
             reaping,
+            interrupting: None,
         };
+        // Written right behind the prompt, they steer no running step.
         for text in carried {
-            pipe.follow_up(&text);
+            pipe.follow_up(&text, None);
         }
         inner.pipe = Some(pipe);
     }
@@ -1139,6 +1191,7 @@ impl ClaudeHost {
                         if self.before_prompt(&msg) {
                             continue;
                         }
+                        self.mark("claude_result");
                         self.settle(&turn, &msg);
                         self.track_wait(&msg);
                         result = Some(msg);
@@ -1510,6 +1563,11 @@ impl ClaudeHost {
                 }
             }
             "assistant" => {
+                // A reply the limit blocked carries the limit itself, and Claude does not repeat an unchanged
+                // `rate_limit_event`, so this may be the only sign of it.
+                if msg["error"] == "rate_limit" || msg["api_error"] == "usage_limit_reached" {
+                    self.rate_limit_info(&msg["api_error_params"]["rate_limit_info"], tid, turn);
+                }
                 let m = &msg["message"];
                 let text: String = m["content"]
                     .as_array()
@@ -1576,11 +1634,12 @@ impl ClaudeHost {
                         .as_mut()
                         .filter(|p| p.open && p.limit_at.is_none())
                     {
-                        p.follow_up(&text);
+                        p.follow_up(&text, None);
                     }
                 }
             }
             "system" if msg["subtype"] == "init" => {
+                self.mark("claude_init");
                 let session = msg["session_id"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -1600,23 +1659,29 @@ impl ClaudeHost {
                     json!({"session_id": session}),
                 ));
             }
-            "rate_limit_event" => {
-                let info = &msg["rate_limit_info"];
-                // Rejected with overage in use: extra usage pays and the model keeps working.
-                if info["status"] == "rejected" && info["isUsingOverage"] != true {
-                    let mut inner = self.inner();
-                    inner.limited.insert(turn.into());
-                    if let Some(p) = inner.pipe.as_mut() {
-                        p.limit_at.get_or_insert(Instant::now() + LIMIT_SETTLE);
-                        p.limit_text
-                            .get_or_insert_with(|| "Claude usage limit reached".into());
+            "rate_limit_event" => self.rate_limit_info(&msg["rate_limit_info"], tid, turn),
+            "control_response" => {
+                let mut inner = self.inner();
+                if let Some(p) = inner.pipe.as_mut() {
+                    // Claude took the stop: the turn is over, so nothing more goes in.
+                    if p.interrupting.is_some()
+                        && msg["response"]["request_id"].as_str() == p.interrupting.as_deref()
+                    {
+                        p.close();
                     }
                 }
-                for payload in rate_limit_windows(info) {
-                    self.emit(event("rate_limits", Some(tid), Some(turn), payload));
-                }
             }
-            "result" => return true,
+            "result" => {
+                if let Some(p) = self
+                    .inner()
+                    .pipe
+                    .as_mut()
+                    .filter(|p| p.interrupting.is_some())
+                {
+                    p.close();
+                }
+                return true;
+            }
             _ => {}
         }
         false
@@ -1952,7 +2017,8 @@ impl ClaudeHost {
             ));
         }
         let turn = self.start_goal(thread_id, "set", objective, effort)?;
-        if let Err(HostError::SteerRefused(_)) = self.steer(thread_id, &turn, text) {
+        // Part of the turn's input, not a steer: it must not cut the goal's first step short.
+        if let Err(HostError::SteerRefused(_)) = self.write_in(thread_id, &turn, text, None) {
             // Only a turn that ended at once refuses it: the goal holds, and the task's next turn brings its prompt.
             log(&format!(
                 "claude[{}]: the task prompt missed the goal turn",
@@ -2027,8 +2093,19 @@ impl ClaudeHost {
             .insert(thread_id.into(), offset + complete as u64);
     }
 
-    /// Write `text` into the running turn, or refuse with nothing written once it is over or ending.
+    /// Write `text` into the running turn, or refuse with nothing written once it is over or ending. It goes as the
+    /// Agent SDK sends a steer (priority "now"): the running step ends and the turn goes on with it.
     pub fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
+        self.write_in(thread_id, turn_id, text, Some("now"))
+    }
+
+    fn write_in(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        text: &str,
+        priority: Option<&str>,
+    ) -> Result<(), HostError> {
         let mut inner = self.inner();
         let running = inner
             .turn
@@ -2036,8 +2113,8 @@ impl ClaudeHost {
             .is_some_and(|(t, u)| t == thread_id && u == turn_id);
         match inner.pipe.as_mut() {
             // Not once Claude reported a limit: the turn is ending, so the input goes to the next one.
-            Some(p) if running && p.open && p.limit_at.is_none() => {
-                p.follow_up(text);
+            Some(p) if running && p.open && p.limit_at.is_none() && p.interrupting.is_none() => {
+                p.follow_up(text, priority);
                 Ok(())
             }
             _ => Err(HostError::SteerRefused(format!(
@@ -2052,24 +2129,82 @@ impl ClaudeHost {
         self.inner().replay_fallback_logged
     }
 
+    /// Stops the turn as the Agent SDK does: an interrupt request on stdin, so Claude ends the turn itself and saves
+    /// it; its `result`, or its answer to the request, closes stdin and the process exits. A turn not over within
+    /// `INTERRUPT_GRACE`, or one whose stdin is already closed, is closed and killed with all it started.
     pub fn interrupt(&self, _thread_id: &str, turn_id: &str) {
         let mut inner = self.inner();
         if inner.turn.as_ref().is_none_or(|(_, t)| t != turn_id) {
             return; // already over; nothing to stop
         }
         inner.interrupted.insert(turn_id.into());
-        if let Some(p) = inner.pipe.as_mut() {
-            p.close();
-            p.stopper.terminate(STOP_TIMEOUT);
+        let Some(p) = inner.pipe.as_mut() else { return };
+        if !p.open || p.interrupting.is_some() {
+            if p.interrupting.is_none() {
+                p.stopper.terminate(STOP_TIMEOUT);
+            }
+            return;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let _ = p.lines.send(Some(interrupt_line(&id)));
+        p.interrupting = Some(id);
+        p.awaiting = None;
+        p.limit_at = None;
+        drop(inner);
+        let host = self.clone();
+        let turn = turn_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(INTERRUPT_GRACE).await;
+            let mut inner = host.inner();
+            if inner.turn.as_ref().is_some_and(|(_, t)| *t == turn) {
+                if let Some(p) = inner.pipe.as_mut().filter(|p| p.kept.is_none()) {
+                    log(&format!(
+                        "claude[{}]: the turn did not end on its interrupt; stopping Claude",
+                        host.0.bot
+                    ));
+                    p.close();
+                    p.stopper.terminate(STOP_TIMEOUT);
+                }
+            }
+        });
+    }
+
+    /// Records a `rate_limit_info` (from a `rate_limit_event`, or a reply the limit blocked) and passes on its usage
+    /// windows. A rejection extra usage does not pay for ends the turn as limited.
+    fn rate_limit_info(&self, info: &Value, tid: &str, turn: &str) {
+        if !info.is_object() {
+            return;
+        }
+        if limit_rejected(info) {
+            let mut inner = self.inner();
+            inner.limited.insert(turn.into());
+            if let Some(p) = inner.pipe.as_mut() {
+                p.limit_at.get_or_insert(Instant::now() + LIMIT_SETTLE);
+                p.limit_text
+                    .get_or_insert_with(|| "Claude usage limit reached".into());
+            }
+        }
+        for payload in rate_limit_windows(info) {
+            self.emit(event("rate_limits", Some(tid), Some(turn), payload));
         }
     }
+}
+
+/// A rejection that stops the model: overage allowed or in use pays for the request and the model keeps working.
+fn limit_rejected(info: &Value) -> bool {
+    let overage = matches!(
+        info["overageStatus"].as_str(),
+        Some("allowed" | "allowed_warning")
+    ) || info["isUsingOverage"] == true
+        || info["overageInUse"] == true;
+    info["status"] == "rejected" && !overage
 }
 
 /// The usage windows of a `rate_limit_event` as `rate_limits` payloads. Claude Code 2.1.30x adds `unifiedWindows`
 /// (`five_hour`, `seven_day`), each with a `utilization` from 0 to 1; that field is undocumented, so a window whose
 /// utilization is missing or out of range reads unknown (null), never 0 or 100, and any other window name is left out.
 /// Without it (an older CLI) only `rateLimitType`'s window goes, with no percentage.
-fn rate_limit_windows(info: &Value) -> Vec<Value> {
+pub(crate) fn rate_limit_windows(info: &Value) -> Vec<Value> {
     let minutes = |name: &str| match name {
         "five_hour" => Some(300),
         "seven_day" => Some(7 * 24 * 60),
@@ -2123,7 +2258,8 @@ fn session_of(thread_id: &str, t: &Thread) -> String {
 
 /// This exact session's transcript: other bots' and people's transcripts stay private.
 fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> {
-    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env never lets CLAUDE_CONFIG_DIR through.
+    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env lets no other CLAUDE_CONFIG_DIR through (a full
+    // login's links `projects` back there).
     let home = turn_env(settings).remove("HOME").unwrap_or_default();
     let dir = std::path::Path::new(&home).join(".claude");
     let name = format!("{session}.jsonl");
@@ -2199,8 +2335,15 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
         }
     }
     // Claude reads CLAUDE_CONFIG_DIR ahead of HOME: one inherited from this process (or brought by a grant) would run
-    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME.
-    env.remove("CLAUDE_CONFIG_DIR");
+    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME. The one
+    // exception is the home of a full Claude login handed to this turn (model_subscriptions.rs), which links the rest
+    // of HOME's .claude in, `projects` among it.
+    if !env
+        .get("CLAUDE_CONFIG_DIR")
+        .is_some_and(|d| crate::model_subscriptions::is_config_home(d))
+    {
+        env.remove("CLAUDE_CONFIG_DIR");
+    }
     env
 }
 
@@ -2465,6 +2608,61 @@ mod tests {
     }
 
     #[test]
+    fn no_secret_value_is_on_the_claude_command_line() {
+        // Synthetic values only: any process on the computer can read a command line.
+        let token = "synthetic-run-token-0f3a9c";
+        let header = "synthetic-header-secret-7b21";
+        let dir =
+            std::env::temp_dir().join(format!("claude-argv-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            mcp_servers: vec![json!({"name": "linear", "transport": "http",
+                "url": "https://mcp.invalid/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})],
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("HUB_API_URL", "http://hub.invalid"),
+            ("HUB_TOKEN", token),
+            ("HUB_BOT", "acme"),
+            ("HUB_EMPLOYEE", "acme"),
+            ("HUB_DIR", "/hub.invalid"),
+            ("LINEAR_KEY", header),
+        ] {
+            settings.env.insert(k.into(), v.into());
+        }
+        // Every kind of Claude turn builds its command line here: a fresh, a resumed and a forked one.
+        let fresh = host.start_thread(&settings);
+        let forked = host.start_thread_forked(&settings, "old-session");
+        for thread in [&fresh, &forked] {
+            let argv = host.argv(thread, &host.inner().threads[thread].clone(), Some("high"));
+            for arg in &argv {
+                assert!(!arg.contains(token), "run token in {arg}");
+                assert!(!arg.contains(header), "header secret in {arg}");
+            }
+            let config: Value = serde_json::from_str(
+                &argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1],
+            )
+            .unwrap();
+            let tico = &config["mcpServers"]["tico"];
+            for k in crate::hosts::HUB_MCP_ENV {
+                assert_eq!(tico["env"][*k], format!("${{{k}}}"));
+            }
+            assert_eq!(
+                config["mcpServers"]["linear"]["headers"]["Authorization"],
+                "Bearer ${LINEAR_KEY}"
+            );
+        }
+        // Claude expands the placeholders from the turn's own environment, which keeps the values.
+        let env = turn_env(&settings);
+        assert_eq!(env["HUB_TOKEN"], token);
+        assert_eq!(env["LINEAR_KEY"], header);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn auto_memory_is_on_in_the_repository_and_claude_compacts_at_the_turns_compact_at() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
@@ -2493,6 +2691,43 @@ mod tests {
         let env = turn_env(&settings);
         assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
         assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "120000");
+    }
+
+    #[test]
+    fn the_output_style_goes_in_the_one_settings_flag_beside_auto_memory_and_default_adds_none() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let given = |settings: &Settings| -> Vec<Value> {
+            let thread = host.start_thread(settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+            argv.iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--settings")
+                .map(|(i, _)| serde_json::from_str(&argv[i + 1]).unwrap())
+                .collect()
+        };
+        let mut settings = Settings {
+            cwd: "/w/bot-acme".into(),
+            memory_dir: Some("/w/bot-acme/memory/claude".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            given(&settings),
+            vec![
+                json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude", "outputStyle": "Concise"})
+            ]
+        );
+        settings.memory_dir = None;
+        assert_eq!(given(&settings), vec![json!({"outputStyle": "Concise"})]);
+        // Default (none saved, or an older server) passes no outputStyle, and with no memory folder no --settings.
+        settings.output_style = None;
+        assert!(given(&settings).is_empty());
+        settings.memory_dir = Some("/w/bot-acme/memory/claude".into());
+        assert_eq!(
+            given(&settings),
+            vec![json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})]
+        );
     }
 
     #[test]
@@ -2709,6 +2944,65 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    #[tokio::test]
+    async fn a_turn_marks_its_spawn_init_and_result_and_its_transcript_size() {
+        let dir =
+            std::env::temp_dir().join(format!("claude-marks-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("out.jsonl"),
+            concat!(
+                r#"{"type": "system", "subtype": "init", "session_id": "s-marks"}"#,
+                "\n",
+                r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 1, "output_tokens": 1}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\ncat out.jsonl\ncat >/dev/null\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        let thread = host.start_thread(&settings);
+        // The session it resumes: its size goes with the turn's marks.
+        let folder = dir.join(".claude/projects/acme");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{thread}.jsonl")), "x".repeat(1234)).unwrap();
+        let aid = format!("marks-{}", uuid::Uuid::new_v4().simple());
+        crate::flight::track();
+        crate::flight::phase("claimed", &aid);
+        host.set_attempt(&aid);
+        host.start_turn(&thread, "hello", None).unwrap();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if ev["kind"] == "status" && ev["state"] == "idle" {
+                break;
+            }
+        }
+        let t = crate::flight::timings(&aid).unwrap();
+        let at = |name: &str| {
+            t["phases"][name]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{name}: {t}"))
+        };
+        assert!(at("claude_spawned") <= at("claude_init"), "{t}");
+        assert!(at("claude_init") <= at("claude_result"), "{t}");
+        assert_eq!(t["transcript_bytes"], 1234, "{t}");
+        crate::flight::turn_end(&aid, "acme", "claude", "completed", true);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     const BG_STARTED: &str = r#"{"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "a1", "task_type": "local_agent", "description": "Build concept A"}]}"#;
@@ -3359,6 +3653,123 @@ mod tests {
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"), "{got:?}");
     }
 
+    #[tokio::test]
+    async fn a_reply_the_limit_blocked_marks_the_limit_and_its_reset_with_no_rate_limit_event() {
+        // Claude Code does not repeat an unchanged `rate_limit_event`; each reply the limit blocks carries it instead.
+        let blocked = r#"{"type": "assistant", "message": {"id": "m", "model": "<synthetic>", "role": "assistant", "content": [{"type": "text", "text": "API Error: Request rejected (429)"}]}, "parent_tool_use_id": null, "error": "rate_limit", "api_error": "usage_limit_reached", "api_error_params": {"rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day", "resetsAt": 4102444800, "overageStatus": "rejected", "isUsingOverage": false}}}"#;
+        let (got, _) = limit_turn(&format!("{blocked}\n"), "", false).await;
+        let failed = got.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert_eq!(failed["limit"], true, "{got:?}");
+        let window = got.iter().find(|e| e["kind"] == "rate_limits").unwrap();
+        assert_eq!(
+            (
+                &window["status"],
+                &window["window_minutes"],
+                &window["resets_at"]
+            ),
+            (
+                &json!("rejected"),
+                &json!(10080),
+                &json!("2100-01-01T00:00:00+00:00")
+            ),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejection_extra_usage_pays_for_is_no_limit() {
+        let rejected = json!({"status": "rejected", "rateLimitType": "five_hour"});
+        assert!(limit_rejected(&rejected));
+        for paid in [
+            json!({"isUsingOverage": true}),
+            json!({"overageInUse": true}),
+            json!({"overageStatus": "allowed"}),
+            json!({"overageStatus": "allowed_warning"}),
+        ] {
+            let mut info = rejected.clone();
+            info.as_object_mut()
+                .unwrap()
+                .extend(paid.as_object().unwrap().clone());
+            assert!(!limit_rejected(&info), "{info}");
+        }
+        assert!(!limit_rejected(&json!({"status": "allowed_warning"})));
+    }
+
+    /// Runs one turn on a `claude` that writes an assistant line, keeps the next line it reads in `sent`, and then
+    /// runs `after`; a SIGTERM leaves a `termed` file. Stops the turn once the assistant line is read and returns the
+    /// events, the line Claude was sent, whether it was signalled, and how long the turn took to end after the stop.
+    async fn stopped_turn(after: &str) -> (Vec<Value>, Value, bool, Duration) {
+        let dir =
+            std::env::temp_dir().join(format!("claude-stop-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            &format!("#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\ntrap 'touch termed; exit 143' TERM\nIFS= read -r line\necho '{}'\nIFS= read -r line\nprintf '%s\\n' \"$line\" > sent\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"request_id\": *\"\\([^\"]*\\)\".*/\\1/p')\n{after}\n", assistant_line("m1", "Working on it.")),
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        let turn = host.start_turn(&thread, "hello", None).unwrap();
+        let (mut got, mut stopped) = (vec![], None);
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if stopped.is_none() && ev["kind"] == "message" {
+                host.interrupt(&thread, &turn);
+                stopped = Some(Instant::now());
+            }
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let took = stopped.expect("the turn was stopped").elapsed();
+        let sent = std::fs::read_to_string(dir.join("sent")).unwrap_or_default();
+        let sent = serde_json::from_str(sent.trim()).unwrap_or(Value::Null);
+        let termed = dir.join("termed").exists();
+        std::fs::remove_dir_all(dir).unwrap();
+        (got, sent, termed, took)
+    }
+
+    #[tokio::test]
+    async fn a_stop_asks_claude_to_interrupt_and_the_turn_ends_on_its_answer() {
+        // Claude answers the request, ends the turn with its `result`, and exits once stdin closes.
+        let answer = r#"printf '{"type": "control_response", "response": {"subtype": "success", "request_id": "%s"}}\n' "$id"
+echo '{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 1, "result": "", "usage": {"input_tokens": 1, "output_tokens": 1}}'
+cat >/dev/null"#;
+        let (got, sent, termed, took) = stopped_turn(answer).await;
+        assert_eq!(sent["type"], "control_request", "{sent}");
+        assert_eq!(sent["request"]["subtype"], "interrupt", "{sent}");
+        // The grace ends in a SIGTERM, so a turn that ended on it was never signalled.
+        assert!(
+            !termed,
+            "Claude was signalled though it ended the turn itself, {took:?} after the stop"
+        );
+        let end: Vec<_> = got
+            .iter()
+            .filter(|e| e["kind"].as_str().is_some_and(|k| k.starts_with("turn_")))
+            .collect();
+        assert_eq!(end.len(), 1, "{got:?}");
+        assert_eq!(end[0]["kind"], "turn_completed");
+        assert_eq!(end[0]["status"], "interrupted");
+    }
+
+    #[tokio::test]
+    async fn a_stop_claude_does_not_answer_closes_and_kills_it_after_the_grace() {
+        let (got, sent, termed, took) = stopped_turn("while :; do sleep 0.05; done").await;
+        assert_eq!(sent["request"]["subtype"], "interrupt", "{sent}");
+        assert!(termed, "the turn ended without its process being stopped");
+        assert!(took >= INTERRUPT_GRACE, "{took:?}");
+        let end = got.iter().find(|e| e["kind"] == "turn_completed").unwrap();
+        assert_eq!(end["status"], "interrupted", "{got:?}");
+    }
+
     #[test]
     fn both_usage_windows_carry_their_percentage() {
         // Claude Code 2.1.301's event, as read on a Max login (Oct 16 2026).
@@ -3501,10 +3912,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn a_bots_model_and_effort_reach_claude_code() {
+    /// `--model` and `--effort` of a turn on a Claude Code whose `--version` the probe read as `version`.
+    async fn model_and_effort(version: &str) -> (Option<String>, Option<String>) {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        // A command of its own, so the features noted here are this case's alone.
+        let cmd = vec![format!("claude-{}", uuid::Uuid::new_v4().simple())];
+        note_version(&cmd, version).await;
+        let host = ClaudeHost::new("acme", cmd, tx);
+        host.start().await.unwrap();
         let settings = Settings {
             model: Some("claude-haiku-5-5".into()),
             effort: Some("xhigh".into()),
@@ -3515,12 +3930,70 @@ mod tests {
         let after = |flag: &str| {
             argv.iter()
                 .position(|a| a == flag)
-                .map(|i| argv[i + 1].as_str())
+                .map(|i| argv[i + 1].clone())
         };
+        (after("--model"), after("--effort"))
+    }
+
+    #[tokio::test]
+    async fn a_bots_model_and_effort_reach_a_claude_code_that_has_the_flag() {
+        let both = (Some("claude-haiku-5-5".into()), Some("xhigh".into()));
+        assert_eq!(model_and_effort("2.1.38 (Claude Code)").await, both);
+        assert_eq!(model_and_effort("2.1.326 (Claude Code)").await, both);
+        // Older than `--effort`: the turn runs at Claude Code's default rather than failing on an unknown option.
+        let model_only = (Some("claude-haiku-5-5".into()), None);
+        assert_eq!(model_and_effort("2.1.37 (Claude Code)").await, model_only);
+        // A wrapper's own number is not Claude Code's version: unknown, so the flag stays out.
+        assert_eq!(model_and_effort("2.1.999").await, model_only);
+    }
+
+    #[test]
+    fn only_claude_codes_own_version_line_counts() {
+        assert_eq!(own_version("2.1.326 (Claude Code)"), Some((2, 1, 326)));
+        assert_eq!(own_version("  2.1.38 (claude code)\n"), Some((2, 1, 38)));
+        assert_eq!(own_version("2.1.40-beta.1 (Claude Code)"), Some((2, 1, 40)));
+        // A launcher that prints its own version first, then Claude Code's line.
         assert_eq!(
-            (after("--model"), after("--effort")),
-            (Some("claude-haiku-5-5"), Some("xhigh"))
+            own_version("op 2.30.0\n2.1.300 (Claude Code)"),
+            Some((2, 1, 300))
         );
+        for other in [
+            "2.1.326",
+            "npx 10.9.2",
+            "v2.1.326 (Claude Code)",
+            "codex-cli 0.169.0",
+            "",
+        ] {
+            assert_eq!(own_version(other), None, "{other:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bare_or_wrapped_version_leaves_steering_and_goals_off() {
+        // Steering and goals read Claude Code's own version line, as --effort does: a number on any other line (a
+        // bare `2.1.999`, a launcher's `npx 10.9.2`) is not Claude Code's version, so none of the three turns on.
+        for text in ["2.1.999", "npx 10.9.2"] {
+            let features = read_features(text);
+            assert!(!features.steer && !features.effort, "{text:?}");
+            let (supported, commands) =
+                crate::hosts::probe_goals("claude", std::path::Path::new("claude"), text).await;
+            assert!(
+                !supported && commands.is_empty(),
+                "{text:?} turned goals on"
+            );
+            // The turn a probe that read this version starts: its features come from the version alone.
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let cmd = vec![format!("claude-{}", uuid::Uuid::new_v4().simple())];
+            note_version(&cmd, text).await;
+            let host = ClaudeHost::new("acme", cmd, tx);
+            host.start().await.unwrap();
+            assert!(!host.supports_steer(), "{text:?} turned steering on");
+        }
+        let own = "2.1.999 (Claude Code)";
+        assert!(read_features(own).steer);
+        let (supported, _) =
+            crate::hosts::probe_goals("claude", std::path::Path::new("claude"), own).await;
+        assert!(supported);
     }
 
     #[test]
@@ -3532,7 +4005,6 @@ mod tests {
         );
         assert_eq!(effort_for(Some("XHIGH")).as_deref(), Some("xhigh"));
         assert_eq!(effort_for(Some("minimal")), None);
-        assert_eq!(version_tuple("2.1.296 (Claude Code)"), Some((2, 1, 296)));
         assert_eq!(
             usage_tokens(
                 &json!({"input_tokens": 3, "cache_creation_input_tokens": 4, "cache_read_input_tokens": "5", "output_tokens": 7})
@@ -3675,24 +4147,5 @@ mod feature_tests {
             "a changed version runs no process either"
         );
         std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn a_keep_warm_turn_runs_one_model_turn_with_the_same_tools() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
-        let thread = host.resume_thread("s-1", &Settings::default());
-        let plain = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        host.one_turn(&thread);
-        let warm = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        let at = warm
-            .iter()
-            .position(|a| a == "--max-turns")
-            .expect("--max-turns");
-        assert_eq!(warm[at + 1], "1");
-        // Only the limit is added: the tools and settings that make up the cached prefix are the same.
-        let mut without = warm.clone();
-        without.drain(at..at + 2);
-        assert_eq!(without, plain);
     }
 }

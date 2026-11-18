@@ -17,16 +17,16 @@ from clients import gateway, sessions
 from . import access as Access
 from . import cloud_access, start_places
 from . import lifecycle
+from . import runner_online
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import app_delivery, login_holds, needs_lane, providers, runner_versions, runs
+from . import login_holds, needs_lane, providers, runner_versions, runs
 from .runs import LIVE as LIVE_RUN_STATES
-from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
-from . import bot_rows, bot_stops, run_triggers
+from . import bot_rows, holds, run_triggers
 
 from . import read_cache, roster_clock
 from .store import (
@@ -44,6 +44,7 @@ from . import task_privacy as privacy
 from .usage_records import ran_on
 from . import task_relations as TR
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 
 MIN_RUNNER_VERSION = (0, 2, 0)
@@ -119,11 +120,11 @@ def prime_attempt_details(c, ids):
 
 def attempt_details(c, turn):
     """What a run's attempt row adds to its turn: `state` (run.state, backend/runs.py; None for a turn with no attempt
-    row), its diagnostics and load, and why it failed."""
+    row), its diagnostics and load, where its time went (`timings`), and why it failed."""
     attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
-    from .performance import attempt_snapshots
+    from .performance import attempt_snapshots, run_timings
 
     details = {
         "state": runs.state(attempt["state"]) if attempt else None,
@@ -131,6 +132,7 @@ def attempt_details(c, turn):
         "didnt_start": failed and not attempt["started_at"],
         **metadata(c, turn["id"]),
         **attempt_snapshots(c, turn["id"]),
+        "timings": run_timings(attempt["result"]) if attempt else None,
     }
     if failed:
         try:
@@ -220,7 +222,6 @@ def computer_details(c, row, who, auth):
     readiness = readiness_document(value.get("readiness"))
     access = auth.bot_accesses(c, who)
     assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
-    shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {
         bot: {k: v for k, v in report.items() if k != "tools"}
         for bot, report in readiness.get("bots", {}).items()
@@ -244,23 +245,7 @@ def computer_details(c, row, who, auth):
         "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
         "services": [],
         "services_scope": "team",
-        "shared_logins": shared,
     }
-
-
-def subscription_login(runtime, detail):
-    """Whether a sign-in detail names a subscription login, as the runner bills it (runner-rs/src/execute.rs
-    billing_for): "Signed in ..." naming the harness's `subscription_marker` and no API key."""
-    from .harnesses import harness_caps
-
-    marker = str(harness_caps(runtime).get("subscription_marker") or "").lower()
-    detail = str(detail or "")
-    return (
-        bool(marker)
-        and detail.lower().startswith("signed in")
-        and marker in detail.lower()
-        and not re.search(r"(?i)api[ _-]?key", detail)
-    )
 
 
 def assignments_by_runner(c):
@@ -286,57 +271,6 @@ def assignments_by_runner(c):
     return ordered, active
 
 
-def shared_logins(c, runner_id, readiness, assigned, access, names=None):
-    """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
-    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
-    omitted: its bots run concurrently on one ChatGPT login. One row per login: its
-    runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
-    it and the ones this reader may see. A key login runs its bots side by side and is left out.
-
-    `names` is `{connection_id: display_name}` from `subscription_identity.display_names` when the caller already
-    loaded every rename (Operations listing).
-    """
-    from .harnesses import harness_caps
-    from .subscription_identity import connection_id, identity
-
-    runtimes = readiness.get("runtimes") or {}
-    logins = {}
-    for bot, report in (readiness.get("bots") or {}).items():
-        if bot not in assigned or not isinstance(report, dict):
-            continue
-        runtime, profile = str(report.get("runtime") or ""), str(report.get("profile") or "")
-        if not harness_caps(runtime).get("one_turn_per_login"):
-            continue
-        row = runtimes.get(runtime) or {}
-        login = ((row.get("profiles") or {}).get(profile) if profile and row.get("profiles") else row) or {}
-        if not subscription_login(runtime, login.get("detail")):
-            continue
-        logins.setdefault((runtime, profile), []).append(bot)
-    rows = []
-    for (runtime, profile), bots in sorted(logins.items()):
-        if len(bots) <= 1:
-            continue
-        if not profile:
-            label = ""
-        elif names is not None:
-            label = names.get(connection_id(runner_id, profile)) or profile
-        else:
-            label = identity(c, runner_id, profile)["display_name"]
-        rows.append(
-            {
-                "runtime": runtime,
-                "profile": profile,
-                "display_name": label,
-                "count": len(bots),
-                "bots": sorted(b for b in bots if (access.get(b) or {}).get("read")),
-            }
-        )
-    return rows
-
-
-SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
-
-
 def team_services(c, who, auth):
     if who.role != "owner" and not auth.bot_admin(who):
         return []
@@ -344,9 +278,9 @@ def team_services(c, who, auth):
         {
             **dict(r),
             "scope": "team",
-            "name": SERVICE_NAMES.get(r["service"], r["service"]),
-            "text": f"{SERVICE_NAMES.get(r['service'], r['service'])}: {r['last_error'] or 'No reported error'}",
-            "fix": "Open Health for " + SERVICE_NAMES.get(r["service"], r["service"]),
+            "name": r["service"],
+            "text": f"{r['service']}: {r['last_error'] or 'No reported error'}",
+            "fix": "Open Health for " + r["service"],
         }
         for r in c.execute("SELECT service,last_succeeded_at,last_error FROM service_health ORDER BY service")
     ]
@@ -375,7 +309,7 @@ def entries(c, github_owner="", shared=False):
 
 
 def seat_parents(c, settings, auth, who):
-    """{open seat id: where it hangs on the team chart for this caller}, as GET /api/people draws it
+    """{open seat id: where it hangs on the team chart for this caller}, as GET /api/humans draws it
     (backend/lifecycle.py `chart_seats`): GET /api/v2/seats carries the same, so a client that refreshes the seats from
     there still hangs a seat under a closed seat where that seat answered to."""
     from . import strategy_bot
@@ -628,7 +562,7 @@ def prime_machines(c, slugs):
 
 def machine(c, bot):
     from .agents import presence
-    from .execution import AWAKE_GAP, Execution  # local: keeps execution out of the selector's fan-in
+    from .execution import Execution  # local: keeps execution out of the selector's fan-in
     from .screen import listing as screen_listing
 
     external = presence(c, bot)
@@ -638,9 +572,7 @@ def machine(c, bot):
     if not row:
         return {"online": False, "awake": False, "ready": False, "machine": None}
     now = H.now()
-    online = bool(
-        not row["revoked_at"] and row["last_seen_at"] and row["last_seen_at"] > H.shift(now, seconds=-AWAKE_GAP)
-    )
+    online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
@@ -950,13 +882,13 @@ def operation_issues(c, who, auth):
             )
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows, unreviewed
+            from .execution import held_back, held_runs, isolation_refused, left_by_tico, stopped_rows, unreviewed
 
             runs = held_runs(c, who, auth, slug)
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
             waiting, waiting_on = held_back(c, who, auth, slug)
-            left = left_by_keeper(c, who, slug)
+            left = left_by_tico(c, who, slug)
             if isolation_refused(c, who, auth, slug):
                 # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
                 # behind the held run until a person acts.
@@ -969,7 +901,7 @@ def operation_issues(c, who, auth):
                     "Tico's Docker runner, then review its stopped run.",
                 )
             elif waiting or left:
-                # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
+                # Work is stuck behind it (the claim's own fence), or Tico settled the rest of its run and left
                 # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
                 # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
                 # retry: the detail says only why they stopped and what waits; the rows name them.
@@ -1157,7 +1089,35 @@ def operation_issues(c, who, auth):
 
     # Whether a computer has stopped is the shared rule over all its queued work, not only what this viewer may read.
     silent = {x["id"] for x in silent_computers(c)} if offline else set()
+    # Machines Tico stopped because the company is out of credit are one account-wide cause with one fix, Add credit:
+    # one card for all of them, never restart advice that cannot help (task #423).
+    frozen = cloud_machines.credit_stopped(c) & set(offline) if offline else set()
+    if frozen:
+        stopped = [offline[r] for r in offline if r in frozen]
+        labels = [x["label"] for x in stopped]
+        named = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+        waiting_bots = sum(len(x["bots"]) for x in stopped)
+        queued_total = sum(x["queued"] for x in stopped)
+        add(
+            "cloud_credit",
+            "Out of credit",
+            f"{len(stopped)} cloud machine{'s' if len(stopped) != 1 else ''} stopped · "
+            f"{waiting_bots} bot{'s' if waiting_bots != 1 else ''} waiting",
+            needs_person=who.role == "owner",
+            more=f"Tico stopped {named} because the company is out of credit."
+            + (
+                f" {queued_total} saved request{'s are' if queued_total != 1 else ' is'} waiting."
+                if queued_total
+                else ""
+            )
+            + " Add credit and they start again; restarting them does not help.",
+            machines=sorted(frozen),
+            action="Add credit.",
+        )
+        issues[-1]["bots"] = [slug for x in stopped for slug in x["slugs"]]
     for runner_id, entry in offline.items():
+        if runner_id in frozen:
+            continue
         names = entry["bots"]
         listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         cannot = "cannot run until it reconnects"
@@ -1176,15 +1136,21 @@ def operation_issues(c, who, auth):
             mine = who.actor == "human:" + operator or (
                 who.role == "owner" and (not person or bool(person.get("hidden")))
             )
+            count = len(names)
+            action = (
+                f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
+                "`tico-computer status` says what stopped, `tico-computer restart` starts it again."
+            )
+            # One line on the card; the bots, the requests and the restart steps are its tooltip (`more`).
             add(
                 "machine",
-                entry["label"] + " stopped checking in",
-                f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting}",
+                entry["label"] + " offline",
+                f"{count} bot{'s' if count != 1 else ''} waiting · {quiet} min",
                 machine=runner_id,
                 since=entry["since"],
                 needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
-                action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
-                "`tico-computer status` says what stopped, `tico-computer restart` starts it again.",
+                action=action,
+                more=f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting} {action}",
             )
         else:
             # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.
@@ -1207,7 +1173,7 @@ def operation_issues(c, who, auth):
         ).fetchall()
         busy = runner_busy_many(c, [row["id"] for row in runners])  # every computer's running turns in one read
         for row in runners:
-            online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
+            online = runner_online.is_online(row["last_seen_at"])
             if online and not runner_version_supported(row["version"]):
                 add(
                     "runner_version",
@@ -1243,9 +1209,8 @@ def operation_issues(c, who, auth):
                 needs_person=bool(detail.get("needs_person")),
                 action=detail.get("action"),
             )
-        # Google connections: the Workspace key that stopped working, and a person's grant held on a computer other
-        # than their message bot's (backend/google_connect.py, google_workspace.py).
-        from . import google_rights, google_workspace
+        # Google connections: the Workspace key that stopped working (backend/google_workspace.py).
+        from . import google_workspace
 
         key = google_workspace.active(c)
         if key and key["status"] == "failing":
@@ -1256,63 +1221,6 @@ def operation_issues(c, who, auth):
                 needs_person=True,
                 action="Check the key in Tools > Settings > Email.",
             )
-        sync_owners = google_workspace.workspace_sync_owners(c)
-        for box in google_workspace.workspace_mailboxes(c):
-            if box["address"] not in sync_owners:
-                add(
-                    "google_workspace",
-                    box["address"] + " has no sync computer",
-                    "Mail and calendar for "
-                    + box["address"]
-                    + " are not syncing because no eligible computer is online.",
-                    needs_person=False,
-                    severity="warning",
-                    action="Bring an isolated company server online."
-                    if box["kind"] == "shared"
-                    else "Bring the person's computer, their Assistant's host or an isolated company server online.",
-                )
-        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
-        hosts = google_rights.inbox_hosts(c)
-        for grant in c.execute(
-            "SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
-            "AND holder IS NOT NULL AND grant_hash IS NOT NULL"
-        ).fetchall():
-            host = (hosts.get(grant["person_id"]) or {}).get("runner")
-            if host and host != grant["holder"]:
-                holder = labels.get(grant["holder"]) or "another computer"
-                bot_computer = labels.get(host) or "the computer that runs their message bot"
-                add(
-                    "google_grant",
-                    grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"]
-                    + "'s Google grant is on "
-                    + holder
-                    + ". Reconnect in Tools > Settings > Email to move it "
-                    "to " + bot_computer + ", where their message bot runs.",
-                    machine=grant["holder"],
-                    needs_person=True,
-                    action="Open Tools > Settings > Email",
-                )
-        # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
-        # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
-        # reports every 10 minutes.
-        if c.execute(
-            "SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-60),),
-        ).fetchone():
-            for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
-                row = c.execute(
-                    "SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)
-                ).fetchone()
-                last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
-                if last and not row["last_error"] and last < H.parse_ts(H.shift(H.now(), minutes=-limit)):
-                    minutes = int((H.parse_ts(H.now()) - last).total_seconds() // 60)
-                    add(
-                        "service",
-                        SERVICE_NAMES[service] + " needs attention",
-                        f"{label} last refreshed {minutes} minutes ago although a Mac is online; check its Tool log.",
-                        needs_person=False,
-                    )
         # A backup that stops running never writes an error, so age is checked here with
         # the same limits as the CloudWatch alarms; the hub is the notification channel.
         # Both run daily after 03:00 UTC and the restore check retries hourly, so 36 hours
@@ -1348,17 +1256,6 @@ def operation_issues(c, who, auth):
                     + " hours ago; check backup.log and the timers on the server.",
                     action="Check backup.log and the server timers.",
                 )
-        for row in c.execute("SELECT id,bot,error FROM bot_transitions WHERE state='failed'"):
-            # A version conflict means settings already moved; the failed checkpoint is leftover.
-            if "while the checkpoint was being prepared" in (row["error"] or ""):
-                continue
-            add(
-                "settings",
-                "A prepared settings change failed",
-                row["error"] or "Review or cancel the change.",
-                bot=row["bot"],
-                action="Review or cancel the failed change in Settings → Bots.",
-            )
     return issues
 
 
@@ -1393,10 +1290,12 @@ def cloud_machine_wait(c, bot):
     return waiting(c, bot)
 
 
-def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False):
+def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False, job=None, message=None):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
-    sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
+    sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py); `job`: the
+    queued run's row, when the label is its own (a hold on that run alone, backend/holds.py), and `message` its
+    message when read already (else holds reads the job's own when a hold needs it)."""
     from .start_places import computer_hold
     from .cloud_machines import resting
     from . import org_turns
@@ -1418,8 +1317,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
         label = "Saved — this bot is paused; this starts when it's resumed"
     elif bot_state != "active":
         label = "Saved — bot " + bot_state
-    elif stop := bot_stops.queued_reason(c, bot, human):
-        # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
+    elif stop := holds.queued_reason(c, bot, human, job, message):
+        # Tico stopped the bot (failed runs, run budget), holds this run (its claim failed), or it waits out a failed
+        # run: the words say why (backend/holds.py).
         label = "Saved — " + stop
     elif (not location["online"] or asleep) and (cloud := cloud_machine_wait(c, bot)):
         # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
@@ -1476,7 +1376,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
 TASK_WAIT_SQL = (
-    f"SELECT j.bot_id,{H.in_person_name_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
+    f"SELECT j.id,j.bot_id,j.message_id,j.state,{H.in_person_name_sql()} AS person_sent "
+    "FROM jobs j INDEXED BY jobs_queued "
     "JOIN messages m ON m.id=j.message_id "
     "JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1"
@@ -1488,7 +1389,9 @@ def task_wait(c, task_id, settings=None):
     job = c.execute(TASK_WAIT_SQL, (task_id,)).fetchone()
     if not job:
         return ""
-    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]))[0]
+    label = queued_label(
+        c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]), job=job
+    )[0]
     reason = label.removeprefix("Saved — ")
     return "Queued" if reason == "queued" else reason[:1].upper() + reason[1:]
 
@@ -1527,8 +1430,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
     far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
-    A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
-    name the bot holding it."""
+    A run waiting for memory says so in `waiting` and its label."""
     person = H.in_person_name_sql()
     which = (
         f"AND (j.bot_id=? OR {person}) "
@@ -1540,7 +1442,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         else ""
     )
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
-    # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
+    # person_sent: the message is a person's, or Tico carrier of one (the sender alone is Tico).
     job = c.execute(
         f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
         "a.stop_requested_at,a.started_at AS attempt_started_at,p.wait_reason AS start_wait_reason "
@@ -1588,10 +1490,6 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             label = "Reply failed — your message is saved"
         waiting = None
         if state in ("leased", "running") and job["attempt_id"]:
-            # Before it starts, or after: a fallback hop takes its own login once the turn has started.
-            from .login_waits import waiting as login_wait
-
-            waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
             if state == "leased" and (job["start_wait_reason"] or "").startswith(start_places.MEMORY_HOLD):
                 waiting = "Waiting: " + job["start_wait_reason"]
             label = waiting or label
@@ -1611,6 +1509,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                 human=bool(job["person_sent"]),
                 behind=bool(behind),
                 queued=(message.get("refs") or {}).get("delivery") == "queue",
+                job=job,
+                message=message or None,
             )
             if (H.status(c, job['bot_id']) or {}).get('state') == 'limited' and (
                 reason := login_holds.fallback_resume_reason(c, job['attempt_id'])
@@ -1656,33 +1556,6 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         if state in ("leased", "running") and job["attempt_started_at"]:
             execution["started_at"] = job["attempt_started_at"]  # the chat counts the turn's time from it
     return execution
-
-
-# What needs a person, in the order they work it. Work that traces back to a person leads: a person asked for it,
-# or it hangs under a task a person asked for. Work bots made for themselves or each other follows, unless it is
-# pressing: due within a day or overdue, or waiting PRESSING_DAYS (DECISIVE_DAYS for an approval or a question,
-# which holds its bot up). Within a tier the decisive kinds lead, then the queue in rank order, oldest first.
-PRESSING_DAYS = 3
-DECISIVE_DAYS = 1
-# A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {
-    "approval": 0,
-    "question": 1,
-    "ask": 1,
-    "waiting": 1,
-    "setup": 1,
-    "declined": 2,
-    "stale": 3,
-    "task": 3,
-    "report": 4,
-    # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
-    # mention or an unread DM is a person's to read.
-    "thread_ask": 1,
-    "thread_held": 1,
-    "thread_capped": 1,
-    "thread_mention": 2,
-    "thread_dm": 2,
-}
 
 
 _VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
@@ -1754,16 +1627,6 @@ def person_origin(c, row, visible_sql, me=None):
         if H.is_human(parent["requester_id"]):
             return parent["requester_id"]
     return None
-
-
-def pressing(it, now=None):
-    """A bot's item that may go ahead of a person's: due within a day or overdue, or waiting long enough."""
-    now = now or H.now()
-    due = it.get("due_at")
-    if due and str(due) <= H.shift(now, days=1):
-        return True
-    days = DECISIVE_DAYS if KIND_RANK.get(it.get("kind"), 9) <= 1 else PRESSING_DAYS
-    return bool(it.get("created_at")) and str(it["created_at"]) <= H.shift(now, days=-days)
 
 
 CHECKOUT_BEHIND_HOURS = 1
@@ -1856,32 +1719,6 @@ def checkout_issue(add, row, busy=0):
             restart_issue(add, row, busy, since=stamp)
     elif checkout.get("running") and checkout.get("head") and checkout["running"] != checkout["head"]:
         restart_issue(add, row, busy)
-
-
-DUE_SOON_DAYS = 7
-
-
-def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing=False, due=None):
-    """Needs you is the person's queue. A card still waiting for its bot to say what it needs goes last, whatever
-    else it is; above that, what is overdue or due within DUE_SOON_DAYS first, soonest first (a date further off
-    does not jump the queue); then what traces back to a person, or presses; then within that what blocks a bot (an
-    approval, a question), then declined work, then their own tasks in rank order."""
-    soon = str(due) if due and str(due) <= H.shift(H.now(), days=DUE_SOON_DAYS) else ""
-    return (
-        1 if ask_missing else 0,
-        0 if soon else 1,
-        soon,
-        0 if person or urgent else 1,
-        KIND_RANK.get(kind, 9),
-        rank if rank is not None else float("inf"),
-        str(created or ""),
-    )
-
-
-def deadline(item):
-    """When the card is due: a person's task's due date. A bot's own task's due is when it looks again, not a date
-    anyone owes it by."""
-    return item.get("due_at") if item.get("kind") != "approval" and not H.is_bot(item.get("owner_id")) else None
 
 
 def _clip(text, n=280):
@@ -2037,23 +1874,12 @@ BRIEF_FIELDS = (
     "pushed_past",
 )
 
-# Every @ of a person by another person that they have not answered since in the same conversation (C28): on a task
-# (its own room, or a comment in a chat the task was filed into) or in a channel. A bot's @ only marks a task unread.
-MENTIONS_SQL = (
-    "SELECT m.id, m.conversation_id, coalesce(cv.root_id, cv.id) AS root_id, m.sender_id, m.body, m.created_at, "
-    "coalesce(cv.task_id, json_extract(CASE WHEN json_valid(m.refs) THEN m.refs END, '$.task')) AS task_id "
-    "FROM message_deliveries d JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-    "WHERE d.recipient=? AND d.reason='mention' AND m.sender_id LIKE 'human:%' AND m.sender_id<>? "
-    "AND m.deleted_at IS NULL AND m.superseded_at IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
-    "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
-    "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
-    "ORDER BY m.created_at, m.id"
-)
-
 
 def _mentions(c, who):
-    """The @s of `who` by a person that they have not replied to and may still read, oldest first."""
-    rows = [dict(r) for r in c.execute(MENTIONS_SQL, (who.actor, who.actor, who.actor))]
+    """The open @s of `who` (open_mentions: by a person, not yet answered) that they may still read, oldest first."""
+    from . import open_mentions
+
+    rows = open_mentions.rows(c, who.actor)
     # Each mention's message, rooms and references read together, not a few statements per mention.
     stored = H.prime_messages(c, [row["id"] for row in rows])
     privacy.prime_messages(c, list(stored.values()))
@@ -2082,28 +1908,30 @@ def _briefs(c, ids, visible):
     return {row["id"]: {k: row.get(k) for k in BRIEF_FIELDS} for row in rows}
 
 
-def needs_items(c, auth, who, task_view=None, count_only=False):
+def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     """Needs you, one list for a person (docs/dev/pipelines-v3-cutover.md, "Needs you"), oldest first:
-    `waiting_on.needs(person)` (every requirement with their name, every task whose work is theirs, every Paused cause
-    they can fix) and every @ of them by a person, on a task or in a channel, until they reply (C28). Only what the
-    person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
+    `waiting_on.needs(person)` (every OK and question asked of them, a private task they must let someone see, every
+    Paused cause they can fix; never a task that only is theirs) and every @ of them by a person, on a task or in a
+    channel, until they reply (C28). Only what the
+    person may read is listed. Each item has `kind` (task, ask, paused, mention, question: a bot's ❓), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
-    task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here."""
-    from . import strategy_merge, teammate_access, waiting_on
+    task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
+    snoozed for themselves (backend/ask_snoozes.py) is out until its time; `snoozed` "only" lists just those, each with
+    its `snoozed_until`."""
+    from . import question_marks, teammate_access, waiting_on
 
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
-    # The asks the Strategy Owner merged into one item stay out while that item is open; the item names them (`merged`).
-    merged = strategy_merge.hidden_by_item(c, who.actor)
-    hidden = {rid for ids in merged.values() for rid in ids}
-    raw = [i for i in waiting_on.needs(c, who.actor) if i.get("requirement_id") not in hidden]
-    mentions = _mentions(c, who)
+    raw = list(waiting_on.needs(c, who.actor, snoozed))
+    mentions = _mentions(c, who) if snoozed != "only" else []  # an @ is not snoozed: only asks are
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
     briefs = {} if count_only else _briefs(c, readable, visible)
     items = []
+    questions = [it for it in raw if it["kind"] == "question"]
+    raw = [it for it in raw if it["kind"] != "question"]
     for it in raw:
         if it["kind"] == "paused":
             tasks = [t for t in it["tasks"] if t in readable]
@@ -2134,13 +1962,55 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 "missing": it["missing"],
                 "since": it["since"],
                 "task": briefs.get(it["task_id"]),
-                **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
+                **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
     # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
     known = teammate_access.Known(c, who, auth)  # reads nothing until it is asked
+    # A bot's ❓ for the reader (backend/question_marks.py): its bot and its line, on a task's chat or in a direct chat.
+    # It stands for its message, so the same message is not listed again as an @.
+    marked = set()
+    # Their messages and chats in one read each, not one per ❓.
+    stored = H.prime_messages(c, {it["message_id"] for it in questions})
+    chats = question_marks.chat_rows(c, {m["conversation_id"] for m in stored.values()})
+    from . import threads
+
+    reader = threads.actor_viewer(c, who.actor) if questions else None
+    for it in questions:
+        if it.get("task_id") and it["task_id"] not in readable:
+            continue
+        found = stored.get(it["message_id"]) if stored else None
+        message = H.message_view(c, found) if found else H.message(c, it["message_id"])
+        if not message or message.get("deleted_at") or reader is None:
+            continue
+        if not question_marks.readable(c, who.actor, message, chats.get(str(message["conversation_id"])), reader):
+            continue
+        marked.add(it["message_id"])
+        refs = H._json(message.get("refs"), {}) or {}
+        shows = (
+            [str(r) for r in refs.get("shows") or [] if str(r).startswith("browser:")] if isinstance(refs, dict) else []
+        )
+        items.append(
+            {
+                "kind": "question",
+                "id": it["id"],
+                "mark_id": it["mark_id"],
+                "message_id": it["message_id"],
+                "conversation_id": it["conversation_id"],
+                "root_id": it["room_id"],
+                "task_id": it.get("task_id"),
+                "from_id": it["bot_id"],
+                "line": it["line"],
+                "since": it["since"],
+                "task": briefs.get(it.get("task_id")),
+                **({"shows": shows} if shows else {}),
+                **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
+            }
+        )
     for m in mentions:
         if m.get("task_id") and m["task_id"] not in readable:
+            continue
+        if m["id"] in marked:
             continue
         first = (m["body"] or "").strip().splitlines()
         items.append(
@@ -2160,7 +2030,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
-        from . import task_calls
+        from . import task_asks, task_calls
+        from .files import readable_earlier
 
         # Every ask's task read together: the list costs what one task's view does.
         task_calls.prime_views(c, {item["task_id"] for item in items if item["kind"] == "ask"}, who.actor)
@@ -2168,48 +2039,25 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             if item["kind"] != "ask":
                 continue
             item["ask"] = task_calls.ask_entry(c, item["task_id"], item["requirement_id"], who.actor)
+            # The page an OK shows from an earlier stage, only to a reader who may open it through the file's own read
+            # check (the task's read takes it out the same way); without it the OK shows the task's text.
+            readable_earlier(c, auth, who, item["ask"])
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.
-            if item["ask"] and item["ask"]["kind"] == "ok":
+            if item["ask"] and item["ask"]["kind"] in ("ok", "page"):
+                # An approval's row is the document's name (or the OK's line): which version, who wrote it and what
+                # changed is its version line, and the task's title is beside it already.
                 item["line"] = item["ask"]["line"]
-                item["missing"] = [item["ask"]["line"]]
-            elif item["ask"] and item["ask"]["kind"] == "page":
-                item["line"] = page_ask_line(item["ask"]["line"], (item.get("task") or {}).get("title"), item["line"])
+                if item["ask"]["kind"] == "ok":
+                    item["missing"] = [item["ask"]["line"]]
+                    # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
+                    # this one is about, to its party, in place of that title (task #389).
+                    title = str((item.get("task") or {}).get("title") or "")
+                    if title in task_asks.FILED_TITLES.values():
+                        said = task_asks.about(c, item["requirement_id"], item["line"])
+                        if said:
+                            item["about"] = said
     return sorted(items, key=needs_key)
-
-
-# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)", task_requirements._page):
-# the list says who it is for already, so they go; what comes before or after them (Jev's reason, a send back, a merge
-# conflict) stays. Only the last such phrase is the stage's: one inside Jev's reason is kept, and a name may hold
-# brackets ("OK Chris (Owner) (version 3)").
-_PAGE_OK_VERSION = re.compile(r"\(version \d+\)\.?")
-_PAGE_WORD = re.compile(r"\s+page$", re.IGNORECASE)
-
-
-def page_ask_line(name, title, waiting):
-    """A page OK in Needs you, in plain words: what it is, which task, and the decision, "Spec for Share Assistant
-    chat, ready for your OK", then anything the stage said about it. The requirement's name alone ("Spec page") said
-    neither the task nor what was asked (#330)."""
-    name = (name or "").strip() or "Page"
-    what = _PAGE_WORD.sub("", name) or name
-    title = (title or "").strip()
-    head = f"{what} for {title}, ready for your OK" if title else f"{name}, ready for your OK"
-    said = _without_page_ok(waiting or "")
-    return f"{head}. {said}" if said else head
-
-
-def _without_page_ok(waiting):
-    """`waiting` without its last "OK <name> (version N)" phrase, the one the stage wrote."""
-    versions = list(_PAGE_OK_VERSION.finditer(waiting))
-    if not versions:
-        return waiting.strip()
-    end = versions[-1]
-    start = waiting.rfind("OK ", 0, end.start())
-    while start > 0 and not waiting[start - 1].isspace():
-        start = waiting.rfind("OK ", 0, start)
-    if start < 0:
-        return waiting.strip()
-    return " ".join((waiting[:start] + " " + waiting[end.end() :]).split())
 
 
 def needs_key(x):
@@ -2268,7 +2116,7 @@ def needs_bots(items, me):
 
 # The items a stage's review walks (the ▶ on a stage): asks, tasks and @s on a task in that stage. A Paused cause is the
 # person's to fix in settings, whatever stage its first task is in.
-NEEDS_STAGE_KINDS = ("ask", "task", "mention")
+NEEDS_STAGE_KINDS = ("ask", "task", "mention", "question")
 
 
 def needs_stage(it):
@@ -2308,6 +2156,8 @@ def needs_actor(it, me):
     task = it.get("task") or {}
     if it.get("kind") == "paused":
         return next(iter(it.get("bots") or ()), None)
+    if it.get("kind") == "question":
+        return it.get("from_id") if H.is_bot(it.get("from_id")) else None
     if it.get("kind") == "ask":
         asked = (it.get("ask") or {}).get("asked_by")
         options = [asked, task.get("owner_id"), task.get("requester_id")]
@@ -2776,9 +2626,6 @@ def install_views(app, store, auth, mutate, task_view):
                         lifecycle.stage(config.get("onboarding_state")) == lifecycle.ONBOARDING
                         and lifecycle.may_complete(auth, c, who, slug)
                     ),
-                    # Labelled as on the bot list, so its computer is named to one who cannot see it.
-                    "app_delivery": app_delivery.view(c, config),
-                    "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
                     "cloud_machine": None
                     if cloud_rows is None or location.get("agent")
                     else cloud_machines.shown(
@@ -2822,8 +2669,6 @@ def install_views(app, store, auth, mutate, task_view):
                 "company_domains": domains_,
                 "member_bot_limit": Access.load_access(c, store.settings)["member_bot_limit"],
                 "role": "owner" if who.role == "owner" else "viewer",
-                "local": False,
-                "cloud": True,
                 "registered": True,
                 "chat_bots": bots,
                 "developer": P.is_developer(H.actor_id(who.actor), r),
@@ -2859,7 +2704,8 @@ def install_views(app, store, auth, mutate, task_view):
                 c, request.state.identity, employee_rows(c, request.state.identity), auth
             )
 
-    @app.get("/api/people")
+    @app.get("/api/humans")
+    @app.get("/api/people", deprecated=True)  # rc.1 Letters list (ui/app/inboxes-letters.ts)
     def people(request: Request):
         who = request.state.identity
         person_or_view(who)
@@ -2934,7 +2780,7 @@ def install_views(app, store, auth, mutate, task_view):
                 out["developers"] = [pid for pid in out.get("developers") or [] if pid not in people_hidden]
             return out
 
-    @app.get("/api/people/{pid}/photo")
+    @app.get("/api/humans/{pid}/photo")
     def person_photo(request: Request, pid: str):
         who = request.state.identity
         human_only(who)
@@ -2979,7 +2825,7 @@ def install_views(app, store, auth, mutate, task_view):
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
             from . import subscriptions, inbox_isolation
-            from .computer_keys import serving, shared_listing
+            from .model_subscriptions import key_listing
 
             subscription_context = subscriptions.context(c, store.settings)
             # One pass for every computer's bot_connections (not assignment+config+identity per bot per runner).
@@ -2987,7 +2833,8 @@ def install_views(app, store, auth, mutate, task_view):
             # One pass for every computer's subscription profiles (not per-runner SELECTs + metadata).
             profiles_map = subscriptions.profiles_by_runner(c)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
-            shared_keys = serving(c)
+            # One pass for every computer's keys (backend/model_subscriptions.py key_listing), not one per computer.
+            keys_by_runner = key_listing(c)
             # A company key's name and preview are a credential administrator's to read, as in Credentials; a
             # computer's operator reads its own key's.
             from .credentials import administrator
@@ -3011,14 +2858,6 @@ def install_views(app, store, auth, mutate, task_view):
 
             # One pass for every computer's repository status (not one registry_metadata lookup per runner).
             repo_status = computer_repositories(c)
-            from .computer_keys import listing_by_runner
-
-            # One pass for every computer's own keys (not one SELECT per runner).
-            keys_by_runner = listing_by_runner(c)
-            from .subscription_identity import display_names
-
-            # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
-            login_names = display_names(c)
             from . import cloud_machines
 
             # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
@@ -3064,6 +2903,8 @@ def install_views(app, store, auth, mutate, task_view):
                 hidden = set() if manage else unseen
                 bots = [bot for bot in placed.get(row["id"]) or [] if bot not in hidden]
                 value = dict(row)
+                # Online is decided here (backend/runner_online.py); the UI reads this flag, not its own clock.
+                value["online"] = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
                 value["turn_counts"] = turn_counts[row["id"]]
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
@@ -3110,19 +2951,14 @@ def install_views(app, store, auth, mutate, task_view):
                     for p in (profiles_map.get(row["id"]) or [])
                 ]
                 # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
-                keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
-                # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
-                # name, whether it is the "Every computer" one, and every computer it serves.
-                served = shared_keys.get(row["id"]) or {}
-                shared = shared_listing(c, row)
+                given = keys_by_runner.get(row["id"]) or {}
+                keys = {runtime: dict(info) for runtime, info in (given.get("keys") or {}).items()}
+                # `shared_keys`: {runtime: {env, preview}} of the shared key given to it; `shared_with`: the one it
+                # runs on, its name and every computer it serves.
+                shared = {runtime: dict(info) for runtime, info in (given.get("shared_keys") or {}).items()}
                 shared_with = {
-                    runtime: {
-                        "id": key["id"],
-                        "name": key["name"],
-                        "every": key["every"],
-                        "computers": [dict(m) for m in key["computers"]],
-                    }
-                    for runtime, key in served.items()
+                    runtime: {**key, "computers": [dict(m) for m in key["computers"]]}
+                    for runtime, key in (given.get("shared_with") or {}).items()
                 }
                 if not manage:
                     for profile in profiles:
@@ -3160,16 +2996,11 @@ def install_views(app, store, auth, mutate, task_view):
                             exit_used.get(row["id"], 0),
                         ),
                         # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
-                        # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
-                        # preview only for whoever may change the computer.
+                        # ones, for the rows a key signs in (backend/model_subscriptions.py key_listing). Never a
+                        # value, and a preview only for whoever may change the computer.
                         "keys": keys,
                         "shared_keys": shared,
                         "shared_with": shared_with,
-                        # The sign-ins several of its bots share, which they take turns on (counting only
-                        # the bots this reader may see).
-                        "shared_logins": shared_logins(
-                            c, row["id"], value["readiness"], assigned_here - hidden, access, names=login_names
-                        ),
                         "bot_runtimes": sorted(run_on.get(row["id"], ())),
                         "update": runner_versions.view(fleet.get(row["id"])),
                         "harness_actions": harness_recent.get(row["id"]) or [],
@@ -3178,14 +3009,13 @@ def install_views(app, store, auth, mutate, task_view):
                     }
                 )
             health = [
-                {**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
+                {**dict(r), "name": r["service"]}
                 for r in c.execute("SELECT service,last_succeeded_at,last_error FROM service_health")
             ]
             from .agents import listing as agent_listing
 
             # `machines` is the older name of `computers`, kept for older clients.
             return {
-                "cloud": True,
                 "computers": machines,
                 "machines": machines,
                 # Cloud machines not enrolled yet (being made, starting, failed): listed before they are computers.
@@ -3252,6 +3082,7 @@ def install_views(app, store, auth, mutate, task_view):
                     "title": title if len(title) <= 80 else title[:79].rstrip() + "\u2026",
                 }
                 (queued if row["state"] == "queued" else active).append(item)
+            # The desktop app (app/src/hub.rs) and the account dot (ui/app/heartbeat.ts) read `cloud` here, so it stays.
             return {
                 "cloud": True,
                 "last_tick": tick,
@@ -3331,7 +3162,15 @@ def install_views(app, store, auth, mutate, task_view):
             return "\n".join(lines) + "\n"
 
     @app.get("/api/changelog")
-    @app.get("/api/v2/changelog")
+    @app.get(
+        "/api/v2/changelog",
+        **api_v2(
+            "Changelog",
+            "listChangelog",
+            "Product updates and agent activity, with your read state; kind=product|activity|all (default all), unread=true, q search, and limit/offset paging. unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
+            "ChangelogList",
+        ),
+    )
     def changelog(
         request: Request,
         kind: Literal["product", "activity", "all"] = "all",
@@ -3409,7 +3248,15 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.post("/api/changelog/read")
-    @app.post("/api/v2/changelog/read")
+    @app.post(
+        "/api/v2/changelog/read",
+        **api_v2(
+            "Changelog",
+            "markChangelogRead",
+            "Acknowledge only supplied product entry ids for the signed-in person. Other people's read state and unseen entries stay unchanged.",
+            "ChangelogReadResult",
+        ),
+    )
     def read_changelog(request: Request, body: M.ChangelogRead):
         who = request.state.identity
         human_only(who)
@@ -3441,7 +3288,15 @@ def install_views(app, store, auth, mutate, task_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/bots/{bot}/instructions")
+    @app.get(
+        "/api/v2/bots/{bot}/instructions",
+        **api_v2(
+            "Bots",
+            "getBotInstructions",
+            "Latest Instructions snapshot published by the Computer; requires Read, published is false until content arrives",
+            "BotInstructions",
+        ),
+    )
     def bot_instructions(request: Request, bot: str):
         who = request.state.identity
         with store.read() as c:
@@ -3523,7 +3378,6 @@ def install_views(app, store, auth, mutate, task_view):
             ):
                 session = None
             return {
-                "cloud": True,
                 "current": True,
                 "runtime": runtime,
                 "model": model,
@@ -3545,7 +3399,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "turns": turns,
             }
 
-    @app.get("/api/v2/me/recent")
+    @app.get("/api/v2/me/recent", **api_v2("Bots", "listRecentBots", "Bots the caller worked with lately", "Recent"))
     def my_recent(request: Request, days: int = 7, limit: int = 10):
         """The bots I have been working with lately, most recent first, each with
         its live status, the last thing I said and the last thing it said, the conversation to read
@@ -3562,7 +3416,15 @@ def install_views(app, store, auth, mutate, task_view):
                 "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view)),
             }
 
-    @app.get("/api/v2/needs-you")
+    @app.get(
+        "/api/v2/needs-you",
+        **api_v2(
+            "Needs you",
+            "getNeedsYou",
+            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "NeedsYou",
+        ),
+    )
     async def needs(
         request: Request,
         count: bool = False,
@@ -3571,8 +3433,9 @@ def install_views(app, store, auth, mutate, task_view):
         limit: int | None = None,
         cursor: str | None = None,
     ):
-        """Needs you (needs_items): every requirement with the person's name, every task whose work is theirs, every
-        Paused cause they can fix and every @ of them by a person until they reply. `count` is the length of the list,
+        """Needs you (needs_items): every OK and question asked of the person, a private task they must let someone
+        see, every Paused cause they can fix and every @ of them by a person until they reply; a task that only is
+        theirs is in Tasks. `count` is the length of the list,
         the one number on the Tasks badge. The list's `version` changes whenever an item or its place does:
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
@@ -3589,8 +3452,12 @@ def install_views(app, store, auth, mutate, task_view):
                 return {"actor": who.actor, "count": len(items)}
             items = needs_items(c, auth, who)
             current = needs_marks(items)[1]
+            # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
+            from . import ask_snoozes
+
+            woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
             if version and version == current and not cursor:
-                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True}
+                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
             if ids is not None:
                 wanted = {part.strip() for part in ids.split(",") if part.strip()}
                 if len(wanted) > NEEDS_IDS_MAX:
@@ -3610,6 +3477,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "items": items,
                 "version": current,
                 "next": None,
+                **woken,
             }
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
@@ -3619,7 +3487,15 @@ def install_views(app, store, auth, mutate, task_view):
                     out["restart"] = True
             return out
 
-    @app.get("/api/v2/needs-you/summary")
+    @app.get(
+        "/api/v2/needs-you/summary",
+        **api_v2(
+            "Needs you",
+            "getNeedsYouSummary",
+            "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; the same query as the board, so the numbers match it (`limit` caps the list of bots)",
+            "NeedsSummary",
+        ),
+    )
     async def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
         most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
@@ -3630,82 +3506,6 @@ def install_views(app, store, auth, mutate, task_view):
     def summary_answer(who, limit):
         with store.read_transaction() as c:
             return needs_summary(c, auth, who, task_view, limit)
-
-    @app.get("/api/v2/tico/fleet")
-    def tico_fleet(request: Request):
-        with store.read() as c:
-            return fleet_snapshot(c, auth, request.state.identity, task_view)
-
-    def task_chat(c, who, tid, text=None, expected_recipient=None):
-        human_only(who)
-        task = auth.task(c, who, tid)
-        candidates = [task["owner_id"], task["requester_id"], H.task_origin(c, task)]
-        # No assistant fallback since its chat was retired: a task with no bot has nobody to chat to.
-        slug = next(
-            (
-                H.actor_id(p)
-                for p in candidates
-                if str(p).startswith("bot:") and auth.visible_bot(c, who, H.actor_id(p)) and H.bot(c, H.actor_id(p))
-            ),
-            None,
-        )
-        if slug:
-            from .shared_bots import route
-
-            slug = H.actor_id(route(c, who.actor, "bot:" + slug))
-        if H.task_private(c, task) and slug and not H.task_private_readable(c, "bot:" + slug, task):
-            slug = None
-        bot = (H.bot(c, slug) if slug else None) or {}
-        allowed = bool(slug) and may_chat(c, auth, who, slug)
-        conv = rooms.chat_room(c, auth, who, slug) if allowed else None
-        if H.task_private(c, task) and conv:
-            conv = auth.conversation(c, who, task["conversation_id"])
-        message = None
-        if text is not None:
-            if expected_recipient:
-                expected_recipient = (H.resolve_bot(c, expected_recipient) or {}).get("id", expected_recipient)
-            if expected_recipient and expected_recipient != slug:
-                raise Problem("recipient_changed", "Task ownership changed; refresh before sending", 409)
-            if not slug:
-                raise Problem(
-                    "no_bot",
-                    "No bot owns or asked for this task; assign it to a bot to discuss it, or comment on the task",
-                    409,
-                )
-            if not allowed:
-                auth.require_write(c, who, slug)
-                raise Problem("forbidden", "This bot takes requests in its own Assistant room, not here", 403)
-            privacy.require_destination(c, who, "bot:" + slug, conv["id"], {"task": tid})
-            message = H.say(c, who.actor, "bot:" + slug, text, conversation_id=conv["id"], refs={"task": tid})
-            c.execute(
-                "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)),
-            )
-        tagged = [
-            m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else []) if H.message_task_id(m) == tid
-        ]
-        recipient = (
-            {
-                "id": slug,
-                "slug": bot.get("slug") or slug,
-                "name": bot.get("display_name") or bot.get("slug") or slug,
-                "can_chat": allowed,
-            }
-            if slug
-            else None
-        )
-        return {"bot": slug, "recipient": recipient, "conversation": conv, "message": message, "messages": tagged}
-
-    @app.get("/api/v2/tasks/{tid}/chat")
-    def task_chat_read(request: Request, tid: str):
-        with store.read() as c:
-            return task_chat(c, request.state.identity, tid)
-
-    @app.post("/api/v2/tasks/{tid}/chat")
-    def task_chat_write(request: Request, tid: str, body: M.TaskChat):
-        return mutate(
-            request, body, lambda c: task_chat(c, request.state.identity, tid, body.text, body.expected_recipient)
-        )
 
     @app.post("/api/employees/{bot}/session/clear")
     def clear_session(request: Request, bot: str, body: M.Empty):
@@ -3725,21 +3525,15 @@ def install_views(app, store, auth, mutate, task_view):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/page-chat")
-    def page_chat(request: Request, body: M.PageChat):
-        who = request.state.identity
-        human_only(who)
-
-        def work(c):
-            if not body.task_id:
-                raise Problem("validation", "Page chat covers a single task", 422)
-            if not body.text.strip():
-                raise Problem("validation", "Write a message about this task", 422)
-            return task_chat(c, who, body.task_id, body.text)
-
-        return mutate(request, body, work)
-
-    @app.get("/api/v2/conversations/{cid}/snapshot")
+    @app.get(
+        "/api/v2/conversations/{cid}/snapshot",
+        **api_v2(
+            "Conversations",
+            "getConversationSnapshot",
+            "The newest messages and the bot's current run (its newest 40 reply pieces), in one read; limit= and max_bytes= as for the messages",
+            "Snapshot",
+        ),
+    )
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
         with store.read() as c:
             auth.conversation(c, request.state.identity, cid)
@@ -3756,7 +3550,6 @@ def runnable_choices(c, who, auth, settings):
     this person manages (backend/readiness.py `can_run`, via health.runtime_choice). A harness not listed is not refused."""
     from .harnesses import HARNESS_BY_ID
     from .health import _movable, runtime_choice
-    from .getting_started import _online_runners
 
     enabled = providers.load(c, settings)["enabled"]
     harnesses = sorted(
@@ -3769,7 +3562,7 @@ def runnable_choices(c, who, auth, settings):
             if not (HARNESS_BY_ID.get(h) or {}).get("external")
         }
     )
-    computers = _movable(c, who, {r["id"] for r in _online_runners(c)})
+    computers = _movable(c, who, {r["id"] for r in runner_online.online_rows(c)})
     tico = {
         model["id"]
         for model in providers.MODEL_CATALOG

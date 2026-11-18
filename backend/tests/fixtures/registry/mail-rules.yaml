@@ -1,5 +1,5 @@
 # Inbox rules for the fictional Acme mailboxes: `common` runs first for every address, then the
-# mailbox's own list. The mail connector's fixtures (connectors/mail/tests/fixtures) run against this.
+# mailbox's own list.
 mailboxes:
   common:
     - id: payment-risk-words

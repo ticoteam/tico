@@ -7,6 +7,8 @@ from backend import execution
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401 (fixture)
 from backend.tests.helpers.task_lanes import task_bot
+from backend.tests.helpers.run_failures import wait_over
+from backend.tests.helpers.held_runs import start_wait_over
 
 
 def lapse(api, machine, attempt):
@@ -16,10 +18,7 @@ def lapse(api, machine, attempt):
     ex.served_at = None  # no server-stall grace: the computer alone lost the run
     with api.app.state.store.transaction() as c:
         ex.expire(c)
-        c.execute(  # a lapse after the first waits before the next try; make that wait over
-            "UPDATE attempts SET finished_at=? WHERE id=?",
-            (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]),
-        )
+        start_wait_over(c)
     ready(api, machine, ["ops"])
 
 
@@ -32,10 +31,7 @@ def hand_back(api, machine, attempt):
         machine["token"],
     )
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE attempts SET finished_at=? WHERE id=?",
-            (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]),
-        )
+        start_wait_over(c)
     ready(api, machine, ["ops"])
 
 
@@ -134,7 +130,7 @@ def test_a_run_that_started_and_failed_says_the_error_it_stored_and_a_bot_hears_
     assert failure["bot"] == "ops" and failure["why"] == "Timeout: max_run_minutes (60 minutes)", failure
     # A bot reads Health too; why a run failed stays with the administrators, who may read every bot's runs.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the failure's wait is over
+        wait_over(c)  # the failure's wait is over
     post(api, "tasks", {"title": "Look at Health", "body": "Read Health.", "owner": "ops"})
     turn = claim(api, machine, "ops")
     assert turn

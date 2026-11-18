@@ -24,7 +24,7 @@ declare const V2C: {rendered: boolean; liveOff: boolean; reading: boolean; readA
 declare const LIVE_SOON: Map<string, unknown>;
 declare const TASKS_ST: {loading: boolean; cursor: string};
 declare const BOT: {slug: string} | null;
-declare const THV_VIEWS: Iterable<{host: Element; state: string}>;
+declare const THV_VIEWS: Iterable<{host: Element; state: string; id: string}>;
 declare let TASK_CHAT: {id: string} | null;
 declare let v2Get: () => Promise<unknown>;
 declare function v2NeedsMend(x: unknown): Promise<unknown>;
@@ -218,16 +218,18 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
     await page.setViewportSize({width, height: 820});
     await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops`);
     await page.locator('.bot-ident [data-tip-bot="ops"]').waitFor();
-    // The page's stream for this bot. A fresh page reconnects twice as it settles: when the thread subscribes
-    // (`thread=`) and when the Threads list's first read lands and adds the `threads` topic (threads.ts threadsLoad ->
-    // live.ts liveTopicAdd), each 30 ms later (liveRestart). Answering the stream before the second has replaced it
-    // answers one the page has closed, and the stream that follows is never answered. Once both are in, it holds the
-    // stream it keeps.
+    // The page's stream for this bot. A fresh page reconnects as it settles: when the thread subscribes (`thread=`),
+    // when the Threads list's first read lands and adds the `threads` topic (threads.ts threadsLoad -> live.ts
+    // liveTopicAdd), and when the plain address swaps its first Home for the newer DM (bot-page.ts botTalkPick, which
+    // looks every 60 ms after the Home has loaded), each 30 ms later (liveRestart). Answering a stream before the next
+    // has replaced it answers one the page has closed, and the stream that follows is never answered. Once all are in,
+    // it holds the stream it keeps.
     await page.waitForFunction(() => LIVE.es?.url.includes('thread=') && LIVE.es.topics.includes('threads'));
     // The thread's first render can scroll; a scroll intentionally dismisses a tooltip.
-    // Open it after that render and the thread subscription have settled.
-    await page.waitForFunction(() => BOT?.slug === 'ops' && [...THV_VIEWS]
-      .filter(v => v.host.isConnected).every(v => v.state !== 'loading'));
+    // Open it after that render, the pick of Home or DM and the thread subscription have settled.
+    await page.waitForFunction(() => BOT?.slug === 'ops' && !document.querySelector('#pane-chat.bot-picking') && [...THV_VIEWS]
+      .filter(v => v.host.isConnected).every(v => v.state !== 'loading')
+      && [...THV_VIEWS].filter(v => v.host.isConnected).every(v => (new URL(LIVE.es?.url || '/', location.href).searchParams.get('thread') || '').split(',').includes(String(v.id))));
     await send(url => url.searchParams.get('party') === 'bot:ops', resend);
     await page.waitForFunction(() => LIVE.after != null);
     await page.locator('.bot-ident [data-tip-bot="ops"]').focus();

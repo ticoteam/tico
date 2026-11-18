@@ -4,7 +4,7 @@ A bot that waits for room inside its turn never goes idle, so its finished workt
 the bot is idle, never free. So the bot's own turn asking for a worktree it has no room for records one wait for that
 task and repository, and the refusal tells the bot to end its turn. When a place frees, the server reserves the worktree
 through the normal path (worktrees.provision: permission, ownership and computer checked again), the bot's computer
-checks it out and runs its setup while the bot is idle (runner_support/worktrees.py `prepare`), and only once the worktree is
+checks it out and runs its setup while the bot is idle (runner-rs/src/worktrees.rs), and only once the worktree is
 present with setup done does the server wake the task, once, naming the worktree. The task's own session resumes with
 that message; nothing of the turn that asked is replayed. A failed checkout or setup wakes it once with the reason.
 
@@ -31,23 +31,6 @@ CLOSED_TASK = ('done', 'closed')
 SWEEP_EVERY = 60  # seconds between the scheduler's sweeps while anything waits
 _last = {'at': 0.0}
 log = logging.getLogger('tico.worktree_waits')
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS worktree_waits(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, "
-    "repo TEXT NOT NULL, generation INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL, link_id TEXT, "
-    "reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT)"
-)
-
-
-def ensure(c):
-    """Unversioned and idempotent, like the task trash: an older release never reads the table."""
-    c.execute(SCHEMA)
-    c.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS worktree_waits_open ON worktree_waits(task_id, repo COLLATE NOCASE) "
-        "WHERE state IN ('waiting','reserved')"
-    )
-    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_state ON worktree_waits(state, owner, created_at)")
-    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_link ON worktree_waits(link_id) WHERE link_id IS NOT NULL")
 
 
 def _exists(c):
@@ -154,7 +137,7 @@ def _finish(c, wait, state, reason):
     if done:
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'worktree.wait.' + state,
             wait['task_id'],
             {'wait': wait['id'], 'repo': wait['repo'], 'reason': reason[:500]},
@@ -319,7 +302,7 @@ def _serve_one(c, wait, full, default_org):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'worktree.wait.reserved',
             wait['task_id'],
             {'wait': wait['id'], 'link': link['link_id'], 'path': link['path']},

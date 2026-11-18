@@ -69,7 +69,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
 | Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
-| Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
+| Strategy | The team's strategy: what the owner saves is live at once as the next numbered version; the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
 | Tools | Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls. |
@@ -256,15 +256,6 @@ no correction or deletion is sent to external services. Provider threads, existi
 and external copies already delivered remain outside this operation. An edit accepts only `text`,
 not `ask` or attachments.
 A client can tell a server offers this by the `editTaskComment` and `deleteTaskComment` operations in `GET /api/v2/openapi.json`.
-
-`POST /api/v2/tasks/{tid}/comments/{mid}/resolve` settles an open question `mid` on the task. With
-`{"quote": "..."}` (at most 4000 characters), the question's asker or the task's owner bot records the person's
-words from wherever they answered as a `kind: "answer"` reply with `refs.quoted: true`; on a structured question
-its `answer` is `{target, answers: {}, other: <quote>, dismiss: false, by: <caller>, at, quoted: true}`. With `{}`,
-the asker withdraws the question: it stays in the thread with `superseded_at`. Either way it leaves every Needs
-you list and count, wakes nobody, and answers as an edit does, with the answer (or the withdrawn question) as
-`comment`. `404` when `mid` is not a question on this task; `403 identity` for any other caller; `422 kind` when
-it was already answered or withdrawn.
 
 ## Branches
 

@@ -1,5 +1,5 @@
 import type * as Tasks from './tasks-page.cts';
-// Done and Close in a task window's header (docs/pipelines-v3.md S5): Done is the owner's, Close is for whoever may
+// Done and Close in a task window's header (docs/dev/pipelines-v3.md S5): Done is the owner's, Close is for whoever may
 // close it; each is one tap, asks no reason, and the window closes. Done sends POST /tasks/{id}/done with the version,
 // Close moves the task to closed and says "Closed" with Undo, which reopens it. A finished task offers neither. The
 // header fits at desktop and phone widths.
@@ -35,7 +35,8 @@ const {open, fixtures} = require('./tasks-page.cts') as Tasks.Api;
       assert.equal(tasks.find(t => t.id === 't-4')!.status, 'closed');
       await bot.page.locator('.toast', {hasText: 'Closed'}).getByRole('button', {name: 'Undo'}).click();
       await bot.page.locator('.toast', {hasText: 'Closed'}).waitFor({state: 'detached'});
-      assert.deepEqual(bot.posts[1], {p: '/api/v2/tasks/t-4/move', body: {to: 'reopen', version: 4}});
+      // A reopen needs a why (task_engine.move): Undo gives one.
+      assert.deepEqual(bot.posts[1], {p: '/api/v2/tasks/t-4/move', body: {to: 'reopen', version: 4, why: 'Undone'}});
       assert.deepEqual(bot.errors, []);
       await bot.page.close();
 

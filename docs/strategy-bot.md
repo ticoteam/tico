@@ -44,9 +44,10 @@ goal's automatic colour is worked out at once. A colour a person set by hand sta
 
 **Changes** at the bottom lists each change with who made it, when, and the level before and after.
 
-Only the owner changes the level, the regular checks, the Strategy Owner's name and publishes a
-[strategy version](strategy.md#who-may-do-what), and only by their own click. An admin cannot. A bot cannot, the
-Strategy Owner included, and neither can your Assistant acting for the owner. Choosing the level you are already on changes
+Only the owner changes the level, the regular checks and the Strategy Owner's name, and only by their own click. An
+admin cannot. A bot cannot, the Strategy Owner included, and neither can your Assistant acting for the owner. The
+[strategy](strategy.md#who-may-do-what) is written by the owner, or by the Strategy Owner on the owner's own
+words (on a task it names); each save is live. Choosing the level you are already on changes
 nothing and logs nothing.
 
 To rename the Strategy Owner, the owner changes its **Name** in **Settings > Bots**. Without a name of your own it is called
@@ -58,8 +59,11 @@ Over the API, `GET /api/v2/strategy-bot` shows `name`, `regular_checks`, `level`
 
 ## Strategy
 
-The [Strategy](strategy.md) page is the Strategy Owner's first job. At every level it **proposes**; you write the draft and
-the bets, and you publish:
+The [Strategy](strategy.md) page is the Strategy Owner's first job. At every level it **proposes**; you write the strategy and
+the bets, and each save is live. The one exception is your own words: when you tell it what the strategy should say (answering
+its question or commenting on its task; a task's first message never counts, since a bot can write it), it updates the sections and bets your words are about, live at once, with the
+history and the version's note saying they were your words. It notes your answer in its memory too, but the strategy is
+where it lands.
 
 - **Drafting.** A task "Draft the strategy", or you asking in your DM, runs its `draft-the-strategy` playbook. It reads
   the market pages, the setup answers, the goals and KPIs, and puts **claims** to you to keep, edit or strike ("Your
@@ -71,12 +75,12 @@ the bets, and you publish:
   your support and sales bots, team meetings, Listening. Its `keep-proof-current` playbook gathers that, writes each
   line with its source and period, and proposes it as one `strategy_draft`. It never invents a number. The Monday note
   says so in one line when the section is empty or unchanged for more than 30 days.
-- **Publishing is yours.** The Strategy Owner ends a drafting run by asking you to confirm and publish from the Strategy page.
-  It cannot publish, and it cannot write the draft: the server refuses every bot.
+- **Confirming is yours.** The Strategy Owner ends a drafting run by asking you to confirm its proposal; confirming makes it live.
+  On its own reading it cannot write the strategy: the server refuses every bot.
 - **When a bet may be wrong.** When a bet's wrong-if trips (a KPI crosses its threshold, a cited market entity
   changes, a check-by date passes), the server files a task and the Strategy Owner writes one proposal: retire the bet,
   rewrite it, or keep it with a new wrong-if, with its pick. This happens at every level, Passive included.
-- **Goals from the strategy.** When you ask for goals, or after you publish, it suggests one or two per active bet,
+- **Goals from the strategy.** When you ask for goals, or after the bets change, it suggests one or two per active bet,
   each tied to its bet with a KPI, and the Monday note names each active bet with no KPI-backed goal or with gray
   health. A goal tied to a bet needs no Why line.
 
@@ -103,8 +107,8 @@ chose a level, since it starts here, unless a person already started or paused t
   your Strategy Owner what this company is for". Writing the vision on the [Strategy](strategy.md) page closes it.
 - **Proposes a Why for each goal that has none and is not tied to a bet**, as one **Needs you** item for each person who decides them, never one
   per goal. You accept, edit or replace each on its goal.
-- **Sends a Monday note** in the owner's DM: a short weekly goals review with a line on the strategy (or that none is
-  published, or that *How we know they want it* is empty or more than 30 days old), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
+- **Sends a Monday note** in the owner's DM: a short weekly goals review with a line on the strategy (or that there is
+  none, or that *How we know they want it* is empty or more than 30 days old), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
   A person who pauses it stays paused.
 - **Asks a goal's owner what is happening** when a goal is red or stalled, as a **Needs you** item for that owner. The
   ask closes by itself when the cause clears.
@@ -121,7 +125,7 @@ chose a level, since it starts here, unless a person already started or paused t
 - **Offers level 3 once you trust it.** After 10 recoveries in a row approved with its pick unchanged, the Monday note
   offers level 3, at most once a month. It never raises its own level; only you do, in Settings.
 
-More on recoveries and merged asks: [Goals and KPIs](goals-and-kpis.md#recoveries-and-merged-asks).
+More on recoveries: [Goals and KPIs](goals-and-kpis.md#recoveries).
 
 ### At most 5 items a day
 
@@ -160,7 +164,7 @@ reply on.
 
 At every level, these stay yours, and the server refuses the Strategy Owner each one:
 - anything that raises cost: a new routine or a routine that runs more often, a bot's model, fallback or wake settings;
-- publishing to a public roadmap without your approval, and publishing a strategy version at all;
+- publishing to a public roadmap without your approval, and writing the strategy on its own reading;
 - sending anything outside the company, such as a calendar invitation to someone outside it;
 - adding, removing or bringing back bots;
 - changing a goal, or a goal's KPI target;

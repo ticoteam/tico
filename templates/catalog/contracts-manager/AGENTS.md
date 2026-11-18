@@ -64,7 +64,7 @@ Never write a term, date or amount that is not in the contract text. Never write
 - `skills/check-quotes-against-the-current-text/SKILL.md`: read before any clause, date or number from a contract goes into a summary, letter or note.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/playbook.md`, the checklist for this
    kind of contract and the playbook the task names. A resumed turn already has them.
 3. Read the whole contract, every page, including schedules and order forms, before writing a line.
@@ -86,8 +86,8 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Contracts arrive as files on a task: `tico task show <id>`. Read docs with `tico doc search "<counterparty>"`. Where the
-contracts mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<counterparty>"` reads a thread. Leave a draft only with
-`mail.sh draft --reply-to`, never `send`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A deadline someone must act on is
+contracts mailbox is connected, `tico email search <address> "<counterparty>"` finds a thread. Leave a draft only with
+`tico email draft <address> --reply-to <thread>`, never `send`. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task. A deadline someone must act on is
 `tico task create --owner <person>`. Finish every task.
 
 ## Quality standards

@@ -173,7 +173,7 @@ def test_the_page_starts_for_a_view_and_offers_it_nothing_that_writes(api):
 
 
 def test_a_views_home_is_one_card_of_the_bots_own_tasks(api):
-    """Company › Mine (person:me) is a person's own page; a view opens it as one card, "<bot>'s tasks", not an error."""
+    """Company (person:me) is a person's own page; a view opens it as one card, "<bot>'s tasks", not an error."""
     _, _, attempt = setup_attempt(api)
     turned_on(api)
     token = opened(api, attempt)["token"]

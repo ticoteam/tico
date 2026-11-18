@@ -12,12 +12,26 @@ def online(api, capabilities=CAPABLE, token=None):
     return r
 
 
-def beat(api, token, capabilities=CAPABLE, auth=None):
+# Codex signed in with the company's shared key, as a computer reports it.
+ON_SHARED = {
+    "schema_version": 1,
+    "runtimes": {
+        "codex": {
+            "installed": True,
+            "authenticated": "ready",
+            "key": {"name": "OPENAI_API_KEY", "source": "shared"},
+        }
+    },
+    "bots": {},
+}
+
+
+def beat(api, token, capabilities=CAPABLE, auth=None, readiness=None):
     import uuid
 
     r = api.post(
         "/api/v2/runners/heartbeat",
-        json={"version": "test", "platform": "test", "readiness": {}, "capabilities": capabilities},
+        json={"version": "test", "platform": "test", "readiness": readiness or {}, "capabilities": capabilities},
         headers={**(auth or headers(token)), "Idempotency-Key": uuid.uuid4().hex},
     )
     assert r.status_code == 200, r.text
