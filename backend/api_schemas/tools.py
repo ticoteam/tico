@@ -135,6 +135,7 @@ SCHEMAS['ApiTool'] = obj(
                     'preview': 's',
                     'access_level': {'enum': ['read', 'read_write']},
                     'expires_on': 'n',
+                    'expires_source': 'n',
                     'last_used_at': 'n',
                     'can_remove': 'b',
                 },

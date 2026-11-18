@@ -73,6 +73,14 @@ that key in place, every grant kept. A repeat adds nothing to the open task and 
 when the tool reads Working again or the key gets a new value (the card, Tools or the API), and closes as not needed
 when the tool is deleted (backend/reconnect_tasks.py).
 
+**End dates.** A key's end date shows on its Keys card. GitHub and Cloudflare say it themselves: each check that works
+reads it (GitHub's `GitHub-Authentication-Token-Expiration` header, Cloudflare's token verify `expires_on`), and the
+card shows it "from GitHub" with no Set, since the vendor's date replaces a typed one. For any other vendor a person
+types it with Set. From 14 days before it the tool reads **Expires in N days** under Needs you, and the Tools page's
+owner gets one task, **Renew <vendor> key**, with the same key card as a Reconnect task and the bots that hold the key
+named. It is looked at after each check and every hour, so a key no check reaches is renewed too. It closes itself when
+the key gets a new value or its date moves more than 14 days away; a key that lapses first keeps the same task.
+
 **Ids are not keys.** A variable whose name says id (`_PROJECT_ID`, `_ACCOUNT_ID`, `_ACCOUNT_SID`, `_ORG_ID`,
 `_WORKSPACE_ID`, `_TEAM_ID`, `_CUSTOMER_ID`) and whose value is one short word that does not look like a credential is a
 setting, never behind the proxy: a bot sends it as it is (Twilio's Account SID is also its Basic username), so a proxy

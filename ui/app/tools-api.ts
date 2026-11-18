@@ -38,7 +38,7 @@ interface ToolApiCall {
 }
 interface ToolApiPage {rows?: ToolApiCall[]; next?: string | null}
 interface ToolApiKey {id: string; name: string; preview?: string | null; access_level: string; expires_on?: string | null;
-  last_used_at?: string | null; created_at?: string | null; can_remove?: boolean}
+  expires_source?: string | null; last_used_at?: string | null; created_at?: string | null; can_remove?: boolean}
 // A tool's setting: a plain variable every run holding a level on the tool gets (backend/tool_settings.py).
 interface ToolApiSetting {id: string; name: string; value: string}
 interface ToolApiCheck {ok: boolean; checked_at?: string | null; status_code?: number | string | null; detail?: string | null}
@@ -196,6 +196,8 @@ function taRecentCard(d: ToolApiData): string {
   return `<section class="card" id="tool-recent"><header><h2>Recent activity</h2><a class="ghost small settings-head-act" href="${base}/activity">See all</a></header>
     ${rows ? `<table class="tt-log tt-log-short"><tbody>${rows}</tbody></table>` : '<p class="muted">No calls yet.</p>'}</section>`;
 }
+// The vendors whose check says when a key ends (backend/api_tools.py ENDS_READ), by their service id.
+const TA_ENDS_FROM: Record<string, string> = {github: 'GitHub', cloudflare: 'Cloudflare'};
 function taKeysCard(d: ToolApiData): string {
   const manage = d.can_manage, keys = d.keys || [], tool = d.tool;
   const rows = keys.map(k => `<div class="tt-key" data-ta-key="${esc(k.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
@@ -203,14 +205,18 @@ function taKeysCard(d: ToolApiData): string {
       <span class="pill${k.access_level === 'read' ? '' : ' in-progress'}" data-key-level="${esc(k.access_level)}">${esc(taLevelName(k.access_level))}</span>
       <span class="tt-key-acts">${manage ? `<button type="button" class="linkish" data-ta-rotate="${esc(k.id)}">Rotate</button>` : ''}<button type="button" class="linkish" data-ta-reveal="${esc(k.id)}">Reveal · logged</button>${
         (k.can_remove ?? manage) ? `<button type="button" class="linkish danger" data-ta-key-delete="${esc(k.id)}">Remove</button>` : ''}</span></div>`).join('');
-  const soonest = keys.map(k => k.expires_on).filter(Boolean).sort()[0];
+  const ending = keys.filter(k => k.expires_on).sort((a, b) => String(a.expires_on).localeCompare(String(b.expires_on)))[0];
+  const soonest = ending?.expires_on;
+  // A date the vendor sent on the key's check (backend/api_tools.py vendor_end_date) is the vendor's: no Set for it.
+  const from = ending?.expires_source === 'vendor' ? ` · <span class="muted" data-ta-expires-from>from ${esc(TA_ENDS_FROM[tool.service || ''] || 'the vendor')}</span>` : '';
+  const settable = keys.some(k => k.expires_source !== 'vendor');
   const used = keys.map(k => k.last_used_at).filter(Boolean).sort().pop();
   const added = keys.map(k => k.created_at).filter(Boolean).sort()[0];
   const row = (dt: string, dd: string | null | undefined) => dd ? `<dt>${esc(dt)}</dt><dd>${dd}</dd>` : '';
   const calls = tool.delivery === 'computer'
     ? `<span data-ta-delivery="computer">Key on computers</span>${manage ? ' · <button type="button" class="linkish" data-ta-proxy>Move to proxy</button>' : ''}`
     : '<span data-ta-delivery="proxy">Through Tico · logged</span>';
-  const expires = `${soonest ? esc(soonest) : 'No date'}${manage && keys.length ? ' · <button type="button" class="linkish" data-ta-expires>Set</button>' : ''}`;
+  const expires = `${soonest ? esc(soonest) : 'No date'}${from}${manage && settable ? ' · <button type="button" class="linkish" data-ta-expires>Set</button>' : ''}`;
   const template = tool.template ? `<span data-ta-template="${esc(tool.template.id)}">${esc(tool.template.id ? taTemplateName(tool.template.id) : 'Own')}</span>${
     manage && d.grouped ? ' · <button type="button" class="linkish" data-ta-split>Split</button>' : ''}` : '';
   return `<section class="card" id="tool-keys"><header><h2>Keys</h2>${manage ? '<span class="settings-head-act"><button type="button" class="ghost small" data-ta-key-paste>Paste</button><button type="button" class="ghost small" data-ta-key-add>Add key</button></span>' : ''}</header>
@@ -513,7 +519,8 @@ function taKeyDialog(key: ToolApiKey | null | undefined): void {
 function taExpiresDialog(): void {
   const state = TA;
   if (!state) return;
-  const keys = state.data?.keys || [];
+  const keys = (state.data?.keys || []).filter(k => k.expires_source !== 'vendor');
+  if (!keys.length) return;
   const dialog = whDialog('Expires', `${keys.length > 1 ? `<label>Key<select name="key">${keys.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}</select></label>` : ''}
     <label>Date<input name="expires_on" type="date" value="${esc(keys[0]?.expires_on || '')}"></label>`, '<button class="primary" type="submit">Save</button>');
   whSubmit(dialog, async (data: FormData) => {

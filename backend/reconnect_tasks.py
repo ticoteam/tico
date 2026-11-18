@@ -19,6 +19,12 @@ Who gets what:
   `tool:<id>`), so the task is paused on that person and Needs you shows it to them. The value they type replaces the
   key in place (`api_tools.update_key`): every grant stays as it was.
 
+Renew tasks: from api_tools.EXPIRING_DAYS before a key's end date (typed, or read from the vendor on its check), the
+tool reads "Expires in N days" and the same task opens as "Renew <vendor> key", with the same key card, naming the date
+and the bots that hold the key. It is decided after each check and proxied call, and every hour for every tool with an
+end date that close (`sweep`), so a key no check reaches is renewed too. It closes itself when the key's value is
+replaced or the date moves past the window; a key that lapses first keeps the same task.
+
 One open task a tool: a repeat finds it (event `tool.reconnect_task`, its target the tool) and adds nothing, notifies
 nobody. When the tool reads Working (or Works (limited)) again or its key's value is replaced, its card says fixed
 and the task closes unless it is in a side stage. When the tool is deleted the task closes as not needed.
@@ -95,17 +101,23 @@ def open_task(c: Any, tool_id: str) -> Row:
     return task if task and task["status"] in H.ACTIVE_STATUSES else None
 
 
-def title_of(tool: Row) -> str:
-    """The task's title, Reconnect and the vendor: the tool's own name when it names its vendor (Raygun · production),
-    else the vendor's with it."""
+def _vendor(tool: Row) -> str:
     TS = _module("tool_services")
-    vendor: str = TS.vendor_name(
-        TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or tool["mcp_url"] or "")
+    return str(
+        TS.vendor_name(TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or tool["mcp_url"] or ""))
     )
+
+
+def title_of(tool: Row, renew: bool = False) -> str:
+    """The task's title, Reconnect (or Renew ... key, before an end date) and the vendor: the tool's own name when it
+    names its vendor (Raygun · production), else the vendor's with it."""
+    vendor = _vendor(tool)
     name = str(tool["name"] or "")
+    what = "Renew" if renew else "Reconnect"
+    tail = " key" if renew else ""
     if not vendor or vendor.lower() in name.lower():
-        return f"Reconnect {name or vendor}"[:150]
-    return f"Reconnect {vendor} · {name}"[:150]
+        return f"{what} {name or vendor}{tail}"[:150]
+    return f"{what} {vendor} · {name}{tail}"[:150]
 
 
 # ---------------------------------------------------------------------------------------------------- who
@@ -184,6 +196,39 @@ def _rejected_key(c: Any, tool_id: str) -> Row:
     ).fetchone()
 
 
+def _ending_key(c: Any, tool_id: str) -> Row:
+    """The key to renew: the tool's stored key whose end date comes first."""
+    return c.execute(
+        "SELECT * FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL AND expires_on IS NOT NULL "
+        "ORDER BY expires_on, created_at LIMIT 1",
+        (tool_id,),
+    ).fetchone()
+
+
+def _holders(c: Any, key: Row) -> list[str]:
+    """The bots granted the key, by name, at most eight."""
+    names: list[str] = []
+    for row in c.execute(
+        "SELECT DISTINCT subject FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL "
+        "AND subject LIKE 'bot:%' ORDER BY subject LIMIT 8",
+        (key["id"],),
+    ):
+        names.append(str(H.actor_name(c, row[0]) or row[0]))
+    return names
+
+
+def _renew_body(c: Any, tool: Row, key: Row) -> str:
+    vendor = _vendor(tool) or str(tool["name"])
+    said = f" ({vendor} says)" if key["expires_source"] == "vendor" else ""
+    holders = _holders(c, key)
+    who = (
+        f"{', '.join(holders)} use it: put a new value on it before then and their runs keep working."
+        if holders
+        else "Put a new value on it before then, or remove it if nobody needs it."
+    )
+    return f"{tool['name']}'s key {key['env'] or key['name']} ends on {key['expires_on']}{said}. {who}"
+
+
 def _card(c: Any, task: Row, owner: str, person: str, tool: Row, key: Row) -> str | None:
     """The key card in the task's thread, standing on the task as its reconnect wait; the request id."""
     KINDS: tuple[str, ...] = _module("credential_cards").KINDS
@@ -245,9 +290,9 @@ def _card(c: Any, task: Row, owner: str, person: str, tool: Row, key: Row) -> st
     return rid
 
 
-def start(c: Any, tool_id: str, why: str) -> Row:
-    """The tool's Reconnect task, opened now with its key card: None when one is already open (a repeat adds nothing),
-    or when nobody can take it."""
+def start(c: Any, tool_id: str, why: str, renew: bool = False) -> Row:
+    """The tool's Reconnect task (with `renew`, its Renew task, before a key's end date), opened now with its key card:
+    None when one is already open (a repeat adds nothing), or when nobody can take it."""
     tool = _tool(c, tool_id)
     if tool is None or open_task(c, tool_id):
         return None
@@ -256,27 +301,38 @@ def start(c: Any, tool_id: str, why: str) -> Row:
         log.warning("No Tools Owner or BotOps to reconnect tool %s", tool_id)
         return None
     person = person_for(c, tool)
-    key = _rejected_key(c, tool_id)
+    key = (_ending_key(c, tool_id) if renew else None) or _rejected_key(c, tool_id)
     who = H.actor_name(c, person) if person else ""
     body = (
-        f"{tool['name']} rejects its key: {why}.\n"
+        (_renew_body(c, tool, key) + "\n" if renew and key else f"{tool['name']} rejects its key: {why}.\n")
         + (
             f"The key card in this thread asks {who} for a new one: never ask for a key in words."
             if person and key
             else "Nobody here can change its key: ask a credential administrator to replace it in Tools."
         )
-        + f"\nThis task closes itself when {tool['name']} reads Working again or its key is replaced.\n"
-        f"#/tools/api/{tool_id}"
+        + (
+            f"\nThis task closes itself when the key's value is replaced or its end date is more than "
+            f"{_api_tools().EXPIRING_DAYS} days away.\n"
+            if renew
+            else f"\nThis task closes itself when {tool['name']} reads Working again or its key is replaced.\n"
+        )
+        + f"#/tools/api/{tool_id}"
     )
     try:
         task: Row = H.task_create(
-            c, H.TICO_ACTOR, title_of(tool), body, owner, lint=False, deduplicate=False, private=False
+            c, H.TICO_ACTOR, title_of(tool, renew), body, owner, lint=False, deduplicate=False, private=False
         )
     except H.Refused:
         log.warning("Could not file the reconnect task for tool %s", tool_id)
         return None
     rid = _card(c, task, owner, person, tool, key) if person and key else None
-    H.event(c, H.TICO_ACTOR, EVENT, tool_id, {"task": task["id"], "request": rid, "person": person, "why": why})
+    H.event(
+        c,
+        H.TICO_ACTOR,
+        EVENT,
+        tool_id,
+        {"task": task["id"], "request": rid, "person": person, "why": why, "renew": renew},
+    )
     return task
 
 
@@ -309,9 +365,38 @@ def sync(c: Any, tool_id: str) -> Row:
     text = _api_tools().state_of(c, tool)["text"]
     if text == "Key rejected":
         return start(c, tool_id, "its check or its calls got 401")
+    if ending(text):
+        return start(c, tool_id, "its key's end date is near", renew=True)
     if text in FIXED:
         return close(c, tool_id, f"{tool['name']} reads {text} again.")
     return None
+
+
+def ending(text: str) -> bool:
+    """Whether a tool's status says its key's end date is near or past (api_tools.status)."""
+    return text.startswith("Expires ") or text == "Key expired"
+
+
+def sweep(store: Any) -> int:
+    """Every hour (backend/scheduler.py): each API tool with a stored key whose end date is EXPIRING_DAYS away or less
+    and no open task is synced, so a key no check reaches gets its Renew task too. The tools synced."""
+    api_tools = _api_tools()
+    soon = (api_tools._today() + api_tools.timedelta(days=api_tools.EXPIRING_DAYS)).isoformat()
+    done = 0
+    with store.transaction() as c:
+        ids = [
+            str(r[0])
+            for r in c.execute(
+                "SELECT DISTINCT k.tool_id FROM credentials k JOIN tools t ON t.id=k.tool_id WHERE t.kind='api' "
+                "AND k.ciphertext IS NOT NULL AND k.expires_on IS NOT NULL AND k.expires_on<=? ORDER BY k.tool_id",
+                (soon,),
+            )
+        ]
+        for tool_id in ids:
+            if not open_task(c, tool_id):
+                _safely(sync, c, tool_id)
+                done += 1
+    return done
 
 
 def replaced(c: Any, tool_id: str) -> Row:
