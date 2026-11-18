@@ -714,6 +714,27 @@ def test_the_connections_route_takes_a_stripe_key_through_the_stripe_probe(api, 
     assert {k: settings[k] for k in lines} == lines
 
 
+def test_the_connections_route_refuses_stripe_lines_for_another_provider_before_any_probe(api, monkeypatch):  # noqa: F811
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        store_keys(c, "cred-stripe")
+
+    probed: list[str] = []
+
+    def no_probe(_store: Any, _vault: Any, credential_id: str) -> tuple[dict[str, object], str]:
+        probed.append(credential_id)
+        return {}, "probed"
+
+    for name in ("mercury_probe", "stripe_probe", "brex_probe"):
+        monkeypatch.setattr(FA, name, no_probe)
+    for provider in ({}, {"provider": "mercury"}, {"provider": "brex"}):
+        body = {**provider, "credential_id": "cred-stripe", "transfer_account_id": "acct-made-up"}
+        res = api.post("/api/v2/finance/connections", json=body, headers=headers())
+        assert res.status_code == 422 and "transfer_account_id" in res.text, (provider, res.text)
+    assert probed == []  # the key never reached a probe
+
+
 def test_a_marked_payment_paid_through_stripe_still_posts_the_fee_so_the_balance_nets(books):
     """An invoice marked paid from the Stripe balance waits for its sale. The sale's fee posts too, so the balance holds
     the net, and the invoice is paid in full."""

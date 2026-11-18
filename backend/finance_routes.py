@@ -1219,6 +1219,10 @@ def install(app, store, auth, mutate):
         """Connect Mercury, Stripe or Brex: the credential is tested and its accounts listed (outside any transaction), then
         the connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
         who = viewer(request)
+        stripe_only = [k for k in ("transfer_account_id", "capital_account_id") if getattr(body, k) is not None]
+        if stripe_only and body.provider != "stripe":
+            # Refused before the key is read or sent anywhere: a Stripe request missing its provider is not Mercury's.
+            raise Problem("invalid", f"{', '.join(stripe_only)} is for a Stripe connection (provider: stripe)", 422)
         if not read(lambda c: finance_reads.may_connect(c, who.actor)):
             raise Problem("denied", "connecting a bank is for finance admins", 403)
         if not read(lambda c: finance.may_use_credential(c, who.actor, body.credential_id)):
