@@ -5108,7 +5108,7 @@ class Execution:
         # the bot's model while the turn is out is told from an effort change by these (ran_another_model).
         handed = providers.bot_choice(c, self.store.settings, followed)
         voice_reply = isinstance(live_ref, dict) and call_sessions.is_voice(c, live_ref.get("meeting_id"))
-        if voice_reply and gateway_connection.is_tico(handed[1]):
+        if voice_reply and isinstance(live_ref, dict) and gateway_connection.is_tico(handed[1]):
             from . import live_meetings
 
             turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=?", (live_ref.get("turn_id"),)).fetchone()
@@ -6371,8 +6371,8 @@ class Execution:
             c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
             include_deleted=True,
         )
-        voice = (origin.get("refs") or {}).get("live_meeting") or {}
-        if origin["sender_id"] == H.TICO_ACTOR and isinstance(voice, dict) and voice.get("voice_call"):
+        voice = ((origin or {}).get("refs") or {}).get("live_meeting") or {}
+        if origin and origin["sender_id"] == H.TICO_ACTOR and isinstance(voice, dict) and voice.get("voice_call"):
             if attempt["stop_requested_at"]:
                 return {"messages": [], "call_voice": {"closed": True}}
             return call_sessions.inputs(c, attempt, voice["voice_call"], self.auth, if_idle=if_idle)

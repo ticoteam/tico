@@ -12,13 +12,11 @@ heard (backend/calls.py), and then routed here:
 - A call has one open question at a time. A bot asked while another answers waits; a question is dropped with a note
   once QUESTION_WAIT_SECONDS have passed since it was heard.
 
-The answer is the bot's normal meeting turn on its own model, told to answer in a few spoken sentences. A turn is dead
-ANSWER_SECONDS after its question was heard: one not answered by then is ended (`voice_deadline`) with a note, and a
-reply stored after it, or whose first sentence would start after it, stays text. The reply is always posted as text in
-the thread (calls.project_reply). Only after that write commits is it handed here to be spoken, and only when it answers
-the open question's own turn: sentence by sentence through the Gateway's text-to-speech, the next sentence made while
-one plays, none made that would not fit in what is left of VOICE_CAP_MS, each checked first against the call (still
-live, not ending, the bot still attached with its attacher's access). A voice failure leaves the text as it is.
+A resident runner session streams a voice bot's answer. Each complete sentence can go to the Gateway's
+text-to-speech while the model continues. The normal meeting reply hook posts the full text when the
+answer ends. The open question expires ANSWER_SECONDS after it was heard. Playback is limited by
+VOICE_CAP_MS and checks that the call is still live and the bot's attacher still has access.
+A legacy runner's reply is spoken after its text commits.
 
 One owner: the process that holds a call's recorder (call_media.LiveKitMedia, `running`) holds its voice too. Everything
 here is that process's memory: the open question, the bots' states and captions, the replies already spoken. Another
