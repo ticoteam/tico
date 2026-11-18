@@ -7,16 +7,38 @@ A cohort is the customer spells whose "became customer" date falls in the same p
 - `new_customers`: how many spells it holds.
 - `kept_d30`, `kept_d90`, `kept_d180`: the share still customers on day N (no churned date, or one after became + N
   days). A window shows only once every customer in the cohort is at least N days old, that is from the period's last
-  day + N days (`fills_on`); before then its status is `not_yet`, never 0%. A cohort under the team's minimum
-  (`min_cohort`, default 30, never below 5) shows the count only, status `too_few`.
+  day + N days (`fills_on`); before then its status is `not_yet`, never 0%. Churn that means "no activity for some
+  days" is only known that many days late, so a cohort whose customers are in a segment with `churn_days` waits that
+  much longer: N + churn_days after the period's last day, taking the largest churn_days among the cohort's customers
+  (a channel or all-together cohort mixing segments waits for the slowest; `churn_days` on the cohort says how long).
+  A cohort under the team's minimum (`min_cohort`, default 30, never below 5; a segment's own in its segment cut)
+  shows the count only, status `too_few`.
 - `revenue_month`, `expected_months`, `ltv`: today's maths (growth.expected_months, revenue per month x margin) on the
   computed retention. Revenue per customer is the customer's own, else the typed figure for their channel's month, else
-  the settings value; margin is the channel's month, else the settings. A cohort under the minimum shows `too_few`.
-- `cac`, `payback_months`: by channel (and all together) only, from the month's typed spend and bot cost. Spend has no
-  segment or plan (`not_split`); Unknown has no spend. A weekly cohort's spend is its Monday-to-Sunday days of Finance's
+  their segment's, else the settings value; margin is the channel's month, else the segment's, else the settings. A
+  cohort under the minimum shows `too_few`.
+- `ltv_observed_d90`, `_d180`, `_d365` (when any customer carries a net revenue): the mean observed cumulative net
+  revenue per customer at that age, over the cohort's customers at least that old who have the value. `not_yet` until
+  one is that old (`fills_on`), `no_data` when none has the value, `too_few` under the minimum; `count` is the customers
+  it averages and `denominator` the cohort. The modelled `ltv` stays beside it.
+- `cac`, `payback_months`: from the month's typed spend and bot cost, by channel and all together. Unknown has no
+  spend. Plan has no spend (`not_split`), and neither has segment for a team with no segments. With segments, a
+  segment's `cac` is direct: the spend and bot cost of the channels whose spend is for it, over its new customers.
+  `cac_loaded` adds the company-wide channels' spend (no segment; Unknown has none) times the segment's share of the
+  period's new customers who have a segment, every customer counted whatever the filter. No segment has no spend.
+  So the segments' loaded spend adds up to the All cohort's spend, less the spend of a segment's channels in a period
+  the segment has no new customers (it has no cohort to carry it). Payback is on the direct CAC.
+  Cut to a channel or plan, a segment's CAC and loaded CAC are `not_split`: its spend is not split to them.
+  A weekly cohort's spend is its Monday-to-Sunday days of Finance's
   daily ad spend (backend/growth_finance.py weeks) while a live Finance ad spend source fills spend, with no bot cost,
   which is monthly. Otherwise, or where a channel's month spend is typed or another source's (who wins,
   backend/growth_sync.py: a sync never overwrites a typed actual), spend is monthly and the week says `spend_monthly`.
+- `attribution` (when the customers carry it): how many customers each rung named the channel by (utm, code, ...).
+
+With segments, a customer's segment is the one its label names by slug or name, any case (backend/growth_segments.py);
+the segment cut shows the rest as `none` (No segment). Every answer then carries `health`: `no_segment`, the customers
+whose label names no segment, and `mismatch`, the ones in a segment other than the one their channel's spend is for,
+over every customer in the period whatever the filter.
 
 Each figure is {value, status, origin: computed}, with `count` and `denominator` where it is a share. A cohort's
 `sources` are the customers sources its customers were loaded from ("upload", or "source:<id>"). The trace lists
@@ -30,7 +52,7 @@ years) computes in a few seconds.
 """
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 
@@ -53,6 +75,8 @@ CUTS = ("channel", "segment", "plan", "all")
 GRAINS = ("month", "week")
 MIN_COHORT, MIN_COHORT_FLOOR = 30, 5
 UNKNOWN = "unknown"  # growth.UNKNOWN: a customer whose channel is not one of the team's
+NO_SEGMENT = "none"  # growth_segments.NO_SEGMENT: a customer whose label names none of the team's segments
+NETS = (90, 180, 365)  # the ages observed net revenue is given at
 
 Row = dict[str, Any]
 Typed = dict[tuple[str | None, str], Row]  # (channel slug or None, YYYY-MM) -> the typed cohort row
@@ -70,6 +94,32 @@ class Fact:
     plan: str | None = None
     revenue_month: float | None = None
     source: str = ""  # the growth_customers.source it was loaded under: "upload" or "source:<id>"
+    net_d90: float | None = None
+    net_d180: float | None = None
+    net_d365: float | None = None
+    attribution: str | None = None
+
+    def net(self, days: int) -> float | None:
+        return {90: self.net_d90, 180: self.net_d180, 365: self.net_d365}[days]
+
+
+@dataclass(slots=True)
+class Segments:
+    """The team's segments for the cuts (backend/growth_segments.py); empty for a team with none, whose segment labels
+    read as they are."""
+
+    rows: dict[str, Row]  # slug -> growth_segments row, retired ones too: their customers still count under them
+    labels: dict[str, str]  # a label as customers give it, lowercased (a slug or a name) -> the slug
+    channels: dict[str, str | None]  # channel slug -> the slug of the segment its spend is for; None is company-wide
+    counts: dict[tuple[str, str], int] | None = None  # (period, segment slug or none) -> every new customer, unfiltered
+    filtered: bool = False  # the facts are cut to a channel or plan: a segment's spend cannot be split to them
+
+    def of(self, f: Fact) -> Row | None:
+        return self.rows.get(self.labels.get((f.segment or "").strip().lower(), ""))
+
+    def slug(self, f: Fact) -> str:
+        seg = self.of(f)
+        return str(seg["slug"]) if seg else NO_SEGMENT
 
 
 @dataclass(slots=True)
@@ -135,43 +185,69 @@ def compute(
     trace: bool = False,
     keys: bool = False,
     daily: Daily | None = None,
+    segs: Segments | None = None,
 ) -> list[Row]:
     """Every cohort of `facts` cut by `cut` at `grain`, as of the date `on`.
 
     channels: the Growth channel slugs; any other channel is Unknown. typed: the typed cohorts, for the month's spend,
     revenue and margin. trace: add each window's rule; keys: and the customer keys behind it. daily: Finance's daily
-    spend by week, for weekly CAC (daily_spend); without it a week's CAC says spend is monthly."""
+    spend by week, for weekly CAC (daily_spend); without it a week's CAC says spend is monthly. segs: the team's
+    segments (`segments`), whose `counts` are every customer's when `facts` is filtered; from `facts` when not given."""
     conf, typed, channels = conf or {}, typed or {}, channels or set()
+    segs = segs or Segments({}, {}, {})
+    by_segment = cut == "segment" and bool(segs.rows)
+    if by_segment and segs.counts is None:
+        segs = replace(segs, counts=new_by_segment(facts, grain, segs))
     groups: dict[tuple[str | None, str], _Group] = {}
     for f in facts:
         slug = f.channel if f.channel in channels else None
-        value = {"channel": slug or UNKNOWN, "segment": f.segment, "plan": f.plan, "all": "all"}[cut]
+        if by_segment:
+            value = segs.slug(f)
+        else:
+            value = {"channel": slug or UNKNOWN, "segment": f.segment, "plan": f.plan, "all": "all"}[cut]
         key, start, end = period(f.became, grain)
         group = groups.get((value, key))
         if group is None:
             group = groups[(value, key)] = _Group(value, key, start, end, [])
         group.rows.append((f, slug))
-    out = [_cohort(g, on, cut, grain, typed, conf, min_cohort, trace, keys, daily) for g in groups.values()]
-    out.sort(key=lambda r: (r["value"] == UNKNOWN, r["value"] is None, str(r["value"])))
+    observed = any(f.net_d90 is not None or f.net_d180 is not None or f.net_d365 is not None for f in facts)
+    out = [
+        _cohort(g, on, cut, grain, typed, conf, min_cohort, trace, keys, daily, segs, observed) for g in groups.values()
+    ]
+    last = (UNKNOWN, NO_SEGMENT) if by_segment else (UNKNOWN,)
+    out.sort(key=lambda r: (r["value"] in last, r["value"] is None, str(r["value"])))
     out.sort(key=lambda r: r["period"], reverse=True)
     return out
 
 
-def _money(rows: list[tuple[Fact, str | None]], typed: Typed, conf: Row) -> tuple[float | None, float | None]:
+def new_by_segment(facts: list[Fact], grain: str, segs: Segments) -> dict[tuple[str, str], int]:
+    """{(period, segment slug or none): new customers}: the shares company-wide spend is loaded by."""
+    out: dict[tuple[str, str], int] = {}
+    for f in facts:
+        key = (period(f.became, grain)[0], segs.slug(f))
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def _first(*values: Any) -> Any:
+    return next((v for v in values if v is not None), None)
+
+
+def _money(
+    rows: list[tuple[Fact, str | None]], typed: Typed, conf: Row, segs: Segments
+) -> tuple[float | None, float | None]:
     """(revenue per customer-month, profit per customer-month) over the cohort's customers, each customer's revenue its
-    own, else its channel's typed month, else the settings; margin its channel's typed month, else the settings."""
+    own, else its channel's typed month, else its segment's, else the settings; margin its channel's typed month, else
+    its segment's, else the settings."""
     revenues: list[float] = []
     profits: list[float] = []
     for f, slug in rows:
         cohort = typed.get((slug, f.became.isoformat()[:7])) or {}
-        revenue = f.revenue_month
-        if revenue is None:
-            revenue = cohort.get("revenue_month")
-            if revenue is None:
-                revenue = conf.get("revenue_month")
-        margin = cohort.get("margin_pct")
-        if margin is None:
-            margin = conf.get("margin_pct")
+        seg = (segs.of(f) if segs.rows else None) or {}
+        revenue = _first(
+            f.revenue_month, cohort.get("revenue_month"), seg.get("revenue_month"), conf.get("revenue_month")
+        )
+        margin = _first(cohort.get("margin_pct"), seg.get("margin_pct"), conf.get("margin_pct"))
         if revenue is not None:
             revenues.append(float(revenue))
             if margin is not None:
@@ -194,12 +270,14 @@ def _spend(
         return None, "spend_monthly"
     if cut == "channel" and value == UNKNOWN:
         return None, "no_spend"
-    if grain == "week" and daily is not None:
-        return _week_spend(value if cut == "channel" else None, key, daily)
-    if cut == "channel":
-        rows = [typed[(value, key)]] if (value, key) in typed else []
-    else:
-        rows = [t for (slug, m), t in typed.items() if m == key and slug]
+    return _cost({str(value)} if cut == "channel" else None, grain, key, typed, daily)
+
+
+def _cost(slugs: set[str] | None, grain: str, key: str, typed: Typed, daily: Daily | None) -> tuple[float | None, str]:
+    """(cost, status) of these channels' spend and bot cost in the period (None: every channel but Unknown)."""
+    if grain == "week":
+        return _week_spend(slugs, key, daily) if daily is not None else (None, "spend_monthly")
+    rows = [t for (slug, m), t in typed.items() if m == key and slug and (slugs is None or slug in slugs)]
     costs = [(t.get("spend"), t.get("bot_cost")) for t in rows]
     costs = [(s, b) for s, b in costs if s is not None or b is not None]
     if not costs:
@@ -207,13 +285,33 @@ def _spend(
     return float(sum((s or 0) + (b or 0) for s, b in costs)), "ok"
 
 
-def _week_spend(slug: str | None, monday: str, daily: Daily) -> tuple[float | None, str]:
-    """A week's spend for one channel, or (slug None) every channel's but Unknown's, as a month's all has it."""
+def _segment_spend(
+    value: str, grain: str, key: str, typed: Typed, daily: Daily | None, segs: Segments
+) -> tuple[tuple[float | None, str], tuple[float | None, str]]:
+    """((direct cost, status), (loaded cost, status)) of a segment's period (see the module's `cac`)."""
+    if value == NO_SEGMENT:
+        return (None, "no_spend"), (None, "no_spend")
+    own = {ch for ch, seg in segs.channels.items() if seg == value}
+    shared = {ch for ch, seg in segs.channels.items() if seg is None}
+    direct, status = _cost(own, grain, key, typed, daily)
+    company, company_status = _cost(shared, grain, key, typed, daily)
+    counts = segs.counts or {}
+    known = sum(n for (p, seg), n in counts.items() if p == key and seg != NO_SEGMENT)
+    share = counts.get((key, value), 0) / known if known else 0.0
+    if "spend_monthly" in (status, company_status):
+        return (direct, status), (None, "spend_monthly")
+    if direct is None and company is None:
+        return (direct, status), (None, "no_spend")
+    return (direct, status), ((direct or 0) + (company or 0) * share, "ok")  # rounded once, as the CAC
+
+
+def _week_spend(slugs: set[str] | None, monday: str, daily: Daily) -> tuple[float | None, str]:
+    """A week's spend for these channels, or (None) every channel's but Unknown's, as a month's all has it."""
     start = date.fromisoformat(monday)
     months = {start.isoformat()[:7], (start + timedelta(days=6)).isoformat()[:7]}
-    if any(m in months and (slug is None or s == slug) for s, m in daily.monthly):
+    if any(m in months and (slugs is None or s in slugs) for s, m in daily.monthly):
         return None, "spend_monthly"
-    found = [v for (s, w), v in daily.spend.items() if w == monday and s and (slug is None or s == slug)]
+    found = [v for (s, w), v in daily.spend.items() if w == monday and s and (slugs is None or s in slugs)]
     return (float(round(sum(found), 2)), "ok") if found else (None, "no_spend")
 
 
@@ -274,11 +372,18 @@ def _cohort(
     min_cohort: int,
     trace: bool,
     keys: bool,
-    daily: Daily | None = None,
+    daily: Daily | None,
+    segs: Segments,
+    observed: bool,
 ) -> Row:
     rows, start, end = group.rows, group.start, group.end
     n = len(rows)
+    by_segment = cut == "segment" and bool(segs.rows)
+    own = segs.rows.get(str(group.value)) if by_segment else None
+    if own and own.get("min_cohort"):
+        min_cohort = max(MIN_COHORT_FLOOR, int(own["min_cohort"]))
     few = n < min_cohort
+    wait = max((int((segs.of(f) or {}).get("churn_days") or 0) for f, _ in rows), default=0) if segs.rows else 0
     view: Row = {
         "cut": cut,
         "value": group.value,
@@ -292,9 +397,11 @@ def _cohort(
         "new_customers": _figure(n),
         "rule": _rule(cut, group.value, start, end),
     }
+    if wait:
+        view["churn_days"] = wait
     rates: dict[int, float | None] = {}
     for window in WINDOWS:
-        fills = end + timedelta(days=window)
+        fills = end + timedelta(days=window + wait)
         name = f"kept_d{window}"
         if on < fills:
             view[name] = _figure(None, "not_yet", count=None, denominator=n, fills_on=fills.isoformat())
@@ -309,7 +416,7 @@ def _cohort(
             figure["rule"] = _rule(cut, group.value, start, end, window)
             if keys:
                 figure["customers"] = _trace(rows, kept)
-    revenue, profit = _money(rows, typed, conf)
+    revenue, profit = _money(rows, typed, conf, segs)
     months: float | None = G.expected_months(rates.get(30), rates.get(90), rates.get(180)) if 30 in rates else None
     ltv = round(profit * months, 2) if profit is not None and months is not None else None
     view["revenue_month"] = _figure(revenue, ("too_few" if few else "ok") if revenue is not None else "missing")
@@ -320,15 +427,62 @@ def _cohort(
         why = "not_yet" if 30 not in rates else "missing"
         view["expected_months"] = _figure(months, "ok" if months is not None else why)
         view["ltv"] = _figure(ltv, "ok" if ltv is not None else why if months is None else "missing")
-    cost, status = _spend(cut, group.value, grain, group.period, typed, daily)
+    if observed:
+        for days in NETS:
+            view[f"ltv_observed_d{days}"] = _observed(rows, on, days, min_cohort)
+    if by_segment and segs.filtered:
+        cost, status = None, "not_split"
+        view["cac_loaded"] = _figure(None, "not_split", denominator=n)
+    elif by_segment:
+        (cost, status), (loaded, loaded_status) = _segment_spend(
+            str(group.value), grain, group.period, typed, daily, segs
+        )
+        view["cac_loaded"] = _figure(round(loaded / n, 2) if loaded is not None else None, loaded_status, denominator=n)
+    else:
+        cost, status = _spend(cut, group.value, grain, group.period, typed, daily)
     cac = round(cost / n, 2) if cost is not None and n else None
-    view["cac"] = _figure(cac, status)
+    view["cac"] = _figure(cac, status, denominator=n) if by_segment else _figure(cac, status)
     if cac is None:
         view["payback_months"] = _figure(None, status)
     else:
         payback = round(cac / profit, 2) if profit else None
         view["payback_months"] = _figure(payback, "ok" if payback is not None else "missing")
+    rungs: dict[str, int] = {}
+    for f, _ in rows:
+        if f.attribution:
+            rungs[f.attribution] = rungs.get(f.attribution, 0) + 1
+    if rungs:
+        view["attribution"] = dict(sorted(rungs.items()))
     return view
+
+
+def _observed(rows: list[tuple[Fact, str | None]], on: date, days: int, least: int) -> Row:
+    """The mean net revenue per customer at `days` days old, over the cohort's customers that old with the value."""
+    n = len(rows)
+    old = [f for f, _ in rows if on >= f.became + timedelta(days=days)]
+    if not old:
+        first = min(f.became for f, _ in rows) + timedelta(days=days)
+        return _figure(None, "not_yet", count=None, denominator=n, fills_on=first.isoformat())
+    values = [v for v in (f.net(days) for f in old) if v is not None]
+    if not values:
+        return _figure(None, "no_data", count=0, denominator=n)
+    mean = round(sum(values) / len(values), 2)
+    return _figure(mean, "too_few" if len(values) < least else "ok", count=len(values), denominator=n)
+
+
+def health(facts: list[Fact], channels: set[str], segs: Segments) -> Row:
+    """With segments: the customers whose label names none (`no_segment`), and the ones in a segment other than the one
+    their channel's spend is for (`mismatch`; a company-wide channel matches every segment)."""
+    no_segment = mismatch = 0
+    for f in facts:
+        seg = segs.of(f)
+        if seg is None:
+            no_segment += 1
+            continue
+        spend_for = segs.channels.get(f.channel or "") if f.channel in channels else None
+        if spend_for and spend_for != seg["slug"]:
+            mismatch += 1
+    return {"no_segment": no_segment, "mismatch": mismatch}
 
 
 # ----------------------------------------------------------------------------- reads
@@ -347,13 +501,42 @@ def facts(c: sqlite3.Connection, since: date | None = None, until: date | None =
     if until:
         where.append("became<=?")
         args.append(until.isoformat())
-    sql = "SELECT customer_key, became, churned, channel, segment, plan, revenue_month, source FROM growth_customers"
+    sql = (
+        "SELECT customer_key, became, churned, channel, segment, plan, revenue_month, source, net_d90, net_d180, "
+        "net_d365, attribution FROM growth_customers"
+    )
     return [
-        Fact(key, date.fromisoformat(became), date.fromisoformat(churned) if churned else None, ch, seg, plan, rev, src)
-        for key, became, churned, ch, seg, plan, rev, src in c.execute(
+        Fact(
+            key,
+            date.fromisoformat(became),
+            date.fromisoformat(churned) if churned else None,
+            ch,
+            seg,
+            plan,
+            rev,
+            src,
+            d90,
+            d180,
+            d365,
+            rung,
+        )
+        for key, became, churned, ch, seg, plan, rev, src, d90, d180, d365, rung in c.execute(
             sql + (" WHERE " + " AND ".join(where) if where else ""), args
         )
     ]
+
+
+def segments(c: sqlite3.Connection) -> Segments:
+    """The team's segments, their labels and which segment each channel's spend is for."""
+    rows: list[Row] = H._rows(c.execute("SELECT * FROM growth_segments"))
+    labels = {str(r["name"]).strip().lower(): str(r["slug"]) for r in rows}
+    labels.update({str(r["slug"]): str(r["slug"]) for r in rows})  # a slug wins over another segment's name
+    ids = {str(r["id"]): str(r["slug"]) for r in rows}
+    channels = {
+        str(slug): ids.get(str(sid)) if sid else None
+        for slug, sid in c.execute("SELECT slug, segment_id FROM growth_channels")
+    }
+    return Segments({str(r["slug"]): r for r in rows}, labels, channels)
 
 
 def has_facts(c: sqlite3.Connection) -> bool:
@@ -395,6 +578,7 @@ def by_channel_month(c: sqlite3.Connection, month: str | None = None) -> dict[tu
         typed=typed_cohorts(c, month),
         conf=conf,
         min_cohort=min_cohort(conf),
+        segs=segments(c),
     )
     return {(None if r["value"] == UNKNOWN else r["value"], r["period"]): r for r in rows}
 
@@ -447,18 +631,25 @@ def computed(
             grain = "week"
     except ValueError:
         raise Problem("validation", "month is YYYY-MM and week is a date (YYYY-MM-DD)", 422) from None
-    rows = facts(c, since, until)
+    everyone = rows = facts(c, since, until)
     slugs = set(_slugs(c).values())
+    segs = segments(c)
+    if segs.rows and cut == "segment":
+        segs.counts = new_by_segment(everyone, grain, segs)
+        segs.filtered = bool(channel or plan)
     if channel:
         rows = [f for f in rows if (f.channel if f.channel in slugs else UNKNOWN) == channel]
-    if segment:
+    if segment and segs.rows:
+        wanted = segs.labels.get(segment.strip().lower(), segment.strip().lower())
+        rows = [f for f in rows if segs.slug(f) == wanted]
+    elif segment:
         rows = [f for f in rows if f.segment == segment]
     if plan:
         rows = [f for f in rows if f.plan == plan]
     keys = customers and may_see_keys(c, auth, who, conf)
     typed = typed_cohorts(c)
     daily = None
-    if grain == "week" and cut in ("channel", "all") and rows:
+    if grain == "week" and (cut in ("channel", "all") or (cut == "segment" and segs.rows)) and rows:
         daily = daily_spend(c, typed, min(f.became for f in rows), max(f.became for f in rows))
     cohorts = compute(
         rows,
@@ -472,11 +663,17 @@ def computed(
         trace=customers,
         keys=keys,
         daily=daily,
+        segs=segs,
     )
     if cut == "channel" and grain == "month":
         # A typed actual that differs, beside its computed figure, and whether this reader may choose (growth.beside).
         G.typed_beside(c, cohorts, who.actor, bool(admin(auth, who)))
-    note = {"segment": "spend is not split by segment", "plan": "spend is not split by plan"}.get(cut)
+    note = {
+        "segment": ("spend is not split by channel or plan within a segment" if segs.filtered else None)
+        if segs.rows
+        else "spend is not split by segment",
+        "plan": "spend is not split by plan",
+    }.get(cut)
     if grain == "week" and not note:
         statuses = {r["cac"]["status"] for r in cohorts}
         if daily is None or ("spend_monthly" in statuses and "ok" not in statuses):
@@ -487,7 +684,7 @@ def computed(
                 note += "; bot cost is monthly"
         elif daily.bot_cost:
             note = "weekly CAC is daily ad spend: bot cost is monthly"
-    return {
+    out: Row = {
         "by": cut,
         "grain": grain,
         "month": month,
@@ -500,6 +697,9 @@ def computed(
         "keys_visible": keys,
         "loads": GC.loads(c, 5),
     }
+    if segs.rows:
+        out["health"] = health(everyone, slugs, segs)  # the team's, whatever the filter: a segment's read names it too
+    return out
 
 
 def install(app: Any, store: Any, auth: Any) -> None:

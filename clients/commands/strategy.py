@@ -341,6 +341,7 @@ CHANNEL_PROPS = {
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number", "description": "The most that KPI may reach"},
     "input_kpi_id": _s("The input KPI the channel moves; \"\" clears"),
+    "segment": _s("The segment its spend is for, by slug; \"\" is company-wide"),
     "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
 }
 
@@ -383,12 +384,65 @@ def growth_channel_show(api, args):
 
 @tool(
     "tico_growth_segment_show",
-    "One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change.",
-    {"label": _s("Segment label, as customer facts name it: agency")},
+    "One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change; "
+    "with segments, its direct and loaded CAC, observed LTV, churn rule and channels.",
+    {"label": _s("Segment slug or name (none: No segment), or the label customer facts give it: agency")},
     required=("label",),
 )
 def growth_segment_show(api, args):
-    return api.get("growth/segments/" + args["label"])
+    return api.get("growth/segments/" + quote(args["label"], safe=""))
+
+
+@tool(
+    "tico_growth_segment_list",
+    "The segments: customer rule, churn days, value per customer, and the channels whose spend is for each. "
+    "may_edit: you may add and change them.",
+    {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
+)
+def growth_segment_list(api, args):
+    return api.get("growth/segments", include_retired="true" if args.get("include_retired") else None)
+
+
+SEGMENT_PROPS = {
+    "name": _s("What people call it: Consumer"),
+    "customer_rule": _s("When someone becomes a customer and when they churn, in plain words"),
+    "churn_days": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Days with no activity before a customer counts as churned; 0 when churn is a cancel date",
+    },
+    "revenue_month": {"type": "number", "description": "Revenue per customer per month; blank uses the settings"},
+    "margin_pct": {"type": "number", "description": "Margin as a percent; blank uses the settings"},
+    "min_cohort": {"type": "integer", "minimum": 5, "description": "Fewest customers a cohort needs for a rate"},
+    "owner": _s("Who runs it: me, a bot slug or a person id; \"\" clears"),
+    "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
+}
+
+
+@tool(
+    "tico_growth_segment_set",
+    "Owner, admin or the Growth Manager: add a segment, or change one by slug (only the fields sent); retire: true "
+    "retires it (owner or admin only).",
+    {
+        "slug": _s("Lowercase, digits and dashes: consumer"),
+        **SEGMENT_PROPS,
+        "retire": {"type": "boolean", "description": "Retire it: no channel can be given it any more"},
+    },
+    required=("slug",),
+    writes=True,
+)
+def growth_segment_set(api, args):
+    slug = args["slug"]
+    client = _as_person(api)
+    if args.get("retire"):
+        return client.post(f"growth/segments/{slug}/retire", {}, key=_key(args))
+    body = {k: args[k] for k in SEGMENT_PROPS if k != "owner" and args.get(k) is not None}
+    if args.get("owner") is not None:
+        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    known = {s["slug"] for s in api.get("growth/segments", include_retired="true")["segments"]}
+    if slug in known:
+        return client.patch(f"growth/segments/{slug}", body, key=_key(args))
+    return client.post("growth/segments", {"slug": slug, **body}, key=_key(args))
 
 
 @tool(
@@ -977,6 +1031,7 @@ _CHANNEL = (
     Arg("guardrail_kpi_id", "--guardrail-kpi", metavar="ID"),
     Arg("guardrail_max", "--guardrail-max", metavar="N"),
     Arg("input_kpi_id", "--input-kpi", metavar="ID"),
+    Arg("segment", "--segment", metavar="SLUG"),
 )
 _SOURCE = (
     Arg("truth_for", "--truth-for"),
@@ -1057,12 +1112,34 @@ CLI = (
         render=_growth_text,
         example="tico growth channel retire google-search",
     ),
-    Group("growth segment", "the numbers for one segment, from customer facts"),
+    Group("growth segment", "who the team sells to, and the numbers for each, from customer facts"),
+    Command(
+        "growth segment list",
+        "the segments: customer rule, churn days, value per customer, channels",
+        args=(_RETIRED,),
+        render=_growth_text,
+        example="tico growth segment list",
+    ),
     Command(
         "growth segment show",
-        "one segment: 6 months of new customers, kept at 30 and 90 days, LTV, and the change",
+        "one segment: 6 months of new customers, kept at 30 and 90 days, LTV, direct and loaded CAC, and the change",
         render=_growth_text,
-        example="tico growth segment show agency",
+        example="tico growth segment show consumer",
+    ),
+    Command(
+        "growth segment set",
+        "add a segment or change one (owner, admin or the Growth Manager); --retire retires it (owner or admin)",
+        args=(
+            Arg("name", "--name"),
+            Arg("customer_rule", "--rule"),
+            Arg("churn_days", "--churn-days", metavar="N"),
+            Arg("revenue_month", "--revenue", metavar="N"),
+            Arg("margin_pct", "--margin", metavar="PCT"),
+            Arg("min_cohort", "--min-cohort", metavar="N"),
+        ),
+        render=_growth_text,
+        example="tico growth segment set consumer --name Consumer --churn-days 90 "
+        "--rule 'first completed booking; churned after 90 days with no booking'",
     ),
     Group("growth source", "which system holds the truth for each number"),
     Command(
