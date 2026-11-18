@@ -187,6 +187,36 @@ def ambiguous_page(publish):
         ) from None
 
 
+def private_document(publish, client, task, document, text, key=None):
+    """Publish a task's document as a page. A run on a private task is refused every page publish as company-wide
+    (backend/task_privacy.py guard_write reads only the path), so it writes the same document through the task's own
+    files route instead. The server still decides there: guard_write admits only a private task whose readers may see
+    what the run carries (require_destination), and the document is still a page linked to the task under its name,
+    submitted to the stage's page requirement. `text` is the HTML, or a function that reads it, called only then."""
+    try:
+        return publish()
+    except APIError as exc:
+        if exc.code != "privacy":
+            raise
+    html = text() if callable(text) else text
+    try:
+        return client.post(f"tasks/{task}/files", {"document": document, "text": html}, key=key and key + ":private")
+    except APIError as exc:
+        if exc.code != "ambiguous":
+            raise
+        ids = [str(page) for page in exc.extra.get("pages") or []]
+        raise APIError(
+            "ambiguous",
+            "More than one page on this task has that role"
+            + (f": {', '.join(ids)}" if ids else "")
+            + ". A run on a private task cannot pick one: ask a person on the task to archive all but one.",
+            exc.status,
+            exc.retryable,
+            exc.operation_id,
+            {"pages": ids},
+        ) from None
+
+
 def document_attachment(result, document):
     """Keep the task attach shortcut's file id and version alongside the published page."""
     if page := result.get("page"):

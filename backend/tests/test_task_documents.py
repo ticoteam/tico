@@ -7,6 +7,7 @@ import pytest
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.cards import task
 from backend.tests.helpers.files import turn
+from backend.tests.helpers.threads_private_execution import private_tasks_have_an_unrelated_manager  # noqa: F401
 
 SPEC = "<h1>Export spec</h1><p>Rows export as CSV.</p><script>alert(1)</script>"
 
@@ -102,6 +103,32 @@ def test_a_document_keeps_the_task_s_read_rules(api):
     assert [d["name"] for d in documents(api, tid, "ben-test")] == ["Spec"]
 
 
+def test_a_bot_s_private_run_writes_its_own_task_s_document_through_the_task_route(api):
+    # A run on a private task may not publish a page (guard_write sees only the path), so `tico task attach --doc`
+    # falls back to the task's files route, which is admitted for the run's own private task and keeps its readers.
+    from backend.tests.helpers.threads_private_execution import private_run, task as plain_task
+
+    row, attempt = private_run(api)
+    page = {"task": row["id"], "as": "QA report", "name": "qa-report.html", "text": "<h1>QA</h1>"}
+    refused = post(api, "pages", page, attempt["token"], expected=403)
+    assert "company-wide" in str(refused)
+    written = write(api, row["id"], "QA report", "<h1>QA</h1>", attempt["token"])
+    assert written["document"] == "QA report"
+    assert [d["name"] for d in documents(api, row["id"], "ben-test")] == ["QA report"]
+    get(api, "tasks/" + row["id"], "cara-test", expected=404)
+    get(api, f"files/{written['file_id']}", "cara-test", expected=404)
+    other = plain_task(api, requester="human:ben", owner="human:ana", title="Someone else's private task")
+    write(api, other["id"], "QA report", "<h1>QA</h1>", attempt["token"], expected=404)  # not its task: unseen
+    # Tasks the run can see but may not carry its private work to: the destination guard refuses both.
+    public = plain_task(api, requester="human:ben", owner="bot:ops", private=False, title="Company work")
+    assert "company-visible" in str(
+        write(api, public["id"], "QA report", "<h1>QA</h1>", attempt["token"], expected=403)
+    )
+    wider = plain_task(api, requester="human:cara", owner="bot:ops", title="Cara's private work")
+    write(api, wider["id"], "QA report", "<h1>QA</h1>", attempt["token"], expected=403)
+    assert documents(api, public["id"]) == []
+
+
 def test_writing_a_document_says_so_in_the_task_history(api):
     tid = task(api, "human:ben", "Ship the export")
     write(api, tid, "Spec", SPEC)
@@ -163,6 +190,71 @@ def test_tico_task_attach_doc_is_the_page_publish_with_task_and_as(monkeypatch, 
         hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "path": "notes.md"})
     with pytest.raises(ValueError):  # outside the checkout: refused before anything is read
         hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "path": "../outside.html"})
+
+
+def test_tico_task_attach_doc_falls_back_to_the_task_route_when_a_private_run_may_not_publish(monkeypatch, tmp_path):
+    from clients import bot_files as BF, hubcli, hubtools, remotecli
+    from clients.tico import APIError
+
+    sent = []
+
+    def refuse_pages(path):
+        if "pages" in path:
+            raise APIError("privacy", "Private task work cannot publish into company-wide resources", 403)
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **query):
+            return {"actor": "bot:writer", "kind": "bot"}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body, key))
+            refuse_pages(path)
+            return {"file_id": "file-1", "version": 2, "document": "QA report"}
+
+        def request(self, method, path, body=None, key=None, raw=None):
+            sent.append((method, path, raw, key))
+            refuse_pages(path)
+            return {}
+
+    (tmp_path / "qa.html").write_text('<h1>QA</h1><img src="shot.png">')
+    (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
+    monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: tmp_path)
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+    monkeypatch.setenv("HUB_OPERATION_ID", "op-1")
+    remotecli.run(hubcli.parser().parse_args(["task", "attach", "T-1", "qa.html", "--doc", "QA report"]))
+    method, path, body, key = sent[-1]
+    assert (method, path, key) == ("POST", "tasks/T-1/files", "op-1:private")
+    assert (
+        body["document"] == "QA report" and "<h1>QA</h1>" in body["text"] and "data:image/png;base64," in body["text"]
+    )
+
+    result = hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
+    assert sent[-1][:3] == ("POST", "tasks/T-1/files", {"document": "Spec", "text": "<p>Spec</p>"})
+    assert (result["file_id"], result["version"]) == ("file-1", 2)
+
+    class Other(Client):
+        def post(self, path, body=None, key=None):
+            raise APIError("forbidden", "No", 403)
+
+    with pytest.raises(APIError, match="No"):  # only the privacy refusal falls back
+        hubtools.task_attach(Other(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
+
+    (tmp_path / "notes.md").write_text("# Notes")
+    with pytest.raises(APIError, match="html"):  # the fallback sends only an .html file, as the page route would
+        remotecli.run(hubcli.parser().parse_args(["task", "attach", "T-1", "notes.md", "--doc", "QA report"]))
+    assert sent[-1][1] != "tasks/T-1/files"
+
+    class Twice(Client):
+        def post(self, path, body=None, key=None):
+            refuse_pages(path)
+            raise APIError("ambiguous", "Several pages", 409, extra={"pages": ["file-a", "file-b"]})
+
+    with pytest.raises(APIError, match="file-a, file-b. A run on a private task cannot pick one"):
+        hubtools.task_attach(Twice(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
 
 
 def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):
