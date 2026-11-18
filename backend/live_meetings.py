@@ -888,7 +888,18 @@ def claim_runner_turn(c, rid, turn_id, bot, *, auth=None, job=None):
 
 
 def complete_runner_turn(
-    c, rid, turn_id, bot, text, outcome, *, requeued=False, attempt_id=None, failure=None, runner_id=None
+    c,
+    rid,
+    turn_id,
+    bot,
+    text,
+    outcome,
+    *,
+    requeued=False,
+    attempt_id=None,
+    may_have_acted=False,
+    failure=None,
+    runner_id=None,
 ):
     """Settle a meeting turn from a completed normal bot execution, keeping PASS hidden. The follow-ups the run took in
     while it ran (Execution.inputs: later turns of this bot in this meeting) are settled with it: answered in its reply,
@@ -938,7 +949,7 @@ def complete_runner_turn(
         elif _is_pass(text):
             _finish_pass(c, rid, turn, "bot_pass")
         elif not str(text or "").strip():
-            if not _retry_empty(c, rid, turn, bot):
+            if may_have_acted or not _retry_empty(c, rid, turn, bot):
                 _finish_pass(c, rid, turn, "empty_bot_reply")
         else:
             who = Identity("bot:" + bot, "bot", attempt_id=attempt_id or "")
@@ -979,7 +990,7 @@ def _say_failed(c, rid, turn, bot, failure, runner_id):
 
 
 def _retry_empty(c, rid, turn, bot):
-    """Ask again after an empty reply (a model can stop with nothing to say), so the question is not lost: a fresh run
+    """Ask again after an empty reply from a run with no evidence of acting, so the question is not lost: a fresh run
     in the same conversation, once on the model that gave it and, when that was a meeting model, once more on the bot's
     own (turn_config). False once the turn has had those; its empty reply is then a hidden PASS."""
     retries = turn["retries"]

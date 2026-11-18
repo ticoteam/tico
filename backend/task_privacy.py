@@ -960,6 +960,10 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
         raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
+        if {"can_send", "can_withdraw", "text"} <= payload.keys() and isinstance(payload.get("id"), str):
+            from .org_rule_check import _hold, require_hold_meeting
+
+            require_hold_meeting(c, principal, _hold(c, payload["id"]))
         if isinstance(payload.get("letter_id"), str) and "approval_hash" in payload:
             letter = (
                 c.execute("SELECT * FROM letters WHERE id=?", (payload["letter_id"],)).fetchone()

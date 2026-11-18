@@ -200,12 +200,19 @@ class Sources:
         ids = self.references(refs)
         if message.get("conversation_id"):
             ids.update(self.conversation(message["conversation_id"]))
-        parents = [message.get("in_reply_to")]
+        reply = message.get("in_reply_to")
+        parents = [reply]
         for key in ("answers", "inputs"):
             if isinstance(refs.get(key), list):
                 parents.extend(v for v in refs[key] if isinstance(v, str))
         for parent in filter(None, parents):
-            ids.update(self.message(H.message(self.c, parent, include_deleted=True), include_run=False, seen=seen))
+            ids.update(
+                self.message(
+                    H.message(self.c, parent, include_deleted=True),
+                    include_run=include_run and parent == reply,
+                    seen=seen,
+                )
+            )
         run = refs.get("run")
         aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if aid and include_run:

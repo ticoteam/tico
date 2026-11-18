@@ -2831,8 +2831,10 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None,
     ):
         return "cooling_off"  # a check on a Tico model waits on the Gateway's hold and its one probe
     config = check_models.apply(followed, wanted)
+    # A hub upgrade leaves active meeting attempts on the lane they were leased with.
     if (
         (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
+        or (job["bot_id"], sessions.LEGACY_MEETING_LANE + message["conversation_id"]) in busy
         or (job["bot_id"], task_id) in live
         or filer_live(c, message)
     ):
@@ -7338,6 +7340,14 @@ class Execution:
                 body.outcome,
                 requeued=requeue,
                 attempt_id=aid,
+                may_have_acted=(
+                    body.outcome == "completed"
+                    and not (body.text or "").strip()
+                    and (
+                        positive_effect(c, aid, body)
+                        or any(call["tool"] not in READ_ONLY_TOOLS for call in recorded_tools(c, aid))
+                    )
+                ),
                 failure=PRIVATE_COPY_FAILURE if no_copy else None,
                 runner_id=row["runner_id"],
             )

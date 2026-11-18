@@ -6,13 +6,14 @@ import pytest
 from starlette.requests import Request
 
 from backend import live_meetings as meetings
-from backend import task_privacy
+from backend import task_privacy, thread_retention
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.live_meetings import attach, chunk, live, ready  # noqa: F401
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401
+from backend.tests.helpers.org_rule_check import Judge, color_rule
 from backend.tests.helpers.sql import query
 from backend.tests.helpers.statement_scope import belongs, measuring
 
@@ -388,6 +389,74 @@ def test_a_message_linked_to_a_private_meeting_run_keeps_its_audience(live, deri
         expected=403,
     )
     assert refused["error"]["code"] == "privacy"
+
+
+def test_a_rule_hold_checks_the_destination_and_keeps_the_current_meeting_audience(live, derived):
+    mid, attempt = derived
+    live.app.state.judge = Judge(live.app.state.store)
+    color_rule(live, reviewer="ana")
+    body = {"text": "The favorite color is gold.", "refs": {"turn_id": attempt["id"]}}
+    refused = post(live, "messages", {**body, "to": "ana"}, token=attempt["token"], expected=403)
+    assert refused["error"]["code"] == "privacy"
+    assert get(live, "rule-holds")["holds"] == []
+
+    to_member = {**body, "to": "ben"}
+    held = post(live, "messages", to_member, token="ops-live", key="held-meeting-message")["held"]
+    path = f"rule-holds/{held['id']}"
+    get(live, path, expected=404)
+    post(live, f"live-meetings/{mid}/access", {"add": ["ana"]}, token="ben-test")
+    view = get(live, path)
+    assert view["text"] == "The favorite color is gold."
+    post(live, f"live-meetings/{mid}/access", {"remove": ["ana"]}, token="ben-test")
+    get(live, path, expected=404)
+    post(live, f"{path}/send", {"nonce": view["nonce"]}, expected=404)
+    removed = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={}, headers=headers("ben-test"))
+    assert removed.status_code == 200, removed.text
+    post(live, "messages", to_member, token="ops-live", key="held-meeting-message", expected=404)
+
+
+def test_shared_thread_replies_inherit_a_parents_meeting_run_audience(live, derived):
+    mid, attempt = derived
+    post(live, f"live-meetings/{mid}/access", {"add": ["cara"]}, token="ben-test")
+    thread = post(live, "threads", {"title": "Shared planning", "audience": "company"}, token="ben-test")
+    path = f"threads/{thread['id']}/messages"
+    parent = post(live, path, {"text": "Meeting reference", "refs": {"turn_id": attempt["id"]}}, token="ben-test")
+    reply = post(live, path, {"text": "The quoted meeting decision", "in_reply_to": parent["id"]}, token="cara-test")
+    nested = post(live, path, {"text": "A follow-up on that decision", "in_reply_to": reply["id"]}, token="ben-test")
+    with live.app.state.store.transaction() as c:
+        # Replies already stored by an older hub have no retained meeting IDs.
+        c.execute(
+            "UPDATE messages SET refs=json_remove(refs,'$.live_meetings') WHERE id IN (?,?)",
+            (reply["id"], nested["id"]),
+        )
+
+    for message, body in (
+        (parent, "Meeting reference"),
+        (reply, "The quoted meeting decision"),
+        (nested, "A follow-up on that decision"),
+    ):
+        mid_path = f"messages/{message['id']}"
+        get(live, mid_path, expected=404)
+        assert get(live, mid_path, token="ben-test")["body"] == body
+        sql = "SELECT body FROM messages WHERE id=?"
+        assert query(live, sql, params=[message["id"]])["rows"] == []
+        assert query(live, sql, params=[message["id"]], token="ben-test")["rows"] == [[body]]
+    # An older hub could settle these replies while overlooking the original message's run.
+    with live.app.state.store.transaction() as c:
+        for message in (reply, nested):
+            key = "m:" + message["id"]
+            c.execute("INSERT OR IGNORE INTO read_index VALUES(?)", (key,))
+            c.execute("INSERT OR IGNORE INTO read_deps VALUES(?,?)", ("m:" + parent["id"], key))
+    assert query(live, "SELECT id FROM messages WHERE id IN (?,?)", params=[reply["id"], nested["id"]])["rows"] == []
+    post(live, f"live-meetings/{mid}/access", {"remove": ["cara"]}, token="ben-test")
+    get(live, f"messages/{reply['id']}", token="cara-test", expected=404)
+
+    retained = post(live, path, {"text": "Follow the meeting decision", "in_reply_to": nested["id"]}, token="ben-test")
+    with live.app.state.store.transaction() as c:
+        assert thread_retention.purge(c, thread["id"], [parent["id"]], days=7) == 1
+    get(live, f"messages/{retained['id']}", expected=404)
+    assert get(live, f"messages/{retained['id']}", token="ben-test")["body"] == "Follow the meeting decision"
+    assert query(live, "SELECT id FROM messages WHERE id=?", params=[retained["id"]])["rows"] == []
 
 
 @pytest.mark.parametrize("visibility", ["private", "team"])

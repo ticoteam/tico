@@ -1141,6 +1141,15 @@ def stamp(c, row, conv, refs):
     row["origin_id"] = str(origin.get("origin_id") or "") or mint_origin(c)
     row["revision"] = int(origin.get("revision") or 0)
     row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"), c)
+    if row["restricted"] and row.get("in_reply_to"):
+        from .live_privacy import sources
+
+        # A reply can outlive the source's refs after the thread's retention sweep.
+        meetings = sources(c)
+        if inherited := meetings.message(H.message(c, row["in_reply_to"], include_deleted=True)):
+            stored = _refs_of(row)
+            stored["live_meetings"] = sorted(inherited | meetings.references(stored))
+            row["refs"] = H._dump(stored)
     row["legacy_audience"] = None
     return row
 
