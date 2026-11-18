@@ -1759,6 +1759,62 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     )
 
 
+def by_rule_again(ctx: Ctx, row: Any, money: Any) -> str:
+    """Post a past row by the posting rules as a new row would be (posting_rules.post_feed), when it is still waiting
+    for a category: new with no entry, or posted to the automatic Other expenses default alone (no person's or bot's
+    categorize put it there). The default's entry is reversed first, as categorize does, and the row's open ask is
+    withdrawn. A row a payment, document, transfer, card, refund or top-up decided is left alone, as is one whose first
+    rule asks, and one in a closed period is not changed. Says "posted", "closed" or "". The caller keeps the opening in
+    step (shift_openings)."""
+    fid = str(row["id"])
+    if (
+        row["request_id"]
+        or row["card_id"]
+        or row["refund_of"]
+        or str(row["kind"]) in (*F.TRANSFER_KINDS, *F.CARD_KINDS, *F.BREX_CARD_PAYMENTS)
+    ):
+        return ""
+    if str(money["kind"]) not in ("bank", "card_program") or ctx.book.mode == "mirror":
+        return ""
+    if covered_day(ctx, str(row["txn_date"])) or _awaiting_sign(ctx, money):
+        return ""
+    t = _txn_of(row)
+    if row["entry_id"]:
+        other = by_code(ctx, OTHER)
+        if (
+            other is None
+            or not _only_other(ctx, row, other.id)
+            or SAP.categorized_into(ctx.c, str(row["entry_id"]))
+            or SK.refunds_of(ctx.c, fid)
+            or SAP.settled_from(ctx.c, "feed", fid)
+        ):
+            return ""
+    elif documents.may_wait(ctx, row, money) or documents.several_match(ctx, row) or _held_back(ctx, money, t):
+        return ""
+    rule = posting_rules.first_for(ctx, posting_rules.feed_facts(row, money))
+    if rule is None or rule.then.outcome != "post" or not posting_rules.usable(ctx, rule.then):
+        return ""
+    if SL.closed_on(ctx.c, ctx.book.id, str(row["txn_date"])):
+        return "closed"
+    if row["entry_id"]:
+        unpost_row(ctx, row, "a posting rule took it")
+        row = SK.get(ctx.c, "fin_feed_txns", fid)
+    if not posting_rules.post_feed(ctx, row, money, t, gl_account(ctx, money).id):
+        raise FinanceError(CONFLICT, f"feed row {fid} did not post by its rule")
+    SK.withdraw_asks(ctx.c, CATEGORY_EVENT, fid)
+    return "posted"
+
+
+def _held_back(ctx: Ctx, money: Any, t: F.FeedTxn) -> bool:
+    """A new debit _settle kept for a person on purpose: it carries a canceled payment's key, or it may be a Gateway
+    top-up's bank side."""
+    if t.amount >= 0:
+        return False
+    from .topups import waiting_for  # lazy: topups posts through this module's helpers
+
+    return _canceled(ctx, money, t) is not None or (str(money["kind"]) == "bank" and bool(waiting_for(ctx, money, t)))
+
+
 def reversal_locked(ctx: Ctx, entry_id: str) -> bool:
     """Whether reversing this entry would unpost a row a done reconciliation cleared."""
     return any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id))

@@ -130,6 +130,34 @@ def post_feed(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gl_id: str) -> bool:
     return True
 
 
+APPLY_MOST = 5000  # past rows one rule_create or rule_update with apply_from looks at
+
+
+def apply_from(ctx: Ctx, rule_id: str, day: str) -> dict[str, object]:
+    """Post the past rows from `day` this rule matches that still wait for a category (banking.by_rule_again), each by
+    the first matching rule as a new row would be, so a higher-priority rule still wins. A row in a closed period is
+    skipped and counted. At most APPLY_MOST rows are looked at; `capped` says the rest were not."""
+    from .banking import by_rule_again, opening_terms, shift_openings
+
+    row = SK.get(ctx.c, "fin_rules", rule_id)
+    if row is None or not row["active"]:
+        return {"reposted": 0, "skipped_closed": 0, "capped": False}  # a rule turned off posts nothing
+    rule = rule_of(row)
+    money = {str(m["id"]): m for m in SK.money_accounts(ctx.c, ctx.book.id)}
+    found = SK.rule_candidates(ctx.c, ctx.book.id, day, APPLY_MOST + 1)
+    before = opening_terms(ctx)  # a waiting credit comes into the books with no bank movement
+    reposted = closed = 0
+    for r in found[:APPLY_MOST]:
+        m = money.get(str(r["money_account_id"]))
+        if m is None or not G.matches(rule.when, feed_facts(r, m)):
+            continue
+        done = by_rule_again(ctx, r, m)
+        reposted += done == "posted"
+        closed += done == "closed"
+    shift_openings(ctx, before)
+    return {"reposted": reposted, "skipped_closed": closed, "capped": len(found) > APPLY_MOST}
+
+
 # ------------------------------------------------------------------------------------------------ writing rules
 def checked(ctx: Ctx, who: str, p: V.Payload, base: Mapping[str, object] | None = None) -> dict[str, object]:
     """A posting rule's fields, validated: its accounts active lines inside the writer's view (never accounts payable

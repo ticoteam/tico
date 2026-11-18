@@ -1577,6 +1577,19 @@ def stripe_unsettled(c: sqlite3.Connection, money_account_id: str, kinds: Sequen
     ).fetchall()
 
 
+def rule_candidates(c: sqlite3.Connection, book_id: str, start: str, most: int) -> list[Any]:
+    """Settled bank and card rows dated from `start` that may still want a category, oldest first: new with no entry,
+    or posted (whether its entry is only the Other expenses default is the caller's check). Never a reconciled row, nor
+    a Stripe balance row (it posts in its day's summary)."""
+    return c.execute(
+        "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE m.book_id=? AND "
+        "m.kind!='stripe' AND f.txn_date>=? AND f.pending=0 AND f.reconciliation_id IS NULL AND "
+        "((f.status='new' AND f.entry_id IS NULL) OR (f.status='posted' AND f.entry_id IS NOT NULL)) "
+        "ORDER BY f.txn_date, f.id LIMIT ?",
+        (book_id, start, most),
+    ).fetchall()
+
+
 def withdraw_asks(c: sqlite3.Connection, name: str, subject: str) -> int:
     """Drop the `name` events about `subject` not yet sent on to Tico's rules (drained): what they asked is settled."""
     return c.execute(
