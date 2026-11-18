@@ -73,6 +73,8 @@ EMPTY_ANSWERS = {
     "regions": [],
     # The default chart's teams setup's Your team step switched off (company_import.default_chart); [] keeps them all.
     "teams_off": [],
+    # The first job picked on the Your team step (company_import.FIRST_JOBS); "" keeps every live seat of the chart.
+    "first_job": "",
 }
 ANSWER_LABELS = (
     ("building", "What we're building"),
@@ -646,6 +648,10 @@ class Onboarding:
             "company_import_failed": company_import.failure(c),
             # The chart a setup with no roles picked creates, by team, for the Your team step; nothing once completed.
             "default_chart": [] if record["completed"] else company_import.default_teams(self, c, home),
+            # Its "Start with" line: the first jobs offered and the one shown picked.
+            "first_jobs": {"choices": [], "picked": ""}
+            if record["completed"]
+            else company_import.first_jobs(self, c, home),
         }
 
     def _bots(self, c):
@@ -752,6 +758,8 @@ class Onboarding:
             answers["regions"] = record["answers"].get("regions") or []
         if "teams_off" not in body.answers.model_fields_set:  # and the teams it switched off
             answers["teams_off"] = record["answers"].get("teams_off") or []
+        if "first_job" not in body.answers.model_fields_set:  # and the first job it picked
+            answers["first_job"] = record["answers"].get("first_job") or ""
         if (
             not names["website"]
             and not answers["building"]

@@ -2681,6 +2681,9 @@ class OnboardingAnswers(Contract):
     regions: Annotated[list[str], AfterValidator(_places_rule)] = Field(default_factory=list, max_length=12)
     # The default chart's teams switched off on setup's Your team step, by name ("Growth"); the rest are created.
     teams_off: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(default_factory=list, max_length=20)
+    # The first job picked on the Your team step's "Start with" line (company_import.FIRST_JOBS): its one seat is the
+    # default chart's only live seat that is not a built-in. "" is none picked: every live seat of the chart is live.
+    first_job: Literal["plan", "grow", "customers", "legal", ""] = ""
 
 
 class OnboardingSelection(Contract):
