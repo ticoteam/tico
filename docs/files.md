@@ -17,10 +17,12 @@ left, a chat on the right, and the top bar holds the name, Download and a clock.
 take turns, switched by two marks under the top bar. Esc or ✕ returns to the page underneath as it was; a cold link
 draws that page first (the task, the bot, else Library › Files), so closing lands there.
 
-- **The file:** the same kinds the viewer shows (pictures, video, audio, PDF, Markdown, text, CSV, HTML in its
-  sandbox), plus Word files (`.docx`), drawn in the browser by the vendored docx-preview (no LibreOffice). A Google
-  Doc, Sheet, Slides or Drive file shows Google's own `/preview` (signed in as the viewer, nothing passed but the
-  address), with Open in Google beside it. Anything else is a card with Download.
+- **The file:** the kinds the viewer shows: pictures, video, audio, PDF, Markdown, text, CSV, HTML in its sandbox,
+  and Word files (`.docx`, up to 25 MB), drawn in the browser by the vendored docx-preview (no LibreOffice). The
+  viewer, a task's Files and a file's OK in Flow draw a Word file the same way; one docx-preview cannot read shows as
+  its card with Download, and a legacy `.doc` only downloads. A Google Doc, Sheet, Slides or Drive file shows Google's
+  own `/preview` (signed in as the viewer, nothing passed but the address), with Open in Google beside it. Anything
+  else is a card with Download.
 - **The chat:** from a task, the task's thread; from a bot's page, its rail or Library, the DM with the file's bot.
   Each message carries `refs.from_page` `{page: 'file', label: <title>, item: {kind: 'file', id, name: 'v<n>'}}`
   for the version on screen (the same reference the [page chat](pages.md) uses). A file no bot owns has no chat.

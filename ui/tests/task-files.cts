@@ -12,8 +12,10 @@ const path = require('node:path') as typeof import('node:path');
 const zlib = require('node:zlib') as typeof import('node:zlib');
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
+import type * as DocxSample from './support/docx-sample.cts';
 const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {docxSample} = require('./support/docx-sample.cts') as DocxSample.Api;
 // @ts-expect-error t is not called in this spec; the require stays for load.cjs's side effects
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SHOTS || '';
@@ -42,6 +44,7 @@ function png(w: number, h: number, rgb: (x: number, y: number) => number[]): Buf
   for (let y = 0; y < h; y++) { rows.push(0); for (let x = 0; x < w; x++) rows.push(...rgb(x, y)); }
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(Buffer.from(rows))), chunk('IEND', Buffer.alloc(0))]);
 }
+const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const TEAL = png(160, 90, (x, y) => [30 + (x >> 1), 120 + y, 140]);
 const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
 
@@ -96,7 +99,10 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       {id: 'f-logo', name: 'logo.svg', mime: 'image/svg+xml', current_version: 1, archived: false, versions: [version('f-logo', 1, {mime: 'image/svg+xml'})]},
       {id: 'f-page', name: 'page.html', mime: 'text/html', current_version: 1, archived: false, versions: [version('f-page', 1, {mime: 'text/html'})]},
       {id: 'f-site', name: 'site.html', mime: 'text/html', current_version: 1, archived: false, versions: [version('f-site', 1, {mime: 'text/html', size: 20_000_000})]},
+      {id: 'f-memo', name: 'memo.docx', mime: DOCX, current_version: 1, archived: false, versions: [version('f-memo', 1, {mime: DOCX})]},
+      {id: 'f-torn', name: 'torn.docx', mime: DOCX, current_version: 1, archived: false, versions: [version('f-torn', 1, {mime: DOCX})]},
     ];
+    const memo = await docxSample(['Dear Ana,', 'The draft letter.'], 'Draft letter');
     const scripts: Record<string, string> = {1: '# Script\n\nIntro line.\n\nScene one.\nScene two.\n', 2: '# Script\n\nA tighter intro line.\n\nScene one.\nScene two.\nScene three.\n'};
     const csv = 'shot,length\n' + Array.from({length: 260}, (_, i) => `s${i + 1},${i % 7 + 1}s`).join('\n');
     const task = {id: 't1', title: 'Cut the launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1,
@@ -167,6 +173,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
         if (id === 'f-script' || id === 'f-notes') return route.fulfill({contentType: 'text/markdown', body: scripts[n!]!});
         if (id === 'f-page') return route.fulfill({contentType: 'application/octet-stream', body: '<h1>Landing</h1><script>document.body.dataset.ran = "yes"</script>'});
         if (id === 'f-rows') return route.fulfill({contentType: 'text/csv', body: csv});
+        if (id === 'f-memo') return route.fulfill({contentType: DOCX, body: memo});
         if (id === 'f-cut') return new Promise(() => {});        // a video that is still on its way: the poster shows
         return route.fulfill({contentType: 'application/octet-stream', body: 'not a real file'});
       }
@@ -227,7 +234,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const modal = page.locator('#task-modal');
     await modal.locator('[data-task-tab="files"]').click();
     await modal.locator('.tft-row[data-tft-file="f-cut"]').waitFor();
-    assert.deepEqual(await modal.locator('[data-tft-file] .tft-t').allTextContents(), ['cut.mp4', 'script.md', 'frame.png', 'still.png', 'shots.csv', 'logo.svg', 'page.html', 'site.html']);
+    assert.deepEqual(await modal.locator('[data-tft-file] .tft-t').allTextContents(), ['cut.mp4', 'script.md', 'frame.png', 'still.png', 'shots.csv', 'logo.svg', 'page.html', 'site.html', 'memo.docx', 'torn.docx']);
     const cutTile = modal.locator('.tft-row[data-tft-file="f-cut"]');
     assert.match(await cutTile.locator('.tft-m').innerText(), /^v3 · \d+h$/);
     assert.equal(await cutTile.locator('.ask-dot').count(), 1, 'a file with an open question has a dot');
@@ -356,6 +363,19 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await openTile('f-site');
     assert.equal(await view.locator('.tf-card .tf-glyph').innerText(), 'HTML');
     assert.equal(await view.locator('.tf-card a[download]').getAttribute('href'), '/api/v2/files/f-site?v=1');
+    assert.equal(await view.locator('iframe').count(), 0);
+    // Word: drawn by docx-preview into the same sandboxed frame, nothing that acts or reaches out; a file it cannot
+    // read is its card with Download
+    await openTile('f-memo');
+    const memoFrame = view.locator('.tf-html iframe.html-view');
+    await memoFrame.waitFor();
+    assert.equal(await memoFrame.getAttribute('sandbox'), 'allow-popups allow-popups-to-escape-sandbox');
+    assert.doesNotMatch(await memoFrame.getAttribute('srcdoc') || '', /javascript:|<script|evil\.example|DOCX_CHUNK/i);
+    await page.frameLocator('.tf-html iframe.html-view').locator('p', {hasText: 'The draft letter.'}).waitFor();
+    await openTile('f-torn');
+    await view.locator('.tf-card').waitFor();
+    assert.equal(await view.locator('.tf-card .tf-glyph').innerText(), 'DOC');
+    assert.equal(await view.locator('.tf-card a[download]').getAttribute('href'), '/api/v2/files/f-torn?v=1');
     assert.equal(await view.locator('iframe').count(), 0);
     // images: full size, ←/→ through the task's images
     await openTile('f-frame');

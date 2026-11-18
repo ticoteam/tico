@@ -5,7 +5,7 @@
 'use strict';
 
 // ---- the shapes this file reads: a task's files (GET /v2/tasks/{id}/files), their versions, and the questions on them
-type TfKind = 'markdown' | 'csv' | 'json' | 'text' | 'html' | 'image' | 'video' | 'audio' | 'pdf' | 'other';
+type TfKind = 'markdown' | 'csv' | 'json' | 'text' | 'html' | 'image' | 'video' | 'audio' | 'pdf' | 'docx' | 'other';
 interface TfAttachment { id: string; name?: string; title?: string; mime?: string; content_type?: string; size?: number; created_at?: string; url?: string; version?: number | string | null; file_id?: string | null; }
 interface TfAnswer { by?: string | null; text?: string; answers?: Record<string, string[]> | null; dismiss?: boolean; other?: string | null; at?: string | null; quoted_by?: string | null; }
 interface TfQuestion { id: string; header?: string | null; question?: string | null; }
@@ -86,9 +86,10 @@ function tfKind(name: string | null | undefined, mime: string | null | undefined
   if (/\.(mp4|webm|mov|m4v)$/.test(n) || m.startsWith('video/')) return 'video';
   if (/\.(mp3|m4a|wav|ogg|aac)$/.test(n) || m.startsWith('audio/')) return 'audio';
   if (/\.pdf$/.test(n) || m === 'application/pdf') return 'pdf';
+  if (/\.docx$/.test(n) || m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx';   // docxPreviewFrame
   return 'other';
 }
-const TF_GLYPH: Partial<Record<TfKind, string>> = {markdown: 'MD', csv: 'CSV', json: 'JSON', text: 'TXT', image: 'IMG', video: 'VIDEO', audio: 'AUDIO', pdf: 'PDF', html: 'HTML'};
+const TF_GLYPH: Partial<Record<TfKind, string>> = {markdown: 'MD', csv: 'CSV', json: 'JSON', text: 'TXT', image: 'IMG', video: 'VIDEO', audio: 'AUDIO', pdf: 'PDF', html: 'HTML', docx: 'DOC'};
 const tfGlyph = (kind: TfKind, name: string | null | undefined): string => TF_GLYPH[kind] || (String(name || '').match(/\.([a-z0-9]{1,4})$/i)?.[1] || 'FILE').toUpperCase();
 const TF_TEXT_MAX = 2_000_000, TF_INLINE_IMAGE = 5_000_000;
 // A version's picture for a tile, a chip or a cover: its thumb, a video's poster, else a small image itself.
@@ -297,8 +298,14 @@ function tfBodyHTML(f: TfFile, v: TfVersion, kind: TfKind, d: TfDialog | null | 
   if (kind === 'audio') return `<div class="tf-media audio media-skel"><audio src="${url}" controls preload="metadata"></audio></div>`;
   if (kind === 'pdf' && v.thumb_url) return `<a class="tf-pdf" href="${url}" target="_blank" rel="noopener" aria-label="Open ${name}"><span class="tf-skel"${ratio}><img alt="" data-tf-src="${esc(v.thumb_url)}"></span><span class="tf-pdf-open">Open PDF ↗</span></a>`;
   if (kind === 'html' && v.size != null && Number(v.size) <= HTML_VIEW_LIMIT) return `<div class="tf-doc tf-html" data-tf-text="${url}" data-kind="html" data-name="${name}" aria-busy="true"><div class="tf-doc-skel"></div></div>`;
+  if (kind === 'docx' && v.size != null && Number(v.size) <= DOCX_VIEW_LIMIT) return `<div class="tf-doc tf-html" data-tf-docx="${url}" data-name="${name}" aria-busy="true"><div class="tf-doc-skel"></div></div>`;
   if (['markdown', 'csv', 'json', 'text'].includes(kind) && !big) return `<div class="tf-doc" data-tf-text="${url}" data-kind="${kind}" aria-busy="true"><div class="tf-doc-skel"></div></div>`;
-  return `<div class="tf-card"><span class="tf-glyph">${esc(tfGlyph(kind, f.name))}</span><span class="tf-card-t"><span class="tf-name">${name}</span><span class="muted tnum">${v.size != null ? esc(bytes(Number(v.size))) : ''}</span></span>
+  return tfCardHTML(f.name, v.url, v.size, kind);
+}
+// A file shown as its mark, name and size, with Download (and Open for a PDF, which the browser shows itself).
+function tfCardHTML(name: string, href: string, size: number | null | undefined, kind: TfKind): string {
+  const url = esc(href);
+  return `<div class="tf-card"><span class="tf-glyph">${esc(tfGlyph(kind, name))}</span><span class="tf-card-t"><span class="tf-name">${esc(name)}</span><span class="muted tnum">${size != null ? esc(bytes(Number(size))) : ''}</span></span>
     ${kind === 'pdf' ? `<a href="${url}" target="_blank" rel="noopener">Open ↗</a>` : ''}<a href="${url}" download>Download</a></div>`;
 }
 // Two versions side by side; text reads as a line diff.
@@ -352,6 +359,7 @@ function tfBodyWire(box: HTMLElement): void {
       doc.innerHTML = kind === 'markdown' ? `<div class="md">${safeMd(raw)}</div>` : `<pre class="plain">${esc(raw)}</pre>`;
     }, e => { if (doc.isConnected) { doc.removeAttribute('aria-busy'); doc.innerHTML = `<p class="err">${esc(e.message)}</p>`; } });
   }
+  for (const doc of box.querySelectorAll<HTMLElement>('[data-tf-docx]')) void tfWord(doc);
   for (const diff of box.querySelectorAll<HTMLElement>('[data-tf-diff]')) {
     Promise.all([tfText(diff.dataset.tfDiff ?? ''), tfText(diff.dataset.tfDiffB ?? '')]).then(([a, b]) => {
       if (!diff.isConnected) return;
@@ -360,6 +368,27 @@ function tfBodyWire(box: HTMLElement): void {
     }, e => { if (diff.isConnected) diff.innerHTML = `<p class="err">${esc(e.message)}</p>`; });
   }
   tfLazy(box);
+}
+// A Word file, drawn by the viewer's docxPreviewFrame; one it cannot read is its card with Download.
+async function tfWord(doc: HTMLElement): Promise<void> {
+  const url = doc.dataset.tfDocx ?? '', name = doc.dataset.name ?? 'file';
+  let blob: Blob;
+  try {
+    const r = await fetch(url, {credentials: 'same-origin'});
+    if (!r.ok) throw new Error(r.status === 403 ? 'You do not have access to this file.' : `Preview unavailable (${r.status}).`);
+    blob = await r.blob();
+  } catch (e) {
+    if (doc.isConnected) { doc.removeAttribute('aria-busy'); doc.innerHTML = `<p class="err">${esc(errorMessage(e, 'Preview unavailable.'))}</p>`; }
+    return;
+  }
+  let frame: HTMLIFrameElement;
+  try { frame = await docxPreviewFrame(blob, name); } catch {
+    if (doc.isConnected) doc.outerHTML = tfCardHTML(name, url, blob.size, 'docx');
+    return;
+  }
+  if (!doc.isConnected) return;
+  doc.removeAttribute('aria-busy');
+  doc.replaceChildren(frame);
 }
 // Clicks and keys inside a task dialog's files section (wired once per dialog by taskDialogWire).
 function tfWire(d: TfDialog): void {
