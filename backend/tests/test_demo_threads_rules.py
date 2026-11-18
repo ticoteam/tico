@@ -100,7 +100,7 @@ def _the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     assert [(h["id"], h["reviewer"], h["can_send"]) for h in listed] == [(hold_id, "human:ben", True)]
     assert read["text"] == held["say"] and read["nonce"]
     assert task["owner_id"] == "human:ben"
-    assert task["title"] == "Rule review"
+    assert task["title"].startswith("Held by: ")  # the review is named by its rule
 
 
 def _the_engineering_home_has_the_pause_and_its_fix_thread(built):

@@ -84,7 +84,7 @@
    "thvSheet"
   ],
   "idle": []
-  },
+ },
  "threads-rail": {
   "files": [
    "app/thread-rail.ts",
@@ -358,6 +358,21 @@
    "decideStop",
    "decideRefresh",
    "decidePaintBody"
+  ]
+ },
+ "rule-review": {
+  "files": [
+   "app/org-rule-review.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "ruleReviewMount",
+   "ruleReviewGroupInto"
+  ],
+  "idle": [
+   "ruleReviewTick",
+   "ruleReviewReset"
   ]
  },
  "setup-gaps": {

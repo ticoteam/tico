@@ -47,8 +47,22 @@ class Judge:
     def __init__(self, store, needles=None):
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
         self.calls, self.locked, self.fail, self.hold = [], [], None, None
+        self.parts, self.part_fail = [], None  # rule-part@1's calls, kept apart: `calls` are the rule checks
+
+    def part(self, state, questions):
+        """Answers rule-part@1: the first part that holds a needle, else `whole`."""
+        self.locked.append(bool(self.store.writer.queue))
+        self.parts.append({"state": state, "questions": questions})
+        if self.part_fail:
+            raise self.part_fail
+        needles = [n.lower() for n in self.needles.values()]
+        hit = next((p["id"] for p in state["parts"] if any(n in p["text"].lower() for n in needles)), "whole")
+        answers = {qid: {"type": "choice", "choice": hit, "confidence": 0.9} for qid in questions}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 120, "output_tokens": 0}, "ms": 30, "answers": answers}
 
     def __call__(self, state, questions, label=None):
+        if str(label or "").startswith("rule-part@"):
+            return self.part(state, questions)
         self.locked.append(bool(self.store.writer.queue))
         self.calls.append({"state": state, "questions": questions, "label": label})
         if len(questions) > GATEWAY_MOST:
