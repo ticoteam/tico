@@ -119,6 +119,14 @@ def test_a_bot_s_private_run_writes_its_own_task_s_document_through_the_task_rou
     get(api, f"files/{written['file_id']}", "cara-test", expected=404)
     other = plain_task(api, requester="human:ben", owner="human:ana", title="Someone else's private task")
     write(api, other["id"], "QA report", "<h1>QA</h1>", attempt["token"], expected=404)  # not its task: unseen
+    # Tasks the run can see but may not carry its private work to: the destination guard refuses both.
+    public = plain_task(api, requester="human:ben", owner="bot:ops", private=False, title="Company work")
+    assert "company-visible" in str(
+        write(api, public["id"], "QA report", "<h1>QA</h1>", attempt["token"], expected=403)
+    )
+    wider = plain_task(api, requester="human:cara", owner="bot:ops", title="Cara's private work")
+    write(api, wider["id"], "QA report", "<h1>QA</h1>", attempt["token"], expected=403)
+    assert documents(api, public["id"]) == []
 
 
 def test_writing_a_document_says_so_in_the_task_history(api):
@@ -234,6 +242,19 @@ def test_tico_task_attach_doc_falls_back_to_the_task_route_when_a_private_run_ma
 
     with pytest.raises(APIError, match="No"):  # only the privacy refusal falls back
         hubtools.task_attach(Other(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
+
+    (tmp_path / "notes.md").write_text("# Notes")
+    with pytest.raises(APIError, match="html"):  # the fallback sends only an .html file, as the page route would
+        remotecli.run(hubcli.parser().parse_args(["task", "attach", "T-1", "notes.md", "--doc", "QA report"]))
+    assert sent[-1][1] != "tasks/T-1/files"
+
+    class Twice(Client):
+        def post(self, path, body=None, key=None):
+            refuse_pages(path)
+            raise APIError("ambiguous", "Several pages", 409, extra={"pages": ["file-a", "file-b"]})
+
+    with pytest.raises(APIError, match="file-a, file-b. A run on a private task cannot pick one"):
+        hubtools.task_attach(Twice(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
 
 
 def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):

@@ -526,6 +526,8 @@ def run(args, who=None):
                 def embedded():
                     from clients import bot_files as BF, visual_embed
 
+                    if not visual_embed.is_page(args.file):
+                        raise APIError("validation", "A document is an .html file", 422)
                     return visual_embed.embed(BF.checkout_root(), args.file)[0].decode("utf-8", errors="replace")
 
                 published = private_document(
