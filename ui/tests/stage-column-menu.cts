@@ -172,15 +172,14 @@ async function stripSteady(browser: Browser) {
       // 5. A phone: the ⋯ sits beside the stage tabs, 44 px, for the stage shown; its menu is the same.
       const phone = await open(browser, {viewport: {width: 390, height: 844}, theme});
       await phone.page.locator('.pv-phone .tk-card').first().waitFor();
-      const selector = '.pv-phone-head [data-pv-col-menu]';
-      const pm = phone.page.locator(selector);
-      // Measure in the same frame that finds the menu, since a redraw can replace the header.
-      const measured = await phone.page.waitForFunction(sel => {
-        const rect = document.querySelector(sel)?.getBoundingClientRect();
-        return rect && rect.width && rect.height ? {x: rect.x, width: rect.width, height: rect.height} : null;
-      }, selector);
-      const box = await measured.jsonValue();
-      if (!box) throw new Error('The phone stage menu has no layout box');
+      const pm = phone.page.locator('.pv-phone-head [data-pv-col-menu]');
+      // Waited for and measured in one step in the page: the head can redraw between a separate wait and measure, which
+      // replaces the ⋯ and leaves the locator's box null.
+      const measured = await phone.page.waitForFunction(() => {
+        const r = document.querySelector('.pv-phone-head [data-pv-col-menu]')?.getBoundingClientRect();
+        return r && r.width > 0 ? {x: r.x, width: r.width, height: r.height} : null;
+      });
+      const box = (await measured.jsonValue())!;
       assert.ok(box.width >= 44 && box.height >= 44, `44 px: ${box.width}x${box.height}`);
       assert.ok(box.x + box.width <= 390, 'on screen');
       assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll');

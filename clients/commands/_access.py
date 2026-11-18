@@ -467,6 +467,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_answer",
         "tico_task_attach",
         "tico_task_create",
+        # A Reviewer files its second review as a check-model sub-task.
+        "tico_task_child_create",
         "tico_task_close",
         "tico_task_link",
         "tico_task_relate",

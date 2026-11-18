@@ -1228,7 +1228,7 @@ _ATTENTION_CHANGE_WHERE = (
 )
 # `bot_status` (backend/thread_bot_status.py): the status rows of a root may have moved. Written for the root of an open
 # wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
-# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
+# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last second.
 _OPEN_WAKE = (
     "recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
     "AND cause='human'"
@@ -1242,7 +1242,7 @@ _RUN_ROOT = (
 )
 _STATUS_QUIET = (
     "NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r "
-    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds'))"
+    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds'))"
 )
 
 
@@ -3399,7 +3399,7 @@ EVENTS_DESCRIPTION = (
     "(how many of the messages it stands for are unread for the viewer: add that many) and `thread` (`id`, `title`, "
     "`name`, `audience`, `root_id`, `parent_id`, `kind`, `last_message_at`, and `dm_with`/`dm_with_count` for a DM), "
     "so a list bumps its row, or adds one it does not hold, without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
-    "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
+    "root's readers, at most one a run step every 1 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
     "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "

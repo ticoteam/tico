@@ -266,6 +266,8 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
     const talk = await pageAs(browser, hub, 'dana');
     await talk.goto(hub.url + '/#/bot/' + BOT + '/home');
     await talk.locator('#bot-incognito').click();
+    // Home and DM use the same composer selector. The pressed lock confirms the DM view has mounted.
+    await talk.locator('#bot-incognito[aria-pressed="true"]').waitFor({timeout: t(15000)});
     await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
     assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
     await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');

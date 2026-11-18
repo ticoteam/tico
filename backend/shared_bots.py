@@ -16,6 +16,8 @@ FOLLOWED = (
     "harness",
     "reasoning_effort",
     "compact_at",
+    "output_style",
+    "verbosity",
     "session",
     "subtask_session",
     "task_goal",

@@ -176,6 +176,12 @@ CompactAt = Literal[
     100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
 ]
 
+# Claude Code's built-in output styles (`outputStyle` in its settings); Default is its own, and saves nothing
+# (backend/harnesses.py OUTPUT_STYLES). Only a Claude Code turn uses it.
+OutputStyle = Literal["Default", "Concise", "Explanatory", "Learning", "Proactive"]
+# Codex's `model_verbosity` (backend/harnesses.py VERBOSITIES); none is the model's own. Only a Codex turn uses it.
+Verbosity = Literal["low", "medium", "high"]
+
 
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
@@ -2252,6 +2258,23 @@ class BotCompactAt(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotOutputStyle(Contract):
+    # Required: null or "Default" clears it, back to Claude Code's own. Kept on any harness; only a Claude Code turn
+    # uses it (backend/harnesses.py output_style).
+    output_style: OutputStyle | None = Field(
+        description="Claude Code's output style for the bot's turns; null or Default is Claude Code's own"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotVerbosity(Contract):
+    # Required: null clears it, back to the model's own. Kept on any harness; only a Codex turn uses it.
+    verbosity: Verbosity | None = Field(
+        description="Codex's model_verbosity for the bot's turns; null is the model's own"
+    )
+    expected_revision: int = Field(ge=1)
+
+
 class BotTaskCondition(Contract):
     """One row of a filter tab (backend/bot_task_tabs.py FIELDS): a task must match every row. A list value is "any
     of"; days are whole numbers. bot_task_tabs.condition checks each value against the field."""
@@ -2887,6 +2910,16 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class RunTimings(Contract):
+    """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
+    `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
+    the size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings)."""
+
+    claimed_at: float = Field(ge=0)
+    phases: dict[Annotated[str, Field(max_length=40)], Annotated[int, Field(ge=0, le=10**9)]] = Field(max_length=40)
+    transcript_bytes: int | None = Field(default=None, ge=0)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2928,6 +2961,7 @@ class Completion(Contract):
     rotated: RunRotation | None = None
     # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
     session: RunSession | None = None
+    timings: RunTimings | None = None  # feature `run_timings`
 
 
 class Retry(Contract):

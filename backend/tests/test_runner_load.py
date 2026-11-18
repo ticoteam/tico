@@ -4,6 +4,7 @@ import json
 import time
 
 from backend import models as M, performance as P
+from backend.store import H
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.bot_access import world  # noqa: F401
 from backend.tests.helpers.runner_load import point
@@ -72,6 +73,35 @@ def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     assert next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])["load_start"] == start
     assert api.delete(f"/api/v2/computers/{r['runner_id']}/performance", headers=headers()).status_code == 200
     assert next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])["load_start"] is None
+
+
+def test_a_runs_timings_join_the_servers_own_and_show_in_its_run_list(api):
+    r, msg, a = setup_attempt(api)
+    assert get(api, "runners/desired", token=r["token"])["features"]["run_timings"] is True
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "timing-test"}, token=r["token"])
+    claimed_at = time.time() - 5
+    phases = {"claimed": 0, "placed": 900, "claude_spawned": 1200, "claude_init": 2500, "claude_result": 4000}
+    timings = {"claimed_at": claimed_at, "phases": phases, "transcript_bytes": 4096}
+    body = {"outcome": "completed", "text": "Finished", "last_seq": 0, "timings": timings}
+    post(api, f"attempts/{a['id']}/complete", body, token=r["token"], key="complete-timed")
+    run = next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])
+    got = run["timings"]
+    assert got["phases"] == phases and got["transcript_bytes"] == 4096 and got["claimed_at"] == claimed_at
+    assert got["rule_check_ms"] >= 0 and 4000 <= got["received_ms"] < 60_000
+    with api.app.state.store.read() as c:
+        sent = H.parse_ts(c.execute("SELECT created_at FROM messages WHERE id=?", (msg["id"],)).fetchone()[0])
+        claimed = H.parse_ts(c.execute("SELECT created_at FROM attempts WHERE id=?", (a["id"],)).fetchone()[0])
+    assert got["send_to_claim_ms"] == max(0, round((claimed - sent).total_seconds() * 1000))
+    # The resent result answers from its receipt: the server's numbers are not taken again.
+    post(api, f"attempts/{a['id']}/complete", body, token=r["token"], key="complete-timed")
+    assert next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])["timings"] == got
+
+
+def test_a_run_from_a_runner_without_timings_has_none(api):
+    r, _, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "timing-none"}, token=r["token"])
+    post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "Done", "last_seq": 0}, token=r["token"])
+    assert next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])["timings"] is None
 
 
 def test_plain_bot_lists_closed_computer_with_latest_numbers_without_change_rights(world):

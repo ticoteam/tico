@@ -186,7 +186,7 @@ interface ThvOpts {
   autofocus?: boolean;               // the box takes the focus when the composer first draws
   // Flow's chat on a task (decide.ts): `tail` draws after the messages (the ask, as the asker's last message); `send`
   // takes the composer's words and files in place of a post to the thread, true once they went (the box clears);
-  // `typed` hears each change of the box's words, a draft put back included (Approve becomes "Approve with comments");
+  // `typed` hears each change of the box's words, a draft put back included (an OK's row then shows Send back, Close and Approve);
   // a composer with `send` offers uploads only.
   tail?: () => string;
   send?: (text: string, files: File[]) => Promise<boolean>;
@@ -866,7 +866,7 @@ function thvStatusHTML(view: ThvView, b: ThvBotRow | null | undefined) {
   if (!b?.actor || !THV_STATUS_WORD[b.state]) return '';
   const slug = actorSlug(b.actor), name = b.name || actorName(b.actor);
   const word = b.state === 'working' ? `working · <span class="tnum" data-th-since="${esc(b.since || '')}">${thvMinSec(b.since)}</span>` : THV_STATUS_WORD[b.state];
-  const stop = b.state === 'working' && slug && settingsCanManageBot(botRow(slug))
+  const stop = b.state === 'working' && b.run_id && slug && settingsCanManageBot(botRow(slug))
     ? `<button type="button" class="ghost small th-status-act" data-th-stop="${esc(slug)}" data-run="${esc(b.run_id || '')}">Stop</button>` : '';
   const fix = b.state === 'cant_reply' && b.fix?.href ? `<a class="ghost small th-status-act" href="${esc(b.fix.href)}">${esc(b.fix.label || 'Fix')}</a>` : '';
   return `<div class="th-status th-status-${esc(b.state)}" data-th-status="${esc(b.actor)}" role="status">
@@ -889,6 +889,25 @@ function thvTick() {
 function thvStatusReplied(view: ThvView, m: ThvMessage) {
   if (!view.botStatus?.length || !thvBot(m?.sender_id)) return;
   view.botStatus = view.botStatus.filter(b => b.actor !== m.sender_id);
+}
+// A send to a bot draws its row at once: "Starting" with its clock running from the send, the row a run draws before its
+// first step. A bot that already has a row keeps it. The server's next status replaces this row; so does a send that
+// fails or is held, and THV_START_MS with no status at all.
+const THV_START_MS = 30000;
+function thvStartRow(view: ThvView): ThvBotRow | null {
+  const bot = view.opts.dm || view.opts.home || '';
+  if (!thvBot(bot) || view.botStatus?.some(b => b.actor === bot)) return null;
+  const row: ThvBotRow = {actor: bot, name: actorName(bot), state: 'working', detail: 'Starting', since: new Date().toISOString(), run_id: null, fix: null};
+  view.botStatus = [...(view.botStatus || []), row].slice(0, 5);
+  setTimeout(() => { if (!view.gone) thvStartGone(view, row); }, THV_START_MS);
+  return row;
+}
+// Takes `row` away when it is still on the list (the server's status puts its own rows there instead).
+function thvStartGone(view: ThvView, row: ThvBotRow | null) {
+  const rows = view.botStatus;
+  if (!row || !rows?.includes(row)) return;
+  view.botStatus = rows.filter(b => b !== row);
+  thvDraw(view);
 }
 
 // ---- a daily update request and the bot's turn that writes the update
@@ -1623,6 +1642,7 @@ async function thvComposerSend(view: ThvView) {
 async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, replyTo = null, refs: more = null, unmarked = []}: {text: string; files?: File[]; lib?: ThvLibFile[]; way?: object | null; replyTo?: ThvMessage | null; refs?: ThvRefs | null; unmarked?: string[]}) {
   const p: ThvPending = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
+  const start = thvStartRow(view);
   thvDraw(view, {stick: true});
   const from = view.opts.from?.() || null;
   const extra = view.opts.context && !view.contextOff ? view.opts.context.refs() : null;
@@ -1648,7 +1668,7 @@ async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, r
       r = files.length ? await thvUpload(thvPath(view.id).replace('/v2/', '/v2/uploads/') + '/messages', body, files)
         : await post(thvPath(view.id) + '/messages', body);
     }
-    if (r?.held) thvHeld(view, p, r.held);
+    if (r?.held) { thvHeld(view, p, r.held); thvStartGone(view, start); }
     else {
       view.pending = view.pending.filter(x => x !== p);
       const m = r?.message || (r?.id && r?.seq !== undefined ? r : null);
@@ -1660,6 +1680,7 @@ async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, r
     }
   } catch (e) {
     p.state = 'failed'; p.error = errorMessage(e, '');
+    thvStartGone(view, start);
   }
   thvDraw(view, {stick: true});
 }

@@ -1,12 +1,14 @@
 """A test that fails and passes on the same commit is quarantined: PR checks and the merge queue run it without failing on
 it, release validation still fails on it, and an entry left too long fails the weekly report, not the queue."""
 
+import io
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 import yaml
@@ -269,6 +271,84 @@ class FakeGitHub:
         self.calls.append(f"results {leg['id']}")
         text = self.xml.get(leg["id"])
         return None if text is None else quarantine.passed_tests(text)
+
+
+def artifact_zip(files):
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return data.getvalue()
+
+
+def test_a_queue_retry_artifact_proposes_a_pytest_entry_and_reports_browser_flakes(monkeypatch, tmp_path):
+    flaky = "scripts/tests/test_flake_quarantine.py::test_a_node_id_comes_from_its_junit_classname_and_name"
+    commit = "c" * 40
+    retry_run = run(7, conclusion="success")
+    archive = artifact_zip(
+        {
+            "flaky.json": json.dumps(
+                [
+                    {"suite": "python-1", "tests": [flaky], "commit": commit},
+                    {"suite": "browser-1", "tests": ["chat.cts"], "commit": commit},
+                ]
+            )
+        }
+    )
+    artifact = {
+        "expired": False,
+        "created_at": "2026-11-07T08:00:00Z",
+        "workflow_run": {"id": retry_run["id"]},
+        "archive_download_url": "https://api.github.com/artifacts/7/zip",
+    }
+    listing = f"repos/{REPO}/actions/artifacts?name=queue-flaky&per_page=100"
+    calls = []
+
+    def fake(command, **kwargs):
+        calls.append(command)
+        path = command[-1]
+        if path == listing:
+            old = {**artifact, "created_at": "2026-11-06T08:00:00Z", "archive_download_url": "old"}
+            expired = {**artifact, "expired": True, "archive_download_url": "expired"}
+            pages = [{"artifacts": [old, expired]}, {"artifacts": [artifact]}]
+            return SimpleNamespace(stdout=json.dumps(pages))
+        if "/workflows/" in path:
+            runs = [retry_run] if "created=2026-11-07" in path else []
+            return SimpleNamespace(stdout=json.dumps({"workflow_runs": runs}))
+        assert path == artifact["archive_download_url"]
+        return SimpleNamespace(returncode=0, stdout=archive)
+
+    monkeypatch.setattr(quarantine.subprocess, "run", fake)
+    report, proposed = quarantine.detect(quarantine.GitHub(REPO), REPO, days=1, today="2026-11-08", quarantined={})
+    assert [command for command in calls if command[-1] == listing] == [["gh", "api", "--paginate", "--slurp", listing]]
+    assert [command[-1] for command in calls if "/workflows/" not in command[-1]] == [
+        listing,
+        artifact["archive_download_url"],
+    ]
+    url = retry_run["html_url"]
+    assert f"| `{flaky}` | {commit[:10]} | [log]({url}) | [log]({url}) | proposed |" in report
+    assert "`chat.cts`" in report
+    assert proposed == [entry(test=flaky, first_seen="2026-11-07", commit=commit, runs=[url])]
+    [written] = quarantine.write_entries(proposed, tmp_path)
+    assert json.loads(written.read_text()) == proposed[0]
+
+
+def test_a_leg_artifact_counts_only_the_first_junit_report_as_ordinary_pass_evidence(monkeypatch):
+    flaky, steady = "fixture_tests/test_x.py::test_flaky", "fixture_tests/test_x.py::test_steady"
+    archive = artifact_zip(
+        {
+            "python-1.xml": junit_for((flaky, "failed"), (steady, None)),
+            "python-1-retry.xml": junit_for((flaky, None)),
+        }
+    )
+    gh = quarantine.GitHub(REPO)
+    artifact = {"created_at": "2026-11-07T07:01:00Z", "archive_download_url": "https://api.github.com/artifacts/8/zip"}
+    monkeypatch.setattr(gh, "api", lambda path: {"artifacts": [artifact]})
+    monkeypatch.setattr(
+        quarantine.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=archive)
+    )
+    leg = {"name": "python-1", "started_at": "2026-11-07T07:00:00Z", "completed_at": "2026-11-07T07:02:00Z"}
+    assert gh.results(7, leg) == {steady}
 
 
 def test_a_rerun_attempt_that_passes_flips_the_test_its_first_attempt_failed():

@@ -46,6 +46,8 @@ def resolved_registry(projects, registry_dir):
         "reasoning_effort",
         "effort",
         "compact_at",
+        "output_style",
+        "verbosity",
         "status",
         "max_run_minutes",
         "schedules",

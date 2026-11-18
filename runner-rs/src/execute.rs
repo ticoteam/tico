@@ -1054,6 +1054,20 @@ fn unstopped(flags: &Flags) -> Result<(), Fail> {
     Ok(())
 }
 
+/// Whether a turn takes the cold sign-in path (one at a time on this computer, `claude_cold_start`): its runtime renews
+/// a stale login on its first call, and the login it reads (the profile's, else the computer's own) is stale. A turn
+/// that a company plan signs in (`plan_signs_in`: a setup-token in its environment, or a full login whose token the
+/// plan's refresher keeps fresh in the turn's own config home) reads neither, so it never waits.
+fn cold_sign_in(
+    runtime: &str,
+    profile: Option<&crate::profiles::Profile>,
+    plan_signs_in: bool,
+) -> bool {
+    !plan_signs_in
+        && crate::harness_tools::caps(runtime, "").serial_cold_start
+        && crate::hosts::token_cold(runtime, profile)
+}
+
 /// One cold Claude sign-in renewal at a time on this computer (service.py claude_cold_start).
 fn claude_cold_start() -> &'static tokio::sync::Mutex<()> {
     static L: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -2301,6 +2315,7 @@ impl Runner {
             };
             let h = host.insert(made);
             h.track_allocation(flags.harness_allocated.clone());
+            h.set_attempt(&aid);
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
@@ -2328,6 +2343,8 @@ impl Runner {
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
+                output_style: hosts::output_style(&config),
+                verbosity: hosts::verbosity(&config),
             };
             let mut resumed = false;
             if side_run && previous.is_none() {
@@ -2422,7 +2439,10 @@ impl Runner {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
                 }
             }
-            let cold = crate::harness_tools::caps(&runtime, "").serial_cold_start && crate::hosts::token_cold(&runtime, selected.as_ref());
+            // A turn a company plan signs in (placed above, not held) never reads the computer's own login, so that
+            // login's age is no reason to wait for the cold sign-in path.
+            let plan_signs_in = held.is_none() && crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).is_some();
+            let cold = cold_sign_in(&runtime, selected.as_ref(), plan_signs_in);
             let mut cold_guard = if cold { Some(self.during_drain(&aid, self.wait_cold_start(&attempt, &flags)).await?) } else { None };
             if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
@@ -2876,6 +2896,7 @@ impl Runner {
                 }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
+                h.set_attempt(&aid);
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -2901,6 +2922,8 @@ impl Runner {
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
+                    output_style: hosts::output_style(&config),
+                    verbosity: hosts::verbosity(&config),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
@@ -3530,12 +3553,19 @@ impl Runner {
             );
         }
         let active = self.active.lock().unwrap().len();
-        let completion = crate::perf::with_snapshot(Value::Object(completion), active)
+        let mut completion = crate::perf::with_snapshot(Value::Object(completion), active)
             .await
             .as_object()
             .unwrap()
             .clone();
         mark("finished", &aid);
+        // Where the turn's time went, up to here, kept with its result: saved before sending, so a resent result is
+        // the same. An older server refuses the field (`run_timings`).
+        if crate::follow::feature("run_timings") {
+            if let Some(timings) = crate::flight::timings(&aid) {
+                completion.insert("timings".into(), timings);
+            }
+        }
         // A nightly memory tidy pass commits and pushes nothing, whatever ended its turn: what it changed in its
         // checkout is discarded here, before the turn settles, and the run log says what it was (criterion 24).
         if crate::continuity::memory_pass(&attempt["config"]) {
@@ -3964,6 +3994,20 @@ mod tests {
             assert_eq!(crate::profiles::claude_token_cold(None), !warm);
             PrivateHome(home)
         }
+    }
+
+    #[test]
+    fn a_turn_a_plan_signs_in_skips_the_cold_sign_in_path() {
+        let stale = PrivateHome::claude(false);
+        // The computer's own Claude login is stale: a turn on it waits its turn to renew it.
+        assert!(cold_sign_in("claude", None, false));
+        // A turn signed in by a company plan never reads that login, so the stale file holds it up for nothing.
+        assert!(!cold_sign_in("claude", None, true));
+        drop(stale);
+        let _warm = PrivateHome::claude(true);
+        assert!(!cold_sign_in("claude", None, false));
+        // Other runtimes renew nothing on a first call.
+        assert!(!cold_sign_in("codex", None, false));
     }
 
     impl Drop for PrivateHome {

@@ -2,6 +2,7 @@
 // - one card left and no next page: no Later (cuLater would do nothing), Mute and Mark read stay;
 // - one card left but a next page to come: Later shows;
 // - two cards left (one in the queue, one put off): Later shows.
+// - a count that stopped at the server's budget (`new_count_partial`, spec P530) shows as "180+ new" and "160+ more".
 // Run: node ui/tests/catch-up-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -54,5 +55,13 @@ set([card('t1'), card('t2')], [], null);
 assert.ok(html().includes('data-cu-later'), 'two queued cards: Later');
 set([card('t1')], [card('t2')], null);
 assert.ok(html().includes('data-cu-later'), 'one queued, one later: Later');
+
+// 4. A count that stopped at the server's budget reads "at least": 180+ new, 160+ more; a whole one has no +.
+set([{...card('t1'), new_count: 180, more: 160, new_count_partial: true}], [], null);
+h = html();
+assert.ok(h.includes('180+ new') && h.includes('160+ more'), 'partial count: +');
+set([{...card('t1'), new_count: 180, more: 160, new_count_partial: false}], [], null);
+h = html();
+assert.ok(h.includes('180 new') && h.includes('160 more') && !h.includes('+ '), 'whole count: no +');
 
 console.log('catch-up-unit: ok');

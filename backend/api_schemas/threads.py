@@ -108,11 +108,16 @@ SCHEMAS.update(
                     "dm_with_count": "i",
                     "home_actor": {"type": ["string", "null"], "description": "The bot or person whose Home it is"},
                     "new_count": "i",
+                    "new_count_partial": {
+                        "type": "boolean",
+                        "description": "new_count stopped at the per-load budget of messages checked: the thread "
+                        "holds at least that many new messages the viewer may read",
+                    },
                     "mention": "b",
                     "task_id": {"type": ["string", "null"]},
                     "last_message_at": {"type": ["string", "null"]},
                 },
-                required=["id", "audience", "new_count", "mention"],
+                required=["id", "audience", "new_count", "new_count_partial", "mention"],
             ),
             "description": "A Catch up item the rail does not hold (a 1:1 DM, a Home, a task's thread), in Catch up's "
             "order: mentions first, then newest activity (first page only; [] after)",
@@ -137,6 +142,11 @@ SCHEMAS.update(
                         {
                             "thread": ref("ThreadView"),
                             "new_count": "i",
+                            "new_count_partial": {
+                                "type": "boolean",
+                                "description": "new_count stopped at the per-load budget of messages checked: the thread "
+                                "holds at least that many new messages the viewer may read",
+                            },
                             "mention": "b",
                             "messages": items(ref("ThreadMessage")),
                             "more": "i",

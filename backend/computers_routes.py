@@ -87,6 +87,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # harness confirmed a new session (an older one has no such route).
         # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
         # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
+        # `run_timings`: a run's result may carry where its time went on the computer (`timings`; an older one refuses it).
         return {
             **runner_versions.desired(),
             "features": {
@@ -106,6 +107,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "runner_drain": True,
                 "capacity_continue": True,
                 "source_continue": True,
+                "run_timings": True,
             },
         }
 

@@ -713,13 +713,16 @@ COMPACT_SIZES = (
     900_000,
     1_000_000,
 )
+# Claude Code's built-in output styles and Codex's verbosity levels (backend/harnesses.py OUTPUT_STYLES, VERBOSITIES).
+OUTPUT_STYLES = ("Concise", "Explanatory", "Learning", "Proactive")
+VERBOSITIES = ("low", "medium", "high")
 
 
 @tool(
     "tico_bot_model",
-    "Show the models a bot may run on, or change its model or where its conversation compacts "
-    "(`compact_at`), as the person who asked you. A model change waits for a run in progress to "
-    "end. A manager bot may change its direct report's model.",
+    "Show the models a bot may run on, or change its model, where its conversation compacts "
+    "(`compact_at`), its Claude Code output style or its Codex verbosity, as the person who asked you. A model change "
+    "waits for a run in progress to end. A manager bot may change its direct report's model.",
     {
         "bot": _s("The bot's slug"),
         "model": _s("A model id or name from the list; leave out to list them"),
@@ -731,6 +734,18 @@ COMPACT_SIZES = (
             "description": "Where the bot's conversation compacts, in tokens; `default` puts it back on its model's "
             "default (it then moves with the model); leave out to keep it",
         },
+        "output_style": {
+            "type": "string",
+            "enum": ["default", *OUTPUT_STYLES],
+            "description": "Claude Code's output style for the bot's turns; `default` is Claude Code's own; leave out "
+            "to keep it. Only a Claude Code turn uses it",
+        },
+        "verbosity": {
+            "type": "string",
+            "enum": ["default", *VERBOSITIES],
+            "description": "Codex's verbosity for the bot's turns; `default` is the model's own; leave out to keep it. "
+            "Only a Codex turn uses it",
+        },
         "on_behalf_of": ON_BEHALF_OF,
     },
     required=("bot",),
@@ -740,7 +755,7 @@ def bot_model(api, args):
     who = _as_person(api, args.get("on_behalf_of"))
     catalog = who.get("models")
     current = who.get(f"bots/{args['bot']}")
-    if not any(args.get(k) for k in ("model", "harness", "effort", "compact_at")):
+    if not any(args.get(k) for k in ("model", "harness", "effort", "compact_at", "output_style", "verbosity")):
         enabled = set(catalog.get("enabled_providers") or [])
         return {
             "models": [
@@ -748,9 +763,15 @@ def bot_model(api, args):
                 for m in catalog.get("models", [])
                 if not m.get("deprecated") and (not enabled or m.get("provider") in enabled)
             ],
-            **{k: v for k, v in current.items() if k in ("harness", "effort", "compact_at")},
+            **{
+                k: v
+                for k, v in current.items()
+                if k in ("harness", "effort", "compact_at", "output_style", "verbosity")
+            },
             "current": current.get("model"),
             "compact_sizes": list(COMPACT_SIZES),
+            "output_styles": ["default", *OUTPUT_STYLES],
+            "verbosities": ["default", *VERBOSITIES],
         }
     out = None
     if any(args.get(k) for k in ("model", "harness", "effort")):
@@ -764,6 +785,15 @@ def bot_model(api, args):
             key=_key(args, ":compact"),
         )
         out = {**(out or {}), **{k: saved.get(k) for k in ("compact_at", "compacts_at", "revision")}}
+    for key, route in (("output_style", "output-style"), ("verbosity", "verbosity")):
+        if not args.get(key):
+            continue
+        revision = (out or {}).get("revision") or who.get(f"bots/{args['bot']}")["revision"]
+        value = None if str(args[key]).lower() == "default" else args[key]
+        saved = who.post(
+            f"bots/{args['bot']}/{route}", {key: value, "expected_revision": revision}, key=_key(args, ":" + key)
+        )
+        out = {**(out or {}), **{k: saved.get(k) for k in (key, "revision")}}
     return out
 
 
