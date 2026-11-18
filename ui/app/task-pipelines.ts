@@ -14,7 +14,9 @@
    draw changes only the columns that changed (pvPaint), so a flood of live changes does not draw the whole board. The
    page (tasks-page.ts) owns the header, loading the pipeline and its tasks, search, filter, the archive and opening a
    task (any [data-task] element); it calls the hooks set at the end of this file. Moving a task between columns is
-   task-board.ts; a refused move shows the engine's reason above the stages.
+   task-board.ts; a refused move shows the engine's reason above the stages. A side stage (`side`) sits where its
+   position puts it, right after its stage: a dashed column with no fill, its name after ↳ in the quieter ink, a dashed
+   tab on a phone, ↳ on its list group. A move into or out of it is a plain move, and never `next`.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -140,7 +142,7 @@ const pvStageFull = (state: PvState, stage: PipelineStageRec): boolean => !!stag
  * Beside a limited stage's number, a person mark and a count keeps the tasks that hold no slot in view. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
   const tip = pvLimitTip(state, stage);
-  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum${pvStageFull(state, stage) ? ' full' : ''}"${tip ? ` title="${esc(tip)}" aria-label="${esc(tip)}"` : ''}>${pvStageCount(state, stage)}</span>`;
+  const inner = `${stage.side ? SIDE_MARK : ''}<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum${pvStageFull(state, stage) ? ' full' : ''}"${tip ? ` title="${esc(tip)}" aria-label="${esc(tip)}"` : ''}>${pvStageCount(state, stage)}</span>`;
   return state.rec.may_change
     ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}" title="${esc(`Edit ${stage.name}`)}">${inner}</button>`
     : `<span class="pv-stage-h">${inner}</span>`;
@@ -244,7 +246,7 @@ function pvColumnsHTML(state: PvState, parts?: Map<string, {head: string; body: 
   const cols = state.rec.stages.map(stage => {
     const id = stage.id ?? '', head = pvColHeadHTML(state, stage), body = pvColBodyHTML(state, stage);
     parts?.set(id, {head, body});
-    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${head}</header>
+    return `<section class="pv-col${stage.side ? ' side' : ''}" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${head}</header>
       <div class="pv-col-body">${body}</div></section>`;
   }).join('');
   return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
@@ -255,7 +257,7 @@ function pvListHTML(state: PvState): string {
   const groups = state.rec.stages.map(stage => {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
-    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvColHeadHTML(state, stage)}</h2>
+    return `<section class="pv-group${stage.side ? ' side' : ''}" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvColHeadHTML(state, stage)}</h2>
       <div class="pv-rows">${pvStageItemsHTML(state, stage.id ?? '', rows, pvRowHTML)}</div></section>`;
   }).join('');
   return groups || '<p class="pv-empty muted">Nothing found</p>';
@@ -282,9 +284,10 @@ function pvPhoneHTML(state: PvState): string {
   const tabs = stages.map(stage => {
     const on = stage.id === shown;
     const waits = stage.id ? needsStageCount(stage.id) : 0;
-    const label = `${stage.name} ${pvStageCount(state, stage)}${waits ? `, ${waits} ${waits === 1 ? 'waits' : 'wait'} on you` : ''}`;
-    return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}" aria-label="${esc(label)}">`
-      + `${esc(stage.name)} <span class="tnum${pvStageFull(state, stage) ? ' full' : ''}">${pvStageCount(state, stage)}</span>${pvTabDotHTML(stage)}</button>`;
+    // the tab's name is its label, so a side stage's says so (the ↳ inside is not read)
+    const label = `${stage.side ? 'Side stage ' : ''}${stage.name} ${pvStageCount(state, stage)}${waits ? `, ${waits} ${waits === 1 ? 'waits' : 'wait'} on you` : ''}`;
+    return `<button type="button" role="tab" class="pv-tab${stage.side ? ' side' : ''}${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}" aria-label="${esc(label)}">`
+      + `${stage.side ? SIDE_MARK : ''}${esc(stage.name)} <span class="tnum${pvStageFull(state, stage) ? ' full' : ''}">${pvStageCount(state, stage)}</span>${pvTabDotHTML(stage)}</button>`;
   }).join('');
   // The column's cards (task #220); an empty stage says so in one line (style guide: empty lists say so in one line).
   const rows = pvStageItemsHTML(state, shown, pvInStage(state, shown), pvCardHTML)
@@ -324,7 +327,7 @@ function pvHTML(state: PvState, parts?: Map<string, {head: string; body: string}
  * few columns, not the whole board). The list and a phone are drawn whole, and only when they changed. */
 function pvPaint(state: PvState, root: HTMLElement): void {
   const was = state.drawn, el = root.firstElementChild, columns = !state.opts.phone && state.opts.layout === 'columns';
-  const frame = `${state.opts.phone ? 'phone' : state.opts.layout}|${state.rec.stages.map(s => `${s.id ?? ''}:${s.name}`).join('|')}`;
+  const frame = `${state.opts.phone ? 'phone' : state.opts.layout}|${state.rec.stages.map(s => `${s.id ?? ''}:${s.name}${s.side ? ':side' : ''}`).join('|')}`;
   const bar = pvBarHTML(state.bar) + PV_PICK.html(state);
   if (columns && was && el && was.el === el && was.frame === frame && !was.whole) {
     const cols = el.querySelector(':scope > .pv-cols');
@@ -496,15 +499,18 @@ function pvSubmit(state: PvState, ev: SubmitEvent): void {
   if (t) pvMove(state, t, bar.to, why);
 }
 
-/** Moves a task to a stage of this pipeline: `next` when it is the stage after its own, else the stage's id. The task is
-    drawn there at once; the page's live read shows where the engine put it. A refusal puts it back and says what the
-    engine said: what is missing, with a why to push past it when it can be pushed past. */
+/** Moves a task to a stage of this pipeline: `next` when it is the main stage after its own main stage, else the stage's
+    id (into or out of a side stage, a plain move). The task is drawn there at once; the page's live read shows where the
+    engine put it. A refusal puts it back and says what the engine said: what is missing, with a why to push past it
+    when it can be pushed past. */
 function pvMove(state: PvState, t: TaskAny, stageId: string, why = ''): void {
   const stages = state.rec.stages;
   const from = stages.findIndex(s => s.id === t.stage_id), to = stages.findIndex(s => s.id === stageId);
   const target = stages[to];
   if (to < 0 || !target || from === to) return;
-  const where = to === from + 1 ? 'next' : stageId;
+  // the main path skips side stages: the next main stage after its own, none from a side stage
+  const next = stages[from]?.side ? undefined : stages.slice(from + 1).find(s => !s.side);
+  const where = next === target ? 'next' : stageId;
   state.moving.set(t.id, stageId);
   state.bar = null;
   pvDraw(state);

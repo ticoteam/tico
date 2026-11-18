@@ -11,7 +11,6 @@ from scripts import replay_red_main as replay
 
 ROOT = Path(__file__).resolve().parents[2]
 # Case numbers in red_main_cases.json from the recorded PR replay.
-# Cases 26 and 27 (76-file changes) lose test_pr_checks.py to the time budget; that's the capped-misses ticket.
 PINNED_CAUGHT = {
     1,
     2,
@@ -26,13 +25,18 @@ PINNED_CAUGHT = {
     16,
     17,
     19,
+    20,
     21,
     22,
+    23,
     25,
+    26,
+    27,
     29,
     30,
     31,
     32,
+    33,
     34,
     35,
     36,
@@ -43,10 +47,62 @@ PINNED_CAUGHT = {
     41,
     42,
     43,
+    44,
     45,
     46,
+    47,
+    49,
     52,
     53,
+    55,
+    56,
+    57,
+    58,
+}
+# Case numbers whose failing checks must run in the light PR plan.
+PINNED_CAUGHT_AT_PR = {
+    1,
+    2,
+    3,
+    4,
+    5,
+    7,
+    10,
+    11,
+    13,
+    14,
+    16,
+    17,
+    19,
+    20,
+    21,
+    22,
+    25,
+    26,
+    27,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    49,
+    52,
+    53,
+    55,
     56,
     57,
     58,
@@ -127,6 +183,7 @@ def test_replay_applies_each_stages_time_cap(monkeypatch, tmp_path, event):
     assert calls == [event, event]
     assert result["python"] == (["test_fast.py"] if event == "pull_request" else list(runner.counts))
     assert result["narrow"]["left_over_budget"] == (["test_over_budget.py"] if event == "pull_request" else [])
+    assert result["narrow"]["selected_seconds"] == (1 if event == "pull_request" else 16)
 
 
 @pytest.mark.parametrize("stage", ["pull_request", "merge_group", None])
@@ -234,7 +291,10 @@ def test_red_main_replay_pinned_cases():
     cases = json.loads((ROOT / "scripts/red_main_cases.json").read_text())
     results = runner.run(cases)
     caught = {row["case"] for row in results if row["caught"]}
+    caught_at_pr = {row["case"] for row in results if row["caught_pr"]}
     replay.report(results)
     print("Newly caught case IDs:", sorted(caught - PINNED_CAUGHT))
     assert not (PINNED_CAUGHT - caught), f"Lost caught cases: {sorted(PINNED_CAUGHT - caught)}"
+    missing_at_pr = PINNED_CAUGHT_AT_PR - caught_at_pr
+    assert not missing_at_pr, f"Lost PR-stage catches: {sorted(missing_at_pr)}"
     assert sum(row["stale"] for row in results) <= 9

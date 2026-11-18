@@ -165,6 +165,11 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 .prop-v.empty{color:var(--muted);font-weight:400}
 .prop-v .av{flex:none}
 .prop-txt{overflow:hidden;text-overflow:ellipsis;min-width:0}
+/* A task in a side stage (task-props.ts): ↳ and its stage, where it came from and how long it has been there in the quiet
+   ink, then Send back at the row's end. */
+.prop-v .side-mark{margin-right:-3px}
+.prop-v .prop-from{flex:0 1 auto;color:var(--muted);font-weight:400;margin-left:-3px}
+.prop-back{flex:none;margin-left:auto}
 .prop-ic{display:inline-flex;color:var(--muted);flex:none}
 .prop-ic.late,.prop-txt.late{color:var(--fail)}
 .prop-x,.prop-add{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer}

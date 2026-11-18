@@ -37,6 +37,7 @@ PIPELINE_VIEW = [
     "pipeline-drop",
     "pipeline-move",
     "pipeline-rail",
+    "pipeline-side-stages",
     "pipeline-snoozed",
     "stage-column-menu",
     "stage-review",
@@ -60,6 +61,24 @@ UI_ALSO = {
     "ui/app/refresh.js": ["board-flood"],
     "ui/app/live.js": ["board-flood"],
 }
+# Checks whose inputs arrive through an HTTP request or catalog discovery.
+CHECK_ALSO = {
+    "backend/mail.py": ("ui/tests/e2e-tools.cts",),
+    "backend/mail_actions.py": ("ui/tests/redesign-e2e-automations.cts",),
+    "backend/model_subscriptions.py": ("ui/tests/computers-shared.cts",),
+    "backend/threads.py": ("backend/tests/test_sql_parity.py",),
+    "templates/catalog/*/card.yaml": ("backend/tests/test_recruiting.py",),
+}
+
+
+def additional_checks(names, root):
+    return {
+        test
+        for pattern, tests in CHECK_ALSO.items()
+        if any(fnmatch.fnmatchcase(name, pattern) for name in names)
+        for test in tests
+        if (root / test).is_file()
+    }
 
 
 def browser_script(root, stem):
@@ -961,12 +980,17 @@ class DependencyMap:
         found.discard(name)
         return found
 
-    def readers(self, name, added):
-        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
-        folder, or a listing (one that uses only names sees it only when it is new)."""
+    def path_readers(self, name):
+        """The files that read a changed path or a folder that contains it."""
         users = set(self.read_by.get(name, set()))
         for parent in list(Path(name).parents)[:-1]:
             users |= self.read_by.get(str(parent) + "/", set())
+        return users
+
+    def readers(self, name, added):
+        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
+        folder, or a listing (one that uses only names sees it only when it is new)."""
+        users = self.path_readers(name)
         users |= {
             p for p, patterns in self.globs.items() if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)
         }
@@ -1413,6 +1437,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
        runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC; a path that can move what a
        cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
+    10. Inputs in CHECK_ALSO run the tests and browser scripts that exercise them through HTTP or catalog discovery.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1573,7 +1598,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         direct |= linked_scripts
         if direct:
             notes.append("rule 6: browser scripts the release check runs")
-        browser |= direct
+    extra_checks = additional_checks(names, root)
+    if extra_checks:
+        notes.append("rule 10: HTTP and catalog checks")
+        python |= {p for p in extra_checks if is_test(p)}
+        direct |= {Path(p).stem for p in extra_checks if is_browser(p)}
+    browser |= direct
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1707,20 +1737,26 @@ def smoke_check(root=ROOT):
     return problems
 
 
-def collect(root=ROOT):
+def start_collect(root=ROOT):
+    """The default collection as a background process. On a hosted runner it takes about a minute, about as long as the
+    dependency map the plan builds meanwhile on another core, so a plan that builds the map starts this first."""
+    command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"]
+    return subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def collect(root=ROOT, started=None):
     # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
     # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
     if __package__:
         from .release_checks import validate_shard_coverage
     else:
         from release_checks import validate_shard_coverage
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"], cwd=root, capture_output=True, text=True
-    )
-    if result.returncode:
-        raise RuntimeError("Default collection failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
+    process = started or start_collect(root)
+    stdout, stderr = process.communicate()
+    if process.returncode:
+        raise RuntimeError("Default collection failed:\n" + stdout[-4000:] + stderr[-4000:])
     counts = Counter(
-        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+        line.split("::", 1)[0] for line in stdout.splitlines() if "::" in line and not line.startswith(" ")
     )
     if not counts:
         raise RuntimeError("Default suite collected no tests")
@@ -1860,8 +1896,9 @@ def queue_jobs(changed):
 #            what made every change select hundreds of tests.
 # When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the
 # Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
-# test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
-# job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
+# test files first, then the smoke set, then tests linked to a specific changed file (non-hub links first), then the
+# nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
+# (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
 # scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
 # them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
@@ -1870,6 +1907,12 @@ def queue_jobs(changed):
 NARROW = {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
 NARROW_SHARD_SECONDS = JOB_SECONDS
 HUB_TEST_USERS = 40
+# The queue follows these hubs to their direct tests for changes to the corresponding inputs, up to three hops.
+QUEUE_HUB_INPUTS = {
+    "backend/threads.py": "backend/thread_attention.py",
+    "backend/store.py": "backend/threads.py",
+    "backend/hubdb.py": "backend/waiting_on.py",
+}
 TIMINGS_FILE = "scripts/test-timings.json"
 
 
@@ -1892,6 +1935,10 @@ def shapes_the_api(name, root=ROOT):
         return "**api_v2(" in (root / name).read_text()
     except OSError:
         return False
+
+
+def is_hub(users):
+    return sum(is_test(user) for user in users) > HUB_TEST_USERS
 
 
 def reach_levels(names, depth, added=None, root=ROOT, graph=None):
@@ -1931,7 +1978,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         found = set()
         for name in frontier:
             users = set(graph.run_by.get(name, ()))
-            if is_browser(name) or sum(1 for user in users if is_test(user)) > HUB_TEST_USERS:
+            if is_browser(name) or is_hub(users):
                 continue
             found |= users
         frontier = found - set(level)
@@ -1943,7 +1990,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         if hop > 1 or not module.endswith("/__init__.py"):
             continue
         users = graph.run_by.get(module, ())
-        if sum(is_test(user) for user in users) > HUB_TEST_USERS:
+        if is_hub(users):
             continue
         for helper in users:
             if "/tests/helpers/" in helper:
@@ -1963,7 +2010,26 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         return picked
     mode = NARROW[event]
     names = [n for n in changed if not unread(n)]
-    level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
+    level, linked, hub_linked = {}, set(), set()
+    if names:
+        graph = graph or DependencyMap(root)
+        level = reach_levels(names, mode["depth"], added, root, graph)
+        if event == "merge_group":
+            for hub, source in QUEUE_HUB_INPUTS.items():
+                if source in names and (hop := level.get(hub)) in (1, 2):
+                    for test in graph.run_by.get(hub, ()):
+                        if is_test(test):
+                            level[test] = min(level.get(test, hop + 1), hop + 1)
+        linked = additional_checks(names, root)
+        for test in linked:
+            level.setdefault(test, 1)
+        for name in names:
+            users = graph.run_by.get(name, ())
+            (hub_linked if is_hub(users) else linked).update(users)
+            linked.update(graph.path_readers(name))
+            stem = Path(name).stem
+            linked.update(graph.by_base.get(f"test_{stem}.py", ()))
+            linked.update(graph.by_base.get(f"{stem}_test.py", ()))
     smoke_tests, smoke_scripts = smoke(root)
     full = set(picked["python"])
     # Schema and other guard checks run like changed tests; their repository-wide reads exceed the depth limit.
@@ -1976,8 +2042,12 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     extra = sorted(set(smoke_tests) - python - full) if full and not left else []
     if full:
         python |= set(smoke_tests)
-    # Changed tests 0, the smoke set 1, level 1 is 2, level 2 is 3.
-    tier = {p: 0 if level.get(p) == 0 else 1 if p in smoke_tests else 1 + level[p] for p in python}
+    # Changed tests and guards run first, then smoke. Concrete links outrank broad reads and downstream users.
+    tier = {p: 3 + level.get(p, 0) for p in python}
+    tier.update(dict.fromkeys(python & hub_linked, 3))
+    tier.update(dict.fromkeys(python & linked, 2))
+    tier.update(dict.fromkeys(python & set(smoke_tests), 1))
+    tier.update(dict.fromkeys((p for p in python if level.get(p) == 0), 0))
     out = {**picked, "python": sorted(python)}
     record = {
         "event": event,
@@ -2063,10 +2133,11 @@ def narrow_summary(record):
     return "\n".join(lines) + "\n"
 
 
-def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
+def prepare(event, base, output, timings_path=None, head="HEAD", light=False, prefetch=False):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
     merge_group. A group's base is its own base sha, so it needs no merge_parent. `light` narrows the
-    plan for an event in NARROW; any other event ignores it."""
+    plan for an event in NARROW; any other event ignores it. `prefetch` (the CLI's plan) starts the test collection
+    before the dependency map, so the two run side by side."""
     if event == "pull_request":
         base = merge_parent(base)
     changed = changed_files(base, head) if base else []
@@ -2075,13 +2146,21 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         changed = sorted(set(changed) | set(script_changes(base, head, changed)))
     light = light and event in NARROW
     # One map for the selection and the narrowing; selection builds none for a change it answers without one.
-    graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
+    mapped = light and any(not unread(n) for n in changed)
+    started = start_collect() if prefetch and mapped else None
+    graph = DependencyMap(ROOT) if mapped else None
     picked = selection(changed, event, base=base, added=added, graph=graph, head=head)
     if light:
         picked = narrow(picked, changed, event, added=added, graph=graph)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
-    counts = collect() if picked["python"] != [] else Counter()
+    if picked["python"] != []:
+        counts = collect(started=started) if started else collect()
+    else:
+        if started:
+            started.kill()
+            started.wait()
+        counts = Counter()
     if picked["python"] is not None:
         # A selected file with no default test (a changed test whose tests are all slow, which the release gate runs;
         # a test helper the map follows) has nothing to run here.
@@ -2091,8 +2170,13 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     if timings_path:
         source = Path(timings_path)
         paths = sorted(source.rglob("durations.json")) if source.is_dir() else ([source] if source.is_file() else [])
+        # Several measured runs (the last green queue groups) average per file: one run's seconds for a file swing by 2x.
+        measured = defaultdict(list)
         for path in paths:
-            timings.update(json.loads(path.read_text()))
+            for name, seconds in json.loads(path.read_text()).items():
+                if isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
+                    measured[name].append(float(seconds))
+        timings = {name: sum(values) / len(values) for name, values in measured.items()}
     record = picked.pop("narrow", None)
     if record is not None:
         # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
@@ -2628,7 +2712,7 @@ def main():
         )
         return 2
     if args.action == "plan":
-        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light)
+        prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light, prefetch=True)
     elif args.action == "run":
         return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
     elif args.action == "junit-ran":
