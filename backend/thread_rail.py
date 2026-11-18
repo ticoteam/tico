@@ -80,6 +80,12 @@ PINNED_SQL = (
 
 
 DM_MATCH_AUDIENCES = f"{_audience()} IN ('company','team','members','personal','participants')"
+OPEN_ROOT = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL"
+# The open roots a thread list can hold, read from the index of exactly these (migration
+# 20261118222618_open_thread_titles) in the rail's title order: a few hundred roots, not every task thread. Its terms
+# are the index's WHERE, so a query naming the index must AND them in.
+OPEN_THREADS = f"{OPEN_ROOT} AND {DM_MATCH_AUDIENCES}"
+OPEN_THREADS_FROM = "conversations r INDEXED BY conversations_open_thread_titles"
 
 
 def root_open(c, v, within=None, args=None):
@@ -87,11 +93,14 @@ def root_open(c, v, within=None, args=None):
     finished task (T.task_open_sql, which a post the reader reads brings back). `within` (SQL over `r`, with `args`) is
     the rest of the caller's filter, or a looser one: only the finished-task roots it admits have their posts checked
     (T.revived_within), so a query that can return no task thread checks none. Without it, every finished task's."""
-    revived = T.revived_roots(c, v) if within is None else T.revived_within(c, v, within, args)
-    return (
-        "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND "
-        f"{T.task_open_sql(c, v, 'r', revived)}"
-    )
+    return f"{OPEN_ROOT} AND {task_open(c, v, within, args)}"
+
+
+def task_open(c, v, within=None, args=None, source="conversations r"):
+    """root_open's task half alone (`within` and `args` as there; `source` the FROM its revival check reads), for a
+    query that puts it after its cheaper terms: SQLite tests a WHERE's correlated subqueries in the order written."""
+    revived = T.revived_roots(c, v) if within is None else T.revived_within(c, v, within, args, source=source)
+    return T.task_open_sql(c, v, "r", revived)
 
 
 ACTIVITY = (
@@ -258,7 +267,7 @@ def set_pinned_for_everyone(c, principal, thread_id, value):
 _TITLE_ORDER = ("CASE WHEN TRIM(COALESCE(r.subject,''))='' THEN 1 ELSE 0 END", "lower(COALESCE(r.subject,''))")
 
 
-def _title_page(c, v, where, args, after, limit):
+def _title_page(c, v, where, args, after, limit, source="conversations r"):
     """Up to `limit` readable roots in title order (unnamed last) after `after`, and whether more follow. Rows the read
     check refuses are skipped, so a batch is read again past them."""
     rows, position = [], after
@@ -271,7 +280,7 @@ def _title_page(c, v, where, args, after, limit):
             )
             at = {"at_blank": int(position[0]), "at_key": str(position[1]), "at_id": str(position[2])}
         sql = (
-            f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM conversations r "
+            f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM {source} "
             f"WHERE {where}){cond} ORDER BY t_blank, t_key, id LIMIT :fetch"
         )
         page = c.execute(sql, {**args, **at, "fetch": fetch})
@@ -325,18 +334,30 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     args = {"me": v.actor, **extra}
     kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
     readable = T.readable_sql(c, v, "r")
-    base = [root_open(c, v, f"{kind} AND {readable}"), kind, readable]
+    # Both lists read the open-thread index (`kind` admits only its audiences), and test the finished-task check last.
+    base = [OPEN_THREADS, kind, readable]
+    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM)
     v._members = {}
     try:
         pinned_rows, pinned_more = (
             ([], False)
             if pinned_at == DONE
-            else _title_page(c, v, " AND ".join([*base, PINNED_SQL]), args, pinned_at, PINNED_MAX)
+            else _title_page(
+                c, v, " AND ".join([*base, PINNED_SQL, open_task]), args, pinned_at, PINNED_MAX, OPEN_THREADS_FROM
+            )
         )
         threads_rows, threads_more = (
             ([], False)
             if threads_at == DONE
-            else _title_page(c, v, " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}"]), args, threads_at, limit)
+            else _title_page(
+                c,
+                v,
+                " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}", open_task]),
+                args,
+                threads_at,
+                limit,
+                OPEN_THREADS_FROM,
+            )
         )
         rows = pinned_rows + threads_rows
         pairs = T._one_dm_pairs(c, v) if first else {}
@@ -871,17 +892,20 @@ def _walk(c, v, flags, after=None):
     is_flagged = "r.id IN (SELECT value FROM json_each(:flagged))"
     is_mention = "r.id IN (SELECT value FROM json_each(:mentions))"
     audience = _audience()
+    # Cheapest first, as SQLite tests a WHERE's correlated subqueries in the order written: something new (an index
+    # seek or two) before the reader being in the root (its members, followers and participants).
     rest = [
         T.readable_sql(c, v, "r"),
+        f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
-        f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
         # A muted root shows only for a mention.
         f"({is_mention} OR NOT EXISTS (SELECT 1 FROM thread_followers mf WHERE mf.thread_id=r.id "
         "AND mf.actor=:me AND mf.notify='muted'))",
     ]
     # Only the finished-task roots this walk could list have their posts checked: the reader's, with something new.
-    where = [root_open(c, v, " AND ".join(rest), args), *rest]
+    # That check (the task's finish and its posts since) goes last, after every cheaper term.
+    where, open_task = [OPEN_ROOT, *rest], task_open(c, v, " AND ".join(rest), args)
     scanned = int(after[3]) if after else 0
     left = [CATCH_UP_HIDDEN]
     for rank, phase in ((0, is_mention), (1, f"NOT {is_mention}")):
@@ -898,7 +922,7 @@ def _walk(c, v, flags, after=None):
                 T.thread_row(c, dict(r))
                 for r in c.execute(
                     f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
-                    f"{' AND '.join([*where, phase])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
+                    f"{' AND '.join([*where, phase, open_task])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                     {**args, **at, "batch": batch},
                 )
             ]

@@ -974,13 +974,14 @@ def readable_sql(
     member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id=r.id AND tm.actor IN {names})"
     meeting_term = meeting("r.id") if meeting else "0"
     participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
-    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live.
+    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live. A task
+    # room is read before its scope: in a CASE, so its participants (a JSON array per room) are never parsed for it.
     shared = sorted(v.shared_slugs(c, [b["id"] for b in H.bots(c)])) if person and legacies else []
     legacy = (
-        f"(CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me} "
+        "(CASE WHEN r.kind='task' AND r.task_id IS NOT NULL THEN 1 ELSE "
+        f"CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me} "
         f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
-        f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END "
-        f"OR (r.kind='task' AND r.task_id IS NOT NULL))"
+        f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END END)"
     )
     root = (
         f"CASE WHEN r.audience IS NULL THEN {legacy} ELSE CASE r.audience "
@@ -4008,16 +4009,17 @@ def revived_roots(c, v, roots=None):
 REVIVED_CHUNK = 400  # roots per revival query when a caller names them (revived_within)
 
 
-def revived_within(c, v, within, args=None):
+def revived_within(c, v, within, args=None, *, source="conversations r"):
     """revived_roots for only the finished-task roots that match `within` (SQL over a conversations row `r`, with
     `args`): the roots a caller's own query could return, so a page that lists no task threads (the rail's lists,
     Browse) checks none, and Catch up checks only the ones its reader is in, not every finished task in the company.
-    Each root's answer is kept for the snapshot, so the rail's lists and its Catch up walk check a root once."""
+    Each root's answer is kept for the snapshot, so the rail's lists and its Catch up walk check a root once. `source`
+    is the FROM naming `r` (an INDEXED BY whose WHERE terms `within` holds)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     roots = [
         row[0]
         for row in c.execute(
-            "SELECT r.id FROM conversations r WHERE r.parent_id IS NULL AND r.task_id IN "
+            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND r.task_id IN "
             f"(SELECT id FROM tasks WHERE status IN ({FINISHED_TASKS})) AND ({within})",
             args or {},
         )
