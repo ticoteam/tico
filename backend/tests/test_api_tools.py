@@ -10,7 +10,7 @@ import pytest
 
 from backend import api_tools
 from backend.store import Problem
-from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner
 from backend.tests.helpers.credentials import explicit_only, setup
 from backend.tests.helpers.api_tools import key, level, tool
 
@@ -96,6 +96,39 @@ def test_a_demoted_key_adder_can_remove_a_rotated_key_only_while_the_tool_is_vis
     assert get(api, f"api-tools/{tid}")["keys"][0]["id"] == cid
     assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
     with api.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
+
+
+def test_a_person_whose_computer_brought_a_key_over_can_remove_it_like_one_they_added(api):
+    from backend.credentials import FILE_MIGRATION
+
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")  # Ben's bot, on Ben's computer
+    machine = runner(api, operator="ben")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(["ops"]), FILE_MIGRATION))
+    values = {"bot": "ops", "credentials": [{"env": "QA_MOVED_KEY", "value": "fixture-moved-value-123456"}]}
+    post(api, "runner-credential-migration", values, machine["token"])
+    with api.app.state.store.read() as c:
+        cid, tid = c.execute("SELECT id,tool_id FROM credentials WHERE env='QA_MOVED_KEY'").fetchone()
+    path = f"/api/v2/api-tools/{tid}/keys/{cid}"
+    # As in the rotated-key case above: Ben no longer manages credentials, and sees the tool through its audience.
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    r = api.patch(f"/api/v2/api-tools/{tid}", headers=headers(), json={"audience": {"people": ["ben", "cara"]}})
+    assert r.status_code == 200, r.text
+    page = get(api, f"api-tools/{tid}", "ben-test")
+    assert not page["can_manage"] and page["keys"][0]["can_remove"]
+    assert not get(api, f"api-tools/{tid}", "cara-test")["keys"][0]["can_remove"]
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone()
         assert (
             c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
             == "human:ben"

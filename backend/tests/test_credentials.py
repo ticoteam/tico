@@ -267,6 +267,28 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == []
 
 
+def test_a_computer_file_import_records_the_computers_owner_as_the_keys_adder(api):
+    setup(api)
+    from backend.credentials import FILE_MIGRATION
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")  # Ben's bot, on Ben's computer
+    machine = runner(api, operator='ben')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
+    values = {'bot': 'ops', 'credentials': [{'env': 'QA_MOVED_KEY', 'value': 'fixture-moved-value-123456'}]}
+    post(api, 'runner-credential-migration', values, machine['token'])
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id,created_by,updated_by FROM credentials WHERE env='QA_MOVED_KEY'").fetchone()
+        [granted_by] = c.execute('SELECT granted_by FROM credential_grants WHERE credential_id=?', (row['id'],))
+        [event] = c.execute("SELECT actor FROM events WHERE action='credential.migrated' AND target=?", (row['id'],))
+    # Ben's computer brought it over: he is its adder. The Computer itself still made the grant and the event.
+    assert row['created_by'] == 'human:ben'
+    assert row['updated_by'] == granted_by[0] == event[0] == 'runner:' + machine['runner_id']
+
+
 def test_migration_shares_one_credential_per_value_by_grant(api):
     setup(api)
     from backend.credentials import FILE_MIGRATION

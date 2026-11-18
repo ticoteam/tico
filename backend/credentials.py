@@ -1167,6 +1167,10 @@ def install_credentials(app, store, delegate=None, propose=None):
                 return {'migrated': True}
             first = bot in pending
             subject = 'bot:' + bot
+            # The keys come from files on this Computer, so its owner brought them over: they are its adder and may
+            # remove it, the same as a key they added by hand. The grant and event still name the Computer.
+            owner = c.execute('SELECT owner_id FROM runners WHERE id=?', (who.runner_id,)).fetchone()
+            adder = 'human:' + owner[0] if owner and owner[0] else None
             label = (H.bot(c, bot) or {}).get('slug') or bot
             from . import api_tools, tool_settings
 
@@ -1194,8 +1198,8 @@ def install_credentials(app, store, delegate=None, propose=None):
                 ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
                 taken = c.execute('SELECT 1 FROM credentials WHERE name=?', (item.env,)).fetchone()
                 c.execute(
-                    'INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by) '
-                    'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,'
+                    'created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                     (
                         cid,
                         f'{item.env} ({label})' if taken else item.env,
@@ -1208,6 +1212,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         now,
                         now,
                         who.actor,
+                        adder,
                     ),
                 )
                 c.execute(
