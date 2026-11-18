@@ -281,8 +281,10 @@ def test_a_message_or_an_edit_in_a_task_s_conversation_is_refused(api):
 
 
 def test_files_pages_and_reads_are_not_checked():
-    assert K.scope("POST", "/api/v2/tasks/t1/files") is None
-    assert K.scope("POST", "/api/v2/tasks/t1/pages") is None
+    # A file's or a page's own bytes are not task text; only what is said with them is (`notes`).
+    assert K.scope("POST", "/api/v2/tasks/t1/files") == "notes"
+    assert K.scope("POST", "/api/v2/tasks/t1/pages") == "notes"
+    assert K.keys_in(json.dumps({"name": "a.txt", "text": "the key " + KEY}).encode(), fields=K.NOTE_FIELDS) == []
     assert K.scope("GET", "/api/v2/tasks/t1") is None
     assert K.scope("POST", "/api/v2/tasks/t1/asks/r1/answer") == "task"
     assert K.scope("POST", "/api/v2/questions") == "task"
@@ -294,3 +296,89 @@ def test_a_message_outside_a_task_is_left_to_the_tools_chat_s_own_backstop(api):
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM events WHERE action=?", (K.ACTION,)).fetchone()
     assert H.now()
+
+
+# ---- Review on c4b9a23: every route that writes task text, and values the detector rates certain.
+# Shapes a key word names that ordinary text never holds: a long number, dashed hex groups, short groups of letters
+# and digits. Built from pieces.
+GENERATED = [
+    "token: " + "82736451" + "92837465",
+    "token: " + "9f86d081-884c" + "4d63-a0d17f0e",
+    "token: " + "a1b2c3-d4e5f6-" + "a7b8c9-d0e1f2",
+    "token: " + "ab1_cd2_" + "ef3_gh4",
+    "token: " + "x7k_m2p_" + "q9z_r4t_w8v",
+    "key: " + "1234-5678-" + "9012-3456",
+    "key: " + "30c1714c9-" + "ab12cd34",
+]
+
+
+def test_long_numbers_hex_groups_and_short_coded_groups_after_a_key_word_are_refused():
+    for text in GENERATED:
+        assert K.found(text), text
+    # What notes name every day still passes: counts, dates, versions, one coded piece in a name.
+    for text in ("max_tokens: 128000", "api key: 20261118", "token_expires_at: 2026-11-18T10:00:00Z",
+                 "token: gpt-4o-mini", "cache key: sha1-30c1714c9", "key: v2_tasks_list"):
+        assert not K.found(text), text
+
+
+def test_a_mark_tico_left_is_not_read_as_a_key_again():
+    once, rules = K.masked("use " + KEY + " for deploys")
+    assert rules == ["github"] and K.masked(once) == (once, [])
+
+
+def test_a_message_into_a_task_s_conversation_by_any_route_is_refused(api):
+    task = _task(api)
+    cid = task["conversation_id"]
+    token = bot_token(api, "ops")
+    for who in ("ana-test", token):
+        _refused(api, f"conversations/{cid}/messages", {"text": "the key " + KEY}, token=who)
+        _refused(api, "messages", {"to": "bot:ops", "conversation_id": cid, "text": "the key " + KEY}, token=who)
+        _refused(api, "messages", {"to": "bot:ops", "refs": {"task": task["id"]}, "text": "use " + KEY}, token=who)
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
+    rows = _rows(api, task["id"])
+    assert len(rows) == 6 and {r["actor"] for r in rows} == {"human:ana", "bot:ops"}
+    assert all(json.loads(r["detail"])["outcome"] == "refused" and KEY[4:] not in r["detail"] for r in rows)
+
+
+def test_a_note_with_a_page_or_a_file_a_many_task_why_and_a_task_from_a_message_are_refused(api):
+    task = _task(api)
+    version = _shown(api, task["id"])["version"]
+    _refused(api, f"tasks/{task['id']}/pages", {"requirement": "Spec", "page": "page:file-x", "note": "key " + KEY})
+    _refused(api, f"tasks/{task['id']}/files", {"name": "a.txt", "text": "ordinary", "note": "token " + KEY})
+    _refused(api, "task-bulk", {"filter": {"ids": [task["id"]]}, "action": "close", "why": "it used " + KEY})
+    assert _shown(api, task["id"])["version"] == version and _shown(api, task["id"])["status"] == "open"
+    # A task made from a message copies the message: one in a chat outside any task holds a key.
+    dm = post(api, "threads/dm", {"members": ["bot:ops"]})
+    said = post(api, f"threads/{dm['id']}/messages", {"text": "for github " + KEY})
+    mid = (said.get("message") or said)["id"]
+    _refused(api, f"threads/messages/{mid}/task", {"title": "Rotate the key", "owner": "ops"})
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE body LIKE ? OR title='Rotate the key'", ("%" + KEY + "%",)).fetchone()
+        assert not c.execute("SELECT 1 FROM events WHERE action<>? AND detail LIKE ?", (K.ACTION, "%" + KEY + "%")).fetchone()
+        made = [r[0] for r in c.execute("SELECT target FROM events WHERE action=? AND target=''", (K.ACTION,))]
+    assert len(_rows(api, task["id"])) == 2 and len(made) == 2, "a many-task change and a new task name no one task"
+
+
+def test_a_bot_s_turn_reply_with_a_key_no_grant_covers_is_stored_as_a_mark(api):
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = _task(api)
+    attempt = claim(api, r)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "keys-start"}, token=r["token"])
+    done_note = {"note": "Reviewed.", "version": _shown(api, task["id"])["version"]}
+    post(api, f"tasks/{task['id']}/done", done_note, token=attempt["token"])
+    reply = "Reviewed. The diff hard-codes " + KEY + ", so rotate it."
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": reply, "last_seq": 0},
+         token=r["token"])
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
+        [kept] = c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        posted = [r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops' AND body LIKE 'Reviewed.%'")]
+    assert kept == "Reviewed. The diff hard-codes " + K.MARK + ", so rotate it."
+    assert posted == [kept], "the reply is posted with the mark, the rest as written"
+    [row] = _rows(api, task["id"])
+    assert row["actor"] == "bot:ops" and json.loads(row["detail"])["outcome"] == "masked" and KEY[4:] not in row["detail"]

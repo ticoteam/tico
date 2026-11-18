@@ -12,8 +12,15 @@ before anything is stored, from any client, person or bot:
   is refused with 422 `looks_like_key` and one line a bot can act on; the value is never repeated and the task is left
   unchanged at the same version, a hand-off (done with a note, an answer) included. The server keeps no request body
   in its logs (uvicorn's access log is off), and this runs before any route reads one.
+  That covers a message into a task's conversation by any route (threads, conversations, POST /api/v2/messages
+  naming the task), what a bot says with a page or a file (`NOTE_FIELDS`), a many-task change's `why`, and a task
+  made from a message (`refuse_text`: the route copies the message's text).
 - From Slack or mail (`OUTSIDE`): `threads.post` stores it with each key replaced by `MARK` (`masked`), and the
-  author is told where it still is (secret_drop.COPY_ELSEWHERE).
+  author is told where it still is (secret_drop.COPY_ELSEWHERE), on a read-only link too. A Slack edit is masked
+  before its message and revision are written (threads.apply_revision), and a Slack event before it is queued
+  (slack_threads.Bridge._queue): a stalled or suspended link keeps the queue, never the key.
+- A bot's turn reply (execution.complete): a key no grant scrubbed is kept as a mark (`mask_on_task`), the rest of
+  the reply as written.
 
 Either leaves one audit row (`ACTION`): the task, the author and the rule, never a value, a hash or part of one.
 Suspect-tier matches are out (spec): they stay as typed.
@@ -42,12 +49,22 @@ OUTSIDE = ("slack", "email", "mail")
 METHODS = ("POST", "PATCH", "PUT")
 # Every write under /api/v2/tasks says something on a task, except a file's or a page's own bytes (a file is not task
 # text, spec Scope). Questions and messages carry a ❓'s line and its answer.
-TASK_WRITES = re.compile(r"/api/v2/(?:tasks(?:/.*)?|questions(?:/.*)?|uploads/tasks)")
+# A many-task change says its `why` on every task it selects, and a task made from a message carries its title here
+# (the message's own text is checked by the route, thread_tasks.message_task, which copies it: `refuse_text`).
+TASK_WRITES = re.compile(
+    r"/api/v2/(?:tasks(?:/.*)?|questions(?:/.*)?|uploads/tasks|task-bulk|threads/messages/[^/]+/task)"
+)
+# A file's or a page's own bytes are not task text; what the bot says with it (`NOTE_FIELDS`) is.
 NOT_TEXT = re.compile(r"/api/v2/tasks/[^/]+/(?:files|pages)(?:/.*)?")
+NOTE_FIELDS = ("note", "changed", "answered")
 # A message write that is task text only when its thread is a task's conversation (`task_of_thread`).
 # A message or a new task sent with files goes to /api/v2/uploads/... as multipart: its text fields are checked too.
-THREAD_WRITES = re.compile(r"/api/v2/(?:uploads/)?threads/([^/]+)/messages")
+# A conversation's id is its thread's.
+THREAD_WRITES = re.compile(r"/api/v2/(?:(?:uploads/)?threads|conversations)/([^/]+)/messages")
 MESSAGE_EDITS = re.compile(r"/api/v2/messages/([^/]+)")
+# A message sent by its recipient: task text when its body names a task's conversation, a message there it answers,
+# or a task in its refs (`_send_target`).
+MESSAGE_SENDS = re.compile(r"/api/v2/messages")
 TASK_ID = re.compile(r"/api/v2/tasks/([^/]+)")
 
 
@@ -108,6 +125,11 @@ def wordlike(letters: str) -> bool:
 
 
 SHORT_HEX = re.compile(r"[0-9a-fA-F]{1,12}")
+# More digits than a date, a version or a count holds (`max_tokens: 4096`, `key: 20261118`, `sha1-30c1714c9`): a long
+# number, or hex or digit groups, is generated (Review on c4b9a23).
+DIGITS_MAX = 8
+# A date or a time is ordinary however many digits it has (`token_expires_at: 2026-11-18T10:00:00Z`).
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?")
 # Tico's own ids, which notes name all the time. A file id has its own shape; a UUID can be a key too (a Heroku key
 # is one), so it is ordinary only when it names a task, a chat, a message, a bot, a person or a run here (`known`).
 FILE_ID = re.compile(r"file-[0-9a-f]{24}")
@@ -120,8 +142,23 @@ def ordinary(value: str) -> bool:
         return True
     if UUID.fullmatch(value):
         return False
+    if DATE.fullmatch(value):
+        return True
     pieces = [p for p in PIECES.split(value) if p]
-    return bool(pieces) and all(_plain(p, len(pieces) > 1) for p in pieces)
+    if not pieces or not all(_plain(p, len(pieces) > 1) for p in pieces):
+        return False
+    if sum(ch.isdigit() for ch in value) > DIGITS_MAX:
+        return False
+    # Short pieces of letters and digits (`ab1_cd2_ef3`, `x7k-m2p-q9z`) and hex groups (`a1b2c3-d4e5f6`) are a
+    # generated value cut into groups; a name has one at most (`gpt-4o-mini`, `tasks:list:v2`, `sha1-30c1714c9`).
+    coded = [p for p in pieces if _coded(p)]
+    return len(coded) < 3 and sum(1 for p in coded if len(p) > 3) < 2
+
+
+def _coded(piece: str) -> bool:
+    """A piece with both letters and digits that is short (3 characters or fewer) or all hex."""
+    mixed = any(ch.isdigit() for ch in piece) and any(ch.isalpha() for ch in piece)
+    return mixed and (len(piece) <= 3 or bool(SHORT_HEX.fullmatch(piece)))
 
 
 def _plain(piece: str, in_name: bool) -> bool:
@@ -158,10 +195,14 @@ def _kept(item: dict[str, Any], known: "Callable[[str], bool] | None") -> bool:
 def found(text: str, known: "Callable[[str], bool] | None" = None) -> list[dict[str, Any]]:
     """The certain-tier keys in `text`: rule, start and end (offsets in the normalized text). Never the value.
     `known` says whether a UUID names something here (`known_id`)."""
+    text = text or ""
+    # A mark Tico left already is not a key (`key removed]` reads as a named value): text masked once, by the Slack
+    # queue, is carried in and posted unchanged.
+    marks = [m.span() for m in re.finditer(re.escape(MARK), secret_drop.normalize(text))] if MARK in text else []
     return [
         {"rule": i["rule"], "start": i["start"], "end": i["end"]}
-        for i in secret_drop.scan(text or "")
-        if _kept(i, known)
+        for i in secret_drop.scan(text)
+        if _kept(i, known) and not any(s < i["end"] and i["start"] < e for s, e in marks)
     ]
 
 
@@ -184,16 +225,19 @@ def _strings(value: Any, path: str = "") -> list[tuple[str, str]]:
 
 
 def scope(method: str, path: str) -> str | None:
-    """What a request's path is, for the check: 'task' (a task write route), 'thread' or 'message' (task text only on a
-    task's conversation), or None (not checked)."""
+    """What a request's path is, for the check: 'task' (a task write route), 'notes' (a page or a file on a task: only
+    what is said with it, `NOTE_FIELDS`), 'thread', 'message' or 'send' (task text only on a task's conversation), or
+    None (not checked)."""
     if method not in METHODS:
         return None
     if TASK_WRITES.fullmatch(path):
-        return None if NOT_TEXT.fullmatch(path) else "task"
+        return "notes" if NOT_TEXT.fullmatch(path) else "task"
     if THREAD_WRITES.fullmatch(path):
         return "thread"
     if MESSAGE_EDITS.fullmatch(path):
         return "message"
+    if MESSAGE_SENDS.fullmatch(path):
+        return "send"
     return None
 
 
@@ -213,17 +257,27 @@ def _form_fields(raw: bytes, content_type: str) -> dict[str, list[str]]:
     return fields
 
 
-def keys_in(raw: bytes, content_type: str = "", known: "Callable[[str], bool] | None" = None) -> list[tuple[str, str]]:
-    """(field, rule) for each certain-tier key in a JSON body or a multipart form's text fields. A body that is
-    neither is checked as one text."""
-    body: Any
+def _body(raw: bytes, content_type: str) -> Any:
+    """A JSON body, a multipart form's text fields, or the text of a body that is neither."""
     if content_type.lower().startswith("multipart/"):
-        body = _form_fields(raw, content_type)
-    else:
-        try:
-            body = json.loads(raw or b"null")
-        except (ValueError, UnicodeDecodeError):
-            body = raw.decode("utf-8", "replace") if raw else None
+        return _form_fields(raw, content_type)
+    try:
+        return json.loads(raw or b"null")
+    except (ValueError, UnicodeDecodeError):
+        return raw.decode("utf-8", "replace") if raw else None
+
+
+def keys_in(
+    raw: bytes,
+    content_type: str = "",
+    known: "Callable[[str], bool] | None" = None,
+    fields: "tuple[str, ...] | None" = None,
+) -> list[tuple[str, str]]:
+    """(field, rule) for each certain-tier key in a JSON body or a multipart form's text fields. A body that is
+    neither is checked as one text. With `fields`, only those top-level fields are read (a page's or a file's note)."""
+    body = _body(raw, content_type)
+    if fields is not None:
+        body = {k: v for k, v in cast("dict[str, Any]", body).items() if k in fields} if isinstance(body, dict) else None
     hits: list[tuple[str, str]] = []
     for field, text in _strings(body):
         hits.extend((field, f["rule"]) for f in found(text, known))
@@ -249,9 +303,33 @@ def task_of_message(c: "sqlite3.Connection", message_id: str) -> str | None:
     return task_of_thread(c, str(row[0])) if row and row[0] else None
 
 
-def target(c: "sqlite3.Connection", kind: str, path: str) -> str | None:
+def _send_target(c: "sqlite3.Connection", body: Any) -> str | None:
+    """The task a sent message (POST /api/v2/messages) is task text on: the task whose conversation its
+    `conversation_id` is, or whose conversation holds the message it answers (`in_reply_to`), or the task its refs
+    name (`refs.task`, `refs.task_id`). None when it names none."""
+    from .store import H
+
+    if not isinstance(body, dict):
+        return None
+    sent = cast("dict[str, Any]", body)
+    conversation, answers = str(sent.get("conversation_id") or ""), str(sent.get("in_reply_to") or "")
+    task = (task_of_thread(c, conversation) if conversation else None) or (
+        task_of_message(c, answers) if answers else None
+    )
+    if task:
+        return task
+    named = cast("str | None", H.refs_task_id(sent.get("refs")))  # pyright: ignore[reportUnknownMemberType]
+    if not named:
+        return None
+    row = c.execute("SELECT id FROM tasks WHERE id=? OR CAST(number AS TEXT)=? LIMIT 1", (named, named)).fetchone()
+    return str(row[0]) if row else None
+
+
+def target(c: "sqlite3.Connection", kind: str, path: str, body: Any = None) -> str | None:
     """The task a checked write is on, or None when it is not task text (a message outside a task). A task route
     whose task is not found keeps the id it was sent with: the audit row still names what was written to."""
+    if kind == "send":
+        return _send_target(c, body)
     if kind == "thread":
         m = THREAD_WRITES.fullmatch(path)
         return task_of_thread(c, m.group(1)) if m else None
@@ -281,18 +359,35 @@ def refusal(store: Any, author: str, method: str, path: str, raw: bytes, content
     kind = scope(method, path)
     if not kind:
         return
-    hits = keys_in(raw, content_type)
+    fields = NOTE_FIELDS if kind == "notes" else None
+    hits = keys_in(raw, content_type, fields=fields)
     if not hits:
         return
     with store.transaction() as c:
-        task = target(c, kind, path)
+        task = target(c, kind, path, _body(raw, content_type) if kind == "send" else None)
         if task is None:
             return  # a message outside a task's conversation: the Tools chat's own backstop covers its case
-        hits = keys_in(raw, content_type, lambda value: known_id(c, value))  # a task's own id after `token:`
+        # A task's own id after `token:` is ordinary.
+        hits = keys_in(raw, content_type, lambda value: known_id(c, value), fields)
         if not hits:
             return
         audit(c, author, task, [rule for _, rule in hits], "refused")
     raise Problem(CODE, REFUSED, 422, extra={"fields": sorted({field for field, _ in hits if field})})
+
+
+def refuse_text(store: Any, author: str, task: str, texts: dict[str, str]) -> None:
+    """`refusal` for task text a route builds itself rather than reads from the request (a task made from a message
+    copies that message): 422 `looks_like_key` and its audit row, before anything is stored."""
+    from .store import Problem
+
+    if not any(found(t) for t in texts.values()):
+        return
+    with store.transaction() as c:
+        hits = [(f, h["rule"]) for f, t in texts.items() for h in found(t, lambda value: known_id(c, value))]
+        if not hits:
+            return
+        audit(c, author, task, [rule for _, rule in hits], "refused")
+    raise Problem(CODE, REFUSED, 422, extra={"fields": sorted({field for field, _ in hits})})
 
 
 def masked(text: str, known: "Callable[[str], bool] | None" = None) -> tuple[str, list[str]]:
@@ -312,18 +407,23 @@ def masked(text: str, known: "Callable[[str], bool] | None" = None) -> tuple[str
     return "".join(out), [h["rule"] for h in hits]
 
 
-def mask_outside(c: "sqlite3.Connection", thread: dict[str, Any] | None, author: str, text: str, via: str) -> str:
-    """`threads.post`'s step for text from outside Tico (`OUTSIDE`) on a task's conversation: stored with each key as
-    MARK, one audit row. Any other text is returned as it came."""
-    if str(via or "").lower() not in OUTSIDE or not text or not thread:
-        return text
-    task = task_of_thread(c, str(thread.get("id") or ""))
-    if task is None:
+def mask_on_task(c: "sqlite3.Connection", task: str | None, author: str, text: str) -> str:
+    """`text` with each certain-tier key as MARK and one audit row, when it goes on `task`; as it came otherwise. For
+    text no one types into Tico's request guard: a bot's turn reply (execution.complete), Slack's queue and edits."""
+    if not task or not text:
         return text
     out, rules = masked(text, lambda value: known_id(c, value))
     if rules:
         audit(c, author, task, rules, "masked")
     return out
+
+
+def mask_outside(c: "sqlite3.Connection", thread: dict[str, Any] | None, author: str, text: str, via: str) -> str:
+    """`threads.post`'s step for text from outside Tico (`OUTSIDE`) on a task's conversation: stored with each key as
+    MARK, one audit row. Any other text is returned as it came."""
+    if str(via or "").lower() not in OUTSIDE or not text or not thread:
+        return text
+    return mask_on_task(c, task_of_thread(c, str(thread.get("id") or "")), author, text)
 
 
 def told(via: str) -> str:

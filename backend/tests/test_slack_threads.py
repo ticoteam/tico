@@ -1462,3 +1462,74 @@ def test_a_history_import_that_fails_is_logged_scrubbed_and_left_to_be_tried_aga
         world.bridge.tick()
     assert f"Slack history import failed: {LOCKED}" in caplog.text
     assert link_row(world, link_id)["history_state"] == "pending"
+
+
+# ----------------------------------------------------------------------------- keys on a task (backend/task_text_keys.py)
+# Built from pieces, so this file holds no key-shaped literal.
+TASK_KEY = "".join(["gh", "p_", "aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3z"])
+
+
+def task_on(world, thread):
+    """A task whose conversation is the linked thread: its text is task text."""
+    with world.hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Plan the launch", "Plan it.", "bot:legal")
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (thread, made["id"]))
+    return made["id"]
+
+
+def key_rows(world, task_id):
+    from backend import task_text_keys as K
+
+    return all_rows(world, "SELECT actor, detail FROM events WHERE action=? AND target=?", K.ACTION, task_id)
+
+
+def test_a_slack_edit_with_a_key_on_a_task_keeps_a_mark_in_the_message_and_its_revision(world):
+    from backend import task_text_keys as K
+
+    link_id = activate_marketing(world)
+    task = task_on(world, link_row(world, link_id)["thread_id"])
+    assert world.bridge.receive(chan_event(ts(1), "the plan")) == "posted"
+    # The edit is applied the way the queue carries it, so the mark is threads.apply_revision's own.
+    edit = chan_edit(ts(1), "the plan, deploy key " + TASK_KEY)
+    edit["edited_ts"] = ts(2)
+    assert world.bridge._revise(edit, link_row(world, link_id), deleted=False) == "edited"
+    [msg] = all_rows(world, "SELECT id, body FROM messages WHERE body LIKE 'the plan%'")
+    assert TASK_KEY not in msg["body"] and K.MARK in msg["body"]
+    revisions = all_rows(world, "SELECT body FROM message_revisions WHERE message_id=?", msg["id"])
+    assert revisions and all(TASK_KEY not in str(r["body"]) for r in revisions)
+    [row] = key_rows(world, task)
+    assert json.loads(row["detail"])["outcome"] == "masked" and TASK_KEY[4:] not in row["detail"]
+    assert world.slack.ephemeral == [(MARKETING, "U1", K.told("slack"))], "the sender is told where it still is"
+
+
+def test_a_slack_event_with_a_key_is_masked_before_it_is_queued_on_a_suspended_link(world):
+    from backend import task_text_keys as K
+
+    link_id = activate_marketing(world, members=("U1",))
+    task = task_on(world, link_row(world, link_id)["thread_id"])
+    world.slack.members[MARKETING].append("U3")  # an unmapped member: the link suspends
+    world.clock.advance(ST.CHECK_SECONDS + 1)
+    world.bridge.check_links()
+    assert link_row(world, link_id)["state"] == "suspended"
+    assert world.bridge.receive(chan_event(ts(1), "use " + TASK_KEY + " for deploys")) == "queued"
+    [queued] = all_rows(world, "SELECT event FROM slack_inbound_events")
+    assert TASK_KEY not in queued["event"] and K.MARK in json.loads(queued["event"])["text"]
+    assert len(key_rows(world, task)) == 1
+    assert world.slack.ephemeral == [(MARKETING, "U1", K.told("slack"))]
+    world.slack.members[MARKETING].remove("U3")
+    ST.resume_link(world.hub, WHO, link_id)
+    assert gate(world, link_id) == "active"
+    world.bridge.tick()
+    [msg] = all_rows(world, "SELECT body FROM messages WHERE body LIKE 'use %'")
+    assert TASK_KEY not in msg["body"] and K.MARK in msg["body"]
+    assert len(key_rows(world, task)) == 1, "one audit row: carried in already masked"
+
+
+def test_a_read_only_link_tells_the_sender_of_a_masked_key(world):
+    from backend import task_text_keys as K
+
+    link_id = read_marketing(world)
+    task_on(world, link_row(world, link_id)["thread_id"])
+    assert world.bridge.receive(chan_event(ts(1), "token " + TASK_KEY)) == "posted"
+    assert world.slack.ephemeral == [(MARKETING, "U1", K.told("slack"))], "a key notice goes out even read-only"
+    assert all_rows(world, "SELECT id FROM messages WHERE body LIKE ?", "%" + TASK_KEY + "%") == []

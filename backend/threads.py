@@ -4430,13 +4430,10 @@ def apply_revision(c, origin, *, body=None, deleted=False):
         return None
     row = dict(row)
     if not deleted:  # a replicated edit is checked as a new message is, before its text is kept anywhere
-        secret_drop.refuse(
-            c,
-            thread_row(c, row["conversation_id"]),
-            str(origin.get("actor") or row["sender_id"]),
-            str(body or ""),
-            "slack",
-        )
+        thread, author = thread_row(c, row["conversation_id"]), str(origin.get("actor") or row["sender_id"])
+        secret_drop.refuse(c, thread, author, str(body or ""), "slack")
+        # A key in it on a task is kept as a mark in the message and its revision alike (backend/task_text_keys.py).
+        body = task_text_keys.mask_outside(c, thread, author, str(body or ""), "slack")
     row["refs"] = _refs_of(row)  # the table's JSON text, as H.message_view decodes it
     if c.execute("SELECT 1 FROM message_revisions WHERE origin_id=? AND revision=?", (oid, revision)).fetchone():
         return None

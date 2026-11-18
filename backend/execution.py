@@ -36,6 +36,7 @@ from . import (
 )
 from . import runner_online
 from . import task_privacy as privacy
+from . import task_text_keys
 from . import (
     bot_stops,
     browser_exit,
@@ -6836,6 +6837,16 @@ class Execution:
         # A turn a carrier started answers the message it carries (reply_source): its sender, in its thread.
         source = reply_source(c, msg)
         carried = source is not None and source["id"] != msg["id"]
+        # A turn's reply goes past the request guard: a certain-tier key in it that no grant scrubbed (scrub_attempt
+        # takes out only values granted in the attempt) is kept as a mark, in the post and on the run alike, with one
+        # audit row; the rest of the reply stays as written (backend/task_text_keys.py).
+        if body.text:
+            work = work_task_id(source, conv) if source is not None else None
+            on = (H.task(c, work) or {}).get("id") if work else None
+            on = on or (task_text_keys.task_of_thread(c, conv["id"]) if conv else None)
+            kept = task_text_keys.mask_on_task(c, on, actor, body.text)
+            if kept != body.text:
+                body = body.model_copy(update={"text": kept})
         # Keep-warm turns are gone. One still out on a computer at the upgrade answers its hidden notice ("ok"): nothing
         # is posted for it, and its text stays on the run.
         kept_warm = row["purpose"] == "keep warm"
