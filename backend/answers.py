@@ -5,7 +5,8 @@ The one writer of `answers` rows, apart from the `pushed_past` rows `task_engine
 person OKs or sends back, an ask is given to someone else, or an answer is taken back. The answer is saved and the task
 moves on in the same step if that was the last thing it waited for. When a send back hands the turn back to a bot, the
 bot is woken once with the person's words. A question to a person is a message marked ❓ (backend/question_marks.py),
-answered by a reply in the chat, never here.
+answered by a reply in the chat, never here; a person's answer to a stage's page approval clears their open ❓ on the
+task (question_marks.approval_answered).
 
 Every function takes the caller's open write transaction and never commits. Each returns the task as
 `task_engine.task()` gives it after the write, with `answer_id` where an answers row was written, and refuses through
@@ -18,7 +19,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
-from . import hubdb_core, pr_conflicts
+from . import hubdb_core, pr_conflicts, question_marks
 from . import task_engine as E
 from . import task_requirements as R
 from . import task_wakes, validate_gate
@@ -481,6 +482,9 @@ def answer(
         out["answer_id"] = newest["id"]
         return out
     answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
+    if requirement["kind"] == "page" and requirement.get("stage_id") and value in (OK, NO):
+        # The approval was the person's ask on this task: a bot's ❓ to them here clears with it (one card per person).
+        question_marks.approval_answered(conn, task_id, str(by), answer_id)
     if requirement["kind"] == "owner_done":
         reopen_sent_back(conn, row, by, notes)
     if requirement["kind"] == "ok" and value != OK:

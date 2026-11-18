@@ -409,7 +409,8 @@ def test_the_stage_waits_only_on_its_page_ok_when_the_bot_also_asks_the_person(c
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid, by=po), "met")
     assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, BEN)
-    Q.ask(c, po, row["id"], BEN, "Please OK the attached spec.")
+    with _refused('already has "Spec page" to approve on this task'):
+        Q.ask(c, po, row["id"], BEN, "Please OK the attached spec.")
     assert [s.requirement["id"] for s in R.unmet(c, E.task(c, row["id"]))] == [rid], "one thing waits: the page OK"
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] != "Spec", "the page OK alone moves it"
 
@@ -431,6 +432,47 @@ def test_a_bots_question_of_a_person_no_stage_ok_waits_on_still_works(c, store):
     _pipeline(c, person=BEN)
     row = _owned(c, po)
     assert Q.ask(c, po, row["id"], BEN, "Should negate accept strings?")["person_id"] == BEN
+
+
+def test_a_bots_question_to_the_person_a_people_only_page_waits_on_is_refused_whatever_it_says(c, store):
+    """Tico Team (Nov 18): QA waited on Chris's OK of the QA report, and the Engineering Manager also asked him "Please
+    move this task on past QA yourself" as a ❓ that named no page. Two waits on one person, and only the approval card
+    had a button. Approvals win over questions: one card per person per task. Someone else is still the bot's to ask."""
+    from backend import waiting_on as W
+
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    rid = _pipeline(c, who_oks="people_only")
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    (card,) = [w for w in W.waiting_on(c, row["id"]) if w.requirement_id == rid]
+    assert (card.state, card.ask) == (W.PERSON, True)
+    holder = card.who
+    other = BEN if holder != BEN else ANA
+    with _refused("that approval is your ask"):
+        Q.ask(c, po, row["id"], holder, "Please move this task on past QA yourself.")
+    assert not Q.on_task(c, row["id"]), "a refused ❓ leaves nothing"
+    assert Q.ask(c, po, row["id"], other, "Which importer first?")["person_id"] == other
+
+
+def test_answering_the_page_approval_clears_the_bots_question_to_that_person(c, store):
+    """The safety net: a ❓ asked before the page waited on the person (allowed then) clears when they answer the
+    approval, OK or send back, so their Needs you never keeps a second card for the same task."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    rid = _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    asked = Q.ask(c, po, row["id"], BEN, "Should negate accept strings?")
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, BEN)
+    assert [m["id"] for m in Q.on_task(c, row["id"])] == [asked["id"]]
+    A.answer(c, row["id"], rid, BEN, "no", "Strings too, please")
+    assert not Q.on_task(c, row["id"]), "the approval was the ask: the ❓ cleared with it"
+    cleared = Q.get(c, asked["id"])
+    assert (cleared["cleared_reason"], cleared["cleared_by_id"]) == ("approval", BEN)
+    assert not cleared["cleared_message_id"], "not counted as a reply"
 
 
 def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c, store):
