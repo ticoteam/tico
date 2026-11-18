@@ -1540,6 +1540,106 @@ impl Runner {
         }
     }
 
+    async fn voice_session(
+        &self,
+        d: &Drive<'_>,
+        claude: &mut hosts::claude::VoiceSession,
+        primer: &str,
+        mut notes_stamp: String,
+    ) -> Result<(), Fail> {
+        claude.send(primer).await?;
+        let mut poll = tokio::time::interval(Duration::from_millis(400));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut warming = true;
+        let mut active: Option<String> = None;
+        let mut last = String::new();
+        let mut canceled = false;
+        let mut spoken = String::new();
+        let mut model = String::new();
+        loop {
+            tokio::select! {
+                frame = claude.frame() => {
+                    let frame = frame?;
+                    if frame["type"] == "result" {
+                        if frame["is_error"] == true && !canceled {
+                            return Err(Fail::runtime(text_of(&frame["result"])));
+                        }
+                        warming = false;
+                        let turn = active.take().filter(|_| !canceled);
+                        canceled = false;
+                        if let Some(turn) = turn {
+                            let answer = text_of(&frame["result"]);
+                            let answer = if spoken.trim().is_empty() || answer.starts_with(spoken.trim()) {
+                                answer
+                            } else if answer.is_empty() || spoken.trim_end().ends_with(answer.as_str()) {
+                                std::mem::take(&mut spoken)
+                            } else {
+                                format!("{}\n\n{}", spoken.trim_end(), answer)
+                            };
+                            self.voice_event(d, "message", json!({
+                                "voice_turn": turn, "text": answer, "model": model, "final": true,
+                            })).await?;
+                        }
+                    } else if let Some(turn) = active.as_ref().filter(|_| !canceled) {
+                        if frame["type"] == "assistant" && frame["parent_tool_use_id"].is_null() {
+                            model = text_of(&frame["message"]["model"]);
+                        }
+                        if let Some(text) = hosts::claude::voice_delta(&frame) {
+                            spoken.push_str(text);
+                            self.voice_event(d, "delta", json!({"voice_turn": turn, "text": text})).await?;
+                        }
+                    }
+                }
+                _ = poll.tick() => {
+                    if d.flags.lost.load(Ordering::SeqCst) || d.flags.stopped.load(Ordering::SeqCst) {
+                        return Err(Fail::runtime("Voice session lease ended"));
+                    }
+                    let key = format!("voice-input:{}", uuid::Uuid::new_v4());
+                    let answer = self.client.post(&format!("attempts/{}/inputs", d.aid), &json!({}), Some(&key)).await?;
+                    let input = &answer["call_voice"];
+                    if input.is_null() || input["closed"] == true {
+                        return Ok(());
+                    }
+                    let turn = text_of(&input["turn"]["id"]);
+                    if let Some(in_progress) = &active {
+                        if *in_progress != turn && !canceled {
+                            claude.cancel().await?;
+                            canceled = true;
+                        }
+                        continue;
+                    }
+                    if warming || turn.is_empty() || turn == last {
+                        continue;
+                    }
+                    let mut question = format!("Participant utterance:\n{}", text_of(&input["turn"]["text"]));
+                    let notes = text_of(&input["turn"]["notes"]);
+                    let stamp = crate::gitrun::sha256_hex(notes.as_bytes());
+                    if notes_stamp != stamp {
+                        question = format!("Updated call notes (context only):\n{notes}\n\n{question}");
+                        notes_stamp = stamp;
+                    }
+                    claude.send(&question).await?;
+                    spoken.clear();
+                    model.clear();
+                    last.clone_from(&turn);
+                    active = Some(turn);
+                }
+            }
+        }
+    }
+
+    async fn voice_event(&self, d: &Drive<'_>, kind: &str, payload: Value) -> Result<(), Fail> {
+        let payload = d
+            .redactor
+            .map_or_else(|| payload.clone(), |r| r.scrub_json(&payload).into_owned());
+        let (aid, kind) = (d.aid.to_owned(), kind.to_owned());
+        self.state
+            .off(move |s| s.append(&aid, &kind, &payload))
+            .await?;
+        d.wake.notify_one();
+        Ok(())
+    }
+
     async fn ack_input(&self, aid: &str, mid: &str) -> Result<(), ApiError> {
         match self
             .client
@@ -2012,7 +2112,9 @@ impl Runner {
         // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
-        let fresh_chat = stateless_chat(&attempt);
+        let voice_ref = &attempt["message"]["refs"]["live_meeting"];
+        let voice_call = voice_ref["voice_call"].is_string();
+        let fresh_chat = voice_call || stateless_chat(&attempt);
         let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
@@ -2154,6 +2256,12 @@ impl Runner {
                 if held.is_none() {
                     s.subscription = Some(d.id.clone());
                 }
+            }
+            if voice_call && (held.is_some()
+                || !crate::harness_tools::caps_of(&config).voice_session
+                || !crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime)
+                    .is_some_and(|plan| plan.billing == "subscription")) {
+                return Err(Fail::runtime("Voice requires a company subscription for its model"));
             }
             let socket_path = self.socket.as_ref().map(|s| {
                 match &own {
@@ -2547,6 +2655,18 @@ impl Runner {
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
                 return Err(Fail::runtime(CONTINUE_LOST));
+            }
+            if voice_call {
+                let Host::Claude(claude) = h else {
+                    return Err(Fail::runtime("The voice session host is unavailable"));
+                };
+                let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
+                let mut resident = claude.start_voice(&th, effort.as_deref(), &aid)?;
+                let primer = text_of(&attempt["message"]["body"]);
+                let stamp = text_of(&voice_ref["notes_stamp"]);
+                self.during_drain(&aid, self.voice_session(&d, &mut resident, &primer, stamp)).await?;
+                drove.outcome = "completed".into();
+                return Ok(());
             }
             // A resumed thread already holds the repo rules unless they changed since it was given them, or a
             // compaction first may have taken them out.

@@ -49,6 +49,7 @@ pub const CAPABILITIES: &[&str] = &[
     FORK_SESSION,
     FRESH_SESSION,
     PLAN_SWITCH_RESUME,
+    "voice_sessions_v1",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -199,6 +200,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            "voice_sessions_v1",
             PLAN_SWITCH_RESUME,
             crate::claude_login::CAPABILITY,
             crate::browser::CAPABILITY,

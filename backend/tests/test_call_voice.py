@@ -31,6 +31,8 @@ from backend.tests.helpers.calls import (
 )
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
+from backend.tests.helpers.credentials import setup as credential_setup
+from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
@@ -272,6 +274,9 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
         "heard_to_transcript_ms",
         "tts_first_chunk_ms",
         "total_ms",
+        "first_token_ms",
+        "first_sentence_ms",
+        "first_audio_ms",
     }
     assert set(spoken) == set(skipped) == fields
     assert (spoken["call_id"], spoken["bot"], spoken["outcome"], spoken["skip_reason"]) == (
@@ -290,6 +295,91 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
     assert not any(
         "reliability" in r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn")
     )
+
+
+def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet, monkeypatch, caplog):
+    credential_setup(meet)
+    company(meet)
+    on(meet, "ops", "claude", "claude-sonnet-5-5")
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    token = worker["token"]
+    cid = _dm(meet)
+    call = start_call(meet, cid, model="claude-opus-5-5", effort="medium")
+    post(meet, f"calls/{call['id']}/bots", {"bots": ["ops"]})
+    attempt = _claim(meet, worker, "ops")
+    path = f"attempts/{attempt['id']}"
+    assert [attempt["config"][k] for k in ("model", "reasoning_effort")] == ["claude-opus-5-5", "medium"]
+    assert len(attempt["subscriptions"]) == 1
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
+    heard = threading.Event()
+    media = meet.app.state.call_media
+    say = media.say
+
+    def record(call_id, pcm, rate, started=None, mark=None):
+        said = say(call_id, pcm, rate, started, mark)
+        heard.set()
+        return said
+
+    monkeypatch.setattr(media, "say", record)  # double: LiveKit's first frame before the model's final result
+    _speak(meet, call["id"], 0)
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert turn["text"] == SYNTHETIC_SPEECH
+    assert post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"] is None
+    first, full = "Yes.", "Yes. Ops can take the reliability review."
+    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
+        post(
+            meet,
+            f"{path}/events",
+            {
+                "events": [
+                    {"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "Yes"}},
+                    {"seq": 2, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "."}},
+                ]
+            },
+            token,
+        )
+        assert heard.wait(10), "the first sentence never played before Claude finished"
+        assert full not in thread_texts(meet, cid)
+        post(
+            meet,
+            f"{path}/events",
+            {
+                "events": [
+                    {"seq": 3, "kind": "message", "payload": {"voice_turn": turn["id"], "text": full, "final": True}},
+                ]
+            },
+            token,
+        )
+        assert meet.app.state.calls.settle()
+    assert full in thread_texts(meet, cid)
+    assert len(media.said) == 2
+    assert first not in thread_texts(meet, cid)
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn "))
+    timing = dict(piece.split("=", 1) for piece in line.split()[1:])
+    assert 0 <= int(timing["first_token_ms"]) <= int(timing["first_sentence_ms"]) <= int(timing["first_audio_ms"])
+    with meet.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT ran_model FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()[0]
+            == "claude-opus-5-5"
+        )
+
+    _speak(meet, call["id"], 10_000)
+    another = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert another["id"] != turn["id"]
+    post(meet, f"calls/{call['id']}/end", {})
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": True}
+    post(
+        meet,
+        f"{path}/events",
+        {
+            "events": [
+                {"seq": 4, "kind": "delta", "payload": {"voice_turn": another["id"], "text": "Too late."}},
+            ]
+        },
+        token,
+    )
+    assert len(media.said) == 2 and "Too late." not in thread_texts(meet, cid)
 
 
 def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypatch):

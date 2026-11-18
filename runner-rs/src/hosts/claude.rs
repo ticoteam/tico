@@ -176,6 +176,62 @@ pub fn interrupt_line(request_id: &str) -> String {
         + "\n"
 }
 
+pub(crate) struct VoiceSession {
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stopper: super::Stopper,
+}
+
+impl VoiceSession {
+    pub(crate) async fn send(&mut self, text: &str) -> Result<(), HostError> {
+        self.write(&user_line(&uuid::Uuid::new_v4().to_string(), text, None))
+            .await
+    }
+
+    pub(crate) async fn cancel(&mut self) -> Result<(), HostError> {
+        self.write(&interrupt_line(&uuid::Uuid::new_v4().to_string()))
+            .await
+    }
+
+    async fn write(&mut self, line: &str) -> Result<(), HostError> {
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| failed(e.to_string()))
+    }
+
+    pub(crate) async fn frame(&mut self) -> Result<Value, HostError> {
+        while let Some(line) = self
+            .stdout
+            .next_line()
+            .await
+            .map_err(|e| failed(e.to_string()))?
+        {
+            if let Ok(value) = serde_json::from_str(&line) {
+                return Ok(value);
+            }
+        }
+        Err(failed("Claude closed the voice session"))
+    }
+}
+
+impl Drop for VoiceSession {
+    fn drop(&mut self) {
+        self.stopper.terminate(STOP_TIMEOUT);
+    }
+}
+
+pub(crate) fn voice_delta(frame: &Value) -> Option<&str> {
+    let event = &frame["event"];
+    (frame["type"] == "stream_event"
+        && frame["parent_tool_use_id"].is_null()
+        && event["type"] == "content_block_delta"
+        && event["delta"]["type"] == "text_delta")
+        .then(|| event["delta"]["text"].as_str())
+        .flatten()
+        .filter(|text| !text.is_empty())
+}
+
 #[derive(Clone)]
 pub(crate) struct Thread {
     settings: Settings,
@@ -959,6 +1015,32 @@ impl ClaudeHost {
         Ok((child, stderr, reaping))
     }
 
+    pub(crate) fn start_voice(
+        &self,
+        thread_id: &str,
+        effort: Option<&str>,
+        aid: &str,
+    ) -> Result<VoiceSession, HostError> {
+        let mut thread = self
+            .inner()
+            .threads
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| failed("Unknown Claude voice session"))?;
+        thread.settings.background_wait = None;
+        let (mut child, _stderr, _) = self
+            .launch(thread_id, &thread, effort, aid)
+            .map_err(|e| failed(format!("Could not open Claude voice session: {e}")))?;
+        let stdin = child.stdin.take().expect("Claude stdin is piped");
+        let stdout = BufReader::new(child.stdout.take().expect("Claude stdout is piped")).lines();
+        let (stopper, _exited) = super::own(child);
+        Ok(VoiceSession {
+            stdin,
+            stdout,
+            stopper,
+        })
+    }
+
     pub fn start_turn(
         &self,
         thread_id: &str,
@@ -1616,7 +1698,7 @@ impl ClaudeHost {
                 let ev = &msg["event"];
                 let delta = &ev["delta"];
                 if ev["type"] == "content_block_delta" && delta["type"] == "text_delta" {
-                    if let Some(text) = delta["text"].as_str().filter(|t| !t.is_empty()) {
+                    if let Some(text) = voice_delta(msg) {
                         self.emit(event(
                             "delta",
                             Some(tid),
@@ -3008,6 +3090,56 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    #[tokio::test]
+    async fn voice_primes_and_answers_twice_from_the_same_process() {
+        let dir = std::env::temp_dir().join(format!("claude-voice-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            r#"#!/bin/sh
+case "$1" in --version) echo '2.1.296 (Claude Code)'; exit 0;; esac
+echo "$$" >> launches
+IFS= read -r line || exit 1
+case "$line" in *READY*) printf '%s\n' '{"type":"result","result":"READY"}';; *) exit 2;; esac
+IFS= read -r line || exit 1
+case "$line" in *First*) printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here."}}}' '{"type":"result","result":"Here."}';; *) exit 3;; esac
+IFS= read -r line || exit 1
+case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; *) exit 4;; esac
+"#,
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let thread = host.start_thread(&Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        });
+        let mut resident = host
+            .start_voice(&thread, Some("low"), "voice-attempt")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            resident.send("Reply with READY").await.unwrap();
+            assert_eq!(resident.frame().await.unwrap()["result"], "READY");
+            resident.send("First utterance").await.unwrap();
+            assert_eq!(voice_delta(&resident.frame().await.unwrap()), Some("Here."));
+            assert_eq!(resident.frame().await.unwrap()["result"], "Here.");
+            resident.send("Second utterance").await.unwrap();
+            assert_eq!(resident.frame().await.unwrap()["result"], "Again.");
+        })
+        .await
+        .expect("the resident Claude process did not answer each input");
+        drop(resident);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("launches"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

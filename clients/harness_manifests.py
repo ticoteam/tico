@@ -34,6 +34,7 @@ FIELDS = {
     "resume_after_interrupt": (bool, True),
     "steer": (bool, False),
     "persistent_session": (bool, False),
+    "voice_session": (bool, False),
     "goal_runs_across_turns": (bool, False),
     "serial_cold_start": (bool, False),
     "isolated_user": (bool, False),

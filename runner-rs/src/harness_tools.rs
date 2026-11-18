@@ -153,6 +153,7 @@ pub struct Capabilities {
     /// A running turn takes a new message (a steer); without it the message waits for the next turn.
     pub steer: bool,
     pub persistent_session: bool,
+    pub voice_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
     /// The CLI keeps no owner-only state shared across turns (a 0600 sign-in file in the bot's home), so a turn can
@@ -196,6 +197,7 @@ impl Default for Capabilities {
             resume_after_interrupt: true,
             steer: false,
             persistent_session: false,
+            voice_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
             isolated_user: false,
@@ -809,6 +811,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "resume_after_interrupt" => c.resume_after_interrupt = flag(k, v)?,
             "steer" => c.steer = flag(k, v)?,
             "persistent_session" => c.persistent_session = flag(k, v)?,
+            "voice_session" => c.voice_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
             // Retired with the one-turn-per-login queue; a manifest from an older checkout may still name it.

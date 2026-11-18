@@ -569,6 +569,16 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
     if not row:
         return config
     config = {**config, "session": "task"}
+    from . import calls, call_sessions
+
+    voice = calls.voice_call(c, rid)
+    if voice:
+        choice = call_sessions.choice(c, settings, bot, row[0], voice["voice_effort"])
+        if choice:
+            if turn_id:
+                c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (choice["model"], turn_id))
+            return task_models.apply({k: v for k, v in config.items() if k != task_models.KEY}, choice)
+        return config
     turn = c.execute("SELECT retries FROM live_meeting_turns WHERE id=? AND meeting_id=?", (turn_id, rid)).fetchone()
     ran_on = lambda name: turn and c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (name, turn_id))
     model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
@@ -642,7 +652,20 @@ def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     H.feed(c, "bot:" + slug, again + _turn_prompt(c, rid, turn_id, slug), conv, refs=refs)
 
 
-def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None, named=False):
+def _enqueue(
+    c,
+    rid,
+    bots,
+    *,
+    source_key,
+    window_index=None,
+    transcript_seq=None,
+    at_ms=None,
+    cap=None,
+    named=False,
+    voice_input=None,
+    voice_expires_at=None,
+):
     """Persist concurrent bot turns while respecting current-meeting and runner busy state. A bot named directly
     (`named`) is never passed over for being busy or in its cooldown: its turn goes into its meeting conversation all
     the same, where a reply this bot is giving in this meeting takes it in as a follow-up and any other work runs
@@ -691,12 +714,25 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
         tid = str(uuid.uuid4())
         c.execute(
             "INSERT OR IGNORE INTO live_meeting_turns "
-            "(id,meeting_id,bot,window_index,source_key,transcript_seq,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (tid, rid, slug, window_index, source_key, transcript_seq, "pending", H.now()),
+            "(id,meeting_id,bot,window_index,source_key,transcript_seq,status,created_at,voice_input,voice_expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                tid,
+                rid,
+                slug,
+                window_index,
+                source_key,
+                transcript_seq,
+                "pending",
+                H.now(),
+                voice_input,
+                voice_expires_at,
+            ),
         )
         if c.execute("SELECT changes()").fetchone()[0]:
             selected.append({"id": tid, "bot": slug, "window_index": window_index, "transcript_seq": transcript_seq})
-            _dispatch_turn(c, rid, tid, slug)
+            if voice_input is None:
+                _dispatch_turn(c, rid, tid, slug)
             if replying or busy:
                 deferred.append(
                     {
@@ -2247,6 +2283,11 @@ def install_live_meetings(app, store, auth, write):
                     added.append(bot_id)
                 if bot_id not in attached:  # one bot named twice (its slug and its id) is attached once
                     attached.append(bot_id)
+            from . import calls, call_sessions
+
+            if voice := calls.voice_call(c, rid):
+                for bot_id in attached:
+                    call_sessions.ensure(c, store.settings, voice, bot_id)
             if added:
                 _event(
                     c,
@@ -2295,6 +2336,9 @@ def install_live_meetings(app, store, auth, write):
             for turn in turns:
                 if _finish_pass(c, rid, turn, "bot_detached"):
                     canceled.append(turn["id"])
+            from . import call_sessions
+
+            call_sessions.stop(c, rid, bot_id)
             c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot_id))
             for hook in BOT_LEFT_HOOKS:
                 hook(c, rid, bot_id)

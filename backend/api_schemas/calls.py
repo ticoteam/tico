@@ -81,6 +81,8 @@ SCHEMAS.update(
                 "description": "Whether the call's bots answer aloud as well as in the thread: on for Tico Meet unless "
                 "the start turned it off, off for Google Meet",
             },
+            model={"type": ["string", "null"], "description": "The call's voice model override"},
+            effort={"type": ["string", "null"], "description": "The call's voice effort override"},
             voice={
                 "anyOf": [
                     obj(
