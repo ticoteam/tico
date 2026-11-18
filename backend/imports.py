@@ -616,7 +616,7 @@ def install_imports(app, store, auth, execution, mutate):
         ).fetchone()
         if not ref or deleted(c, ref[0]):
             return
-        stored = meeting(ref[0], c)
+        stored = meeting(ref[0], c) or {}
         meta = dict(authorized(c, who, ref[0], write=True)["metadata"])
         if not stored.get("notes") or meta.get("granola_mcp_notes_hash") != notes_hash(stored["notes"]):
             return
