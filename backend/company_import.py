@@ -50,6 +50,17 @@ log = logging.getLogger(__name__)
 IN_TEAM_BUILT_INS = ("finance-owner",)
 SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
 SOFTWARE_TEAMS = ("Product", "Engineering")  # and its teams
+# Setup's "Start with" line (docs/onboarding.md, the Your team step): the first job the owner picks, as
+# `answers.first_job`, and the one default-chart seat it makes live; every other seat that is not a built-in starts as a
+# Recruiting seat. A choice whose seat is not in the chart is not offered. No Engineering choice: its pipeline needs five
+# seats live, so a team that wants it uses Change.
+FIRST_JOBS = (
+    ("plan", "Plan what to build next", "feature-owner"),
+    ("grow", "Get more customers", "growth-manager"),
+    ("customers", "Look after customers", "success-manager"),
+    ("legal", "Check contracts and policies", "legal-owner"),
+)
+FIRST_JOB_SEATS = {key: seat for key, _label, seat in FIRST_JOBS}
 
 
 def plan(onboarding, c, who, text):
@@ -812,7 +823,7 @@ def finish_new_company(onboarding, c, who, seats, made, teams):
     return True
 
 
-def default_chart(onboarding, c, home, every_team=False):
+def default_chart(onboarding, c, home, every_team=False, first_job=None):
     """The chart a new company starts with when setup picked none: the chart formula's own default
     (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
@@ -820,7 +831,11 @@ def default_chart(onboarding, c, home, every_team=False):
     product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`), and a team
     setup's Your team step switched off (`answers.teams_off`) gets none, unless `every_team` (the step lists them all);
     a team of built-ins only (`locked_teams`) is never off. The Finance Owner's seat is filled by the Finance Owner, as
-    on import."""
+    on import.
+
+    With a first job picked (`answers.first_job`, or `first_job` given), only that job's seat is live and its team is
+    never off; the built-ins' seats are as before. With none (a record from before the Your team step asked), every
+    live seat of the chart formula is live."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
@@ -833,7 +848,11 @@ def default_chart(onboarding, c, home, every_team=False):
         if row["template"] in cards
         and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
+    picked = FIRST_JOB_SEATS.get((record["answers"].get("first_job") or "") if first_job is None else first_job)
+    if picked not in {row["id"] for row in rows}:
+        picked = None
     off = set() if every_team else set(record["answers"].get("teams_off") or []) - locked_teams(rows, cards)
+    off -= {row["team"] for row in rows if row["id"] == picked}
     rows = [row for row in rows if row["team"] not in off]
     keys = {row["id"] for row in rows}
     seats = {}
@@ -849,7 +868,7 @@ def default_chart(onboarding, c, home, every_team=False):
             "reports_to": row["reports_to"] if row["reports_to"] in keys else home,
             "waits_on": None,
             "team": row["team"],
-            "live": bool(row["live"]) and not built_in,
+            "live": bool(row["live"]) and not built_in and (picked is None or row["id"] == picked),
             **({"fills": built_in} if built_in else {}),
         }
     return seats
@@ -867,27 +886,50 @@ def default_teams(onboarding, c, home):
     """The default chart by team, for setup's Your team step: each team's name, whether it is on, and its seats in
     chart order (live: a bot works from day one; else a Recruiting seat), each with the seat it reports to inside the
     team (None for the team's top seats), so the step draws the chart's own shape. Every team is listed, the
-    switched-off ones as off; a team of built-ins only is `locked`, always on."""
+    switched-off ones as off; a team of built-ins only is `locked`, always on. The chart is drawn for the first job the
+    step shows picked (first_jobs), whose team is on and `picked`; each role says whether a built-in fills it
+    (`built_in`), so the step can redraw another pick itself."""
     off = set(O.load(c)["answers"].get("teams_off") or [])
-    chart = default_chart(onboarding, c, home, every_team=True)
+    job = first_jobs(onboarding, c, home)["picked"]
+    seat_of_job = FIRST_JOB_SEATS.get(job)
+    chart = default_chart(onboarding, c, home, every_team=True, first_job=job)
     teams = {}
     for key, seat in chart.items():
         team = teams.setdefault(
-            seat["team"], {"team": seat["team"], "on": seat["team"] not in off, "locked": True, "roles": []}
+            seat["team"],
+            {"team": seat["team"], "on": seat["team"] not in off, "locked": True, "picked": False, "roles": []},
         )
         team["locked"] = team["locked"] and bool(seat.get("fills"))
+        team["picked"] = team["picked"] or key == seat_of_job
         boss = chart.get(seat["reports_to"])
         team["roles"].append(
             {
                 "id": key,
                 "title": seat["title"],
                 "live": seat["live"] or bool(seat.get("fills")),
+                "built_in": bool(seat.get("fills")),
                 "reports_to": seat["reports_to"] if boss and boss["team"] == seat["team"] else None,
             }
         )
     for team in teams.values():
-        team["on"] = team["on"] or team["locked"]
+        team["on"] = team["on"] or team["locked"] or team["picked"]
     return [*teams.values(), *general_team(onboarding)]
+
+
+def first_jobs(onboarding, c, home):
+    """The Your team step's "Start with" line: the first jobs whose seat is in this company's default chart, in order,
+    each with its seat and that seat's team, and the one shown picked: the saved answer, else "Plan what to build next",
+    or "Get more customers" when the owner said software is not the product (its seat is then not in the chart)."""
+    chart = default_chart(onboarding, c, home, every_team=True, first_job="")
+    choices = [
+        {"key": key, "label": label, "seat": seat, "team": chart[seat]["team"]}
+        for key, label, seat in FIRST_JOBS
+        if seat in chart
+    ]
+    keys = [choice["key"] for choice in choices]
+    saved = O.load(c)["answers"].get("first_job") or ""
+    picked = saved if saved in keys else next((key for key in ("plan", "grow") if key in keys), keys[0] if keys else "")
+    return {"choices": choices, "picked": picked}
 
 
 def general_team(onboarding):
@@ -903,6 +945,7 @@ def general_team(onboarding):
             "id": slug,
             "title": name,
             "live": True,
+            "built_in": True,
             "reports_to": None if slug == G.GENERAL_MANAGER else G.GENERAL_MANAGER,
         }
         for slug, name in names
@@ -910,7 +953,7 @@ def general_team(onboarding):
     ]
     if not roles or roles[0]["id"] != G.GENERAL_MANAGER:
         return []
-    return [{"team": G.BUILT_IN_NAME, "on": True, "locked": True, "roles": roles}]
+    return [{"team": G.BUILT_IN_NAME, "on": True, "locked": True, "picked": False, "roles": roles}]
 
 
 def add_invitee(onboarding, c, who, key, email):

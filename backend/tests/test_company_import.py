@@ -1802,6 +1802,115 @@ def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched
     assert not titles & ({role["title"] for role in off["roles"]} - others)
 
 
+FIRST_JOBS = {
+    "plan": "feature-owner",
+    "grow": "growth-manager",
+    "customers": "success-manager",
+    "legal": "legal-owner",
+}
+
+
+def _chart_roles(view):
+    return {role["id"]: (row, role) for row in view["default_chart"] for role in row["roles"]}
+
+
+def test_the_your_team_step_offers_four_first_jobs_and_draws_only_the_picked_seat_live(environment):
+    """Smaller day-one team, criteria 1 and 2: the step opens with four first jobs, "Plan what to build next" picked, and
+    the chart drawn with that job's seat as the only live seat besides the built-ins; every other seat is Recruiting."""
+    api = environment()
+    view = api.get("/api/v2/setup", headers=signed_in()).json()
+    jobs = view["first_jobs"]
+    assert [job["label"] for job in jobs["choices"]] == [
+        "Plan what to build next",
+        "Get more customers",
+        "Look after customers",
+        "Check contracts and policies",
+    ]
+    assert {job["key"]: job["seat"] for job in jobs["choices"]} == FIRST_JOBS
+    assert jobs["picked"] == "plan"
+    roles = _chart_roles(view)
+    live = {key for key, (_row, role) in roles.items() if role["live"] and not role["built_in"]}
+    assert live == {"feature-owner"}
+    assert roles["finance-owner"][1]["live"] and roles["finance-owner"][1]["built_in"]  # a built-in, as today
+    assert {row["team"] for row in view["default_chart"] if row["picked"]} == {"Product"}
+    # Another pick redraws the chart for it.
+    saved = api.put("/api/v2/setup", json={"answers": {"first_job": "legal"}}, headers=signed_in()).json()
+    assert saved["first_jobs"]["picked"] == "legal"
+    live = {key for key, (_row, role) in _chart_roles(saved).items() if role["live"] and not role["built_in"]}
+    assert live == {"legal-owner"}
+    # A client that does not send it keeps it; a job Tico does not know is refused.
+    kept = api.put("/api/v2/setup", json={"answers": {"building": "Rentals"}}, headers=signed_in()).json()
+    assert kept["answers"]["first_job"] == "legal"
+    bad = api.put("/api/v2/setup", json={"answers": {"first_job": "build"}}, headers=signed_in())
+    assert bad.status_code == 422
+
+
+def test_a_company_whose_product_is_not_software_starts_with_get_more_customers(environment):
+    """Criterion 1: an owner who said software is not their product has no Product team, so "Plan what to build next"
+    is not offered and "Get more customers" is picked."""
+    api = environment()
+    view = api.put("/api/v2/setup", json={"answers": {"software_product": "no"}}, headers=signed_in()).json()
+    assert [job["key"] for job in view["first_jobs"]["choices"]] == ["grow", "customers", "legal"]
+    assert view["first_jobs"]["picked"] == "grow"
+
+
+@pytest.mark.parametrize("job,seat", sorted(FIRST_JOBS.items()))
+def test_creating_the_team_with_a_first_job_makes_only_that_jobs_bot(environment, job, seat):
+    """Criteria 4, 5 and 6: Create team with a first job makes exactly one bot that is not a built-in, the job's, with its
+    setup task; the default chart's other live seats are Recruiting seats with their reporting lines."""
+    api = environment()
+    titles = {
+        key: role["title"]
+        for key, (_row, role) in _chart_roles(api.get("/api/v2/setup", headers=signed_in()).json()).items()
+    }
+    saved = api.put("/api/v2/setup", json={"answers": {"first_job": job}}, headers=signed_in())
+    assert saved.status_code == 200, saved.text
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    ids = bot_ids(api)
+    assert set(ids) & set(LIVE_DEFAULT) == {seat}
+    seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,closed_at,reports_to FROM seats")}
+    assert seats[titles[seat]]["filled_by"] == ids[seat]
+    for other in set(LIVE_DEFAULT) - {seat}:
+        assert not seats[titles[other]]["filled_by"] and seats[titles[other]]["closed_at"] is None, other
+    # The seats keep their lines: the Feature Owner's seat is under the Product Manager's.
+    if seat != "feature-owner":
+        assert seats[titles["product-manager"]]["id"] in seats[titles["feature-owner"]]["reports_to"]
+    setup_tasks = {r["title"] for r in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up %'")}
+    chart_titles = {titles[key] for key in LIVE_DEFAULT}
+    assert {title for title in chart_titles if any(t.startswith("Set up " + title + " ") for t in setup_tasks)} == {
+        titles[seat]
+    }
+
+
+def test_a_first_job_switches_its_team_back_on_and_its_seat_is_recruited_as_any_other(environment):
+    """Criteria 3 and 7: a first job whose team was switched off makes that team; a Recruiting seat of a company created
+    with a first job is recruited as today."""
+    api = environment()
+    api.put("/api/v2/setup", json={"answers": {"teams_off": ["Growth"], "first_job": "grow"}}, headers=signed_in())
+    view = api.get("/api/v2/setup", headers=signed_in()).json()
+    growth = next(row for row in view["default_chart"] if row["team"] == "Growth")
+    assert growth["on"] and growth["picked"]
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert "growth-manager" in bot_ids(api)
+    seat = rows(api, "SELECT id FROM seats WHERE title='Product Manager'")[0]["id"]
+    found = api.post(f"/api/v2/seats/{seat}/recruit", json={}, headers=signed_in())
+    assert found.status_code == 200, found.text
+    assert [c["template"] for c in found.json()["candidates"]] == ["product-manager"]
+
+
+def test_a_company_already_set_up_keeps_its_bots_when_a_first_job_is_saved_later(environment):
+    """Criterion 9: a company that finished setup before this release (no first job saved) keeps every bot and seat."""
+    api = environment()
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+    before = (sorted(bot_ids(api)), len(rows(api, "SELECT id FROM seats")))
+    assert set(LIVE_DEFAULT) <= set(before[0])
+    api.put("/api/v2/setup", json={"answers": {"first_job": "legal"}}, headers=signed_in())
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+    assert (sorted(bot_ids(api)), len(rows(api, "SELECT id FROM seats"))) == before
+
+
 def test_a_default_team_of_built_ins_only_is_locked():
     """A team every seat of which is a built-in is always made: setup cannot switch it off."""
     from backend import company_import
