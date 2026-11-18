@@ -1,4 +1,4 @@
-"""A computer's heartbeat answer carries no bot list (P02): the computer reads its bots from `runners/assignments` when
+"""A computer's heartbeat answer carries no bot list: the computer reads its bots from `runners/assignments` when
 the server tells it something changed, so the heartbeat stays small however many bots the computer hosts."""
 
 import json
@@ -8,7 +8,7 @@ from backend import bot_settings as BS
 from backend.tests.helpers.api import assign, get, headers, runner  # noqa: F401  (the api fixture)
 from backend.tests.helpers.bot_list_reads import add_bots
 
-# Production's shared cloud machine on 2026-11-12: 53 bots, 20 of them with about 11 KB of written instructions.
+# Sized like production's shared cloud machine: 53 bots, 20 of them with about 11 KB of written instructions.
 BOTS, LONG, INSTRUCTIONS = 53, 20, ("Write plainly and check the numbers before you send. " * 220)[:11_000]
 BEAT = {"version": "test", "platform": "test", "readiness": {}}
 
@@ -53,7 +53,7 @@ def test_a_heartbeat_from_a_computer_with_53_bots_answers_under_10_kb(api):
 
     assert len(response.content) < 10_000, len(response.content)
     answer = response.json()
-    # Kept, empty, for the releases whose recorded contract requires the field (0.5.0, 0.6.0); none of them reads it.
+    # Kept, empty, because older runners' recorded contract requires the field; none of them reads it.
     assert answer["assignments"] == []
     assert answer["server_time"] and "worktree_actions" in answer
 

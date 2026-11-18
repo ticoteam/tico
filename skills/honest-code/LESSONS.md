@@ -70,7 +70,7 @@ Seeded 2026-11-18 from merged pull requests and commits on `origin/main` at `7e7
 | id | lesson | incidents | class | seen | status | where |
 |---|---|---|---|---|---|---|
 | L01 | A test that fails and passes on one commit is flaky. Fix its cause or delete it; never rerun or retry it to green. | 2026-11-03 #2294 (merged after rerunning one browser leg); 2026-11-12 e9dece9583 (empty commit "Re-run PR checks"); 2026-11-18 #4124 (CI retries failed tests once and passes) | script | 3 | encoded no-retry | `scripts/pr_checks.py` |
-| L02 | No fixed wait in a test. Wait for the event, the drawn state or the write that the assertion needs. | 2026-10-25 #1523; 2026-10-31 #2003; 2026-11-12 #3404; 2026-11-12 #3548; 2026-11-13 #3652; 2026-11-13 #3672; 2026-11-13 #3696; 2026-11-17 #3889 | script | 8 | encoded no-fixed-sleep-py, no-fixed-wait-ui | `ui/tests/support/e2e.cts` |
+| L02 | No fixed wait in a test. Wait for the event, the drawn state or the write that the assertion needs. | 2026-10-25 #1523; 2026-10-31 #2003; 2026-11-12 #3404; 2026-11-12 #3548; 2026-11-13 #3652; 2026-11-13 #3672; 2026-11-13 #3696; 2026-11-17 #3889; 2026-11-18 #4172 (`test_needs_lane` passed before its requests arrived) | script | 9 | encoded no-fixed-sleep-py, no-fixed-wait-ui | `ui/tests/support/e2e.cts` |
 | L03 | Assert the work done, as a count. Never assert elapsed time or a ratio of times. | 2026-11-13 #3719 (462 ms against one draw of 187 ms on a shared runner) | script | 1 | open | `ui/tests/thread-redraw.cts` |
 | L04 | A test reads time through a seam it controls (`H.now`, `time_machine.travel(..., tick=False)`) and measures from the record's own timestamp, never from "now". | 2026-10-17 #795; 2026-10-26 #1648; 2026-11-01 #2071; 2026-11-03 #2367; 2026-11-13 #3551; 2026-11-17 #4070 | script | 6 | proposed unseamed-clock | `backend/hubdb.py` |
 | L05 | A test starts from state it made. Reset process-wide caches in an autouse fixture, and hold or await background work before asserting. | 2026-10-17 #809; 2026-10-22 #1212; 2026-11-09 #3103; 2026-11-16 #3851; 2026-11-17 #3893 | judgment | 5 | example | `conftest.py` |
@@ -92,6 +92,8 @@ Seeded 2026-11-18 from merged pull requests and commits on `origin/main` at `7e7
 | L28 | A failure that depends on which batch ran is a selection gap or a product bug until the file alone, with `-n 0`, passes. | 2026-11-17 #3980 | judgment | 1 | open | - |
 | L29 | A test that flips can be showing a race in the product. Fix the product, and have the test hold one side until the other lands. | 2026-11-17 #3891; 2026-11-17 #3894 | judgment | 2 | example | `ui/health.ts` |
 | L30 | A Rust test never holds a script open for writing while another test forks. Write it with `crate::util::write_script`. | 2026-10-15 #609; 2026-11-09 3210df2026 | script | 2 | proposed rust-test-script-write | `runner-rs/src/util.rs` |
+| L31 | A module's test seam is a `def` that calls the stdlib (`def _sleep(seconds): time.sleep(seconds)`), not an assignment (`_sleep = time.sleep`) that binds the real function at import. | 2026-11-18 #4172 (an assignment seam hung a test that swaps the module's `time` for a fake clock) | script | 1 | encoded no-global-sleep-patch | `clients/tico.py` |
+| L32 | An assertion passes on one outcome. An `or` between two expectations hides which one the code produced, and that one can be wrong. | 2026-11-18 #4172 (`test_stage_rule_timers` expected the wrong text; the `or` passed it) | script | 1 | proposed or-assert | `backend/tests/test_stage_rule_timers.py` |
 
 ## Ids not used
 

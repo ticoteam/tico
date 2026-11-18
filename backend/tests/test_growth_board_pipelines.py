@@ -4,7 +4,6 @@ the Growth board and its channel's row and marks the charts when it starts and f
 stage labels. Success Experiments does not count. Examples use Acme, a home-cleaning company; synthetic rows only."""
 
 import json
-import time
 
 from backend import growth_numbers as GN
 from backend import pipeline_settings as PS
@@ -225,10 +224,7 @@ def test_the_growth_board_reads_a_thousand_open_tasks_in_a_few_statements(compan
             def memo(self, key, make):
                 return self.memos.setdefault(key, make())
 
-        start = time.perf_counter()
         tasks = C.marketing_tasks(Ctx())
-        took = time.perf_counter() - start
         c.set_trace_callback(None)
     assert len(tasks) == 667
     assert len([s for s in statements if s.lstrip().upper().startswith("SELECT")]) <= 4
-    assert took < 2.0

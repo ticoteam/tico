@@ -337,7 +337,7 @@ def another_writer(store):
         c.execute("SELECT 1")
 
 
-def test_two_refreshes_of_one_sign_in_at_once_send_its_refresh_token_once(api, server):
+def test_two_refreshes_of_one_sign_in_at_once_send_its_refresh_token_once(api, server, monkeypatch):
     """Two callers (two stores on one database, as two processes have) find an ending access token at once. The vendor
     rotates refresh tokens and refuses a used one, so exactly one refresh may reach it, and both callers get the access
     token that refresh stored. While the vendor answers, another writer gets the database: no write lock is held."""
@@ -346,7 +346,19 @@ def test_two_refreshes_of_one_sign_in_at_once_send_its_refresh_token_once(api, s
     store, vault = api.app.state.store, api.app.state.vault
     other = Store(store.settings)
     original = fake.auth
-    seen = []  # (the vendor's status, whether another writer got the database during its answer)
+    # (the vendor's status, whether another writer got the database during its answer, whether a second caller
+    # found this refresh in flight before the vendor answered)
+    seen = []
+    found_in_flight = threading.Event()
+    real_take = oauth_refresh.take
+
+    def take_or_note(c, sign_in):
+        holder = real_take(c, sign_in)
+        if holder is None:  # another holder's refresh is live: this caller waits on it
+            found_in_flight.set()
+        return holder
+
+    monkeypatch.setattr(oauth_refresh, "take", take_or_note)
 
     def slow_vendor(request, path):
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()} if path == "/token" else {}
@@ -355,9 +367,9 @@ def test_two_refreshes_of_one_sign_in_at_once_send_its_refresh_token_once(api, s
         writer = threading.Thread(target=another_writer, args=(other,))
         writer.start()
         writer.join(10)
-        time.sleep(0.3)  # the second caller arrives while this refresh is in flight
+        in_flight = found_in_flight.wait(10)  # the second caller arrives while this refresh is in flight
         response = original(request, path)
-        seen.append((response.status_code, not writer.is_alive()))
+        seen.append((response.status_code, not writer.is_alive(), in_flight))
         return response
 
     fake.auth = slow_vendor
@@ -376,7 +388,7 @@ def test_two_refreshes_of_one_sign_in_at_once_send_its_refresh_token_once(api, s
         thread.join(60)
     other.close()
     assert errors == [] and len(results) == 2
-    assert seen == [(200, True)]
+    assert seen == [(200, True, True)], seen
     stored = read_tokens(api, cid)
     assert results == [stored["access_token"], stored["access_token"]]
     assert stored["access_token"] in fake.issued and stored["refresh_token"] in fake.refreshes

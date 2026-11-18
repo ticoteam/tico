@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_webhooks.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

@@ -45,13 +45,38 @@ time.sleep(1.1)  # a second tick of the clock the timestamp reads
 assert run(api, net) == 1
 ```
 
-Good: move the clock. The product reads `H.now()` (`backend/webhooks.py`). This rewrite is a proposal and has not run.
+Good: move the clock the product reads. The stamp comes from `time.time()` in `backend/webhook_delivery.py`, not
+`H.now()`, so the module gets a `_now` seam and the test advances it.
 
 ```python
-at = H.now()
-monkeypatch.setattr(H, "now", lambda: H.shift(at, seconds=2))
+stamp = [1614265330]
+monkeypatch.setattr(D, "_now", lambda: stamp[0])
+...
+stamp[0] += 2
 assert run(api, net) == 1
 ```
+
+Which clock: `H.now()` (`backend/hubdb.py`) for rows; `time.time()` and `datetime.now()` for the stdlib wall clock
+(`time_machine.travel(..., tick=False)`); `time.monotonic()` for deadlines inside the product (a module seam). Patch
+the one the code under test reads.
+
+Good: wait for N arrivals, not for half a second. `backend/tests/test_needs_lane.py`. Count where every request
+passes (the lane), not inside the held build: only two builds run at once, so a count there never reaches 45.
+
+```python
+async def counted_run(*args, **kwargs):  # a spy: it counts, then runs the real lane
+    with seen:
+        count[0] += 1
+        if count[0] == 45:
+            all_arrived.set()
+    return await real_run(*args, **kwargs)
+...
+assert all_arrived.wait(10), f"only {count[0]} of 45 Needs you requests reached the lane"
+```
+
+Good: prove the race the test is named for happened. `backend/tests/test_mcp_connect.py` spies on
+`oauth_refresh.take`; the fake vendor holds its answer until a second caller finds the refresh in flight, and the test
+asserts that it did. A sleep there let the test pass when the second caller came after the refresh.
 
 Bad: a loop that stops quietly at its deadline. After 10 s the assertions run on state that never arrived.
 `backend/tests/test_flight.py:279-284`
@@ -98,9 +123,10 @@ newest = stream.until(ready)["data"]["seq"]
 stream.until(lambda e: e["event"] == "reset" or e["id"] >= newest)
 ```
 
-Also bad, same shapes: `backend/tests/test_needs_lane.py:77` (a sleep for "every request has arrived"),
-`backend/tests/test_mcp_connect.py:358` (a sleep to order two callers), `conftest.py:285-294` (`inside_one_half_hour`
-sleeps on the real clock for up to about 20 s).
+Also bad, same shapes: `backend/tests/test_finance_sync.py:609` (a sleep before a counter snapshot; needs a "first
+pass done" event in the worker), `conftest.py:285-294` (`inside_one_half_hour` sleeps on the real clock for up to about 20 s).
+
+Good: a port from the OS, not a retry on collision: bind port 0 and read the port back.
 
 ## Waiting in the browser
 
@@ -153,19 +179,29 @@ Bad: our own function replaced by a canned answer. The test checks only the call
 monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
 ```
 
-Bad: `sleep` removed from the `time` module for the whole process. `backend/tests/test_company_apps.py:24`
-(`scripts/company_apps.py` does `import time`, so `company_apps.time` is the module itself). 16 such lines in 7 files.
+Bad: `sleep` removed from the `time` module for the whole process. `company_apps.time` is the `time` module itself,
+so every thread in the run stops sleeping. There were 17 such lines in 8 files; `no-global-sleep-patch` now bans them.
 
 ```python
 monkeypatch.setattr(company_apps.time, "sleep", lambda seconds: None)
 ```
 
-Good: the module owns a seam, and the test patches that. `backend/store.py:386`, `backend/company_billing.py:61`
+Good: the module owns a seam, and the test patches that. `clients/tico.py`, `scripts/company_apps.py`
 
 ```python
-_sleep = time.sleep  # the pauses go through this so tests can run without waiting
-CLOCK = time.monotonic  # tests replace it
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
 ```
+
+Bad: the same seam as an assignment, `_sleep = time.sleep`. It binds the real function at import, so a test that swaps
+the module's `time` for a fake clock (`wait_clock` in `backend/tests/test_updater_safety.py`) never reaches it and the
+test hangs (L31). Seven module seams still have this shape (`_sleep` in `backend/store.py`, `CLOCK` in
+`backend/company_billing.py`, `now` in `backend/inbound.py`, ...). They work only while no test swaps their `time`;
+turn one into a `def` when you touch it.
+
+Good: pass the function in. `resolve_op_refs(env, run=None)` (`runner_support/op.py:24`) takes the runner, so the
+test hands it a fake `op` with no patch at all.
 
 Allowed with a reason on the line: forcing a failure in our own code that cannot be produced from outside.
 `backend/tests/test_automation_due.py:250` does this (`monkeypatch.setattr(hubdb, "task_create", broken)`) and has no
@@ -174,7 +210,28 @@ reason yet.
 Allowed: a spy that wraps the real function and still calls it (`backend/tests/test_billing_check.py:174`).
 
 Good: only what is outside Tico is a double. `backend/tests/helpers/ticket_journey.py:6-8` says so, and uses
-`backend/tests/helpers/fake_github.py`. `scripts/fake_stripe.py` stands in for Stripe.
+`backend/tests/helpers/fake_github.py`.
+
+Fakes that exist: GitHub `backend/tests/helpers/fake_github.py`; Stripe `scripts/fake_stripe.py`; QuickBooks, Xero,
+Mercury `scripts/fake_quickbooks.py`, `scripts/fake_xero.py`, `scripts/fake_mercury.py`; S3
+`backend/tests/helpers/backup_bundle.py:ObjectStore`; a model `backend/tests/helpers/judge.py:FakeJudge`; HQ
+`backend/tests/helpers/cloud_machines.py:FakeHQ` (five more copies live in single test files; use this one). None yet:
+Slack, CloudWatch, `launchctl`/`systemctl`. For a CLI, put a fake executable on PATH
+(`runner_support/tests/isolation/fake_cli.py`) or pass the runner in.
+
+A fake that lacks a failure gets it, one `_check("list")` call, instead of a `Mock(side_effect=...)` on its method.
+
+Allowed: an assertion on what a recording fake received, when that request is what leaves the process (the metric
+payload sent to AWS). Not allowed: `mock.call_args` on a `Mock` of our own function.
+
+Allowed with a reason: pointing an import-time path constant (`PROJECTS` in `connectors/browser.py`, `ROOT` in
+`clients/repo_safety.py`) at a temp directory. Better: read the path per call from the environment.
+
+A browser fake for a host Tico does not own (telemetry, a vendor script) is a `page.route` to that host with the shape
+the test asserts. A fake for a Tico route returns what the route returns, and a refusal is `{error: {code, detail}}`
+(`Problem` in `backend/store.py`), not `{}`. A catch-all answers unknown paths with `route.abort()` so the test fails
+on the URL; `ui/tests/web-timings.cts:42` (`401 {}`) and `ui/tests/sign-in-redirect.cts:23` (`200 {}`) do not. A save
+fake returns the saved value, and the test asserts the page shows it, not only the posted body.
 
 Fake drift to watch: the `EMPTY` table in `ui/tests/support/mailboxes-fake.cts` copies the response shapes of
 `backend/postal_mail.py` by hand. No check compares them (L07).
@@ -206,6 +263,24 @@ pytest.mark.xfail(strict=True, raises=SC.ScenarioFailed, reason=SC.FAILING[numbe
 ```
 
 Review proof (L10): remove the guarded line and say what happened. "With the members check removed, it fails" (#3741).
+
+Bad: an `or` in the assertion passes on either of two outcomes, so it cannot tell which one the code took.
+Bad: `assert "saved" in message` passes on "not saved". Bad: comparing the response's `at` with the response's own
+`at`. Bad: a test called `test_..._refuses_every_writer` that sends one request.
+
+Bad: `assert took < 2.0`. A generous bound is still a timing assertion: it flips on a loaded runner and never catches
+a 10% regression. Keep the statement count next to it and delete the bound.
+
+## Skips
+
+Good: the skip says what is missing and where the test runs. `# the pinned Litestream binary is not installed in CI;
+these restore tests run only where it is installed by hand`. Better still, CI installs it or the test is deleted.
+
+Bad: a premise that fails turns into a skip. `backend/tests/test_threads_core.py` skipped when a mention queued no
+run, which is the behaviour under test. Use `assert found, "a mention queued no run"`.
+
+Bad: Docker is up, the container refused to start, and the test skipped. Once the service is known to be there, a
+container that will not start or a database that never answers fails with the stderr.
 
 ## Suppressions
 

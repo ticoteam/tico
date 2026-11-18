@@ -387,7 +387,7 @@ def helper(monkeypatch, tmp_path, image_after):
     monkeypatch.setenv("TICO_SWAP_OLD_ID", "sha256:oldupdater")
     monkeypatch.setenv("TICO_SWAP_OLD_REF", "ghcr.io/ticoteam/tico-updater:v0.1.0")
     (tmp_path / ".env").write_text("TICO_TAG=v0.2.0\nTICO_UPDATER_TAG=v0.1.0\n")
-    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    monkeypatch.setattr(updater, "_sleep", lambda s: None)
     clock = iter(range(0, 10000, 5))
     monkeypatch.setattr(updater.time, "time", lambda: next(clock))
     docker = Fake(updater, monkeypatch, container=lambda ref: {"Image": image_after, "State": {"Running": True}})
@@ -538,7 +538,7 @@ def test_a_slow_first_answer_after_the_switch_is_tried_again_not_rolled_back(mon
         return io.BytesIO(answer.encode())
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    monkeypatch.setattr(updater, "_sleep", lambda s: None)
     images = iter([("sha256:old", "v0.1.0"), ("sha256:new", "v0.2.0"), ("sha256:new", "v0.2.0")])
     monkeypatch.setattr(updater, "running_image", lambda: next(images))
     updater.update("v0.2.0")

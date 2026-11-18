@@ -23,7 +23,7 @@ from backend.tests.helpers.model_keys import (
 )
 from backend.tests.helpers.computer_signin import store
 from backend.tests.helpers.getting_started import add_bot
-from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401 - pytest fixture
 
 OWN = "sk-proj-own-key-0123456789"
 TEAM = "sk-ant-team-key-0123456789"
@@ -308,7 +308,7 @@ def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(envir
 
 
 def test_a_bots_own_key_grant_signs_its_turns_in_before_the_computers_key(environment):
-    """Codex review P1-4: a bot granted its own model key ran on it before the computer's key (v0.6.0-rc.1 runners set
+    """A bot granted its own model key ran on it before the computer's key (v0.6.0-rc.1 runners set
     the computer's key only where no grant set one). A computer's key, now a subscription, is not handed to that bot's
     turns, since a runner takes the granted key out for a subscription handed; other bots still get it."""
     api = setup(environment)
@@ -331,7 +331,7 @@ def test_a_bots_own_key_grant_signs_its_turns_in_before_the_computers_key(enviro
 
 
 def test_deleting_a_shared_codex_key_in_credentials_clears_it_on_each_computer(environment):
-    """Codex review P2-1: a key deleted while computers run on it tells each to clear its copy (`clear_key`): a
+    """A key deleted while computers run on it tells each to clear its copy (`clear_key`): a
     v0.6.0-rc.1 runner logs Codex out of the login the key made, which it otherwise keeps in auth.json."""
     api = setup(environment)
     one = computer(api, "Alpha", source="shared")

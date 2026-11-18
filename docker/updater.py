@@ -51,6 +51,12 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 PROJECT = os.environ.get("TICO_PROJECT_DIR", "/project")
 TOKEN_FILE = os.environ.get("TICO_UPDATER_TOKEN_FILE", "/control/updater-token")
 MODE = "runner" if os.environ.get("TICO_UPDATER_MODE") == "runner" else "server"
@@ -442,7 +448,7 @@ def check_switched(version, release, seconds=None):
         except (OSError, ValueError, KeyError, IndexError, AttributeError, subprocess.SubprocessError) as exc:
             if time.time() >= deadline:
                 raise RuntimeError("could not check the new version (%s)" % exc)
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
 
 
 def container_healthy(seconds):
@@ -467,7 +473,7 @@ def container_healthy(seconds):
                 return False
         except (RuntimeError, OSError, subprocess.SubprocessError):
             pass
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
     return False
 
 
@@ -532,7 +538,7 @@ def healthy(seconds):
             HEALTH_GAVE_UP = reason
             print("tico-updater: %s; not waiting the full %d seconds" % (reason, seconds), flush=True)
             return False
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
     return False
 
 
@@ -787,7 +793,7 @@ def hold_ready(seconds):
             pass
         if time.time() >= deadline:
             return False
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
 
 
 def reconcile_tunnel(tag, settling=False):
@@ -1158,7 +1164,7 @@ def settle(tag, outcome):
         except Exception as exc:  # anything: only a confirmed recreate may end the hold
             set_status(message="Not settled: %s. Holding new work: %s." % (outcome, exc))
         save_status()
-        time.sleep(SETTLE_RETRY_SECONDS)
+        _sleep(SETTLE_RETRY_SECONDS)
 
 
 def inspect(ref):
@@ -1252,7 +1258,7 @@ def updater_stays_up(old_id, seconds=12):
             return False
         if time.time() >= deadline:
             return True
-        time.sleep(2)
+        _sleep(2)
 
 
 def pin_updater_tag(tag):

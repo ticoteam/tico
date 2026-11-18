@@ -636,8 +636,7 @@ def _a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_
 
         assert not carriers(hidden), "no carrier for a message the bot may not read"
         found = carriers(plain)
-        if not found:
-            pytest.skip("this world's wake rules do not queue a run for a mention")
+        assert found, "a mention queued no run"
         carrier = H.message(c, found[0]["id"])
         assert threads.carrier_current(c, carrier, bot)
         assert task_privacy.message_readable(c, member, carrier) == task_privacy.message_readable(c, member, plain)

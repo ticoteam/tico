@@ -596,7 +596,7 @@ def test_stdio_mcp_wait_covers_server_deadline_without_changing_ordinary_timeout
             return io.BytesIO(json.dumps(value).encode())
 
     monkeypatch.setattr(tico.urllib.request, 'build_opener', lambda *args: VirtualServer())
-    monkeypatch.setattr(tico.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(tico, '_sleep', lambda _: None)
     monkeypatch.setenv('HUB_API_URL', 'https://hub.example.test')
     monkeypatch.setenv('HUB_TOKEN', 'synthetic-lease')
     stdin = io.StringIO(

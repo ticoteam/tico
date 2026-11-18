@@ -136,15 +136,16 @@ RULES = [
             re.compile(r"\bmock\.patch\b"),
         ],
         "Do not replace our own code in a test. Run the real code. For something outside Tico use a fake "
-        "(backend/tests/helpers/fake_github.py, scripts/fake_stripe.py).",
+        "(skills/honest-code/references/examples.md lists them) or pass the dependency in.",
     ),
     Rule(
         "no-global-sleep-patch",
-        "ratchet",
+        "ban",
         py_test,
         [re.compile(r"setattr\(\s*(?:[\w.]*\btime\s*,\s*['\"]sleep['\"]|['\"][\w.]*\btime\.sleep['\"])")],
         "This removes sleep from the time module for the whole process. Give the module its own seam "
-        "(_sleep = time.sleep, as in backend/store.py) and patch that.",
+        "(def _sleep(seconds): time.sleep(seconds), as in clients/tico.py) and patch that.",
+        "L31",
         view="raw",
     ),
 ]

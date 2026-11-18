@@ -143,7 +143,8 @@ def test_a_true_lessons_table_passes():
         seen="2",
         status="encoded no-retry",
     )
-    assert [p for p in lesson_problems(text) if "L02" not in p and "L26" not in p] == []
+    cited_elsewhere = ("L02", "L26", "L31")  # the real rules cite rows this one-row table does not have
+    assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 
 
 def test_seen_must_match_the_incidents():
