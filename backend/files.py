@@ -1876,9 +1876,9 @@ class Files:
             return ""
         task_id = self.auth.resolve_task(c, who, task)
         if role:
-            from .task_reads import comment_rights
+            from .task_reads import page_rights
 
-            comment_rights(c, self.auth, who, task_id)
+            page_rights(c, self.auth, who, task_id)
         else:
             self.auth.task(c, who, task_id)
         return task_id

@@ -515,3 +515,18 @@ def test_task_files_and_context_follow_live_and_backfilled_pins(api):
     pin = post(api, 'pins', {'place': target, 'item': 'page:' + fid})
     assert api.delete('/api/v2/pins/' + pin['id'], headers=headers()).status_code == 200
     assert membership() == [[fid], [fid], [fid], [fid]]
+
+
+def test_a_bot_that_may_comment_on_a_task_still_may_not_link_its_page_as_the_tasks_spec(api):
+    # Any bot that reads a task may comment on it (task_reads.comment_rights); its pages stay with its parties
+    # (task_reads.page_rights), so an unrelated bot cannot put its own page in the task's Spec role.
+    outsider = bot(api, 'cpo')
+    t = task(api)
+    said = api.post('/api/v2/tasks/' + t['id'] + '/comments', json={'text': 'From product.'}, headers=headers(outsider))
+    assert said.status_code == 200, said.text
+    own = publish_page(api, outsider, 'Mine', scope='bot')
+    assert own.status_code == 200, own.text
+    fid = own.json()['page']['file_id']
+    refused = add_link(api, fid, 'task:' + t['id'], 'Spec', token=outsider)
+    assert refused.status_code == 403, refused.text
+    assert add_link(api, fid, 'task:' + t['id'], 'related', token=outsider).status_code == 200

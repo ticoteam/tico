@@ -247,7 +247,7 @@ def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
 
         def allowed(task_id: str = r["target"][5:]) -> bool:
             try:
-                cast(Callable[..., Any], task_reads.comment_rights)(c, auth, who, task_id)
+                cast(Callable[..., Any], task_reads.page_rights)(c, auth, who, task_id)
             except Problem as exc:
                 if exc.status not in (403, 404, 409):
                     raise

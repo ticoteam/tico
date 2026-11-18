@@ -490,9 +490,9 @@ class Pages:
                     self.auth.task(c, who, ident)
                 selected = "task:" + ident
                 if not remove and chosen_role not in ("writer", "related"):
-                    from .task_reads import comment_rights
+                    from .task_reads import page_rights
 
-                    comment_rights(c, self.auth, who, ident)
+                    page_rights(c, self.auth, who, ident)
             elif not remove:
                 if kind == "bot":
                     bot = H.resolve_bot(c, ident)

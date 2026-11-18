@@ -387,11 +387,35 @@ def _running(c, bots):
 def comment_rights(c, auth, who, task_id):
     """Whether the caller may write on the task: every comment and file goes through here. Returns the task's row.
 
-    Anyone who can read the task may write on it, a bot as a person: a bot Related input picks is no party to the task
-    (related_input.candidates), and its comment is what the stage waits on. What stays: the read check, onboarding,
-    and the owner bot's own Write access and contact settings (refuse_comment)."""
+    Anyone who can read the task may comment and attach files on it, a bot as a person: a bot Related input picks is no
+    party to the task (related_input.candidates), and its comment is what the stage waits on. What stays: the read
+    check, onboarding, and the owner bot's own Write access and contact settings (refuse_comment). The task's pages stay
+    with its parties (page_rights)."""
     row = auth.task(c, who, task_id)
     refuse_comment(c, auth, who, row)
+    return row
+
+
+def page_rights(c, auth, who, task_id):
+    """Whether the caller may write the task's pages: a page linked to the task, or one published in a role on it (its
+    Spec). A page is what a stage decides on, so this keeps the party rule comments dropped: a bot writes one only as
+    the task's party, a manager of one, a delegate, a party of a task above it, or one who can work the task.
+    Returns the task's row."""
+    from .store import H, Problem
+
+    row = comment_rights(c, auth, who, task_id)
+    if who.role == "bot" and not H.task_participant(c, who.actor, row):
+        delegated = c.execute(
+            "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
+            (row["id"], who.actor, H.now()),
+        ).fetchone()
+        if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.task_can_work(c, who.actor, row):
+            raise Problem(
+                "forbidden",
+                "Only the task's parties, their managers, delegates, the parties of a task above it and its "
+                "pipeline's manager may write its pages",
+                403,
+            )
     return row
 
 
