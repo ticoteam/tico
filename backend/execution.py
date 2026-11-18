@@ -3508,9 +3508,12 @@ class Execution:
             return False
 
     @staticmethod
-    def awake(awake_since, now):
-        """Whether a machine has been reporting in long enough to be given work."""
-        return not awake_since or awake_since <= H.shift(now, seconds=-AWAKE_SETTLE)
+    def awake(awake_since, now, platform=None):
+        """Whether a machine has been reporting in long enough to be given work. The settle is for a machine that
+        dark-wakes for seconds, a Mac (or one whose platform is unknown). A Linux machine back from a silence is a
+        cloud machine started, or a server or runner restarted by an update: it is given work at once. Settling it
+        held every turn queued meanwhile, a person's message included, two minutes more after each update."""
+        return platform == "linux" or not awake_since or awake_since <= H.shift(now, seconds=-AWAKE_SETTLE)
 
     def issue_enrollment(self, c, who, body):
         self.refuse_in_rehearsal("Enrolments")
@@ -4680,7 +4683,7 @@ class Execution:
                 not target
                 or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                 or not runner_online.is_online(target['last_seen_at'])
-                or not self.awake(target['awake_since'], H.now())
+                or not self.awake(target['awake_since'], H.now(), target['platform'])
                 or runner_versions.paused(c, rid)
                 or cloud_machines.held(c, rid)
                 or load_status(c, rid)['overloaded']
@@ -4758,7 +4761,7 @@ class Execution:
         if held:
             return held
         count = sum(start_places.live(c, who.runner_id).values())
-        if count >= start_places.claim_limit(runner, body) or not self.awake(awake_since, now):
+        if count >= start_places.claim_limit(runner, body) or not self.awake(awake_since, now, runner["platform"]):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed)
         if failed:
@@ -4881,7 +4884,7 @@ class Execution:
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.
         # Its work keeps its place in the queue and goes out once the machine is really up.
-        if not self.awake(awake_since, now):
+        if not self.awake(awake_since, now, runner["platform"]):
             return {"attempt": None}
         if oldest := self.company_waiter(c, who, body, runner, failed=failed):
             if oldest[0] != who.runner_id:

@@ -575,7 +575,7 @@ def machine(c, bot):
     online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
-    awake = online and Execution.awake(row["awake_since"], now)
+    awake = online and Execution.awake(row["awake_since"], now, row["platform"])
     # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py). A missing
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
