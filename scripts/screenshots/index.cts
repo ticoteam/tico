@@ -137,11 +137,9 @@ const PAGES: PageSpec[] = [
       await page.locator('.cf-hall-name').first().waitFor({timeout: 20000});
     }},
   {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.ts', 'ui/styles/updates.css']},
-  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
-    await page.click('#task-scope');
-    await page.click('#task-filter-pop [data-task-type="general"]');
-    await page.getByText('Draft replies for the open support tickets').first().waitFor();
-  }},
+  // The default view (You). The page lost its task-type filter in the Pipelines v3 cut-over (Nov 10); clicking it timed
+  // out every release's tasks pictures.
+  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
     ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-content.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
