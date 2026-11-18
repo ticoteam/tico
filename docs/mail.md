@@ -138,6 +138,8 @@ Do not retry the same text, and do not look for another route.
 tico email draft ana@acme.example --to ava@creator.example \
   --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt
 tico email draft ana@acme.example --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt
+tico email draft ana@acme.example --to records@city.example --subject "Records request" \
+  --body-file out/request.txt --attach out/request.pdf --attach file-0123456789abcdef01234567
 tico email discard ana@acme.example r-882...
 ```
 
@@ -149,6 +151,12 @@ The lint refuses a draft with an error: rewrite it once, and never route around 
 the thread and the second reviewer's verdict. Running the same draft again **finds the same Gmail draft** instead of
 leaving two. Change a word and it is a new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail. A draft is
 harmless: it sits in Gmail Drafts until someone sends it.
+
+`--attach` (repeatable, also on `reply`) adds a file: a path in your checkout is published first, as `tico file
+publish` does, and a Tico file id (`FILE` or `FILE@N`) is used as it is. Over MCP, `attachments` takes file ids only.
+You may attach only files you may open; any other is not found. The draft carries each file's bytes as they are now,
+so a changed file or another set of files is a new draft. An email is at most 24 MB with its files encoded (about
+18 MB of files); a bigger one is refused.
 
 Attachments use the shared sending policy, whose attachment prompt is on by default. The server freezes and hashes
 every attachment, including unnamed inline parts. An OK binds that exact snapshot; changed files need a new send and OK.

@@ -448,3 +448,105 @@ def test_bots_are_offered_the_mail_read_tools():
     offered = {t["name"] for t in hubtools.listing(kind="bot")}
     assert {"tico_email_mailboxes", "tico_email_inbox", "tico_email_search", "tico_email_thread"} <= offered
     assert "tico_email_message" in offered
+
+
+# ------------------------------------------------------------------------------------------------- files on a draft
+def tico_file(api, token, name, data):
+    """A file the bot publishes (POST /api/v2/files/uploads): its id."""
+    body = {"name": name, "content_base64": base64.b64encode(data).decode(), "scope": "bot"}
+    return post(api, "files/uploads", body, token)["file"]["id"]
+
+
+def files_of(mime):
+    from email import policy
+    from email.parser import BytesParser
+
+    msg = BytesParser(policy=policy.default).parsebytes(mime)
+    return msg.get_content_type(), [(p.get_filename(), p.get_content()) for p in msg.iter_attachments()]
+
+
+REPLY = {"mailbox": BOX, "reply_to": "t1", "body": "Thanks for the invoice.\n\nOps"}
+
+
+def test_a_draft_carries_tico_files_and_is_found_again_with_them(api, box):
+    from backend import mail_compose
+
+    token = as_bot(api, "ops")
+    grant(api, "ops", "read_write")
+    pdf, csv = tico_file(api, token, "records.pdf", b"%PDF-1.4 records"), tico_file(api, token, "log.csv", b"a,b\n")
+    body = {**REPLY, "attachments": [pdf, csv]}
+    first = post(api, "mail/drafts", body, token)
+    again = post(api, "mail/drafts", body, token)
+    assert first["created"] and not again["created"] and again["draft"] == first["draft"] and len(box.drafts(BOX)) == 1
+    kind, files = files_of(box.drafts(BOX)[first["draft"]])
+    assert kind == "multipart/mixed" and files == [("records.pdf", b"%PDF-1.4 records"), ("log.csv", "a,b\n")]
+    assert [(f["ref"], f["name"]) for f in first["attachments"]] == [
+        (pdf + "@1", "records.pdf"),
+        (csv + "@1", "log.csv"),
+    ]
+    # Other files are another draft; no files is the draft (and the Message-ID) a draft without them always had.
+    assert post(api, "mail/drafts", {**body, "attachments": [pdf]}, token)["draft"] != first["draft"]
+    plain = post(api, "mail/drafts", REPLY, token)
+    key = mail_compose.key("bot:ops", BOX, "", "t1", [], [], "", REPLY["body"])
+    assert mail_compose.message_id("draft", key, BOX).encode() in box.drafts(BOX)[plain["draft"]]
+
+
+def test_a_file_the_caller_may_not_open_is_refused_and_nothing_is_drafted(api, box):
+    token = as_bot(api, "ops")
+    grant(api, "ops", "read_write")
+    hidden = tico_file(api, as_bot(api, "legal"), "private.pdf", b"%PDF-1.4 private")
+    for ref, status in ((hidden, 404), ("file-" + "0" * 24, 404), (hidden + "@x", 422)):
+        refused = api.post("/api/v2/mail/drafts", json={**REPLY, "attachments": [ref]}, headers=headers(token))
+        assert refused.status_code == status, refused.text
+    assert box.drafts(BOX) == {}
+
+
+def test_files_over_the_email_limit_are_refused(api, box, monkeypatch):
+    from backend import mail_compose
+
+    token = as_bot(api, "ops")
+    grant(api, "ops", "read_write")
+    pdf = tico_file(api, token, "records.pdf", b"%PDF-1.4 " + b"x" * 3000)
+    monkeypatch.setattr(mail_compose, "RAW_MAX", 2048)
+    refused = api.post("/api/v2/mail/drafts", json={**REPLY, "attachments": [pdf]}, headers=headers(token))
+    assert refused.status_code == 413 and refused.json()["error"]["code"] == "attachments"
+    assert box.drafts(BOX) == {}
+
+
+def test_a_large_draft_and_its_send_go_up_as_uploads(api, box, monkeypatch):
+    from backend import gmail_live
+
+    autonomous(api)
+    monkeypatch.setattr(gmail_live, "INLINE_RAW_MAX", 64)  # every draft here is "large"
+    pdf = tico_file(api, as_bot(api, "ops"), "records.pdf", b"%PDF-1.4 records")
+    made = post(
+        api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Records attached.", "attachments": [pdf]}
+    )
+    assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("records.pdf", b"%PDF-1.4 records")]
+    queued = post(api, "email/sends", {"mailbox": BOX, "draft_id": made["draft"]})["send"]
+    assert [f["name"] for f in queued["attachments"]] == ["records.pdf"]
+    assert S.drain(api.app.state.store, api.app.state.auth) == 1
+    ((_, mime, thread),) = box.sent  # read back from Gmail and sent as an upload too
+    assert thread == "t1" and mime == box.drafts(BOX)[made["draft"]]
+
+
+def test_the_cli_attaches_a_path_and_a_file_id(api, box, monkeypatch, tmp_path, capsys):
+    from backend.tests.helpers.automation_cli import Client
+    from clients import hubcli, remotecli
+
+    from backend.tests.helpers.files import turn
+
+    _, attempt = turn(api, bot="ops")  # a file the CLI publishes goes on the task the bot is working on
+    token = attempt["token"]
+    grant(api, "ops", "read_write")
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", token)
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "packet.pdf").write_bytes(b"%PDF-1.4 packet")
+    known = tico_file(api, as_bot(api, "ops"), "log.csv", b"a,b\n")
+    argv = ["email", "draft", BOX, "--reply-to", "t1", "--body", REPLY["body"], "--attach", "packet.pdf"]
+    assert hubcli.main([*argv, "--attach", known]) == 0
+    made = json.loads(capsys.readouterr().out)
+    assert [f["name"] for f in made["attachments"]] == ["packet.pdf", "log.csv"]
+    assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("packet.pdf", b"%PDF-1.4 packet"), ("log.csv", "a,b\n")]
