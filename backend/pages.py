@@ -477,6 +477,8 @@ class Pages:
 
         def work(c):
             row = self.rows(c, [fid]).get(fid)
+            if remove and target.partition(":")[0] == "task" and (not row or not self.files.visible(c, who, row, {})):
+                return self.unlink_unread(c, who, fid, target, role)
             if not row or not self.files.visible(c, who, row, {}):
                 raise Problem("not_found", "Page not found", 404)
             if not page_links.may_write(c, self.auth, who, row):
@@ -523,6 +525,33 @@ class Pages:
             return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
 
         return self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
+
+    def unlink_unread(self, c, who, fid, target, role):
+        """Take a page the caller may not read off a task whose pages they write (task_reads.page_rights): a page bound
+        to a stage's approval that only its maker reads otherwise stays bound, and nobody can answer the approval
+        (answers._page_version reads every bound page). Only that task's link in that role goes, never a writer link,
+        and the answer names nothing of the page. With no such link, or no right on the task, the page is not found."""
+        from .task_reads import page_rights
+
+        chosen_role = page_links.role_name(role)
+        missing = Problem("not_found", "Page not found", 404)
+        if chosen_role == "writer":
+            raise missing
+        try:
+            ident = self.auth.resolve_task(c, who, target.partition(":")[2])
+            page_rights(c, self.auth, who, ident)
+        except Problem as exc:
+            if exc.status not in (403, 404, 409):
+                raise
+            raise missing from None
+        selected = "task:" + ident
+        if not page_links.unlink(c, fid, selected, chosen_role, who.actor):
+            raise missing
+        from . import task_pages
+
+        task_pages.submit(c, ident, chosen_role, fid, None, who.actor)
+        H.event(c, who.actor, "page.unlink", fid, {"target": selected, "role": chosen_role, "unread": True})
+        return {"page": None}
 
     @staticmethod
     def require_pin_space(c, task):
@@ -733,7 +762,7 @@ def install_pages(app, store, auth, files):
 
     @app.delete(
         "/api/v2/pages/{fid}/links",
-        **api_v2("Pages", "unlinkPage", "Remove a page link, keeping at least one writer", "PageShown"),
+        **api_v2("Pages", "unlinkPage", "Remove a page link, keeping at least one writer", "PageUnlinked"),
     )
     def unlink_page(request: Request, fid: str, target: str, role: str = "related"):
         return pages.change_link(request, fid, target, role, remove=True)
