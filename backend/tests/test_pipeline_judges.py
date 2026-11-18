@@ -378,8 +378,8 @@ def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path)
     assert set(said) == {"met", "unsure", "not_met"}
     assert said == {
         "met": 'Meets "Shows the page live".',
-        "unsure": 'Can\'t tell if it meets "Shows the page live".',
-        "not_met": 'Doesn\'t meet "Shows the page live".',
+        "unsure": 'Can\'t tell if it meets "Shows the page live". Can\'t tell if it meets: "The link opens the page"',
+        "not_met": 'Doesn\'t meet "Shows the page live". Not met: "The link opens the page"',
     }
     kept = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5, reason="No scope line"))
     assert kept["reason"] == "No scope line", "a model's own reason is kept"
@@ -425,13 +425,16 @@ def test_the_judge_is_shown_what_a_page_is_judged_against():
 
 
 # ----------------------------------------------------------------------------- checks asked in parts (task #351)
-def _parts_engine(ps, asked=None):
-    """Jev answering each part question (`part_<key>`) with ps[key] (0.95 when not named), as live_engine reads it."""
+def _parts_engine(ps, asked=None, read=None):
+    """Jev answering each part question (`part_<key>`) with ps[key] (0.95 when not named), and the page line its answer
+    rests on (P.READ) with `read`, as live_engine reads it."""
 
     def ask(model, state, questions, label):
         if asked is not None:
             asked.append(questions)
-        answers = {qid: {"noul": ps.get(qid.removeprefix("part_"), 0.95)} for qid in questions}
+        answers = {qid: {"noul": ps.get(qid.removeprefix("part_"), 0.95)} for qid in questions if qid != P.READ}
+        if read is not None and P.READ in questions:
+            answers[P.READ] = {"choice": read, "confidence": 0.9}
         return P._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
 
     return ask
@@ -488,6 +491,73 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     assert (result["verdict"], result["reason"]) == ("unsure", "Can't tell if the version production runs is named.")
 
 
+REVIEW_TEXT = (
+    "Review 1 by GPT-6.1 Terra at d34ae47.\nWhat I read: the diff and its tests.\n"
+    "Second opinion: tico-medium-1.0 reviewed d34ae47; its maker was not reported.\n"
+    "issue (blocking): backend/x.py:12 drops the last line, so the parser fails."
+)
+
+
+def test_a_review_page_refused_names_the_unmet_item_and_the_line_the_model_read():
+    """Task #614: the shipped Review rubric is asked whole, as before, with its parts and the page line the answer rests
+    on beside it in the same call. A refusal names the part scored no and quotes the line the model picked, whichever
+    line that is (here not the one that shares the item's words); a pick that is not one of the lines quotes nothing;
+    an unsure part is never said to be missing; an OK keeps today's line. The parts never change the verdict."""
+    from backend import pipeline_settings as PS
+
+    req = {"id": "r", "name": "Review page", "rubric": PS.REVIEW_RUBRIC}
+    page = {**ATTACHMENT, "text": REVIEW_TEXT}
+    assert P.check_of(PS.REVIEW_RUBRIC) is None and P.explain_parts(PS.REVIEW_RUBRIC) == P.EXPLAINED["two_reviews"]
+    asked = []
+
+    refused = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, asked, read="L1"))
+    want = ["met", P.READ] + sorted(f"part_{part.key}" for part in P.EXPLAINED["two_reviews"])
+    assert sorted(asked[-1]) == sorted(want)
+    assert asked[-1][P.READ]["criteria"]["L3"] == REVIEW_TEXT.splitlines()[2], "each line is offered as itself"
+    assert refused["verdict"] == "not_met" and refused["p"] == 0.1, "the whole question is the verdict"
+    assert refused["reason"] == (
+        'Doesn\'t meet "Review page". No second review from a different model. Read: "Review 1 by GPT-6.1 Terra at '
+        'd34ae47."'
+    ), refused["reason"]
+    unpicked = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, read="L9"))
+    assert unpicked["reason"] == 'Doesn\'t meet "Review page". No second review from a different model.', "no guess"
+    nothing = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, read=P.NO_LINE))
+    assert nothing["reason"].endswith("Read: no line of the page bears on it."), nothing["reason"]
+    hedged = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.5}))
+    assert hedged["verdict"] == "not_met"
+    assert "Can't tell if the two reviews are by different models." in hedged["reason"], "unsure is never 'missing'"
+    assert "No second review" not in hedged["reason"]
+    passed = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.9, "models": 0.05}, read="L3"))
+    assert (passed["verdict"], passed["reason"]) == ("met", 'Meets "Review page".'), "an OK keeps today's wording"
+
+
+def test_a_company_rubric_refused_names_its_unmet_sentence_and_a_one_sentence_rubric_its_only_item():
+    """Task #614: a rubric of a company's own is asked whole, with one part per sentence beside it (grouped into at most
+    SENTENCES_AT_MOST, none left out); a refusal quotes the sentence scored no and the line the model read. A rubric of
+    one sentence is asked whole with only the line pick beside it, and its refusal quotes that sentence as the item."""
+    req = {"id": "r", "name": "Launch page", "rubric": "Shows the page live at acme.example. Names who signed it off."}
+    page = {**ATTACHMENT, "text": "<h1>Launch</h1><p>Live at acme.example since Monday.</p><p>Signed off: not yet.</p>"}
+    asked = []
+    refused = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "s2": 0.05}, asked, read="L2"))
+    assert sorted(asked[-1]) == ["met", "part_s1", "part_s2", P.READ]
+    assert refused["reason"] == (
+        'Doesn\'t meet "Launch page". Not met: "Names who signed it off." Read: "Signed off: not yet."'
+    ), refused["reason"]
+    long = " ".join(f"Item {n} is shown." for n in range(1, 12))
+    assert len(P.explain_parts(long)) <= P.SENTENCES_AT_MOST and "Item 11" in P.explain_parts(long)[-1].missing
+    one = {"id": "r", "name": "Review page", "rubric": "Names the second reviewer's maker."}
+    alone = P.judge_once(None, one, page, engine=_parts_engine({"met": 0.1}, asked, read="L2"))
+    assert sorted(asked[-1]) == ["met", P.READ], "a one-sentence rubric is not asked twice"
+    assert alone["reason"] == (
+        'Doesn\'t meet "Review page". Not met: "Names the second reviewer\'s maker." Read: "Signed off: not yet."'
+    ), alone["reason"]
+    unsure = P.judge_once(None, one, page, engine=_parts_engine({"met": 0.5}))
+    assert (
+        unsure["reason"]
+        == 'Can\'t tell if it meets "Review page". Can\'t tell if it meets: "Names the second reviewer\'s maker."'
+    )
+
+
 def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
     """Task #351: "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): <the whole rubric>"
     named nothing to fix. Whole or in parts, met, not met or unsure, the reason carries none of it."""
@@ -501,13 +571,15 @@ def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
             for key in [part.key for part in P.CHECKS[P.check_of(rubric)]]:
                 reasons.append(P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({key: p}))["reason"])
     assert reasons and all(reasons)
-    for reason in reasons:
+    for said in reasons:
+        # A one-sentence rubric is its own item, quoted (task #614); only that case may carry it.
+        reason = said.split(' Not met: "')[0].split(' Can\'t tell if it meets: "')[0]
         assert "p 0." not in reason and "between 0.2" not in reason and "(p " not in reason, reason
         for rubric in (REQ["rubric"], PS.SPEC_RUBRIC, PS.REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
             assert rubric not in reason, reason
     assert P.judge_once(None, REQ, ATTACHMENT, engine=_engine(0.5, reason=""))["reason"] == (
-        'Can\'t tell if it meets "Shows the page live".'
-    ), "a check asked whole names the requirement, never its rubric"
+        'Can\'t tell if it meets "Shows the page live". Can\'t tell if it meets: "The link opens the page"'
+    ), "a check asked whole names the requirement, and a one-sentence rubric is quoted as its only item"
 
 
 def test_the_grouped_jev_step_asks_the_parts_in_one_call_and_reads_each(monkeypatch):
