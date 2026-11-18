@@ -6,8 +6,9 @@ company's task threads are most of its roots (thread_rail.rail). The index holds
 (the stored one, else the one derived from scope and kind, as threads._derived_audience reads it), keyed by the rail's
 title order: unnamed last, then the lowercased title, then the id.
 
-A second index holds every open root's task and id, so Catch up (thread_rail._walk) passes over a finished task's root
-by its task alone, without reading the root's row. Nothing else changes.
+Only a query holding the index's own terms can use it: the rail's lists and threads/match, both ordered down to the
+id, so no answer and no order of ties changes. (A plain open-roots index would also serve threads._open_dm, whose
+timestamp order leaves ties to the plan.)
 
 Running it again changes nothing more.
 """
@@ -20,8 +21,6 @@ INDEXES = (
     "WHEN scope='personal' THEN 'personal' WHEN scope='shared' THEN 'home' "
     "WHEN kind='task' AND task_id IS NOT NULL THEN 'task' ELSE 'participants' END) "
     "IN ('company','team','members','personal','participants')",
-    "CREATE INDEX IF NOT EXISTS conversations_open_roots ON conversations(task_id, id) "
-    "WHERE parent_id IS NULL AND archived_at IS NULL AND closed_at IS NULL",
 )
 
 

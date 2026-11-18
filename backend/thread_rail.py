@@ -86,8 +86,6 @@ OPEN_ROOT = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NU
 # are the index's WHERE, so a query naming the index must AND them in.
 OPEN_THREADS = f"{OPEN_ROOT} AND {DM_MATCH_AUDIENCES}"
 OPEN_THREADS_FROM = "conversations r INDEXED BY conversations_open_thread_titles"
-# Every open root's task and id (the same migration): Catch up tests a finished task's root out on these alone.
-OPEN_ROOTS_FROM = "conversations r INDEXED BY conversations_open_roots"
 
 
 def root_open(c, v, within=None, args=None):
@@ -924,7 +922,7 @@ def _walk(c, v, flags, after=None):
             found = [
                 T.thread_row(c, dict(r))
                 for r in c.execute(
-                    f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM {OPEN_ROOTS_FROM} WHERE "
+                    f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
                     f"{' AND '.join([*where, phase, open_task])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                     {**args, **at, "batch": batch},
                 )

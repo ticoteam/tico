@@ -938,12 +938,12 @@ def readable_sql(
     Home and legacy terms no such row can take are rendered false without reading what they need (every teammate's
     access, every bot's shared room), which only ever narrows.
 
-    `per_row` (a person's check, with none of the options above): the same answer, tested row by row (the row's root
+    `per_row` (a person's check, with none of the options above, over alias r or s): the same answer, tested row by row (the row's root
     and task looked up by id) rather than against every readable root and task, built whole for each statement. For a
     statement that tests few rows: building those lists reads every conversation and task."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = inner is None and meeting is None and conversation is None and tasks == "SELECT id FROM tasks"
-    per_row = per_row and plain and alias not in ("", "rd", "rt")  # its own subqueries name rd and rt
+    per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
     me = _q(v.actor)

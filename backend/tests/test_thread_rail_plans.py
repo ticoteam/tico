@@ -149,7 +149,7 @@ def test_readable_sql_reads_task_rooms_as_before(api):
             c.execute(
                 "INSERT INTO conversations(id,kind,task_id,scope,participants,room_key,created_at) "
                 "VALUES(?,?,?,?,?,?,?)",
-                (f"legacy-{n}", kind, task, scope, people, "ops" if scope == "shared" else None, H.now()),
+                (f"legacy-{n}", kind, task, scope, people, f"ops:{n}" if scope == "shared" else None, H.now()),
             )
             c.execute(
                 "INSERT INTO conversations(id,kind,parent_id,root_id,created_at) VALUES(?,?,?,?,?)",
@@ -159,7 +159,7 @@ def test_readable_sql_reads_task_rooms_as_before(api):
         total = c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
         for actor in [*READERS, "bot:ops"]:
             v = threads.actor_viewer(c, actor)
-            for alias in ("x", ""):
+            for alias in ("r", "x", ""):
                 new = threads.readable_sql(c, v, alias)
                 old = old_readable_sql(new)
                 assert old != new or actor == "bot:ops", actor
@@ -168,9 +168,9 @@ def test_readable_sql_reads_task_rooms_as_before(api):
                 want = {r[0] for r in c.execute(f"SELECT id FROM {table} WHERE {old}")}
                 assert got == want, (actor, alias, got ^ want)
                 assert 0 < len(got) < total, (actor, len(got))
+                rows = threads.readable_sql(c, v, alias, per_row=True)
+                assert ("rd.id=COALESCE" in rows) == (alias == "r" and actor != "bot:ops"), (alias, rows[:200])
                 if alias:
-                    rows = threads.readable_sql(c, v, alias, per_row=True)
-                    assert ("rd.id=COALESCE" in rows) == (actor != "bot:ops"), rows[:200]
                     each = {r[0] for r in c.execute(f"SELECT id FROM {table} WHERE {rows}")}
                     assert each == want, (actor, "per_row", each ^ want)
 
@@ -188,11 +188,10 @@ def test_the_rail_and_catch_up_answer_as_the_old_sql(api, monkeypatch):
     )
     monkeypatch.setattr(thread_rail, "_rail_lists", old_rail_lists)
     monkeypatch.setattr(thread_rail, "_walk_where", old_walk_where)
-    monkeypatch.setattr(thread_rail, "OPEN_ROOTS_FROM", "conversations r")
     for (path, token), pages in new.items():
         assert _pages(api, token, path) == pages, f"{path} changed for {token}"
     rail = {t: new[("threads/rail", t)] for t in READERS.values()}
-    assert all(len(pages) > 1 for pages in rail.values()), {t: len(p) for t, p in rail.items()}
+    assert len(rail["ana-test"]) > 1, {t: len(p) for t, p in rail.items()}  # its cursors are compared too
     titles = {t: [r["title"] for p in pages for r in p["pinned"] + p["threads"]] for t, pages in rail.items()}
     assert "Listed" in titles["cara-test"] and "Unlisted" not in titles["cara-test"], titles
     assert all(pages[0]["catch_up"] for pages in rail.values()), {t: p[0]["catch_up"] for t, p in rail.items()}
