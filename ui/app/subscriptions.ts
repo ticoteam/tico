@@ -101,19 +101,24 @@ const subsStopWords = (n: number) => `${subsPlural(n, 'running task')} ${n === 1
 
 // ---- Settings > Models > Subscriptions
 // Usage: what is left of the plan's tighter window (the server's reading is its most-used one, 5-hour or week), a bar
-// of that share, and the hours until it resets ("62% left · resets in 98h"); the window and the reset time in the
-// tooltip. A plan with no reading says so, with the server's reason in the tooltip. An API key shows the month's spend.
+// of that share, and the time until it resets in days and hours, hours and minutes, or minutes ("62% left · resets in
+// 4d 2h", "resets in 1h 3m", "resets in 40m"); the window and the reset time in the tooltip. A plan with no reading
+// says so, with the server's reason in the tooltip. An API key shows the month's spend.
 // Computers never show here: only on the count (subsCountHTML).
-function subsHoursUntil(iso: string | null | undefined) {
+function subsTimeUntil(iso: string | null | undefined) {
   const ms = Date.parse(iso || '') - Date.now();
   if (!(ms > 0)) return '';
-  return ms >= 3600e3 ? `${Math.round(ms / 3600e3)}h` : `${Math.max(1, Math.round(ms / 60000))}m`;
+  const all = Math.max(1, Math.round(ms / 60000));
+  const d = Math.floor(all / 1440), h = Math.floor((all % 1440) / 60), m = all % 60;
+  if (d) return h ? `${d}d ${h}h` : `${d}d`;
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
 }
 function subsUsageHTML(sub: SubsRow) {
   const usage: SubsUsage = sub.usage || {};
   if (typeof usage.used_pct === 'number') {
     const left = 100 - Math.max(0, Math.min(100, Math.round(usage.used_pct)));
-    const resetIn = subsHoursUntil(usage.resets_at);
+    const resetIn = subsTimeUntil(usage.resets_at);
     const at = resetIn ? timeSaid(usage.resets_at) : '';
     const window = usage.window === 'week' ? 'Week' : usage.window === '5h' ? '5-hour window' : '';
     const words = [`${window ? `${window}: ` : ''}${left}% left`, at ? `resets ${at} (in ${resetIn})` : ''].filter(Boolean).join(' · ');
