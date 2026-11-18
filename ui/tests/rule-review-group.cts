@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {open, task} = require('./tasks-page.cts') as Tasks.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 declare function decideOpen(id?: string): boolean;
 declare function ruleReviewTick(): void;
 const SHOTS = process.env.TICO_SHOTS || '';
@@ -92,7 +93,7 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
         // On a phone a ❓ opens on its Chat tab; the held items are on the Task tab.
         if (phone) await page.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').click();
         const g = group(page);
-        await g.locator('.rh-brief').first().waitFor({timeout: 5000});
+        await g.locator('.rh-brief').first().waitFor({timeout: t(5000)});
         // The rule on one line, cut with an ellipsis; the count beside it.
         const title = g.locator('.rh-gtitle');
         assert.equal(await title.innerText(), `Held by: ${RULE_TEXT}`);
@@ -135,19 +136,19 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
           // A hold that joins an open card is counted when the list is read again, and on both buttons.
           join(hold('h-4', 1, 'ops', 'Lee', 'Another one about Brightway.', null));
           await page.evaluate(() => { ruleReviewTick(); });
-          await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-gcount')?.textContent === '· 4 holds', null, {timeout: 5000});
+          await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-gcount')?.textContent === '· 4 holds', null, {timeout: t(5000)});
           assert.equal(await group(page).locator('[data-rh-keep-all]').innerText(), 'Keep all 4 blocked');
           // One that joins after the card is drawn is not decided by Keep all.
           join(hold('h-5', 1, 'ops', 'Lee', 'One more about Brightway.', null));
           await group(page).locator('[data-rh-keep-all]').click();
-          await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-gcount')?.textContent === '· 1 hold', null, {timeout: 5000});
+          await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-gcount')?.textContent === '· 1 hold', null, {timeout: t(5000)});
           assert.deepEqual(posted, ['keep:h-1', 'keep:h-2', 'keep:h-3', 'keep:h-4'], 'only the holds shown');
           assert.equal(await group(page).locator('.rh-each [data-hold="h-5"]').count(), 1, 'the one that joined waits');
         } else {
           // Send all: one that cannot be sent stays, its reason under it, and the buttons count what is left.
           failing.add('h-2');
           await g.locator('[data-rh-send-all]').click();
-          await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-gcount')?.textContent === '· 1 hold', null, {timeout: 5000});
+          await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-gcount')?.textContent === '· 1 hold', null, {timeout: t(5000)});
           assert.deepEqual(posted, ['send:h-1', 'send:h-2', 'send:h-3']);
           const left = group(page);
           assert.match(await left.locator('[data-hold="h-2"] .rh-err').first().innerText(), /checked again and still breaks it/);
@@ -162,10 +163,10 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
       const {page, errors, posted} = await world(browser, {width: 1440, height: 900}, 'dark', '#/tasks', MANY);
       await page.evaluate(() => { decideOpen('rq'); });
       const g = group(page);
-      await g.locator('.rh-brief').first().waitFor({timeout: 5000});
+      await g.locator('.rh-brief').first().waitFor({timeout: t(5000)});
       assert.equal(await g.locator('.rh-gcount').innerText(), '· 53 holds');
       await g.locator('[data-rh-keep-all]').click();
-      await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-done') !== null, null, {timeout: 15000});
+      await page.waitForFunction(() => document.querySelector('#need-card[open] .rh-done') !== null, null, {timeout: t(15000)});
       assert.equal(posted.length, 53, 'every page decided');
       assert.deepEqual(errors, []);
       await page.close();
@@ -173,7 +174,7 @@ const group = (page: Page) => page.locator('#need-card[open] .dc-thing .rh-group
     // The task window: the same group over its cards.
     const {page, errors} = await world(browser, {width: 1440, height: 900}, 'dark', '#/task/t-review');
     const head = page.locator('#task-modal .rule-holds .rh-group, #task-modal [data-rule-holds] .rh-group');
-    await head.waitFor({timeout: 5000});
+    await head.waitFor({timeout: t(5000)});
     assert.equal(await head.locator('[data-rh-keep-all]').innerText(), 'Keep all 3 blocked');
     assert.equal(await page.locator('#task-modal .rh-card').count(), 3);
     assert.equal(await page.locator('#task-modal [data-hold="h-1"] mark.rh-part').innerText(), "It quotes Lee Park's order from Brightway.");
