@@ -397,3 +397,15 @@ def test_a_permit_with_no_live_turn_token_refuses_without_asking(monkeypatch, tm
     monkeypatch.setattr(remote.urllib.request, 'urlopen', lambda *a, **k: pytest.fail('asked Tico'))
     environ = {'HUB_API_URL': 'http://hub', 'HUB_TOKEN': f'tico-file:{tmp_path / "gone"}', 'HUB_TASK_ID': 't1'}
     assert 'no active Tico turn' in remote.permit('0123456789ab', '4', 50, environ)
+
+
+def test_the_workflow_runs_only_spot_vms_of_8_vcpus_at_most_and_no_c_family():
+    """Remote runs stay Large (8 vCPUs at most), on Spot, off the c-family pools that fell back to on-demand."""
+    import yaml
+
+    doc = yaml.safe_load((ROOT / '.github' / 'workflows' / 'remote-run.yml').read_text())
+    assert doc[True]['workflow_dispatch']['inputs']['cpus']['options'] == ['4', '8']
+    label = doc['jobs']['run']['runs-on']
+    families = label.split('/family=')[1].split('/')[0].split('+')
+    assert families and not [f for f in families if f.startswith('c')], families
+    assert 'spot=false' not in label and 'retry=false' not in label
