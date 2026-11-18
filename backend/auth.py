@@ -1101,8 +1101,16 @@ class Auth:
             return False
         from . import views
 
-        archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
-        return P.manages(H.actor_id(who.actor), kind, ident, views.roster(c), views.entries(c), archived, True)
+        # Pages ask this once per bot, so it reads the snapshot's roster, entries and archived bots as they are (people
+        # `manages` only reads them): copying them per call was most of a non-admin's time on the people pages.
+        archived = read_cache.value(
+            c,
+            ("archived_bots",),
+            lambda: frozenset(row["id"] for row in H.bots(c) if row.get("state") == "archived"),
+            shared=True,
+        )
+        roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
+        return P.manages(H.actor_id(who.actor), kind, ident, roster, entries, archived, True)
 
     def bot_admin(self, who):
         """Whether a person may administer bots assigned to their own operator identity. Tico support with app access
