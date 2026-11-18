@@ -648,10 +648,15 @@ def _bot_checks(c, settings=None):
         for r in statuses(
             c,
             c.execute(
-                "SELECT t.owner_id,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
                 "WHERE l.kind='worktree' AND l.state<>'removed'"
             ),
         ):
+            # A finished task needs no checkout: re-adding one on another computer helps nobody, and work left
+            # unpushed on a retired computer cannot be fetched either way. Reopening the task restores the
+            # checkout, and its retirement shows here again then.
+            if r["state"] == "retired" and r["task_status"] in ("done", "closed"):
+                continue
             error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:
                 bot = H.actor_id(r["owner_id"])

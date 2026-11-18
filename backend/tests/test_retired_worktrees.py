@@ -100,6 +100,30 @@ def test_retired_status_health_recovery_and_old_reports(prepared, revoked):
         assert c.execute('SELECT computer_id FROM task_links WHERE id=?', (old['link_id'],)).fetchone()[0] == 'r1'
 
 
+@pytest.mark.parametrize('status', ['done', 'closed'])
+def test_health_skips_a_retired_checkout_of_a_finished_task(prepared, status):
+    from backend import maintenance_health
+
+    api, tid, _ = prepared
+    leave_on_old_computer(api, tid)
+
+    def flagged():
+        with api.app_state.store.read() as c:
+            return [
+                f
+                for f in maintenance_health.findings(c, api.app_state.store.settings)
+                if f['check_id'] == 'worktree_error' and 'retired computer' in f['detail']
+            ]
+
+    assert len(flagged()) == 1
+    with api.app_state.store.transaction() as c:
+        end(c, tid, status)
+    assert flagged() == []
+    with api.app_state.store.transaction() as c:
+        end(c, tid, 'open')
+    assert len(flagged()) == 1
+
+
 def test_live_other_computer_and_unauthorized_bot_still_refused(prepared):
     api, tid, other = prepared
     old = leave_on_old_computer(api, tid)
