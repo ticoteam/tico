@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import threading
 
 import httpx
 import pytest
@@ -85,20 +86,26 @@ def install(api, monkeypatch):
 def http(install, monkeypatch):
     calls, state = [], {"items": [item()], "status": 200, "reply": None}
     original = install.transaction
-    writing = []
+    # Only the calling thread's own write transactions count: the app's workers write on this store meanwhile, at
+    # random, and counting theirs failed a step that held none (validation run 44268947739).
+    held = threading.local()
+
+    def writing():
+        return getattr(held, "depth", 0) > 0
+
     state["writing"] = writing
 
     @contextmanager
     def transaction(*args, **kwargs):
         with original(*args, **kwargs) as c:
-            writing.append(c)
+            held.depth = getattr(held, "depth", 0) + 1
             try:
                 yield c
             finally:
-                writing.pop()
+                held.depth -= 1
 
     def handle(request):
-        assert not writing, "HTTP must run outside every write transaction"
+        assert not writing(), "HTTP must run outside every write transaction"
         assert request.headers["authorization"] == "Bearer install-test-key"
         assert request.headers["user-agent"].startswith("Tico-Client/")  # the edge refuses a library's default
         payload = json.loads(request.content)
@@ -598,12 +605,12 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
 
     class KMS(KMSWithEncrypt):
         def encrypt(self, **kwargs):
-            assert not http[1]["writing"], "KMS must run outside every write transaction"
+            assert not http[1]["writing"](), "KMS must run outside every write transaction"
             calls.append("encrypt")
             return super().encrypt(**kwargs)
 
         def decrypt(self, **kwargs):
-            assert not http[1]["writing"], "KMS must run outside every write transaction"
+            assert not http[1]["writing"](), "KMS must run outside every write transaction"
             calls.append("decrypt")
             return super().decrypt(**kwargs)
 
