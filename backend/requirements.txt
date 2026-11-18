@@ -91,7 +91,7 @@ pymongo==4.20.0
     # via -r requirements.in
 pymysql==1.2.4
     # via -r requirements.in
-pypdf==6.21.4
+pypdf==7.1.0
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via

@@ -180,7 +180,7 @@ pymysql==1.2.4
     # via
     #   -c requirements.txt
     #   -r requirements.in
-pypdf==6.21.4
+pypdf==7.1.0
     # via
     #   -c requirements.txt
     #   -r requirements.in

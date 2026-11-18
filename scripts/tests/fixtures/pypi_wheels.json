@@ -1021,7 +1021,7 @@
  "pymysql==1.2.4": [
   "py3-none-any"
  ],
- "pypdf==6.21.4": [
+ "pypdf==7.1.0": [
   "py3-none-any"
  ],
  "python-dateutil==2.9.0.post0": [
