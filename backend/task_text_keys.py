@@ -320,7 +320,7 @@ def _send_target(c: "sqlite3.Connection", body: Any) -> str | None:
     )
     if task:
         return task
-    named = cast("str | None", H.refs_task_id(sent.get("refs")))  # pyright: ignore[reportUnknownMemberType]
+    named = H.refs_task_id(sent.get("refs"))  # pyright: ignore[reportUnknownMemberType]
     if not named:
         return None
     row = c.execute("SELECT id FROM tasks WHERE id=? OR CAST(number AS TEXT)=? LIMIT 1", (named, named)).fetchone()
