@@ -831,7 +831,12 @@ async function pages(browser: Browser) {
 // Spec "Task search finds a task by its number": a search that is only a number puts that task first, from any pipeline
 // and status, with Enter opening it; words, an unknown number and an older number's late answer add nothing.
 async function byNumber(browser: Browser) {
-  const tasks = [...fixtures(), task('t-55', 'Fifty-five', 'doing')];
+  // t-80: closed in the retired Old roadmap (prefix O), which no view or view menu offers.
+  // t-44: another Product task a search for 4 matches (its number holds a 4).
+  const tasks = [...fixtures(), task('t-55', 'Fifty-five', 'doing'), task('t-44', 'Order more chairs', 'spec'),
+    task('t-80', 'Roadmap import', 'closed', {pipeline_id: 'old', pipeline: {id: 'old', name: 'Old roadmap'}})];
+  // The rows a person sees, top to bottom: the task first, then the view's own matches.
+  const order = (page: Page) => page.locator('[data-task]:visible').evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.task));
   const jump = (page: Page) => page.locator('#task-jump [data-task]');
   const shows = async (page: Page, typed: string, id: string, where: string) => {
     await page.locator('#task-q').fill(typed);
@@ -867,6 +872,10 @@ async function byNumber(browser: Browser) {
     // A snoozed one and a done one, from You.
     await shows(page, '5', 't-5', 'Snoozed');
     await shows(page, '#6', 't-6', 'Done');
+    // A finished task of a retired pipeline: found by its label too, and named with that pipeline.
+    for (const typed of ['80', 'O80', 'o-80']) await shows(page, typed, 't-80', 'Closed');
+    assert.equal((await jump(page).locator('.tk-ref').textContent())!.trim(), 'O80');
+    assert.match((await jump(page).locator('.tk-ask').textContent())!, /^Old roadmap · /);
     // Words, letters no pipeline has, and a number no task has: the search as before, nothing first.
     await none(page, '7 old');
     await none(page, 'x7');
@@ -892,6 +901,9 @@ async function byNumber(browser: Browser) {
     await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.tasks.some(t => t.id === 't-4'));
     await page.evaluate(() => new Promise(requestAnimationFrame));
     assert.equal(await page.locator('[data-task="t-4"]:visible').count(), 1, 'once');
+    // The view's other match (t-44) is still there, under the task the number names.
+    await page.locator('#task-body [data-task="t-44"]').waitFor();
+    assert.deepEqual(await order(page), ['t-4', 't-44'], 'the task first, then the view');
     assert.deepEqual(errors, []);
     await page.close();
   }

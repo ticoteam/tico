@@ -81,8 +81,13 @@ function tasksPipelinesKept(): PipelineRec[] {
 function tasksPipelinesForget() {
   try { localStorage.removeItem(TASK_PIPELINES_KEPT); } catch { /* nothing was kept */ }
 }
+/** Every pipeline as last read, retired ones too: a finished task stays in its retired pipeline, and a search by its
+ * number names that pipeline and takes its prefix (tasksJumpPipelines). The views and the view menu keep the rest. */
+let TASKS_EVERY_PIPELINE: PipelineRec[] = [];
 async function tasksPipelinesRead(): Promise<PipelineRec[]> {
-  const list = (await pipelinesAll()).filter(p => !p.retired_at);
+  const every = await pipelinesAll();
+  TASKS_EVERY_PIPELINE = every;
+  const list = every.filter(p => !p.retired_at);
   TASK_PIPELINES = list;
   try {
     const kept = JSON.stringify({who: S.me?.id || '', list});
@@ -638,11 +643,14 @@ function tasksRender(state: TasksPageState | null) {
 // ---- a task by its number (spec "Task search finds a task by its number")
 /** The task number a search is, when the whole search is one: 556, #556, or a pipeline's prefix and it (P556, p-556).
  * 0 when it is not, so words, or letters that are no pipeline's prefix ("v2"), search as before. */
+/** The pipelines a number search knows: every one, retired too, once read; the view's until then. */
+const tasksJumpPipelines = (state: Pick<TasksPageState, 'pipelines'>): PipelineRec[] =>
+  TASKS_EVERY_PIPELINE.length ? TASKS_EVERY_PIPELINE : state.pipelines;
 function tasksJumpNumber(state: Pick<TasksPageState, 'q' | 'pipelines'>): number {
   const m = /^#?(?:([a-z]{1,4})-?)?(\d{1,9})$/i.exec(state.q.trim());
   if (!m) return 0;
   const prefix = (m[1] || '').toLowerCase();
-  if (prefix && !state.pipelines.some(p => (p.prefix || '').toLowerCase() === prefix)) return 0;
+  if (prefix && !tasksJumpPipelines(state).some(p => (p.prefix || '').toLowerCase() === prefix)) return 0;
   return Number(m[2]) || 0;
 }
 /** Reads the task the search's number names, once per number: the server's number read ignores the view, the status
@@ -665,7 +673,7 @@ const tasksJumpShown = (state: TasksPageState): TaskBriefV3 | null =>
   state.jump && state.jumpFor && state.jump.number === tasksJumpNumber(state) ? state.jump : null;
 /** Its label as the task's page shows it: its pipeline's prefix and number ("P556"), else "#556". */
 function tasksJumpLabel(state: TasksPageState, t: TaskBriefV3): string {
-  const prefix = state.pipelines.find(p => p.id === t.pipeline_id)?.prefix || '';
+  const prefix = tasksJumpPipelines(state).find(p => p.id === t.pipeline_id)?.prefix || '';
   return `${prefix || '#'}${t.number}`;
 }
 /** Where it is: its stage while open, else Snoozed, Done or Closed. */
@@ -676,7 +684,7 @@ function tasksJumpWhere(state: TasksPageState, t: TaskBriefV3): string {
   return tasksStageName(state, t.stage_id) || 'Open';
 }
 function tasksJumpHTML(state: TasksPageState, t: TaskBriefV3): string {
-  const pipeline = state.pipelines.find(p => p.id === t.pipeline_id)?.name || '';
+  const pipeline = tasksJumpPipelines(state).find(p => p.id === t.pipeline_id)?.name || '';
   const line = [pipeline, t.owner_id ? actorLabel(t.owner_id) : ''].filter(Boolean).join(' · ');
   return `<div class="tk-row" data-task="${esc(t.id)}" role="button" tabindex="0">`
     + `<span class="tk-ref tnum">${esc(tasksJumpLabel(state, t))}</span>`

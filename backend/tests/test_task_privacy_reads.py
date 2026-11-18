@@ -1057,3 +1057,19 @@ def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(ap
                 c.set_trace_callback(None)
             outcomes.add(frozenset(readable))
     assert len(outcomes) >= 3  # the readers see different tasks: the rule is exercised, not trivial
+
+
+def test_a_task_number_search_finds_a_private_finished_task_only_for_who_may_read_it(api):
+    """The Tasks search reads a typed number with GET /api/v2/tasks?number=N, across every view, status and snooze
+    (spec "Task search finds a task by its number"): a private closed task comes back to its party and to nobody
+    else, so the search never says such a task exists."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        hidden = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
+        c.execute("UPDATE tasks SET number=? WHERE id=?", (98765, hidden["id"]))
+        H.task_close(c, "human:cara", hidden["id"], note="Done with it")
+    for brief in ("&brief=1", ""):
+        cara = get(api, "tasks?number=98765" + brief, "cara-test")
+        assert [t["id"] for t in cara["tasks"]] == [hidden["id"]]
+        ben = get(api, "tasks?number=98765" + brief, "ben-test")
+        assert ben["tasks"] == [] and "Private plan" not in json.dumps(ben)
