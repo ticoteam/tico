@@ -522,7 +522,8 @@ async function settingsTurnsAtOnceSave(input: HTMLInputElement): Promise<void> {
 function machineOutOfCredit(machine: DeviceMachine): boolean {
   const cloud = machine.cloud_machine;
   if (!cloud || machineOnline(machine)) return false;
-  return cloud.problem === 'Out of credit' || CLOUD_ACCESS?.access === 'frozen';
+  // cloud-access.ts may not be loaded (a page or test with only this file): then only the machine's own word counts.
+  return cloud.problem === 'Out of credit' || (typeof CLOUD_ACCESS !== 'undefined' && CLOUD_ACCESS?.access === 'frozen');
 }
 // What a computer is doing now: "1 running · 55 queued", idle, asleep (a cloud computer stopped to save), or offline.
 function machineNowWords(machine: DeviceMachine) {
@@ -576,7 +577,7 @@ function renderSettingsMachines() {
       <td class="num tnum machine-bot-count" data-label="Bots">${(machine.bots || []).length}</td>
       ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
-      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-label="Now" data-machine-now>${esc(now)}${machineOutOfCredit(machine) ? cloudCreditLinkHTML() : ''}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
+      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-label="Now" data-machine-now>${esc(now)}${machineOutOfCredit(machine) && typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
   const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
   // A cloud machine not enrolled yet: its name and what it is doing (being made, starting, out of credit, failed), with
