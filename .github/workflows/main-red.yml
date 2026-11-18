@@ -1,23 +1,27 @@
-# Runs scripts/main_red.py for each Release validation run that finishes on main. The alarm job reviews up to three
+# Runs scripts/main_red.py for each Release validation run on main: ci.yml's last job dispatches this workflow with its run
+# id (a workflow_run trigger never fired for the runs the train dispatches with GITHUB_TOKEN), and the alarm waits for
+# that run to finish before reading it. The alarm job reviews up to three
 # suspect pull requests, or hands a red run with more to the bisect job: that one runs on RunsOn, probes the failing
 # tests at the commits between the last green run and the red one, and reviews only the pull request of the first bad
 # commit. A newer bisect job cancels an older one (its group), and a bisect stops itself once a newer validation run has
 # finished.
 name: Main is red
-run-name: "Main is red: ${{ github.event.workflow_run.display_title }}"
+run-name: "Main is red: run ${{ inputs.run_id }}"
 
 on:
-  workflow_run:
-    workflows: [Release validation]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The Release validation run on main to read (ci.yml's main-red job passes its own)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   alarm:
-    if: github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -36,12 +40,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Wait for the validation run to finish
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          case $RUN_ID in ''|*[!0-9]*) echo "::error::run_id must be a run number, not '$RUN_ID'"; exit 1 ;; esac
+          until [ "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json status --jq .status)" = completed ]; do sleep 15; done
       - name: Tell the owners of the run
         id: alarm
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ID: ${{ inputs.run_id }}
         run: python3 scripts/main_red.py --run-id "$RUN_ID" --workdir "$RUNNER_TEMP/red"
 
   bisect:
@@ -87,5 +99,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ID: ${{ inputs.run_id }}
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 scripts/main_red.py --run-id "$RUN_ID" --workdir "$RUNNER_TEMP/red" --bisect
