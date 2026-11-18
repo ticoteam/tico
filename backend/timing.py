@@ -38,12 +38,12 @@ class Timing:
             self.inflight += 1
             self.peak = max(self.peak, self.inflight)
 
-    def end(self, route, auth_ms, total_ms, caller="anonymous", status=200, nbytes=0, actor="", cost=None):
+    def end(self, route, auth_ms, total_ms, caller="anonymous", status=200, nbytes=0, actor="", cost=None, client=""):
         with self.lock:
             self.inflight -= 1
             self.routes[route].append((auth_ms, total_ms))
         if self.recorder is not None:
-            self.recorder.request(route, caller, status, total_ms, nbytes, actor, cost)
+            self.recorder.request(route, caller, status, total_ms, nbytes, actor, cost, client)
 
     def summary(self):
         with self.lock:
@@ -137,6 +137,7 @@ def install_middleware(app, flight, recorder):
                 int(size) if size and size.isdigit() else 0,
                 getattr(who, "actor", "") or "",
                 cost,
+                flight.client_of(who),
             )
             if cost_token is not None:
                 flight.request_finished(cost_token)
