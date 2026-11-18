@@ -260,3 +260,21 @@ def test_github_reads_stop_one_second_before_the_window_ends():
         "2026-11-10T00:00:00Z..2026-11-10T23:59:59Z",
         "2026-11-11T00:00:00Z..2026-11-11T23:59:59Z",
     ]
+
+
+def test_only_the_latest_attempt_decides_whether_a_cancel_was_a_failure():
+    def leg(attempt, *steps):
+        return dict(
+            job("2026-11-10T10:00:00Z", "2026-11-10T10:05:00Z", conclusion="cancelled"),
+            run_attempt=attempt,
+            steps=list(steps),
+        )
+
+    old_failure = leg(1, step("Run tests", "failure"), step(ci_report.FAIL_FAST_STEP, "success"))
+    newer_push = leg(2, step("Run tests", "cancelled"), step(ci_report.FAIL_FAST_STEP, "skipped"))
+    latest_fail_fast = leg(2, step("Run tests", "failure"), step(ci_report.FAIL_FAST_STEP, "success"))
+    cancelled = dict(run(1, conclusion="cancelled"), run_attempt=2)
+    counts = ci_report.fail_rate([cancelled], {1: [old_failure, newer_push]})
+    assert (counts["failed"], counts["cancelled"], counts["fail_pct"]) == (0, 1, None)
+    counts = ci_report.fail_rate([cancelled], {1: [old_failure, latest_fail_fast]})
+    assert (counts["failed"], counts["cancelled"], counts["fail_pct"]) == (1, 0, 100.0)

@@ -197,12 +197,19 @@ def failed_fast(jobs):
     return False
 
 
+def latest_attempt(run, jobs):
+    """The jobs of the run's own (latest) attempt: filter=all also lists earlier ones, whose failures a later attempt
+    (cancelled by a newer push, say) does not share. Compute counts every attempt; the fail share reads only this one."""
+    attempt = run.get("run_attempt") or 1
+    return [job for job in jobs if (job.get("run_attempt") or 1) == attempt]
+
+
 def fail_rate(runs, jobs_by_run=None):
     """Failed over failed plus passed. A run that cancelled itself after a failed suite counts as failed, not cancelled."""
     counts = {"failed": 0, "succeeded": 0, "cancelled": 0, "other": 0}
     for run in runs:
         conclusion = run.get("conclusion")
-        if conclusion == "cancelled" and failed_fast((jobs_by_run or {}).get(run["id"], [])):
+        if conclusion == "cancelled" and failed_fast(latest_attempt(run, (jobs_by_run or {}).get(run["id"], []))):
             conclusion = "failure"
         key = (
             "failed"
