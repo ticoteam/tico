@@ -572,11 +572,12 @@ def test_a_media_restart_before_the_first_sweep_ends_the_call(meet):
     assert ended["state"] == "ended" and ended["end_reason"] == "media_lost"
 
 
-def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_the_media_server(meet):
+def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_the_media_server(meet, monkeypatch):
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
     settle(meet)
+    monkeypatch.setattr(gateway, "relay", lambda *args, **kwargs: (200, drafted([])))
     media = meet.app.state.call_media
     media.down = True
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
