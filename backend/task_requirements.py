@@ -683,9 +683,55 @@ def last_sent_back(
         sql, args = sql + " AND a.visit_id=?", [*args, visit_id]
     if task_id is not None:
         sql, args = sql + " AND v.task_id=?", [*args, task_id]
-    cursor = conn.execute(sql + " ORDER BY a.created_at DESC, a.id DESC LIMIT 1", args)
-    found = cursor.fetchone()
-    return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
+
+    def read() -> Row | None:
+        cursor = conn.execute(sql + " ORDER BY a.created_at DESC, a.id DESC LIMIT 1", args)
+        found = cursor.fetchone()
+        return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
+
+    if visit_id is None or task_id is not None:
+        return read()
+    # One visit's: kept for the read snapshot (read_cache) and seeded for many visits at once (`prime_page_checks`).
+    return read_cache.value(conn, ("last_sent_back", requirement_id, visit_id), read)
+
+
+def prime_page_checks(conn: "sqlite3.Connection", task_ids: list[str], visits: dict[str, list[str]]) -> None:
+    """Read what a page check asks of each of many tasks together, three statements in all, for the checks that follow
+    in this snapshot: the heads each task's met Review pages were for (`REVIEWED_SQL`), a bot's OK of the commits after
+    them (`NEW_REVIEWED_SQL`), and each visit's last send back of each page requirement (`last_sent_back`). `visits`
+    is {visit id: its page requirement ids}. Without a read snapshot it reads nothing; a write discards it."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    ids = sorted({str(t) for t in task_ids if t})
+    many = "v.task_id IN (SELECT value FROM json_each(?))"
+    for sql, column in ((REVIEWED_SQL, "SELECT p.item_versions"), (NEW_REVIEWED_SQL, "SELECT a.by_id")):
+        unread = [t for t in ids if (sql, (t,)) not in values]
+        if not unread:
+            continue
+        found: dict[str, list[tuple[object, ...]]] = {t: [] for t in unread}
+        batched = sql.replace(column, "SELECT v.task_id, " + column[len("SELECT ") :], 1).replace("v.task_id=?", many, 1)
+        for row in conn.execute(batched, (json.dumps(unread),)).fetchall():
+            if str(row[0]) in found:
+                found[str(row[0])].append(tuple(row[1:]))
+        read_cache.prime_rows(conn, sql, {(t,): rows for t, rows in found.items()})
+    wanted = [(v, rid) for v, rids in visits.items() for rid in rids if ("last_sent_back", rid, v) not in values]
+    if not wanted:
+        return
+    newest: dict[tuple[str, str], Row] = {}
+    cursor = conn.execute(
+        "SELECT a.requirement_id, a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
+        "WHERE a.visit_id IN (SELECT value FROM json_each(?)) AND a.answer='no' AND a.undone_at IS NULL "
+        "ORDER BY a.created_at DESC, a.id DESC",
+        (json.dumps(sorted({v for v, _ in wanted})),),
+    )
+    names = [d[0] for d in cursor.description]
+    for row in cursor.fetchall():
+        answer = dict(zip(names, row, strict=True))
+        requirement_id = str(answer.pop("requirement_id"))
+        newest.setdefault((str(answer["visit_id"]), requirement_id), answer)
+    for v, rid in wanted:
+        values.setdefault(("last_sent_back", rid, v), newest.get((v, rid)))
 
 
 def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
@@ -752,12 +798,12 @@ def _new_heads(conn: "sqlite3.Connection", task: Row) -> list[tuple[str, str]]:
     if not heads:
         return []
     reviewed: list[dict[str, object]] = []
-    for found in conn.execute(REVIEWED_SQL, (task["id"],)).fetchall():
+    for found in read_cache.rows(conn, REVIEWED_SQL, (task["id"],)):  # seeded by `prime_page_checks`
         if (versions := _heads_of(found[0] or "{}")) is not None:
             reviewed.append(versions)
     if not reviewed:
         return []
-    for by, text, named in conn.execute(NEW_REVIEWED_SQL, (task["id"],)).fetchall():
+    for by, text, named in read_cache.rows(conn, NEW_REVIEWED_SQL, (task["id"],)):
         if _is_bot(by) and by != named and (versions := _heads_of(text)) is not None:
             reviewed.append(versions)
     return [(ref, sha) for ref, sha in sorted(heads.items()) if not any(each.get(ref) == sha for each in reviewed)]

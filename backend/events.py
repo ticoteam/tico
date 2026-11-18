@@ -3518,7 +3518,9 @@ def install(app, store, auth, task_views, task_view):
             raise Problem("validation", "output is full or compact", 422)
 
         def start():
-            with store.read() as c:
+            # One read snapshot, so the Needs-you baseline reads every task's pages and PRs in a few batched
+            # statements (waiting_on.prime) and not several a task: without a snapshot nothing is primed.
+            with store.read_transaction() as c:
                 if held is not None:
                     held.update(needs_baseline(c, auth, who, task_view))
                 return latest(c)

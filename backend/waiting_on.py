@@ -802,6 +802,24 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
         values.setdefault(("filed_open", visit_id), filed)
+    # Each task's page checks and PR checks (task_requirements._page, github.checks_pass and heads): their pages, live
+    # documents, linked PRs and those PRs' metadata, a few statements for the whole list, not several a task. App
+    # open asks for every open task's standings on Needs you, Health, the Floor and the live stream (task 13b92931).
+    from . import task_pages
+    from .item_sources import github as GS
+
+    page_requirements = {
+        str(row["visit"]["id"]): (str(row["id"]), [r for r in R.for_visit(conn, row["visit"]) if r["kind"] == "page"])
+        for row in rows
+        if row.get("visit")
+    }
+    task_pages.prime(conn, page_requirements)
+    GS.prime_prs(conn, ids)
+    R.prime_page_checks(
+        conn,
+        [task_id for task_id, requirements in page_requirements.values() if requirements],
+        {visit: [str(r["id"]) for r in requirements] for visit, (_, requirements) in page_requirements.items() if requirements},
+    )
     return {str(row["id"]): row for row in rows}
 
 

@@ -55,12 +55,44 @@ def _one(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> Row | N
 
 
 def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row | None:
-    """The verdict row for a page version and rubric hash, or None when none is owed yet."""
-    return _one(
+    """The verdict row for a page version and rubric hash, or None when none is owed yet. Kept for the read snapshot
+    (read_cache: a write discards it) and seeded for many pages at once by `prime`."""
+    from . import read_cache
+
+    return read_cache.value(
         conn,
-        "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?",
-        (file_id, int(version), key),
+        ("page_verdict", str(file_id), int(version), str(key)),
+        lambda: _one(
+            conn,
+            "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?",
+            (file_id, int(version), key),
+        ),
     )
+
+
+def prime(conn: "sqlite3.Connection", pages: "list[tuple[str, int, str]]") -> None:
+    """Read `get` for many (file id, version, rubric hash) together, one statement, for the page checks that follow in
+    this snapshot. Without a read snapshot it reads nothing."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    wanted = sorted({(str(f), int(v), str(k)) for f, v, k in pages if ("page_verdict", str(f), int(v), str(k)) not in values})
+    if not wanted:
+        return
+    cursor = conn.execute(
+        "SELECT v.* FROM json_each(?) j JOIN page_verdicts v ON v.file_id=json_extract(j.value,'$[0]') "
+        "AND v.version=json_extract(j.value,'$[1]') AND v.rubric_hash=json_extract(j.value,'$[2]')",
+        (json.dumps(wanted),),
+    )
+    names = [d[0] for d in cursor.description]
+    found = {}
+    for row in cursor.fetchall():
+        verdict = dict(zip(names, row, strict=True))
+        found[(str(verdict["file_id"]), int(verdict["version"]), str(verdict["rubric_hash"]))] = verdict
+    for triple in wanted:
+        values.setdefault(("page_verdict", *triple), found.get(triple))
 
 
 # Each page's versions Jev passed, with the page requirement each counted for: newest version first, then the newest
