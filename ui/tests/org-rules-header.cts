@@ -97,17 +97,20 @@ async function searchProblems(page: Page, width: number) {
   const box = page.locator('.ru-ph .rr-q');
   if (await page.locator('.ru-ph .ph-menu .rr-q').count()) return ['the search is in ⋯'];
   if (!await page.locator('.ru-ph > .ph-tools .rr-q').count()) return ['the search is not on the row'];
-  const onTop = await box.evaluate(el => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return r.width >= 100 && r.right <= document.documentElement.clientWidth + 0.5 && !!top && el.contains(top); });
-  if (!onTop) bad.push('the search is not in view on top');
+  // A narrow header shows the search as its magnifier (.ph-find), which opens over the title line when tapped.
+  const find = await page.locator('.ru-ph.ph-find').count() > 0;
+  const onTop = await box.evaluate((el, min) => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return r.width >= min && r.right <= document.documentElement.clientWidth + 0.5 && !!top && el.contains(top); }, find ? 40 : 100);
+  if (!onTop) bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}`);
   await box.click({timeout: t(3000)});
+  if (find && await box.evaluate(el => el.getBoundingClientRect().width) < 200) bad.push('the magnifier did not open to a search box');
   await page.keyboard.type('abc', {delay: 30});
-  await page.waitForTimeout(t(200));   // a frame or two for the header to fit again
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));  // the header fits again
   const state = await page.evaluate(() => ({val: document.querySelector<HTMLInputElement>('.ru-ph .rr-q')?.value,
     focus: document.activeElement?.matches('.rr-q'), row: !!document.querySelector('.ru-ph > .ph-tools .rr-q')}));
   if (state.val !== 'abc' || !state.focus || !state.row) bad.push(`typing in the search at ${width}px: ${JSON.stringify(state)}`);
   await box.fill('');
-  await page.locator('.ru-ph > .ph-t').click();
+  await box.blur();   // an open magnifier lies over the title, so leave the box without a click
   return bad;
 }
 
