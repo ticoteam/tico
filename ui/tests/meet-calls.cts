@@ -172,6 +172,11 @@ const connect = async (sse: {queue: unknown[]}, seen: {ringing: number}, page: P
   assert.ok(seen.ringing > was, 'the ring read what rings on connect');
   await page.waitForTimeout(150);
 };
+const reload = async (page: Page, sse: {latest: import('playwright').Request | null}) => {
+  // A pending route from the old page cannot deliver the new page's reconnect event.
+  sse.latest = null;
+  await page.reload();
+};
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth);
 
 let browser: import('playwright').Browser | null = null;
@@ -277,14 +282,14 @@ let browser: import('playwright').Browser | null = null;
     await ring.waitFor({state: 'detached'});
     assert.equal(await page.evaluate(() => RING_SOUND.timer), 0);
     // A reload still knows it was dismissed (GET /calls/ringing still lists it).
-    await page.reload();
+    await reload(page, sse);
     await page.locator('#thread-rail .tr-row[data-thread="t-alerts"] .tr-call').waitFor();
     await connect(sse, seen, page);
     assert.equal(await page.locator('.call-ring-card').count(), 0, 'dismissed stays dismissed');
     // Another call rings from the page's first read; it goes when that call ends.
     const c4 = meetCall('c4', 't-alerts', 'human:cy', {ring: true});
     calls.set('c4', c4);
-    await page.reload();
+    await reload(page, sse);
     await page.locator('#thread-rail .tr-row[data-thread="t-alerts"]').waitFor();
     await connect(sse, seen, page);
     const ring4 = page.locator('.call-ring-card[data-ring="c4"]');
