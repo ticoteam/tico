@@ -135,7 +135,7 @@ impl Stderr {
                         if n == 0 {
                             if !pending.is_empty() || oversized {
                                 kept.push(if oversized { "[oversized stderr line omitted]".into() } else {
-                                    safe(&String::from_utf8_lossy(&pending), &scrub)
+                                    safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
                                 });
                                 dirty = true;
                             }
@@ -147,7 +147,7 @@ impl Stderr {
                         for b in &buf[..n] {
                             if *b == b'\n' {
                                 let line = if oversized { "[oversized stderr line omitted]".into() } else {
-                                    safe(&String::from_utf8_lossy(&pending), &scrub)
+                                    safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
                                 };
                                 kept.push(line);
                                 pending.clear();
@@ -265,6 +265,40 @@ mod tests {
             .is_some()
         {}
         drop(input);
+    }
+
+    /// A granted value with non-ASCII in it, written to stderr as UTF-16: scrubbed as bytes before the line is
+    /// decoded, so the emitted diagnostic holds the mark and none of the value (Review on c4b9a23).
+    #[tokio::test]
+    async fn a_non_ascii_secret_in_utf16_on_stderr_is_masked_in_the_emitted_event() {
+        let secret = "granted-wïde-sécret";
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut env = crate::env::Env::new();
+        env.insert("TICO_TEST_TOKEN".into(), secret.into());
+        let escaped: String = secret
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .map(|b| format!("\\{b:03o}"))
+            .collect();
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", &format!("printf 'failure {escaped}\\n' >&2")])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let tail = Stderr::capture(&mut child, tx, &env);
+        child.wait().await.unwrap();
+        let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let shown = ev["stderr_tail"].as_str().unwrap();
+        let ascii: String = "granted-w".chars().flat_map(|c| [c, '\0']).collect();
+        assert!(shown.starts_with("failure "), "{shown:?}");
+        assert!(shown.contains(crate::redact::MASK), "{shown:?}");
+        assert!(
+            !shown.contains(&ascii) && !tail.tail().contains(&ascii),
+            "{shown:?}"
+        );
     }
 
     #[tokio::test]

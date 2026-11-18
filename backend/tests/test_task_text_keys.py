@@ -316,8 +316,14 @@ def test_long_numbers_hex_groups_and_short_coded_groups_after_a_key_word_are_ref
     for text in GENERATED:
         assert K.found(text), text
     # What notes name every day still passes: counts, dates, versions, one coded piece in a name.
-    for text in ("max_tokens: 128000", "api key: 20261118", "token_expires_at: 2026-11-18T10:00:00Z",
-                 "token: gpt-4o-mini", "cache key: sha1-30c1714c9", "key: v2_tasks_list"):
+    for text in (
+        "max_tokens: 128000",
+        "api key: 20261118",
+        "token_expires_at: 2026-11-18T10:00:00Z",
+        "token: gpt-4o-mini",
+        "cache key: sha1-30c1714c9",
+        "key: v2_tasks_list",
+    ):
         assert not K.found(text), text
 
 
@@ -354,8 +360,12 @@ def test_a_note_with_a_page_or_a_file_a_many_task_why_and_a_task_from_a_message_
     mid = (said.get("message") or said)["id"]
     _refused(api, f"threads/messages/{mid}/task", {"title": "Rotate the key", "owner": "ops"})
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE body LIKE ? OR title='Rotate the key'", ("%" + KEY + "%",)).fetchone()
-        assert not c.execute("SELECT 1 FROM events WHERE action<>? AND detail LIKE ?", (K.ACTION, "%" + KEY + "%")).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM tasks WHERE body LIKE ? OR title='Rotate the key'", ("%" + KEY + "%",)
+        ).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM events WHERE action<>? AND detail LIKE ?", (K.ACTION, "%" + KEY + "%")
+        ).fetchone()
         made = [r[0] for r in c.execute("SELECT target FROM events WHERE action=? AND target=''", (K.ACTION,))]
     assert len(_rows(api, task["id"])) == 2 and len(made) == 2, "a many-task change and a new task name no one task"
 
@@ -372,13 +382,21 @@ def test_a_bot_s_turn_reply_with_a_key_no_grant_covers_is_stored_as_a_mark(api):
     done_note = {"note": "Reviewed.", "version": _shown(api, task["id"])["version"]}
     post(api, f"tasks/{task['id']}/done", done_note, token=attempt["token"])
     reply = "Reviewed. The diff hard-codes " + KEY + ", so rotate it."
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": reply, "last_seq": 0},
-         token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": reply, "last_seq": 0},
+        token=r["token"],
+    )
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
         [kept] = c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
-        posted = [r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops' AND body LIKE 'Reviewed.%'")]
+        posted = [
+            r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops' AND body LIKE 'Reviewed.%'")
+        ]
     assert kept == "Reviewed. The diff hard-codes " + K.MARK + ", so rotate it."
     assert posted == [kept], "the reply is posted with the mark, the rest as written"
     [row] = _rows(api, task["id"])
-    assert row["actor"] == "bot:ops" and json.loads(row["detail"])["outcome"] == "masked" and KEY[4:] not in row["detail"]
+    assert (
+        row["actor"] == "bot:ops" and json.loads(row["detail"])["outcome"] == "masked" and KEY[4:] not in row["detail"]
+    )

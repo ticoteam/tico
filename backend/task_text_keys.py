@@ -277,7 +277,9 @@ def keys_in(
     neither is checked as one text. With `fields`, only those top-level fields are read (a page's or a file's note)."""
     body = _body(raw, content_type)
     if fields is not None:
-        body = {k: v for k, v in cast("dict[str, Any]", body).items() if k in fields} if isinstance(body, dict) else None
+        body = (
+            {k: v for k, v in cast("dict[str, Any]", body).items() if k in fields} if isinstance(body, dict) else None
+        )
     hits: list[tuple[str, str]] = []
     for field, text in _strings(body):
         hits.extend((field, f["rule"]) for f in found(text, known))
