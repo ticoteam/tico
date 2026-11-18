@@ -112,9 +112,10 @@ Settings, Security & access. `https://mcp.linear.app/mcp/readonly` is a read-onl
 ```
 
 For a server held in Tools, a bot's level is enforced at Tico's proxy: with only a read-and-write key, a bot at **Read**
-may call only the tools the server's own tool list marks `readOnlyHint`, plus the session's set-up and listings. The `can`
+may call only the tools the server's own tool list marks `readOnlyHint`, plus the session's set-up and MCP's other read calls (listings, `resources/read`, `prompts/get`). The `can`
 line in `bot.yaml` (the older way) declares intent only; Tico does not filter a vendor's MCP tools by it, so there the
-endpoint or credential scopes must enforce read-only access. [Linear's official guide](https://linear.app/docs/mcp) describes both options.
+endpoint or credential scopes must enforce read-only access. If `bot.yaml` names a server the same as a Tools one, the `bot.yaml` entry is used, so that server is
+neither renewed nor filtered. [Linear's official guide](https://linear.app/docs/mcp) describes both options.
 
 If you want writes, choose the write endpoint and declare that intent separately:
 
@@ -213,8 +214,9 @@ Then prove it with one read-only call.
 
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
 Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and in `bot.yaml`
-`can:` does not stop it. Added in Tools and granted at Read, the bot may call only the tools TIDY's server marks
-`readOnlyHint`, so a booking tool the server does not mark is refused. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
+`can:` does not stop it. Added in Tools with only a read-and-write key and granted at Read, the bot may call only the
+tools TIDY's server marks `readOnlyHint`, so a booking tool the server does not mark is refused. A key added at Read goes
+to the bot as it is: Tico does not check its scopes, so it must be read-only at TIDY. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
 bot ask a person to OK it (`tico task ask --kind ok`) and send a booking or anything that costs money only after the
 person OKs it, and write that rule in the bot's instructions and the tool's `note:`.
 
