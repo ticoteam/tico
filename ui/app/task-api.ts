@@ -131,6 +131,8 @@ const withVersion = (version: number | null | undefined, body: Record<string, un
 // ---- reads
 interface TaskBriefQuery {
   owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string; pipeline?: string;
+  /** One task by its number, in any pipeline and status the reader may read. */
+  number?: number;
   sort?: 'queue' | 'finished'; limit?: number; offset?: number;
   /** The Tasks page's search and filters, with taskFilterMatch's meaning (backend/task_match.py). */
   search?: string; owners?: string[]; stages?: string[]; requesters?: string[]; labels?: string[]; turn?: string[];

@@ -177,6 +177,12 @@ tico task create --pipeline product --owner bot:pm --title "Export to CSV" --for
 
 It is refused unless that person sent the message and the bot can read its conversation.
 
+## Finding a task by its number
+
+Type a task's number in the Tasks search (`556`, `#556` or its label, `P556`) and that task is the first row, from any
+pipeline and whether it is open, snoozed, done or closed, if you may read it. Enter opens it. A search with words in it
+looks in the view on screen only. Bots and the CLI take `#556` wherever they take a task.
+
 ## Done, closed and reopen
 
 `tico task done <id> -m "what was done"` says the work of this stage is finished. In General that makes the task Done.
