@@ -4,6 +4,8 @@
 //! when no steer is unread and no background task of the session still runs, and then stdin closes and the process
 //! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers and
 //! stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
+//! Once the process is gone, whatever the turn started and left running is stopped (crate::turn_sweep), except the
+//! shells a turn that ended on its wait keeps.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -883,6 +885,7 @@ impl ClaudeHost {
         thread_id: &str,
         t: &Thread,
         effort: Option<&str>,
+        mark: &str,
     ) -> std::io::Result<(
         Child,
         crate::run_diagnostics::Stderr,
@@ -938,6 +941,8 @@ impl ClaudeHost {
             .stderr(Stdio::piped())
             .current_dir(&t.settings.cwd);
         command.env_clear().envs(turn_env(&t.settings));
+        // Inherited by all the turn starts, a job that leaves its session too: what is left when it ends is stopped.
+        command.env(crate::turn_sweep::MARK_ENV, mark);
         #[cfg(test)]
         if let Some(path) = &reaping {
             let mut args = vec![json!(path), json!("--")];
@@ -981,7 +986,7 @@ impl ClaudeHost {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
             let (child, stderr, reaping) = self
-                .launch(thread_id, &t, effort)
+                .launch(thread_id, &t, effort, &turn)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
             inner.reaping = reaping;
             inner.turn = Some((thread_id.into(), turn.clone()));
@@ -1097,10 +1102,13 @@ impl ClaudeHost {
         let mut recovered = false;
         // What a restarted session is told after its prompt: the follow-ups the missing one never read.
         let mut requeued: Vec<String> = vec![];
+        // Each Claude process of the turn (a restored session has two): the groups and scopes it left.
+        let mut launched: Vec<u32> = vec![];
         loop {
             let stdout = child.stdout.take();
             let stdin = child.stdin.take();
             let pid = child.id();
+            launched.extend(pid);
             let (stopper, exited) = super::own(child);
             self.open_pipe(
                 &tid,
@@ -1280,7 +1288,7 @@ impl ClaudeHost {
                             t.session_id = None;
                             t.restored = true;
                             let t = t.clone();
-                            self.launch(&tid, &t, effort.as_deref())
+                            self.launch(&tid, &t, effort.as_deref(), &turn)
                                 .ok()
                                 .map(|(c, s, r)| {
                                     inner.reaping = r;
@@ -1313,9 +1321,65 @@ impl ClaudeHost {
                     continue;
                 }
             }
+            self.sweep(&tid, &turn, &launched).await;
             self.finish(&tid, &turn, result, rc, &tail, failure);
             return;
         }
+    }
+
+    /// Stops what the ended turn left running (crate::turn_sweep) and says so on the turn. Claude has exited, or was
+    /// killed on its wait: then the shells it kept stay with what they run, and their reaping parent stays for them.
+    async fn sweep(&self, tid: &str, turn: &str, launched: &[u32]) {
+        let target = {
+            let inner = self.inner();
+            let stem = inner.threads.get(tid).and_then(|t| {
+                turn_env(&t.settings)
+                    .get(crate::turn_limits::SCOPE_ENV)
+                    .cloned()
+            });
+            let (keep, keep_trees) = match inner
+                .pipe
+                .as_ref()
+                .and_then(|p| p.kept.as_ref().map(|k| (p, k)))
+            {
+                Some((p, kept)) => (
+                    p.reaping.as_ref().and(p.pid).into_iter().collect(),
+                    kept.iter()
+                        .filter_map(|k| k["pid"].as_u64())
+                        .map(|pid| pid as u32)
+                        .collect(),
+                ),
+                None => (vec![], vec![]),
+            };
+            crate::turn_sweep::Turn {
+                mark: turn.to_string(),
+                groups: launched.to_vec(),
+                cgroups: launched
+                    .iter()
+                    .filter_map(|&pid| crate::turn_limits::scope_dir(stem.as_deref(), pid))
+                    .collect(),
+                keep,
+                keep_trees,
+            }
+        };
+        let stopped = tokio::task::spawn_blocking(move || crate::turn_sweep::sweep(&target))
+            .await
+            .unwrap_or_default();
+        if stopped.is_empty() {
+            return;
+        }
+        log(&format!(
+            "claude[{}]: turn ended: stopped {} processes it left running ({})",
+            self.0.bot,
+            stopped.len(),
+            crate::turn_sweep::programs(&stopped)
+        ));
+        self.emit(event(
+            "diagnostic",
+            Some(tid),
+            Some(turn),
+            crate::turn_sweep::report(&stopped),
+        ));
     }
 
     /// Claude read message `mid`; one missing or not written here stands for the oldest unread message.
@@ -2782,7 +2846,7 @@ mod tests {
             .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         let thread = host.start_thread(&settings);
         let t = host.inner().threads[&thread].clone();
-        let (mut child, _stderr, _status) = host.launch(&thread, &t, None).unwrap();
+        let (mut child, _stderr, _status) = host.launch(&thread, &t, None, "turn").unwrap();
         drop(child.stdin.take());
         child.wait().await.unwrap();
         assert_eq!(
@@ -3179,6 +3243,52 @@ mod tests {
         );
     }
 
+    /// A turn that ends on its wait keeps the shell it waited on, and stops a job the bot left behind that is no
+    /// background task of Claude's and has left Claude's tree (double-forked), which the wait's own stray stop misses.
+    #[tokio::test]
+    async fn a_turn_ended_on_its_wait_keeps_its_shell_and_stops_the_rest() {
+        let stray_file = std::env::temp_dir().join(format!(
+            "claude-wait-stray-{}.pid",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let rest = format!(
+            "( sleep 900 </dev/null >/dev/null 2>&1 & echo $! > {} )",
+            stray_file.display()
+        );
+        let first = format!(
+            "{SHELL_STARTED}\n{}\n{}\n",
+            assistant_line("m1", "Suite running."),
+            result_line("Suite running.")
+        );
+        let (got, _, pid) = wait_turn(&first, &rest, Duration::from_millis(300)).await;
+        let stray: i32 = std::fs::read_to_string(&stray_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let _ = std::fs::remove_file(&stray_file);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(stray) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (shell_up, stray_up) = (alive(pid), alive(stray));
+        // SAFETY: processes this test's fake started.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::kill(stray, libc::SIGKILL);
+        }
+        assert!(shell_up, "the kept shell was stopped");
+        assert!(!stray_up, "a job the turn left outlived it");
+        let swept = got
+            .iter()
+            .find(|e| e["kind"] == "diagnostic" && e["leftover_processes"].is_object())
+            .expect("the turn says what it stopped");
+        assert!(
+            swept["text"].as_str().unwrap().contains("sleep 900"),
+            "{swept}"
+        );
+    }
+
     #[tokio::test]
     async fn a_stopped_turn_leaves_nothing_it_started_running() {
         let dir = std::env::temp_dir().join(format!(
@@ -3246,6 +3356,130 @@ mod tests {
         assert!(
             group_gone,
             "something of the turn's group outlived the stop"
+        );
+    }
+
+    /// A turn that ends on its own (the answer is in, stdin closes, Claude exits) leaves none of what it started
+    /// running: a background job, one that double-forked away, and on Linux one that left the session (`setsid`).
+    /// Nothing is stopped while the turn still runs, and a process of no turn of this one's is never stopped.
+    #[tokio::test]
+    async fn an_ended_turn_leaves_nothing_it_started_running_and_a_running_one_keeps_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "claude-leftovers-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("first.jsonl"),
+            format!(
+                "{}\n{}\n",
+                assistant_line("m1", "Done."),
+                result_line("Done.")
+            ),
+        )
+        .unwrap();
+        let setsid = if cfg!(target_os = "linux") {
+            "setsid sh -c 'echo $$ > detached.pid; exec sleep 900' </dev/null >/dev/null 2>&1 &\n"
+        } else {
+            "echo 0 > detached.pid\n"
+        };
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\n\
+                 sh -c 'while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &\necho $! > job.pid\n\
+                 ( sleep 900 </dev/null >/dev/null 2>&1 & echo $! > forked.pid )\n{setsid}\
+                 while [ ! -e go ]; do sleep 0.05; done\ncat first.jsonl\ncat >/dev/null\n"
+            ),
+        );
+        let mut bystander = std::process::Command::new("sleep")
+            .arg("900")
+            .spawn()
+            .unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            // As on a cloud machine: on Linux, Claude runs under its reaping parent.
+            background_wait: Some(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ["job.pid", "forked.pid", "detached.pid"]
+            .iter()
+            .any(|n| read(n).is_none())
+            && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (job, forked, detached) = (
+            read("job.pid").unwrap(),
+            read("forked.pid").unwrap(),
+            read("detached.pid").unwrap(),
+        );
+        let running = [job, forked, detached]
+            .iter()
+            .filter(|&&p| p > 0)
+            .all(|&p| alive(p));
+        std::fs::write(dir.join("go"), "").unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let left = || -> Vec<i32> {
+            [job, forked, detached]
+                .into_iter()
+                .filter(|&p| p > 0 && alive(p))
+                .collect()
+        };
+        while !left().is_empty() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let left = left();
+        let bystander_up = alive(bystander.id() as i32);
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+        for pid in [job, forked, detached].into_iter().filter(|&p| p > 0) {
+            // SAFETY: processes this test's fake started.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        host.stop().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(running, "a process was stopped while its turn still ran");
+        assert!(left.is_empty(), "outlived the turn: {left:?} of {got:?}");
+        assert!(bystander_up, "a process of no turn was stopped");
+        assert!(
+            got.iter()
+                .any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"),
+            "{got:?}"
+        );
+        let swept = got
+            .iter()
+            .find(|e| e["kind"] == "diagnostic" && e["leftover_processes"].is_object())
+            .expect("the turn says what it stopped");
+        let least = if cfg!(target_os = "linux") { 3 } else { 2 };
+        assert!(
+            swept["leftover_processes"]["count"].as_u64().unwrap() >= least,
+            "{swept}"
+        );
+        assert!(
+            swept["text"].as_str().unwrap().contains("sleep 900"),
+            "{swept}"
         );
     }
 
