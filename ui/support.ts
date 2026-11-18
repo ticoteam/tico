@@ -1,4 +1,4 @@
-/* The Tico team chat: one ongoing conversation with the Tico team (docs/support.md). Help beside Search opens it
+/* The Tico support chat: one ongoing conversation with Tico support (docs/support.md). Help beside Search opens it
    (#support-open); so do a #/support link, Report this, Want help setting up? and old #/help links. Help is there
    whether or not this server lets messages out: where they are off (demo, rehearsal, TICO_SUPPORT=off) the same window
    offers the help Tico has without the team: the Assistant, the tour and the docs.
@@ -39,7 +39,7 @@
   const say = (msg: string, error?: boolean, action?: ToastAction | null) => typeof toast === 'function' && toast(msg, error, action);
   // randomUUID exists only in a secure context; a Tico served over plain http on a LAN still needs keys.
   const uid = () => crypto.randomUUID?.() || [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
-  const NAME = 'Tico team';
+  const NAME = 'Tico support';
   // The code call() puts on the error it throws ('' when it has none).
   const thrownCode = (error: unknown): string => typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : '';
   const browserFailures: BrowserFailure[] = [];
@@ -125,7 +125,7 @@
       headers: body === undefined ? {} : {'Content-Type': 'application/json', 'Idempotency-Key': key || uid()},
       body: body === undefined ? undefined : JSON.stringify(body)} as RequestInit);   // exactOptionalPropertyTypes: body may be undefined
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach the Tico team. Try again.'), {status: r.status, code: data.error?.code || ''});
+    if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach Tico support. Try again.'), {status: r.status, code: data.error?.code || ''});
     return data;
   }
   // Help beside Search: always there (support off, it opens the help Tico has without the team), a dot on it while a
@@ -134,7 +134,7 @@
     const n = state.unread, b = document.getElementById('support-open');
     if (b) {
       if (b.classList.contains('has-unread') !== !!n) b.classList.toggle('has-unread', !!n);
-      const label = n ? `Help, ${n} new from the ${NAME}` : 'Help';
+      const label = n ? `Help, ${n} new from ${NAME}` : 'Help';
       if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
     }
     document.dispatchEvent(new CustomEvent('tico:support'));
@@ -279,7 +279,7 @@
       stick.update(() => { host.innerHTML = html; host.dataset.shown = html; }, {fresh});
     }
   }
-  // Letting the Tico team in (docs/support.md): a banner on every screen while a session lasts; over the box, the
+  // Letting Tico support in (docs/support.md): a banner on every screen while a session lasts; over the box, the
   // button that starts one from the open conversation, for an owner or admin; and what the team did in each session.
   let access: AccessInfo = {available: false, active: null, sessions: [], at: 0}, accessTimer: ReturnType<typeof setTimeout> | 0 = 0, accessRevision = 0;
   const accessLogs = new Map<string, AccessLog>();
@@ -318,12 +318,12 @@
     let html = '';
     if (here) html = `<p class="support-access-on">${escape(accessWords(here))}${canStop() ? ' · <button type="button" class="ghost" data-access-stop>Stop</button>' : ''}</p>`;
     else if (t && access.available && access.can_start && !access.active)
-      html = `<button type="button" class="linkish" data-access-start>Let the ${NAME} in</button>`;
+      html = `<button type="button" class="linkish" data-access-start>Let ${NAME} in</button>`;
     const sessions = (access.sessions || []).filter(x => mine.has(x.ticket_id));
     if (sessions.length) {
       for (const x of sessions) if (!accessLogs.has(x.id) || x.id === here?.id) void loadLog(x.id);
       const items = sessions.flatMap(x => accessLogs.get(x.id)?.items || []).sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
-      html += `<details class="support-access-log"${here ? ' open' : ''}><summary>What the ${NAME} did</summary>${items.length
+      html += `<details class="support-access-log"${here ? ' open' : ''}><summary>What ${NAME} did</summary>${items.length
         ? `<ol>${items.map(x => `<li><time datetime="${escape(x.created_at)}" data-ago="${escape(x.created_at)}" title="${escape(fmt(x.created_at))}">${escape(ago(x.created_at))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
         : '<p class="support-note">Nothing yet.</p>'}</details>`;
     }
@@ -358,15 +358,15 @@
       accessRevision++;
       access = {...access, active: null, sessions: (access.sessions || []).map(x => x.id === stopped?.id ? stopped : x)};
       renderBanner(); renderAccess();
-      say(`The ${NAME} no longer has access.`);
+      say(`${NAME} no longer has access.`);
     } catch (e) { say(errorMessage(e, ''), true); }
     await pollAccess();
   }
   interface AccessControls { hours: HTMLSelectElement; custom: HTMLInputElement; tier: RadioNodeList }
   function openAccess(t: SupportTicket) {
     const dialog = document.createElement('dialog');
-    dialog.className = 'tmodal support-modal'; dialog.setAttribute('aria-label', `Let the ${NAME} in`);
-    dialog.innerHTML = `<div class="tmodal-head"><strong>Let the ${NAME} in</strong><span class="spacer"></span><button type="button" class="ghost" data-close aria-label="Close">✕</button></div>
+    dialog.className = 'tmodal support-modal'; dialog.setAttribute('aria-label', `Let ${NAME} in`);
+    dialog.innerHTML = `<div class="tmodal-head"><strong>Let ${NAME} in</strong><span class="spacer"></span><button type="button" class="ghost" data-close aria-label="Close">✕</button></div>
       <form class="tmodal-body" data-access-form>
       <label class="support-check"><input type="radio" name="tier" value="app" checked><span><strong>App only.</strong> The team sees settings, Health, computers, bots, tasks and runs, and can change setup (a bot's model, a computer's runner restart). It cannot see credential values, approve for you, send, spend, publish or run bots.</span></label>
       <label class="support-check"><input type="radio" name="tier" value="full"${access.can_full ? '' : ' disabled'}><span><strong>Full access.</strong> What the owner can do in Tico, except tokens, credential values and ownership. Its changes can outlast the session.${access.can_full ? '' : ' Only the owner can give it.'}</span></label>
@@ -386,7 +386,7 @@
       accessForm.querySelectorAll<FormControl>('button, input, select').forEach(el => { el.disabled = true; });
       try {
         await call('POST', '/support/access', {ticket_id: t.id, tier: controls.tier.value, hours});
-        dialog.close(); say(`The ${NAME} has access.`); await pollAccess();
+        dialog.close(); say(`${NAME} has access.`); await pollAccess();
       } catch (error) {
         err.textContent = errorMessage(error, ''); err.hidden = false;
         accessForm.querySelectorAll<FormControl>('button, input, select').forEach(el => { el.disabled = false; });
@@ -430,8 +430,8 @@
         <button class="linkish" type="button" data-preview>Review</button><button class="support-x" type="button" data-unreport aria-label="Remove diagnostics" title="Remove diagnostics"><span class="nav-icon" aria-hidden="true">close</span></button></p>` : ''}
       <div class="support-input">
         <button class="support-clip" type="button" data-attach aria-label="Attach diagnostics" title="Attach diagnostics">${ICON.clip}</button>
-        <label class="sr-only" for="support-message">Message the ${NAME}</label>
-        <textarea id="support-message" name="message" maxlength="4000" rows="1" placeholder="Message the ${NAME}" aria-describedby="support-keys">${escape(d.message)}</textarea>
+        <label class="sr-only" for="support-message">Message ${NAME}</label>
+        <textarea id="support-message" name="message" maxlength="4000" rows="1" placeholder="Message ${NAME}" aria-describedby="support-keys">${escape(d.message)}</textarea>
         <button class="support-send" type="submit" aria-label="Send" title="Send (Enter)">${ICON.send}</button></div>
       <p class="err support-error" data-error role="alert"${d.error ? '' : ' hidden'}>${escape(d.error || '')}</p>
       <small class="sr-only" id="support-keys">Enter sends. Shift+Enter adds a new line.</small>`;
@@ -505,7 +505,7 @@
         settled(); done();
         // Said where the person is looking: the message did not arrive and is still in the box.
         const status = errorStatus(error);
-        shown(!status || status >= 500 ? `Not sent. Could not reach the ${NAME}. Try again in a moment.` : 'Not sent. ' + errorMessage(error, ''));
+        shown(!status || status >= 500 ? `Not sent. Could not reach ${NAME}. Try again in a moment.` : 'Not sent. ' + errorMessage(error, ''));
         if (isOpen() && draft === d) dialog.querySelector<HTMLElement>('[data-compose] [name=message]')?.focus();
       }
       // A Report this or setup snapshot that came while the message was on its way starts from what is left now.
@@ -658,7 +658,7 @@
         <button type="button" class="support-close" data-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <p class="support-connection" data-connection role="status"></p>
       <p class="support-note support-loading" data-loading hidden>Loading…</p>
-      <div class="support-off" data-off hidden><p>Messages to the ${NAME} are off on this Tico server.</p>
+      <div class="support-off" data-off hidden><p>Messages to ${NAME} are off on this Tico server.</p>
         <nav class="support-help" aria-label="Help">
           <button class="nav-link" type="button" data-help-go data-ask-open><span class="nav-icon" aria-hidden="true">forum</span>Ask the Assistant</button>
           <button class="nav-link" type="button" data-help-go data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
@@ -666,11 +666,11 @@
         </nav></div>
       <div class="support-confirm" data-confirm role="alertdialog" aria-labelledby="support-confirm-h" hidden>
         <p id="support-confirm-h"><strong>Delete chat history?</strong></p>
-        <p class="support-note">Every message and its diagnostics, here and at the ${NAME}. This cannot be undone.</p>
+        <p class="support-note">Every message and its diagnostics, here and at ${NAME}. This cannot be undone.</p>
         <p class="err" data-confirm-error role="alert" hidden></p>
         <div class="support-row"><button type="button" class="ghost" data-confirm-no>Cancel</button><button type="button" class="danger" data-confirm-yes>Delete</button></div></div>
       <div class="support-view" data-view hidden>
-        <div class="support-thread" data-thread role="log" aria-label="Conversation with the ${NAME}"></div>
+        <div class="support-thread" data-thread role="log" aria-label="Conversation with ${NAME}"></div>
         <div class="support-access" data-access hidden></div>
         <form class="support-write" data-compose novalidate></form>
       </div></div>`;

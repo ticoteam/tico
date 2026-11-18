@@ -87,7 +87,7 @@ _RULE_NAMES = {
     "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
-    "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
+    "bot_reports_direct": ("Bots send reports to Tico support without asking", "confirm", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }

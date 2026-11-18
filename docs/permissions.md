@@ -236,7 +236,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
-| **Bots send reports to the Tico team without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to the Tico team is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
+| **Bots send reports to Tico support without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to Tico support is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
 
@@ -511,7 +511,7 @@ The row follows the computer as the page refreshes (it comes online, its screen 
 
 ## Tico support
 
-A session a person opens from a support request ([support.md](support.md#letting-tico-support-in)) lets the Tico team in as
+A session a person opens from a support request ([support.md](support.md#letting-tico-support-in)) lets Tico support in as
 one more identity, `human:tico-support`, named **Tico support** wherever names show. It has no roster row and no sign-in: it
 exists only while its session is live, through a token the server keeps in memory, and every request it makes is checked
 against the session again.
@@ -729,7 +729,7 @@ The commands (with MCP tools of the same names):
 | `tico credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
 | `tico credential grant <name> --to <bot>`, `tico credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
 | `tico credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |
-| `tico support file "<message>"` | sends a requested support message to the Tico team with the requester's rights |
+| `tico support file "<message>"` | sends a requested support message to Tico support with the requester's rights |
 | `tico api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |
 
 The server applies the requester's rights to every BotOps v2 call, including friendly tools and `tico api`.

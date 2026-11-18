@@ -4,7 +4,7 @@
 // bubbles (theirs with the writer's name when it changes, a date line where the day changes), one box and a paperclip
 // for diagnostics. No list, no form, no statuses. Sending writes to the open ticket, or starts a new one with the
 // message (email and install details filled in). A reply on the person's own request opens the chat once and puts a dot on the ?; a bot's report is not in the chat at all. A #/support
-// link, Report this, Want help setting up?, old #/help links and Let the Tico team in all work through it; with
+// link, Report this, Want help setting up?, old #/help links and Let Tico support in all work through it; with
 // support off the ? is gone and the chat says so. Nothing a message says is rendered as HTML.
 import type {Page} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -19,7 +19,7 @@ const {t} = (() => { try { return require('./support/load.cts') as import('./sup
 const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
 const DIAGNOSTICS_TEXT = '{\n  "format": 1,\n  "versions": {\n    "tico": "0.2.17"\n  }\n}';
 const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
-const UNREACHABLE = 'Not sent. Could not reach the Tico team. Try again in a moment.';
+const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a moment.';
 // No help-desk words anywhere in the chat.
 const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Open|Answered|Closed|sup_/;
 
@@ -217,19 +217,19 @@ declare function talkToUs(report: unknown): void;
     assert.ok(row.gap >= 0 && row.gap < 8 && row.dy < 2 && row.w === row.sw && Math.abs(row.h - row.sh) < 1, `next to Search, the same size: ${JSON.stringify(row)}`);
     assert.deepEqual([await q.getAttribute('aria-label'), await q.getAttribute('title'), await q.innerText()], ['Help', 'Help', 'help']);
     await q.click();
-    const pop = page.getByRole('dialog', {name: 'Tico team'});
+    const pop = page.getByRole('dialog', {name: 'Tico support'});
     await pop.locator('[name=message]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'the page behind stays');
     const box0 = (await pop.boundingBox())!, side = (await page.locator('#side').boundingBox())!;
     assert.ok(box0.x >= side.x + side.width && box0.x - (side.x + side.width) < 30 && Math.abs(box0.width - 400) <= 2 && box0.height <= 640, `a panel beside the sidebar: ${JSON.stringify(box0)}`);
     assert.deepEqual(await active(page), {id: 'support-message', name: 'message', inPop: true}, 'focus in the box');
     // The header: the headset and "Tico team", a close button. No list, form, subject, status or ticket words.
-    assert.equal(await pop.locator('.support-head h2').innerText(), 'Tico team');
+    assert.equal(await pop.locator('.support-head h2').innerText(), 'Tico support');
     assert.equal(await pop.locator('.support-head .support-av').innerText(), 'headset_mic');
     assert.equal(await pop.locator('[data-requests], [data-list], [data-mine], [data-new], [name=email], [name=subject], .support-badge').count(), 0, 'no list, form or statuses');
     assert.equal(await pop.locator('[data-delete]').isHidden(), true, 'nothing to delete yet');
     const box = pop.locator('[name=message]');
-    assert.equal(await box.getAttribute('placeholder'), 'Message the Tico team');
+    assert.equal(await box.getAttribute('placeholder'), 'Message Tico support');
     assert.equal(await box.getAttribute('maxlength'), '4000');
     assert.equal(await pop.locator('[data-thread]').innerText(), '', 'an empty chat: just the box');
     assert.doesNotMatch(await pop.innerText(), DESK);
@@ -279,7 +279,7 @@ declare function talkToUs(report: unknown): void;
     await page.locator('#support-open.has-unread').waitFor();
     const {log, ...waiting} = await page.evaluate(() => ({unread: (window as unknown as PageWin).supportState().unread, active: document.activeElement?.id,
       open: (document.getElementById('support-pop') as HTMLDialogElement).open, label: document.getElementById('support-open')!.getAttribute('aria-label'), log: (window as unknown as PageWin).__focus.slice()}));
-    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Help, 1 new from the Tico team'},
+    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Help, 1 new from Tico support'},
       `the reply waits while the field has focus; focus: ${JSON.stringify(log)}; calls: ${v.calls.slice(-6).join(' | ')}`);
     assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
     await page.evaluate(() => document.getElementById('t-elsewhere')!.blur());
@@ -289,7 +289,7 @@ declare function talkToUs(report: unknown): void;
     assert.ok(v.calls.includes('POST tickets/sup_1/read'));
     assert.equal(await page.locator('.toast', {hasText: 'replied'}).count(), 0, 'no notice for the reply');
     // Theirs: the name above, in a bubble on the left; text, never HTML.
-    assert.equal(await pop.locator('.support-msg.them .support-who').innerText(), 'Tico team');
+    assert.equal(await pop.locator('.support-msg.them .support-who').innerText(), 'Tico support');
     assert.match(await pop.locator('.support-msg.them .support-body').innerText(), /^Try the latest release\. <img src=x/);
     const sides = await pop.evaluate((el: Element) => { const b = (s: string) => el.querySelector(s)!.getBoundingClientRect(), t = el.querySelector('[data-thread]')!.getBoundingClientRect();
       return {them: b('.support-msg.them').left - t.left, you: t.right - b('.support-msg.you').right}; });
@@ -339,8 +339,8 @@ declare function talkToUs(report: unknown): void;
     await chat.locator('.support-msg.them', {hasText: 'Anything else?'}).waitFor();
     const order = await chat.locator('[data-thread] > *').evaluateAll(els => els.map(el => el.matches('.support-day') ? 'day'
       : (el.matches('.you') ? 'me: ' : 'them: ') + [...el.children].map(c => c.textContent).join(' | ')));
-    assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico team | Yes.', 'me: Thanks',
-      'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico team | Anything else?'], `in time order: ${order}`);
+    assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico support | Yes.', 'me: Thanks',
+      'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico support | Anything else?'], `in time order: ${order}`);
     // Days are the browser's own (its time zone may not be this script's): count them there.
     const seen = await page.evaluate((times: string[]) => ({days: new Set(times.map(t => new Date(t).toDateString())).size,
       today: new Date(times[0]!).toDateString() === new Date().toDateString()}),
@@ -397,7 +397,7 @@ declare function talkToUs(report: unknown): void;
     await confirmBox.waitFor({state: 'hidden'});
     assert.deepEqual(v.calls.filter(c => c.startsWith('DELETE')).sort(), ['DELETE tickets/sup_1', 'DELETE tickets/sup_2'], "each ticket's DELETE");
     assert.equal(await chat.locator('.support-msg, .support-day').count(), 0, 'the chat is empty');
-    assert.equal(await chat.locator('[name=message]').getAttribute('placeholder'), 'Message the Tico team');
+    assert.equal(await chat.locator('[name=message]').getAttribute('placeholder'), 'Message Tico support');
     assert.equal(await trash.isHidden(), true, 'nothing left to delete');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
@@ -422,8 +422,8 @@ declare function talkToUs(report: unknown): void;
                      access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: false}});
     await openSupport(v.page);
     const strip = v.page.locator('#support-pop [data-access]');
-    await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
-    const letIn = v.page.locator('dialog[aria-label="Let the Tico team in"]');
+    await strip.getByRole('button', {name: 'Let Tico support in'}).click();
+    const letIn = v.page.locator('dialog[aria-label="Let Tico support in"]');
     assert.equal(await letIn.locator('[name=tier][value=full]').isDisabled(), true, "full access is the owner's to give");
     assert.equal(await letIn.locator('[name=hours]').inputValue(), '72');
     assert.deepEqual(await letIn.locator('[name=hours] option').evaluateAll(options => options.map(o => [(o as HTMLOptionElement).value, o.textContent])),
@@ -432,9 +432,9 @@ declare function talkToUs(report: unknown): void;
     await letIn.locator('[type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();
     assert.ok(v.calls.includes('POST access {"ticket_id":"sup_9","tier":"app","hours":4}'));
-    assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico team has access (App only), 3 h 12 min left');
+    assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico support has access (App only), 3 h 12 min left');
     await strip.locator('.support-access-log li').waitFor();
-    assert.equal(await strip.locator('.support-access-on').innerText(), 'Tico team has access (App only), 3 h 12 min left · Stop');
+    assert.equal(await strip.locator('.support-access-on').innerText(), 'Tico support has access (App only), 3 h 12 min left · Stop');
     assert.match(await strip.locator('.support-access-log li').innerText(), /^now Support Agent · GET \/api\/v2\/health<img src=x/);
     await v.page.keyboard.press('Escape');
     await v.page.locator('#support-access-banner [data-access-left]').click();
@@ -443,17 +443,17 @@ declare function talkToUs(report: unknown): void;
     v.hq.accessGate = new Promise(resolve => { releaseAccess = resolve; });
     await strip.getByRole('button', {name: 'Stop'}).click();
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
-    await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
+    await strip.getByRole('button', {name: 'Let Tico support in'}).waitFor();
     releaseAccess(); v.hq.accessGate = null;
     // Every longer preset sends its duration in hours, and Stop still ends it immediately.
     for (const hours of ['720', '2160', '8760']) {
-      await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
+      await strip.getByRole('button', {name: 'Let Tico support in'}).click();
       await letIn.locator('[name=hours]').selectOption(hours);
       await letIn.locator('[type=submit]').click();
       await v.page.locator('#support-access-banner:not([hidden])').waitFor();
       assert.ok(v.calls.includes(`POST access {"ticket_id":"sup_9","tier":"app","hours":${hours}}`));
       await strip.getByRole('button', {name: 'Stop'}).click();
-      await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
+      await strip.getByRole('button', {name: 'Let Tico support in'}).waitFor();
     }
     assert.equal(await v.page.evaluate(() => (window as unknown as PageWin).__pwned), undefined);
     assert.deepEqual(v.errors, []);
@@ -465,7 +465,7 @@ declare function talkToUs(report: unknown): void;
       access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: true}});
     await openSupport(v.page);
     await v.page.locator('[data-access-start]').click();
-    const customDialog = v.page.locator('dialog[aria-label="Let the Tico team in"]');
+    const customDialog = v.page.locator('dialog[aria-label="Let Tico support in"]');
     await customDialog.locator('[name=hours]').selectOption('custom');
     const customHours = customDialog.locator('[name=custom]');
     assert.equal(await customHours.getAttribute('max'), '8760');
@@ -781,8 +781,8 @@ declare function talkToUs(report: unknown): void;
     assert.equal(await v.page.locator('#support-open').isVisible(), true, 'Help stays');
     assert.equal(await v.page.locator('#support-open').getAttribute('aria-label'), 'Help');
     await openSupport(v.page);
-    const off = v.page.getByRole('dialog', {name: 'Tico team'});
-    assert.equal(await off.locator('[data-off] p').innerText(), 'Messages to the Tico team are off on this Tico server.');
+    const off = v.page.getByRole('dialog', {name: 'Tico support'});
+    assert.equal(await off.locator('[data-off] p').innerText(), 'Messages to Tico support are off on this Tico server.');
     assert.deepEqual(await off.locator('[data-off] .support-help .nav-link').evaluateAll(els => els.map(el => el.lastChild?.textContent)),
       ['Ask the Assistant', 'Take the tour', 'Read the docs'], 'what helps without the team');
     assert.match((await off.locator('[data-off] a.nav-link').getAttribute('href'))!, /^https:\/\/github\.com\/ticoteam\/tico\/blob\/main\/docs\//);
