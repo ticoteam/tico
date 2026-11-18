@@ -359,10 +359,16 @@ def approved(c, auth, row, policy):
         return False
     if not can_ok(c, auth, found["ok_by_id"], row["mailbox"], row["bot"], policy):
         return False
+    return seen(c, found["ok_by_id"], row)
+
+
+def seen(c, actor, row):
+    """Whether the server showed `actor` this whole frozen email (`shown_to`, from GET /api/v2/email/sends/{id}): an OK
+    of a send counts only from someone it was shown to. The generic OK preview never shows the body."""
     return bool(
         c.execute(
             "SELECT 1 FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
-            (row["id"], found["ok_by_id"], row["content_sha256"]),
+            (row["id"], actor, row["content_sha256"]),
         ).fetchone()
     )
 
@@ -689,7 +695,7 @@ def shown_to(c, who, row):
 
 def ok_given(c, grant, ctx):
     """In the transaction of an OK of a send (task_asks.ON_OK): the person who gave it may approve this send under the
-    inbox's rule now. Checked again before it is sent (`approved`)."""
+    inbox's rule now, and was shown the whole email (`seen`). Checked again before it is sent (`approved`)."""
     auth = getattr(ctx, "auth", None)
     sid = str(grant["subject"]).removeprefix(SUBJECT)
     row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
@@ -699,6 +705,9 @@ def ok_given(c, grant, ctx):
         c, auth, grant["ok_by_id"], row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])
     ):
         raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
+    if not seen(c, grant["ok_by_id"], row):
+        # Refused here, not found out at the send: an OK `approved` would not count is never given.
+        raise Problem("email_not_shown", "Open the full email before you OK it", 409)
 
 
 def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None, wait_for_gmail=False):
@@ -989,6 +998,15 @@ def _queued(c, mailbox, lease=True):
     return rows
 
 
+def _why_asked_again(c, auth, row, bound, standing, policy):
+    """Why an OK of this send is withdrawn and asked again: its giver was never shown the whole email, or the inbox's
+    approval rule no longer lets them (or whoever it waits on) approve it."""
+    giver = bound.get("ok_by_id") if standing == task_asks.OK else None
+    if giver and can_ok(c, auth, giver, row["mailbox"], row["bot"], policy) and not seen(c, giver, row):
+        return "The email was OK'd without opening it in full: open it and OK it again"
+    return "The email's approval rule changed"
+
+
 def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
     """One pass over an inbox's queue inside a write: abandoned leases recovered, approvals reconciled, and the first
     due send leased to `runner_id`. `permit` (the server's own dispatch) also issues the dispatch permit in the same
@@ -1056,7 +1074,7 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
             )
             if not bound or stale:
                 if bound:
-                    task_asks.withdraw(c, rid, "The email's approval rule changed")
+                    task_asks.withdraw(c, rid, _why_asked_again(c, auth, row, bound, standing, found["policy"]))
                 request_approval(c, auth, row, found["policy"])
             continue
         if row["state"] == "waiting_approval":
