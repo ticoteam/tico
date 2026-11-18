@@ -318,3 +318,132 @@ def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_rea
     rebuilt = api.get("/api/v2/needs-you", headers=headers("ben-test")).json()
     assert gone not in {item.get("task_id") for item in rebuilt["items"]}
     assert later["items"] == rebuilt["items"][:2] and later["count"] == first["count"] - 1
+
+
+def preset_company(api, count):
+    """The software company's preset pipelines with `count` open tasks over their work stages: a third with an OK of
+    Ana's or Ben's, a quarter with a subtask filed on their visit, a fifth with a PR, and each task in a stage that
+    approves a document with that document written. Every task's standing reads its stage, its pipeline, the company
+    person, its document's live pages, its filed tasks and whether its stage is a Review stage."""
+    from contextlib import suppress
+
+    from backend import pipeline_settings as PS
+    from backend.store import Problem
+    from backend.tests.helpers.product_engineering_presets import _answers, _team
+    from backend.tests.helpers.stage_inputs import _link_pr
+
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as c:
+        _team(c)
+        _answers(c, software="yes")
+        PS.ensure_presets(c)
+        X.github_installed(c)
+        stages = [
+            (str(r[0]), str(r[1]))
+            for r in c.execute(
+                "SELECT s.id, s.pipeline_id FROM stages s JOIN pipelines p ON p.id=s.pipeline_id "
+                "WHERE s.retired_at IS NULL AND p.retired_at IS NULL AND s.kind='work' AND coalesce(s.side,0)=0 "
+                "ORDER BY s.pipeline_id, s.position"
+            )
+        ]
+        documents = {
+            str(r[0]): str(r[1])
+            for r in c.execute(
+                "SELECT stage_id, json_extract(settings, '$.document') FROM requirements WHERE stage_id IS NOT NULL "
+                "AND kind='page' AND withdrawn_at IS NULL AND json_extract(settings, '$.document') IS NOT NULL"
+            )
+        }
+        written = []
+        for k in range(count):
+            stage, pipeline = stages[k % len(stages)]
+            row = X.new_task(c, ANA, f"Preset task {k}", pipeline, assignee=[ANA, BEN, "bot:pm"][k % 3])
+            with suppress(Problem, H.Refused):
+                if row["stage_id"] != stage:
+                    E.move(c, row["id"], stage, ANA, "Set up for the test")
+            if k % 3 == 0:
+                with suppress(Problem, H.Refused):
+                    X.ok_ask(c, row["id"], ANA, [ANA, BEN][k % 2], f"Ready {k}?")
+            if k % 4 == 0:
+                with suppress(Problem, H.Refused):
+                    X.new_task(c, ANA, f"Filed by {k}", pipeline, assignee=ANA, parent=row["id"])
+            if k % 5 == 0:
+                _link_pr(c, row["id"], 1000 + k, f"{k + 1:040x}")
+            moved = E.task(c, row["id"])
+            if moved and moved["stage_id"] in documents:
+                written.append((row["id"], documents[moved["stage_id"]]))
+    for task_id, document in written:  # best effort: a stage may refuse it, and the standing is read either way
+        api.post(
+            f"/api/v2/tasks/{task_id}/files",
+            json={"document": document, "text": f"<h1>{document}</h1><p>For {task_id}.</p>"},
+            headers=headers("ana-test"),
+        )
+    return store
+
+
+# A standing's reads of each task that a snapshot reads together for the whole list (waiting_on.prime): its stage and
+# pipeline, the company person's address, a document's live pages, the tasks filed on its visit, its Review gate.
+def shapes(api, person, monkeypatch, primed=True):
+    """{read: how many times it ran} in one snapshot build of the person's Needs you; `primed` False reads each task's
+    rows as it comes to it (the snapshot still keeps a row read by id), as before these were read together."""
+    from backend import task_requirements as R
+    from backend import waiting_on as W
+
+    once = {
+        "stage": E.STAGE_SQL,
+        "pipeline": E.PIPELINE_SQL,
+        "company person": "SELECT id FROM humans WHERE lower(email)=? LIMIT 1",
+        "live pages": P.LIVE_DOCUMENTS_SQL,
+        "filed": R.FILED_SQL,
+        "review gate": R.AT_HEAD_SQL,
+    }
+    store, seen = api.app.state.store, []
+    with monkeypatch.context() as patched:
+        if not primed:
+            patched.setattr(W, "company_person", W._company_person)
+            patched.setattr(E, "prime_parts", lambda *a: None)
+            patched.setattr(P, "prime_live_documents", lambda *a: None)
+            patched.setattr(R, "_prime_linked_done", lambda *a: None)
+        with store.read_transaction() as c:
+            c.set_trace_callback(seen.append)
+            items = V.needs_items(c, api.app.state.auth, WHO[person])
+            c.set_trace_callback(None)
+    return {name: sum(1 for s in seen if _same(s, sql)) for name, sql in once.items()}, items
+
+
+def _same(traced, sql):
+    """Whether a traced statement (its values written in) is `sql` (with ? marks)."""
+    import re
+
+    value = r"(?:'(?:[^']|'')*'|-?\d+(?:\.\d+)?|NULL)"
+    return re.fullmatch(re.escape(" ".join(sql.split())).replace(r"\?", value), " ".join(traced.split())) is not None
+
+
+def test_a_preset_companys_build_is_the_row_by_row_build_byte_for_byte(api):
+    from backend import waiting_on as W
+
+    store = preset_company(api, 40)
+    for person in (ANA, BEN):
+        for count_only in (False, True):
+            batched, _ = build(api, person, "snapshot", count_only=count_only)
+            rows, _ = build(api, person, "rows", count_only=count_only)
+            assert json.dumps(batched, sort_keys=True, default=str) == json.dumps(rows, sort_keys=True, default=str)
+    # Health's plate check: every person's list in one pass.
+    with store.read_transaction() as c:
+        plates = W.needs_by_person(c)
+    with store.read() as c:
+        alone = W.needs_by_person(c)
+    assert plates, "the company's people have something to act on"
+    assert json.dumps(plates, sort_keys=True, default=str) == json.dumps(alone, sort_keys=True, default=str)
+
+
+def test_a_preset_companys_build_reads_each_tasks_stage_pipeline_pages_and_filed_work_once(api, monkeypatch):
+    store = preset_company(api, 40)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM page_links WHERE target LIKE 'task:%'").fetchone()[0] > 0
+    alone, before = shapes(api, ANA, monkeypatch, primed=False)
+    # Read as each task comes, each of these runs for several tasks (or stages): the company exercises every one.
+    assert all(n >= 2 for n in alone.values()), str(alone)
+    together, after = shapes(api, ANA, monkeypatch)
+    assert all(n <= 1 for n in together.values()), str((alone, together))
+    assert json.dumps(after, sort_keys=True, default=str) == json.dumps(before, sort_keys=True, default=str)

@@ -49,14 +49,55 @@ LIVE_DOCUMENT = (
 )
 
 
+LIVE_DOCUMENTS_SQL = "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id"
+# Some roles' live pages of many tasks: the same filter and order as LIVE_DOCUMENTS_SQL, so each (task, role) gets the
+# pages one read gives, in its order.
+LIVE_DOCUMENTS_MANY_SQL = (
+    "SELECT l.target,l.role,f.id,f.current_version "
+    + LIVE_DOCUMENT
+    + "AND l.target IN (SELECT value FROM json_each(?)) AND l.role IN (SELECT value FROM json_each(?)) ORDER BY f.id"
+)
+
+
 def live_documents(conn: "sqlite3.Connection", task_id: str, document: str) -> dict[str, int]:
+    """{file id: current version} of the task's live pages in this role. A (task, role) `prime_live_documents` read is
+    not read again in this snapshot."""
+    values = _snapshot(conn)
+    primed = values.get(("live_documents", "task:" + task_id, document)) if values is not None else None
+    if primed is not None:
+        return dict(primed)
     return {
         str(file_id): int(version)
-        for file_id, version in conn.execute(
-            "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id",
-            ("task:" + task_id, document),
-        )
+        for file_id, version in conn.execute(LIVE_DOCUMENTS_SQL, ("task:" + task_id, document))
     }
+
+
+def prime_live_documents(conn: "sqlite3.Connection", wanted: "Iterable[tuple[str, str]]") -> None:
+    """Read `live_documents` of many (task, document role) pairs in one statement, for the reads that follow in this
+    snapshot (a document approval's standing reads it for each task in a list). Only the roles asked for: a task's other
+    pages are not read. Nothing outside a snapshot."""
+    values = _snapshot(conn)
+    if values is None:
+        return
+    keys = sorted(
+        {
+            ("task:" + str(task_id), str(document))
+            for task_id, document in wanted
+            if task_id and document and ("live_documents", "task:" + str(task_id), str(document)) not in values
+        }
+    )
+    if not keys:
+        return
+    found: dict[tuple[str, str], dict[str, int]] = {key: {} for key in keys}
+    targets, roles = sorted({t for t, _ in keys}), sorted({r for _, r in keys})
+    for target, role, file_id, version in conn.execute(
+        LIVE_DOCUMENTS_MANY_SQL, (json.dumps(targets), json.dumps(roles))
+    ):
+        pages = found.get((str(target), str(role)))
+        if pages is not None:  # a role another of the tasks asked for
+            pages[str(file_id)] = int(version)
+    for (target, role), pages in found.items():
+        values.setdefault(("live_documents", target, role), pages)
 
 
 # The live pages of one requirement on one visit (`current_pages`), and of every requirement on many visits
