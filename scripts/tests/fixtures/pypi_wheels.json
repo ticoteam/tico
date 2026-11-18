@@ -1104,7 +1104,7 @@
   "cp39-cp39-win32",
   "cp39-cp39-win_amd64"
  ],
- "reportlab==4.5.1": [
+ "reportlab==5.1.0": [
   "py3-none-any"
  ],
  "s3transfer==0.19.2": [

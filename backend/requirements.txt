@@ -101,7 +101,7 @@ python-multipart==0.0.34
     # via -r requirements.in
 pyyaml==6.0.3
     # via -r requirements.in
-reportlab==4.5.1
+reportlab==5.1.0
     # via -r requirements.in
 s3transfer==0.19.2
     # via boto3
