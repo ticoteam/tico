@@ -1,4 +1,3 @@
-
 """The one writer of a task's stage, owner and status (backend/task_engine.py, docs/dev/pipelines-v3.md "How a task moves").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a three-stage Build pipeline, the fictional
