@@ -80,7 +80,7 @@ dialog.meet-call-dialog{background:var(--g1)}
 /* light: white, as the meeting window (call-window.css .cw) */
 :root[data-theme="light"] :is(dialog.meet-call-dialog,.meet-call-dialog .wh-foot){background:var(--g0)}
 @media (prefers-color-scheme:light){:root[data-theme="system"] :is(dialog.meet-call-dialog,.meet-call-dialog .wh-foot){background:var(--g0)}}
-.meet-call-dialog :is(input.who-pick-q,input[name=title]){background-color:var(--g2)}
+.meet-call-dialog :is(input.who-pick-q,input[name=title]){background-color:var(--g2);border:1px solid var(--g4)}
 .meet-call-dialog :is(input.who-pick-q,input[name=title]):is(:focus,:focus-visible){outline:0;box-shadow:none;border:1px solid var(--muted)}
 .meet-call-dialog input[name=title]{box-sizing:border-box;width:100%}
 .meet-call-who{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -96,10 +96,38 @@ dialog.meet-call-dialog{background:var(--g1)}
 .meet-stack{display:flex}
 .meet-stack .av{box-shadow:0 0 0 2px var(--surface);border-radius:50%}
 .meet-stack .av+.av{margin-left:-6px}
+.meet-call-when{display:flex;align-items:center;gap:8px}
+/* When: a field-like button reading Now or the time picked; the native picker it opens sits under it, unseen. */
+.meet-call-at-box{position:relative;flex:1 1 auto;min-width:0;display:flex}
+.meet-call-at{flex:1 1 auto;min-width:0;display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:var(--ctl);padding:0 10px;border:1px solid var(--g4);border-radius:var(--r-ctl);background:var(--g2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.meet-call-at .nav-icon{font-size:18px;color:var(--muted)}
+.meet-call-at>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meet-call-at:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.meet-call-at-input{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none}
+/* Back to Now: an × inside the field's right edge */
+.meet-call-at-box.has-clear .meet-call-at{padding-right:32px}
+.meet-call-now-again{position:absolute;top:50%;right:8px;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.meet-call-now-again .nav-icon{font-size:16px}
+.meet-call-now-again:hover{color:var(--ink)}
+.meet-call-now-again[hidden],.meet-call-when select[hidden]{display:none}
+.meet-call-when select{flex:0 0 auto;width:auto;height:var(--ctl);background-color:var(--g2);border:1px solid var(--g4)}
+/* Upcoming: the scheduled calls the viewer is in, above the meetings list; one dense row each. */
+.meet-upcoming{margin:12px 0}
+.meet-upcoming-h{margin:0 0 4px;padding:0 8px;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.meet-upcoming-row{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 8px;border-radius:var(--r-ctl);color:var(--g7)}
+.meet-upcoming-row:hover{background:var(--hover)}
+.meet-upcoming-row>svg{flex:none;color:var(--accent)}
+.meet-upcoming-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);text-decoration:none;font-weight:500}
+.meet-upcoming-when{flex:none;font-size:var(--t-sm)}
+.meet-upcoming-ppl{display:flex;flex:none}
+.meet-upcoming-ppl>span+span{margin-left:-4px}
+@media (max-width:760px){.meet-upcoming-row{gap:8px;min-height:44px}}
 /* A phone: the dialog stands at the top, so the field, the list and Start stay above the keyboard. */
 @media (max-width:760px){
   dialog.tmodal.meet-call-dialog{top:max(12px,env(safe-area-inset-top));right:16px;bottom:auto;left:16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}
   .meet-call-who .nm-chip{height:32px;border-radius:16px}
+  .meet-call-at{height:44px;font-size:16px}
+  .meet-call-when select{height:44px}
   .meet-call-dialog .who-pick-list .settings-combo-opt{min-height:44px}
 }
 .ph #notes-search{width:240px;flex:0 1 240px}

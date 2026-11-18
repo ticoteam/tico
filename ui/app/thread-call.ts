@@ -21,6 +21,9 @@ interface CallRecord {
   live_count?: number; status_source?: string | null; seen_at?: string | null; started_at?: string | null; ended_at?: string | null;
   duration_s?: number | null; ring?: boolean; card_message_id?: string | null; transcript_message_id?: string | null;
   participants?: CallPerson[]; meeting_id?: string | null; end_reason?: string | null;
+  // A scheduled call (state 'scheduled'): when it is booked for. `people`: who it is with (GET /v2/calls/upcoming).
+  // `can_edit`: whether the viewer may change its time or cancel it (its booker, or who manages its thread).
+  scheduled_start?: string | null; scheduled_end?: string | null; people?: string[]; can_edit?: boolean;
   // The bots in the call: slugs, or (an older voice view) each bot with what it is doing and its words now; what each is
   // doing now comes in `voice` (null without voice).
   bots?: (string | CallBotRaw)[]; voice?: CallVoiceView | null;
@@ -32,11 +35,12 @@ interface CallRecord {
 interface CallStageView { kind: 'screen' | 'file'; by: string; at?: string | null; file_id?: string; version?: number; title?: string; no_access?: boolean; }
 // A bot in a call as the server may send it: `state` is listening, waiting, thinking, making_voice or speaking.
 interface CallBotRaw { slug?: string; state?: string | null; caption?: string | null; }
-interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; }
+interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; next_scheduled?: CallRecord | null; }
 interface CallJoinReply { call?: CallRecord; token: string; url: string; }
 // Per thread: {call} (the live call, or null), {off} when the server has calls switched off, {removed} after a removal,
-// {none} when the server has no calls at all. `providers`: what the viewer could start here, in order.
-interface CallThreadInfo { call?: CallRecord | null; none?: boolean; off?: boolean; removed?: boolean; providers?: string[]; }
+// {none} when the server has no calls at all. `providers`: what the viewer could start here, in order. `next`: the
+// soonest scheduled call.
+interface CallThreadInfo { call?: CallRecord | null; next?: CallRecord | null; none?: boolean; off?: boolean; removed?: boolean; providers?: string[]; }
 // The parts of LiveKit's room, participants and tracks this file reads.
 interface CallPublication { source?: unknown; track?: { stop?: () => void; mediaStreamTrack?: { stop?: () => void } } | null; }
 interface CallParticipant { identity: string; isSpeaking?: boolean; isMicrophoneEnabled?: boolean; }
@@ -148,9 +152,10 @@ async function callLoad(view: ThvView): Promise<void> {
   if (!t || view.opts.header === false || !view.id) return;
   try {
     const r = await get<CallListReply>(`/v2/threads/${encodeURIComponent(view.id)}/calls?limit=1`, {fresh: true});
-    const live = (r.calls || []).find(c => c.state === 'live') || null;
-    CALL_THREADS.set(view.id, {...CALL_THREADS.get(view.id), call: live, none: false, off: r.available === false,
+    const live = (r.calls || []).find(c => c.state === 'live') || null, next = r.next_scheduled || null;
+    CALL_THREADS.set(view.id, {...CALL_THREADS.get(view.id), call: live, next, none: false, off: r.available === false,
                                ...(r.providers ? {providers: r.providers} : {})});
+    if (next) CALL_VIEWS.set(next.id, next);
     if (live?.provider) callViewKeep(live);
   } catch (e) {
     // 404: a call the viewer cannot read.
@@ -168,6 +173,13 @@ function callHeadHTML(view: ThvView): string {
   if (info.call) {
     const n = callCount(CALL_VIEWS.get(info.call.id) || info.call);
     return `<button type="button" class="thv-call on" data-call="join" aria-label="Join call" title="Join">${CALL_SVG}${n ? `<span class="tnum">${n}</span>` : ''}</button>`;
+  }
+  // A booked call takes the phone's place: the phone and when. It joins (the first join starts the call); for who may
+  // change it, it opens Join, Change time and Cancel call instead (the header has its own ⋯ beside it).
+  const next = info.next ? CALL_VIEWS.get(info.next.id) || info.next : null;
+  if (next?.state === 'scheduled') {
+    const menu = next.can_edit ? ' aria-haspopup="menu" aria-expanded="false"' : '';
+    return `<button type="button" class="thv-call-next" data-call="next" title="${next.can_edit ? 'Call' : 'Join'}"${menu}>${CALL_SVG}<span class="tnum">${esc(callWhen(next.scheduled_start))}</span></button>`;
   }
   // A DM with one bot calls that bot, which only Tico Meet can do: no phone where the server has no Tico Meet.
   if (!callTicoMeet(info.providers) && callDmBot(t)) return '';
@@ -213,6 +225,13 @@ async function callAction(view: ThvView, kind: string | undefined, from?: HTMLEl
   }
   // In the call here: its window opens and takes the call over.
   if (kind === 'window') { const v = CALL ? CALL_VIEWS.get(CALL.id) || {id: CALL.id, thread_id: CALL.threadId} : null; if (v) callWindowOpen(v); return; }
+  // A booked call: Join, or its menu for who may change it.
+  if (kind === 'next') {
+    const next = info.next ? CALL_VIEWS.get(info.next.id) || info.next : null;
+    if (next?.can_edit && from) callScheduledMenu(from, next, () => callLoad(view), true);
+    else if (next) await callJoinAny(next);
+    return;
+  }
   const live = info.call ? CALL_VIEWS.get(info.call.id) || info.call : null;
   // Google Meet goes to a tab of its own, opened now while the click still allows it.
   if (kind === 'join' && live?.provider === 'google_meet') { await callMeetJoin(live); return; }
@@ -319,12 +338,8 @@ async function callTeammates(actors: string[], title = ''): Promise<boolean> {
   const gen = ++CALL_GEN;
   CALL_JOINS++;
   try {
-    const r: (ThreadRow & {thread?: ThreadRow}) | null = actors.length === 1
-      ? await get('/v2/threads/dm?with=' + encodeURIComponent(actors[0]!), {fresh: true})
-      : await post('/v2/threads', {title: title || actors.map(a => actorName(a)).join(', ').slice(0, 200), audience: 'members', members: actors});
-    const t = r?.thread || r;
+    const t = await callThreadWith(actors, title);
     if (!t?.id || gen !== CALL_GEN) return false;
-    threadsPut(t);
     let call: CallRecord | null | undefined, started = false;
     try {
       const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`,
@@ -347,6 +362,72 @@ async function callTeammates(actors: string[], title = ''): Promise<boolean> {
     tabClose();
     CALL_JOINS--;
   }
+}
+
+// The thread a call with these teammates goes in: one teammate is the viewer's DM with them, more are a new thread.
+async function callThreadWith(actors: string[], title: string): Promise<ThreadRow | null> {
+  const r: (ThreadRow & {thread?: ThreadRow}) | null = actors.length === 1
+    ? await get('/v2/threads/dm?with=' + encodeURIComponent(actors[0]!), {fresh: true})
+    : await post('/v2/threads', {title: title || actors.map(a => actorName(a)).join(', ').slice(0, 200), audience: 'members', members: actors});
+  const t = r?.thread || r;
+  if (t?.id) threadsPut(t);
+  return t?.id ? t : null;
+}
+// Book a call with teammates for later (the Meetings page's Schedule): the call and its calendar event, nothing opens.
+// Its bots are given their prep 30 minutes before (docs/meet.md, Scheduled calls). A refusal is thrown for the caller.
+async function callSchedule(actors: string[], title: string, startsAt: Date, minutes: number): Promise<CallRecord | null> {
+  const t = await callThreadWith(actors, title);
+  if (!t) return null;
+  const bots = actors.filter(a => a.startsWith('bot:')).map(a => a.slice(4));
+  const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`, {
+    provider: 'tico', ...(bots.length ? {bots} : {}), ...(title ? {title} : {}),
+    starts_at: startsAt.toISOString(), ends_at: new Date(startsAt.getTime() + minutes * 60000).toISOString()});
+  const call = made?.call || made;
+  if (call?.id) { callViewKeep(call); CALL_THREADS.set(t.id, {...CALL_THREADS.get(t.id), next: call}); }
+  return call || null;
+}
+// A scheduled call's toast: one at a time, so Time changed right after Scheduled replaces it rather than stacking on it
+// (a wider toast under a narrower one showed as a strip at its edge).
+function callToast(msg: string): void {
+  for (const t of document.querySelectorAll('.toast.call-toast')) t.remove();
+  toast(msg);
+  const made = document.body.lastElementChild;
+  if (made?.classList.contains('toast')) made.classList.add('call-toast');
+}
+// A scheduled call's ⋯ on Upcoming.
+const callMoreHTML = (attrs: string): string =>
+  `<button type="button" class="call-sched-more" ${attrs} aria-label="Call options" title="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
+// The menu behind it (Join first with `join`): Change time (the Call dialog, filled in: meetings.ts meetCallDialog) and
+// Cancel call. Both go to the call's calendar event first (docs/meet.md, Scheduled calls), so a refusal there changes
+// nothing and shows here. A cancel has no Undo: the calendar has already told everyone invited. `done` runs once the
+// call changed.
+function callScheduledMenu(button: HTMLElement, call: CallRecord, done: () => unknown, join = false): void {
+  // The list may be drawn again while the dialog is up: focus goes back to the ⋯ drawn in this one's place.
+  const back = (): HTMLElement | null => button.isConnected ? button : document.querySelector<HTMLElement>(
+    [...button.attributes].filter(a => a.name.startsWith('data-')).map(a => `[${a.name}="${CSS.escape(a.value)}"]`).join(''));
+  const items: [string, string][] = [['change', 'Change time'], ['cancel', 'Cancel call']];
+  thvMenuShow(button, join ? [['join', 'Join'], ...items] : items, async key => {
+    if (key === 'join') { await callJoinAny(call); return; }
+    if (key === 'change') { meetCallDialog({change: call, done, back}); return; }
+    if (!await askConfirm('Cancel the call for everyone?', button)) return;
+    try {
+      const r: CallRecord | null = await post(`/v2/calls/${encodeURIComponent(call.id)}/end`, {});
+      const v = r?.call || r;
+      if (v?.id) callViewKeep(v);
+      callToast('Call cancelled');
+      await done();
+    } catch (e) { toast(errorMessage(e, 'Could not cancel the call')); }
+  }, 'call-sched-menu');
+}
+// When a booked call starts, short: "Today 3:00 PM", "Thu 3:00 PM", "Nov 30, 3:00 PM".
+function callWhen(at: string | null | undefined): string {
+  const d = at ? new Date(at) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return 'Today ' + time;
+  if (days > 0 && days < 7) return d.toLocaleDateString(undefined, {weekday: 'short'}) + ' ' + time;
+  return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) + ', ' + time;
 }
 
 // ----------------------------------------------------------------- in a call: ui/app/thread-call-live.ts, the thread-call-live page part
@@ -412,7 +493,8 @@ function callViewKeep(v: CallRecord): void {
   if (tid) {
     const info = CALL_THREADS.get(tid);
     if (info?.call?.id === v.id && v.state !== 'live') CALL_THREADS.set(tid, {...info, call: null});
-    else if (info && !info.call && v.state === 'live') CALL_THREADS.set(tid, {...info, call: v});
+    else if (info && !info.call && v.state === 'live') CALL_THREADS.set(tid, {...info, call: v, ...(info.next?.id === v.id ? {next: null} : {})});
+    else if (info?.next?.id === v.id && v.state !== 'scheduled') CALL_THREADS.set(tid, {...info, next: null});
     callRailMark(tid, v);
     if (JSON.stringify(was) !== JSON.stringify(v)) callViewsDraw(tid);
   }
@@ -511,6 +593,10 @@ function callCardHTML(m: ThvMessage): string {
   if (id && !v && !CALL_VIEW_MISSING.has(id)) void callViewRead(id);
   const head = (cls: string, svg = CALL_SVG, label = '') => `<span class="call-card-ic${cls}"${label ? ` title="${label}" aria-label="${label}" role="img"` : ''}>${svg}</span><b class="call-card-t">Call</b>`;
   if (!v) return `<div class="call-card" data-call-card="${esc(id)}">${head('')}</div>`;
+  if (v.state === 'scheduled') {
+    return `<div class="call-card" data-call-card="${esc(id)}">${head('')}<span class="call-card-n muted">${esc(callWhen(v.scheduled_start))}</span>
+      <span class="spacer"></span><button type="button" class="ghost small call-card-join" data-call-join="${esc(id)}">Join</button></div>`;
+  }
   if (v.state === 'live') {
     const blind = callBlind(v), faces = callFaces(v), since = blind ? '' : v.seen_at || v.started_at || '';
     const end = v.provider === 'google_meet' && v.connector && v.connector === myActor()

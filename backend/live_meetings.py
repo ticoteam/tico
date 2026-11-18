@@ -2011,7 +2011,11 @@ def install_live_meetings(app, store, auth, write):
             from .task_privacy import snapshot
 
             snapshot(c)
-            rows = c.execute("SELECT * FROM live_meetings WHERE state!='ended' ORDER BY updated_at DESC,id").fetchall()
+            # A scheduled call's meeting waits paused for its first join (backend/calls.py): it is not on yet.
+            rows = c.execute(
+                "SELECT * FROM live_meetings WHERE state!='ended' AND id NOT IN "
+                "(SELECT live_meeting_id FROM calls WHERE state='scheduled') ORDER BY updated_at DESC,id"
+            ).fetchall()
             meetings = [_view(c, auth, who, row["id"]) for row in rows if _sees(c, who, row)]
             return {"meetings": meetings, "count": len(meetings)}
 

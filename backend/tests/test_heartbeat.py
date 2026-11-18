@@ -40,6 +40,7 @@ ORDER = [
     "repository_waits",
     "entity_links",
     "call_sweeps",
+    "call_prep",
     "item_metadata",
     "source_actions",
     "jev_verdicts",
@@ -101,7 +102,7 @@ def test_the_steps_run_in_their_order_and_the_server_loops_own_need_the_app(api,
     ran.clear()
     beat(api, scheduler_of(api), AT + timedelta(hours=1), app=False)  # a bare Scheduler.tick (tests, a script)
     assert ran == [k for k in ORDER if not HB.BY_KEY[k].loop]
-    assert {"github_sync", "personal_alerts", "repository_waits", "call_sweeps"}.isdisjoint(ran)
+    assert {"github_sync", "personal_alerts", "repository_waits", "call_sweeps", "call_prep"}.isdisjoint(ran)
 
 
 def test_each_step_runs_at_most_as_often_as_it_did(api, fake):

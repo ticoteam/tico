@@ -519,7 +519,7 @@ let browser: import('playwright').Browser | null = null;
     await themed(page, 'call-now-button', phone);
     await call.click();
     const dialog = page.locator('dialog.meet-call-dialog');
-    const start = dialog.locator('button[type="submit"]');
+    const start = dialog.locator('.meet-call-start');
     assert.ok(await start.isDisabled(), 'Start waits for someone to call');
     assert.equal(await dialog.locator('input[name="title"]').inputValue(), '');
     await dialog.locator('.who-pick-q').click();

@@ -43,7 +43,9 @@ from pydantic import Field
 
 from . import (
     audit_log,
+    calendar_api,
     call_items,
+    call_prep,
     call_media,
     call_ring,
     call_voice,
@@ -104,6 +106,15 @@ POLL_BUDGET_SECONDS = 5
 POLL_SKIP_MAX = 16
 RINGING_LIMIT = 20  # the calls `GET /api/v2/calls/ringing` answers with at most
 CHANGE_FIELDS = ("live_count", "status_source", "meet_seen_at")  # with in_call: call.updated
+# Scheduled calls (docs/meet.md, Scheduled calls). A start a little behind now is still taken: the dialog's "now" was
+# a moment ago. The invitation names at most INVITE_LIMIT people.
+SCHEDULE_LONGEST = timedelta(hours=8)
+SCHEDULE_PAST = timedelta(minutes=5)
+INVITE_LIMIT = 50
+UPCOMING_LIMIT = 50
+UPCOMING_FACES = 8
+# A scheduled call's id comes from its booking's idempotency key, so a retry names the same call and the same event.
+SCHEDULE_IDS = uuid.UUID("5d1f6b0e-2c47-4f0a-9a36-7c2b8e1d4f53")
 
 # The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
 AUTH = None
@@ -224,13 +235,31 @@ class StartCall(Contract):
     speak_replies: bool | None = None
     provider: Literal["auto", "google_meet", "tico"] = "auto"
     bots: list[str] = Field(default_factory=list, max_length=BOT_LIMIT)  # bots in the call from its start
+    # Both given: the call is booked for then (docs/meet.md, Scheduled calls), not started. ISO 8601 with an offset.
+    starts_at: str | None = Field(default=None, max_length=40)
+    ends_at: str | None = Field(default=None, max_length=40)
+
+    def model_dump(self, **kwargs):
+        # The idempotency hash reads this: a call started now hashes as it did before calls could be booked, so a
+        # retry sent across that upgrade is still answered from its first answer.
+        dumped = super().model_dump(**kwargs)
+        if dumped.get("starts_at") is None and dumped.get("ends_at") is None:
+            dumped.pop("starts_at", None)
+            dumped.pop("ends_at", None)
+        return dumped
+
+
+class ChangeCall(Contract):
+    # A scheduled call's new times (docs/meet.md, Scheduled calls). ISO 8601 with an offset.
+    starts_at: str = Field(min_length=1, max_length=40)
+    ends_at: str = Field(min_length=1, max_length=40)
 
 
 def _start_hashed_before_voice(body):
     """A start as servers before voice calls stored its idempotency hash (speak_replies false by default, no bots), so
     a retry of a start sent to one of them is answered from its first answer rather than refused as different. None for
     a start those servers could not have been sent."""
-    if body.bots:
+    if body.bots or body.starts_at or body.ends_at:
         return None
     return {"title": body.title, "speak_replies": bool(body.speak_replies), "provider": body.provider}
 
@@ -317,7 +346,41 @@ def _summary(row):
         "started_at": row["started_at"],
         "ended_at": row["ended_at"],
         "end_reason": row["end_reason"],
+        "scheduled_start": row["scheduled_start"],
+        "scheduled_end": row["scheduled_end"],
     }
+
+
+def _instant(value, field):
+    try:
+        at = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise Problem("validation", f"{field} is not an ISO 8601 time", 422) from None
+    if at.tzinfo is None:
+        raise Problem("validation", f"{field} needs its offset from UTC", 422)
+    return at.astimezone(timezone.utc)
+
+
+def booking(starts_at, ends_at):
+    """A scheduled call's (start, end) as stored, on the whole minute, or None for a call that starts now."""
+    if starts_at is None and ends_at is None:
+        return None
+    if not starts_at or not ends_at:
+        raise Problem("validation", "A scheduled call needs both starts_at and ends_at", 422)
+    start = _instant(starts_at, "starts_at").replace(second=0, microsecond=0)
+    end = _instant(ends_at, "ends_at").replace(second=0, microsecond=0)
+    if end <= start:
+        raise Problem("validation", "A call ends after it starts", 422)
+    if end - start > SCHEDULE_LONGEST:
+        raise Problem("validation", "A scheduled call lasts at most 8 hours", 422)
+    if start < datetime.now(timezone.utc) - SCHEDULE_PAST:
+        raise Problem("validation", "A call is scheduled for a time still to come", 422)
+    return _stamp(start), _stamp(end)
+
+
+def _calendar_time(stamp):
+    """A stored time as the calendar takes it: whole seconds, in UTC."""
+    return _instant(stamp, "time").strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _between(start, end):
@@ -350,8 +413,11 @@ def _google(row):
     return row["provider"] == "google_meet"
 
 
-def _require_open(row):
-    """Refuse a call that has ended, or whose End was pressed (nothing more is heard in it): nobody joins it then."""
+def _require_open(row, scheduled=False):
+    """Refuse a call that has ended, or whose End was pressed (nothing more is heard in it): nobody joins it then. A
+    join takes a scheduled call too (`scheduled`): the first one starts it."""
+    if scheduled and row["state"] == "scheduled":
+        return
     if row["state"] != "live":
         raise Problem("call_ended", "This call has ended", 409)
     if row["ending_at"]:
@@ -397,6 +463,7 @@ class Calls:
         self.polling = {}  # call_id -> a status read a past pass left still out
         self.backoff = {}  # call_id -> [failures in a row, passes still to skip]
         self.poll_pass = threading.Lock()  # one polling pass at a time
+        self.went_live = set()  # scheduled calls a committed join just started, until that join starts their media
 
     @property
     def media(self):
@@ -454,6 +521,8 @@ class Calls:
             "holds": holds,
             "stage": self._stage_view(c, row, who),
             "stage_n": _stage_n(row),
+            "scheduled_start": row["scheduled_start"],
+            "scheduled_end": row["scheduled_end"],
             **self.provider_fields(c, row, who),
         }
 
@@ -581,11 +650,17 @@ class Calls:
             raise Problem("forbidden", "Only the person who started this call can do that", 403)
         return row
 
-    def _may_start(self, c, who, thread_id):
-        """The checks a start makes before anything is made, whatever the provider, and again inside its write."""
+    def _may_start(self, c, who, thread_id, scheduled=False):
+        """The checks a start makes before anything is made, whatever the provider, and again inside its write. A call
+        scheduled for later may be booked while another is going."""
         human_only(who)
         self.auth.domain(who)
         threads.require(c, threads.viewer(self.auth, who), thread_id, write=True)
+        if not scheduled:
+            self._none_live(c, thread_id)
+
+    @staticmethod
+    def _none_live(c, thread_id):
         live = c.execute("SELECT id FROM calls WHERE thread_id=? AND state='live'", (thread_id,)).fetchone()
         if live:
             raise Problem(
@@ -650,20 +725,31 @@ class Calls:
                 retryable=exc.kind == "unreachable",
             ) from None
 
+    @staticmethod
+    def _people_of(c, thread_id):
+        """The people of a call's thread (its root's), bots left out."""
+        root = threads.root_of(c, threads.thread_row(c, thread_id))
+        return list(dict.fromkeys(a for a in threads._dm_members(c, root) if str(a).startswith("human:")))
+
     def _ring_for(self, c, who, thread_id):
         """Who a call rings (backend/call_ring.py): the thread's people other than the caller who can read it, when it
         has at most RING_MAX people; nobody in a bigger thread. Bots are never rung."""
-        root = threads.root_of(c, threads.thread_row(c, thread_id))
-        people = [actor for actor in threads._dm_members(c, root) if str(actor).startswith("human:")]
+        people = self._people_of(c, thread_id)
         if len(people) > call_ring.RING_MAX:
             return []
         return [actor for actor in people if actor != who.actor and readable(c, actor, thread_id)]
 
-    def start(self, c, who, thread_id, title, speak_replies=None, provider="tico", space=None, bots=()):
+    def start(
+        self, c, who, thread_id, title, speak_replies=None, provider="tico", space=None, bots=(), *, scheduled=None
+    ):
         """Store a call, its live meeting, its card in the thread, who it rings and the bots it starts with. A Google
         Meet start brings the space `make_space` made before this write; a Tico Meet one needs LiveKit set up. A voice
-        call's bots answer on their own models (`meeting_model` ''), as they do in their chats."""
-        self._may_start(c, who, thread_id)
+        call's bots answer on their own models (`meeting_model` ''), as they do in their chats.
+
+        `scheduled` books a Tico Meet call for later instead (`schedule_plan`): the call is `scheduled` and its meeting
+        paused, nobody is in it and nobody is rung until the first join starts it, and its calendar event is recorded
+        here, in the same write."""
+        self._may_start(c, who, thread_id, scheduled=scheduled is not None)
         if speak_replies is None:
             speak_replies = provider == "tico"
         if (speak_replies or bots) and provider != "tico":
@@ -673,7 +759,9 @@ class Calls:
         if provider == "google_meet" and not space:
             raise Problem("meet_unavailable", "Google Meet did not make the meeting. Try again in a minute.", 503)
         meeting = live_meetings.Connect(title=title, visibility="private")
-        meeting_id, call_id, stamp = str(uuid.uuid4()), str(uuid.uuid4()), H.now()
+        meeting_id, stamp = str(uuid.uuid4()), H.now()
+        call_id = scheduled["call_id"] if scheduled else str(uuid.uuid4())
+        state = "scheduled" if scheduled else "live"
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,reply_cap,"
             "threshold,created_at,updated_at,started_at,visibility,meeting_model,thread_id) "
@@ -682,7 +770,7 @@ class Calls:
                 meeting_id,
                 who.actor,
                 meeting.title,
-                "live",
+                "paused" if scheduled else "live",
                 None,
                 live_meetings._window_ms(self.app, meeting),
                 meeting.cooldown_seconds * 1000,
@@ -698,20 +786,23 @@ class Calls:
         )
         c.execute("INSERT INTO live_meeting_humans VALUES(?,?,?)", (meeting_id, who.actor, stamp))
         live_meetings._event(
-            c, meeting_id, "meeting.state", {"state": "live", "connected_by": who.actor, "visibility": "private"}
+            c,
+            meeting_id,
+            "meeting.state",
+            {"state": "paused" if scheduled else "live", "connected_by": who.actor, "visibility": "private"},
         )
         space = space or {}
         c.execute(
             "INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
-            "created_at,updated_at,speak_replies,provider,meet_space,meet_uri,meet_code,ring) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,updated_at,speak_replies,provider,meet_space,meet_uri,meet_code,ring,scheduled_start,"
+            "scheduled_end) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 call_id,
                 thread_id,
                 meeting_id,
                 who.actor,
                 meeting.title,
-                "live",
+                state,
                 ROOM_PREFIX + call_id,
                 stamp,
                 stamp,
@@ -721,14 +812,29 @@ class Calls:
                 space.get("name"),
                 space.get("meeting_uri"),
                 space.get("meeting_code"),
-                json.dumps(self._ring_for(c, who, thread_id)),
+                json.dumps([] if scheduled else self._ring_for(c, who, thread_id)),
+                scheduled["start"] if scheduled else None,
+                scheduled["end"] if scheduled else None,
             ),
         )
-        c.execute(
-            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,?)",
-            (call_id, who.actor, stamp, int(provider == "tico")),
-        )
-        self._record(c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id, "provider": provider})
+        if scheduled:
+            calendar_api.record_call_event(c, who, scheduled["event"], call_id, scheduled.get("occurrence"))
+            self._record(
+                c,
+                who.actor,
+                call_id,
+                thread_id,
+                "call.scheduled",
+                {"meeting_id": meeting_id, "starts_at": scheduled["start"], "ends_at": scheduled["end"]},
+            )
+        else:
+            c.execute(
+                "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,?)",
+                (call_id, who.actor, stamp, int(provider == "tico")),
+            )
+            self._record(
+                c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id, "provider": provider}
+            )
         if bots:
             self._attach(c, who, _call(c, call_id), live_meetings._meeting(c, meeting_id), bots)
         # The call's card in the thread. A thread that refuses it still has the call: the card is its place in the
@@ -751,6 +857,246 @@ class Calls:
         if isinstance(card, dict) and card.get("id") and not card.get("held"):
             c.execute("UPDATE calls SET card_message_id=? WHERE id=?", (card["id"], call_id))
         return self.view(c, call_id, who)
+
+    @staticmethod
+    def schedule_id(who, thread_id, key):
+        """A booking's call id: from its idempotency key when it has one (a retry books the same call), else new."""
+        if not key:
+            return str(uuid.uuid4())
+        return str(uuid.uuid5(SCHEDULE_IDS, f"{who.actor}\n{thread_id}\n{key}"))
+
+    def _invited(self, c, booker, thread_id):
+        """Who a scheduled call's event invites: the thread's people, other than its booker, who can read it now."""
+        people = [a for a in self._people_of(c, thread_id) if a != booker and readable(c, a, thread_id)]
+        return people[:INVITE_LIMIT]
+
+    def schedule_plan(self, c, who, thread_id, title, when, bots, key):
+        """What a scheduled start brings into its write, made before it (`start`'s `scheduled`): the call's id, its
+        times and where its one calendar event goes. Everything the write would refuse is checked first, so a calendar
+        is never written for a call that cannot be stored. The event invites the thread's people who can read it; its
+        location and notes hold the call's link."""
+        self._may_start(c, who, thread_id, scheduled=True)
+        if self.media is None:
+            raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
+        self._may_attach(c, who, bots)
+        call_id = self.schedule_id(who, thread_id, key)
+        if c.execute("SELECT 1 FROM calls WHERE id=?", (call_id,)).fetchone():
+            raise Problem("receipt_expired", "This booking's receipt expired; book it again", 409)
+        link = f"{self.store.settings.public_url}/#/call/{urllib.parse.quote(call_id)}"
+        event = calendar_api.plan_call_event(
+            c,
+            who,
+            title=title,
+            start=_calendar_time(when[0]),
+            end=_calendar_time(when[1]),
+            invited=self._invited(c, who.actor, thread_id),
+            link=link,
+        )
+        return {"call_id": call_id, "start": when[0], "end": when[1], "event": event}
+
+    def schedule_event(self, plan):
+        """Write a scheduled call's Google event before its write (Google is asked outside any transaction). A Tico
+        calendar's event is made in the write itself."""
+        if plan["event"]["home"] != "google":
+            return plan
+        with self.store.read() as c:
+            plan["occurrence"] = calendar_api.insert_call_event(c, plan["event"], plan["call_id"])
+        return plan
+
+    def unschedule_event(self, plan):
+        """Take back the Google event of a scheduled start whose write failed, so no invitation names a call that
+        does not exist."""
+        if plan.get("occurrence") is None:
+            return
+        with self.store.read() as c:
+            calendar_api.drop_call_event(c, plan["event"], plan["call_id"])
+
+    def _may_change(self, c, who, call_id):
+        """A scheduled call may be moved or cancelled by the person who booked it, or by anyone who manages its
+        thread, until it starts."""
+        human_only(who)
+        self.auth.domain(who)
+        row = _call(c, call_id)
+        if not readable(c, who.actor, row["thread_id"]):
+            raise Problem("not_found", "Call not found", 404)
+        if who.actor != row["connector_actor"] and not threads.can_manage(
+            c, threads.viewer(self.auth, who), row["thread_id"]
+        ):
+            raise Problem("forbidden", "Only the person who booked this call, or who manages its thread, can", 403)
+        if row["state"] != "scheduled":
+            raise Problem("call_not_scheduled", "This call has started or ended; its time no longer changes", 409)
+        return row
+
+    def may_end(self, c, who, call_id):
+        """End's check: a scheduled call is cancelled by whoever may change it, a started one ended by its starter."""
+        row = _call(c, call_id)
+        if row["state"] == "scheduled":
+            return self._may_change(c, who, call_id)
+        return self._connector(c, who, call_id)
+
+    def change_plan(self, c, who, call_id, when):
+        """A scheduled call's new times, and where its event's change goes (`calendar_api.plan_call_change`), made
+        before the write: the calendar is written first. The event's people become who can read the thread now."""
+        row = self._may_change(c, who, call_id)
+        event = calendar_api.plan_call_change(
+            c,
+            call_id,
+            row["connector_actor"],
+            start=_calendar_time(when[0]),
+            end=_calendar_time(when[1]),
+            invited=self._invited(c, row["connector_actor"], row["thread_id"]),
+        )
+        return {"start": when[0], "end": when[1], "event": event}
+
+    def reschedule(self, c, who, call_id, plan, occ):
+        """Store a scheduled call's new times, once its calendar took them (`occ`: Google's answer; a Tico event
+        changes here, in this write)."""
+        row = self._may_change(c, who, call_id)
+        if plan is None:
+            raise Problem("receipt_expired", "This change's receipt expired; send it again", 409)
+        calendar_api.record_call_change(c, who, plan["event"], occ)
+        if (plan["start"], plan["end"]) != (row["scheduled_start"], row["scheduled_end"]):
+            self.move(c, row, plan["start"], plan["end"], by=who.actor)
+        return self.view(c, call_id, who)
+
+    def move(self, c, row, start, end, now=None, by=None):
+        """A scheduled call's new times, from its calendar or a change made in Tico, in the caller's write (`row` is
+        updated in place). A start more than call_prep.PREP_LEAD away clears `prepped_at`: its bots prep again for
+        the new time."""
+        now = now or H.now()
+        far = start > H.shift(now, seconds=call_prep.PREP_LEAD.total_seconds())
+        prepped = None if far else row["prepped_at"]
+        c.execute(
+            "UPDATE calls SET scheduled_start=?,scheduled_end=?,prepped_at=?,updated_at=? WHERE id=?",
+            (start, end, prepped, now, row["id"]),
+        )
+        self._record(
+            c,
+            by or row["connector_actor"],
+            row["id"],
+            row["thread_id"],
+            "call.moved",
+            {"starts_at": start, "ends_at": end},
+        )
+        row.update(scheduled_start=start, scheduled_end=end, prepped_at=prepped)
+
+    @staticmethod
+    def readable(c, actor, thread_id):
+        return readable(c, actor, thread_id)
+
+    @staticmethod
+    def thread_private(c, thread_id):
+        """Whether a call's thread is private: anything but a company thread. Work filed from it is private too."""
+        return threads.audience_of(threads.root_of(c, threads.thread_row(c, thread_id))) != "company"
+
+    def upcoming(self, c, who):
+        """The scheduled calls `who` is in, soonest first: in threads they can read, and booked by them or with them
+        among the thread's people. The SQL keeps only calls whose thread names them before the limit; each is then
+        checked exactly. A row is compact: the call, its times, its thread, up to UPCOMING_FACES of its people, and
+        `can_edit` (`_may_change`'s rule in the same SQL: the booker, an admin, the thread's owner or an owner member;
+        a teammate's manage grant on someone's home thread is not read here, so such a call shows no ⋯ though PATCH
+        would take it)."""
+        human_only(who)
+        self.auth.domain(who)
+        found = []
+        rows = c.execute(
+            "SELECT calls.id,calls.title,calls.thread_id,calls.connector_actor,calls.scheduled_start,"
+            "calls.scheduled_end,(calls.connector_actor=:me OR :admin OR r.owner_id=:me OR EXISTS (SELECT 1 FROM "
+            "thread_members o WHERE o.thread_id=r.id AND o.actor=:me AND o.role='owner')) AS can_edit "
+            "FROM calls JOIN conversations t ON t.id=calls.thread_id "
+            "JOIN conversations r ON r.id=COALESCE(t.root_id,t.id) WHERE calls.state='scheduled' AND "
+            "(calls.connector_actor=:me OR r.owner_id=:me OR EXISTS (SELECT 1 FROM thread_members m "
+            "WHERE m.thread_id=r.id AND m.actor=:me) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN "
+            "json_valid(r.participants) THEN r.participants END) p WHERE p.value=:me)) "
+            "ORDER BY calls.scheduled_start, calls.id LIMIT :n",
+            {"me": who.actor, "admin": bool(threads.viewer(self.auth, who).admin(c)), "n": UPCOMING_LIMIT * 2},
+        ).fetchall()
+        for row in rows:
+            if len(found) >= UPCOMING_LIMIT:
+                break
+            if not readable(c, who.actor, row["thread_id"]):
+                continue
+            people = list(dict.fromkeys([row["connector_actor"], *self._people_of(c, row["thread_id"])]))
+            if who.actor not in people:
+                continue
+            faces = [a for a in people if a == who.actor or self._sees(c, who, a)][:UPCOMING_FACES]
+            found.append(
+                {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "thread_id": row["thread_id"],
+                    "scheduled_start": row["scheduled_start"],
+                    "scheduled_end": row["scheduled_end"],
+                    "people": faces,
+                    "can_edit": bool(row["can_edit"]),
+                }
+            )
+        return {"calls": found}
+
+    def next_scheduled(self, c, who, thread_id):
+        """The thread's soonest scheduled call, for its header (one indexed read), or None. `can_edit`: whether the
+        viewer may change its time or cancel it (`_may_change`)."""
+        row = c.execute(
+            "SELECT * FROM calls WHERE thread_id=? AND state='scheduled' ORDER BY scheduled_start, id LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        edit = who.actor == row["connector_actor"] or threads.can_manage(c, threads.viewer(self.auth, who), thread_id)
+        return {**_summary(row), **self.provider_fields(c, row, who), "can_edit": bool(edit)}
+
+    def _go_live(self, c, who, row):
+        """The first join of a scheduled call starts it: from here it is a call like any other, with the bots it was
+        booked with. It rings the thread's other people as a start does. True when this join started it."""
+        self._none_live(c, row["thread_id"])
+        if self.media is None:
+            raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
+        stamp = H.now()
+        started = c.execute(
+            "UPDATE calls SET state='live',started_at=?,updated_at=?,ring=? WHERE id=? AND state='scheduled'",
+            (stamp, stamp, json.dumps(self._ring_for(c, who, row["thread_id"])), row["id"]),
+        ).rowcount
+        if not started:
+            return False
+        c.execute(
+            "UPDATE live_meetings SET state='live',started_at=?,updated_at=? WHERE id=?",
+            (stamp, stamp, row["live_meeting_id"]),
+        )
+        live_meetings._event(c, row["live_meeting_id"], "meeting.state", {"state": "live", "by": who.actor})
+        self._record(
+            c,
+            who.actor,
+            row["id"],
+            row["thread_id"],
+            "call.started",
+            {"meeting_id": row["live_meeting_id"], "provider": row["provider"], "scheduled": True},
+        )
+        call_id = row["id"]
+        c.after_commit.append(lambda: self._went_live(call_id))
+        return True
+
+    def _went_live(self, call_id):
+        with self.lock:
+            self.went_live.add(call_id)
+
+    def take_went_live(self, call_id):
+        """Whether a join just started this scheduled call, once: the join that did starts its media and rings."""
+        with self.lock:
+            if call_id not in self.went_live:
+                return False
+            self.went_live.discard(call_id)
+            return True
+
+    def cancel(self, c, call_id, reason, by=None):
+        """End a scheduled call that never started. Nothing was said in it, so it owes no transcript and no action
+        items: it is finalized at once. Returns False when it was no longer scheduled."""
+        row = _call(c, call_id)
+        if row["state"] != "scheduled":
+            return False
+        self.finish(c, call_id, reason, by)
+        stamp = H.now()
+        c.execute("UPDATE calls SET wrapped_up_at=?,finalized_at=? WHERE id=?", (stamp, stamp, call_id))
+        return True
 
     def ring_started(self, call_id):
         """Ring the people a call that just started rings, through call_ring's hooks. After the start's write, outside
@@ -794,14 +1140,15 @@ class Calls:
                 self.starting.pop((actor, key), None)
 
     def check_join(self, c, who, call_id):
-        """Whether `who` may join this call now: the thread still lets them read it, and the call is live and not ending. It
-        runs before a cached retry is answered, and again before a token is minted."""
+        """Whether `who` may join this call now: the thread still lets them read it, and the call is live and not ending,
+        or scheduled (the join starts it). It runs before a cached retry is answered, and again before a token is
+        minted."""
         human_only(who)
         self.auth.domain(who)
         row = _call(c, call_id)
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
-        _require_open(row)
+        _require_open(row, scheduled=True)
         return row
 
     def join(self, c, who, call_id):
@@ -810,7 +1157,10 @@ class Calls:
         row = _call(c, call_id)
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
-        _require_open(row)
+        _require_open(row, scheduled=True)
+        if row["state"] == "scheduled":
+            self._go_live(c, who, row)
+            row = _call(c, call_id)
         stamp = H.now()
         if _google(row):
             # Opening the Meet from Tico. The row's joined_at stays the first open (or the first time Google saw them).
@@ -854,11 +1204,16 @@ class Calls:
             return {"id": call_id, "left": True}
         return self.view(c, call_id, who)
 
-    def end(self, c, who, call_id):
+    def end(self, c, who, call_id, gone=None):
         """End the call. A Google Meet one ends here. A Tico Meet one is marked ending: nothing more is heard or said in
-        it, its bots' open turns end, and it is ended once the speech already heard is in its transcript (wind_down)."""
-        row = self._connector(c, who, call_id)
+        it, its bots' open turns end, and it is ended once the speech already heard is in its transcript (wind_down).
+        A scheduled one is cancelled, with its event: `gone` is the Google delete made before this write."""
+        row = self.may_end(c, who, call_id)
         if row["state"] == "ended":
+            return self.view(c, call_id, who)
+        if row["state"] == "scheduled":
+            calendar_api.record_call_cancel(c, who, call_id, gone)
+            self.cancel(c, call_id, "cancelled", by=who.actor)
             return self.view(c, call_id, who)
         if _google(row):
             self.finish(c, call_id, "ended_by_connector", by=who.actor)
@@ -984,10 +1339,8 @@ class Calls:
         self._attach(c, who, row, meeting, slugs)
         return self.view(c, call_id, who)
 
-    def _attach(self, c, who, row, meeting, slugs):
-        """Attach bots `who` may write to, BOT_LIMIT in the call at most: the limit counts the bots already in it."""
-        call_id = row["id"]
-        live_meetings.check_call_bot_limit(c, meeting["id"], slugs)
+    def _may_attach(self, c, who, slugs):
+        """Each bot is on the team and active, and `who` may write to it."""
         for slug in slugs:
             live_meetings._active_bot(c, slug)
             access = teammate_access.levels_for(c, who, f"bot:{slug}", self.auth)
@@ -995,6 +1348,13 @@ class Calls:
                 raise Problem("forbidden", f"You cannot see org-chart bot {slug}", 403)
             if not access["write"]:
                 raise Problem("forbidden", f"You can see {slug} but do not have Write access to contact it", 403)
+
+    def _attach(self, c, who, row, meeting, slugs):
+        """Attach bots `who` may write to, BOT_LIMIT in the call at most: the limit counts the bots already in it."""
+        call_id = row["id"]
+        live_meetings.check_call_bot_limit(c, meeting["id"], slugs)
+        self._may_attach(c, who, slugs)
+        for slug in slugs:
             cursor = c.execute(
                 "INSERT OR IGNORE INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,?,?,?)",
                 (meeting["id"], slug, who.actor, H.now()),
@@ -1519,9 +1879,9 @@ class Calls:
             ids = [
                 r["id"]
                 for r in c.execute(
-                    "SELECT id FROM calls WHERE state='live' OR finalized_at IS NULL OR (provider='tico' AND id IN "
-                    "(SELECT call_id FROM call_participants WHERE media_removed_at IS NULL AND "
-                    "(left_at IS NOT NULL OR removed_at IS NOT NULL)))"
+                    "SELECT id FROM calls WHERE state<>'scheduled' AND (state='live' OR finalized_at IS NULL OR "
+                    "(provider='tico' AND id IN (SELECT call_id FROM call_participants WHERE media_removed_at IS NULL "
+                    "AND (left_at IS NOT NULL OR removed_at IS NOT NULL))))"
                 )
             ]
         polls = []
@@ -2025,6 +2385,7 @@ def install_calls(app, store, auth, write):
         config = call_media.config_from_env()
         app.state.call_media = call_media.LiveKitMedia(config) if config else None
     calls = app.state.calls = CALLS = Calls(app, store, auth)
+    prep = app.state.call_prep = call_prep.Prep(app, store, calls)
 
     @app.get(
         "/api/v2/threads/{thread_id}/calls",
@@ -2038,7 +2399,7 @@ def install_calls(app, store, auth, write):
     def list_calls(request: Request, thread_id: str, limit: int = 25, before: str = ""):
         """A thread's calls, newest first, a page at a time. `next_before` is the cursor for the next page, or null.
         `providers` is what the viewer could start, in the order `auto` tries them; `available` is whether that is
-        anything."""
+        anything. `next_scheduled` is the thread's soonest scheduled call, whatever the page."""
         who = request.state.identity
         human_only(who)
         auth.domain(who)
@@ -2064,11 +2425,14 @@ def install_calls(app, store, auth, write):
             used += cost
             shown.append(item)
         more = len(found) > len(shown)
+        with store.read() as c:
+            upcoming = calls.next_scheduled(c, who, thread_id)
         return {
             "calls": shown,
             "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None,
             "available": bool(offered),
             "providers": offered,
+            "next_scheduled": upcoming,
         }
 
     @app.post(
@@ -2076,16 +2440,18 @@ def install_calls(app, store, auth, write):
         **api_v2(
             "Calls",
             "startCall",
-            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings",
+            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings. With starts_at and ends_at the call is scheduled instead: a Tico Meet call, one event on your calendar, started by its first join",
             "Call",
         ),
     )
     def start_call(request: Request, thread_id: str, body: StartCall):
         """Start a call. A Google Meet start makes its space before the write, outside any transaction; a retry with the
         same idempotency key is answered from the first answer and makes no second space (the lock keeps two copies
-        sent at once from both making one)."""
+        sent at once from both making one). A scheduled start writes its calendar event the same way."""
         who = request.state.identity
         key = request.headers.get("idempotency-key") or ""
+        if body.starts_at is not None or body.ends_at is not None:
+            return schedule_call(request, who, key, thread_id, body)
         entry = calls.start_lock(who.actor, key)
         try:
             with entry[0]:
@@ -2126,6 +2492,55 @@ def install_calls(app, store, auth, write):
             calls.ring_started(result["id"])
         return result
 
+    def schedule_call(request, who, key, thread_id, body):
+        """Book a call for later. Its calendar event is written first; a calendar that refuses it leaves no call, and a
+        write that fails after a Google event was made takes the event back. A retry is answered from its stored
+        answer before its times are checked again, so one sent after its start time passed still gets it."""
+        entry = calls.start_lock(who.actor, key)
+        try:
+            with entry[0]:
+                plan = None
+                if not calls.replayed(request, who):
+                    when = booking(body.starts_at, body.ends_at)
+                    with store.read() as c:
+                        plan = calls.schedule_plan(c, who, thread_id, body.title, when, body.bots, key)
+                    calls.schedule_event(plan)
+                try:
+                    return write(
+                        request,
+                        body,
+                        fn=lambda c: calls.start(
+                            c,
+                            who,
+                            thread_id,
+                            body.title,
+                            body.speak_replies,
+                            provider="tico",
+                            bots=body.bots,
+                            scheduled=plan,
+                        ),
+                    )
+                except BaseException:
+                    if plan is not None:
+                        calls.unschedule_event(plan)
+                    raise
+        finally:
+            calls.start_unlock(who.actor, key, entry)
+
+    @app.get(
+        "/api/v2/calls/upcoming",
+        **api_v2(
+            "Calls",
+            "listUpcomingCalls",
+            "The scheduled calls you are in, soonest first, with who is in them",
+            "CallUpcoming",
+        ),
+    )
+    def upcoming_calls(request: Request):
+        who = request.state.identity
+        with store.read() as c:
+            return calls.upcoming(c, who)
+
     @app.get(
         "/api/v2/calls/ringing",
         **api_v2("Calls", "listRingingCalls", "The live calls ringing you now, in threads you can read", "CallRinging"),
@@ -2155,10 +2570,21 @@ def install_calls(app, store, auth, write):
         ),
     )
     def join_call(request: Request, call_id: str, body: Empty):
+        """Join a call. The first join of a scheduled call reads its event live first (call_prep.Prep.at_join): one
+        cancelled on its calendar is refused, one moved starts with its new times."""
         who = request.state.identity
+        if not calls.replayed(request, who):
+            with store.read() as c:
+                row = calls.check_join(c, who, call_id)
+            if row["state"] == "scheduled":
+                prep.at_join(call_id)
         result = write(
             request, body, lambda c: calls.join(c, who, call_id), check=lambda c: calls.check_join(c, who, call_id)
         )
+        if calls.take_went_live(call_id):
+            # This join started a scheduled call: its media and its ringing start here, as a start's do.
+            calls.begin_media(call_id)
+            calls.ring_started(call_id)
         with store.read() as c:
             row = calls.check_join(c, who, call_id)  # a token is minted only for a person who may still join
         if _google(row):
@@ -2210,7 +2636,9 @@ def install_calls(app, store, auth, write):
         transcribed within END_WAIT_SECONDS, else `ending`, and it ends on its own once that is in."""
         who = request.state.identity
         with store.read() as c:
-            row = calls._connector(c, who, call_id)  # refuses before any speech is sent on the call's behalf
+            row = calls.may_end(c, who, call_id)  # refuses before any speech is sent on the call's behalf
+        if row["state"] == "scheduled":
+            return cancel_call(request, who, call_id, body)
         if _google(row):
             if row["state"] == "live":
                 calls.end_conference(call_id)  # best effort: Google removes everyone; the call ends either way
@@ -2247,6 +2675,42 @@ def install_calls(app, store, auth, write):
     def clear_call_stage(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         return write(request, body, lambda c: calls.clear_stage(c, who, call_id))
+
+    def cancel_call(request, who, call_id, body):
+        """End a call still scheduled: its event is deleted on its calendar first (everyone invited is told), then the
+        call is cancelled. Google not answering leaves both as they were."""
+        gone = None
+        if not calls.replayed(request, who):
+            with store.read() as c:
+                gone = calendar_api.delete_call_event(c, call_id)
+        return write(request, body, lambda c: calls.end(c, who, call_id, gone=gone))
+
+    @app.patch(
+        "/api/v2/calls/{call_id}",
+        **api_v2(
+            "Calls",
+            "changeCall",
+            "Change a scheduled call's time: its calendar event is changed first (everyone invited is told), and the call only once the calendar took it. For whoever booked it or manages its thread",
+            "Call",
+        ),
+    )
+    def change_call(request: Request, call_id: str, body: ChangeCall):
+        """Move a scheduled call. Google is written outside any transaction, before the call's write; a calendar that
+        refuses leaves the call as it was. A Tico calendar's event changes in the call's write."""
+        who = request.state.identity
+        key = request.headers.get("idempotency-key") or ""
+        entry = calls.start_lock(who.actor, "change\n" + call_id + "\n" + key)
+        try:
+            with entry[0]:
+                plan = occ = None
+                if not calls.replayed(request, who):
+                    when = booking(body.starts_at, body.ends_at)
+                    with store.read() as c:
+                        plan = calls.change_plan(c, who, call_id, when)
+                        occ = calendar_api.change_call_event(c, who, plan["event"])
+                return write(request, body, lambda c: calls.reschedule(c, who, call_id, plan, occ))
+        finally:
+            calls.start_unlock(who.actor, "change\n" + call_id + "\n" + key, entry)
 
     @app.post(
         "/api/v2/calls/{call_id}/action-items/retry",

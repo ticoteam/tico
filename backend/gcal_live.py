@@ -596,7 +596,8 @@ def _recurrence(fields: Json) -> list[str]:
 def google_body(fields: Json, *, partial: bool = False) -> Json:
     """A Google event body from the contract's POST /events fields (title, start, end, all_day, time_zone, repeat or
     recurrence, attendees as addresses or {email}, notes, location, add_meet, visibility, response) plus `actor`
-    (who in Tico wrote it) and `bot` (the bot it is for). `partial` builds a patch: only the fields given."""
+    (who in Tico wrote it), `bot` (the bot it is for) and `call` (the scheduled call it is for). `partial` builds a
+    patch: only the fields given."""
     body: Json = {}
 
     def has(key: str) -> bool:
@@ -640,6 +641,8 @@ def google_body(fields: Json, *, partial: bool = False) -> Json:
         private["tico_actor"] = str(fields["actor"])[:200]
     if fields.get("bot"):
         private["tico_bot"] = str(fields["bot"])[:200]
+    if fields.get("call"):
+        private["tico_call"] = str(fields["call"])[:200]
     if private:
         body["extendedProperties"] = {"private": private}
     return body
@@ -700,6 +703,19 @@ def get_raw(c: Conn, as_mailbox: str, calendar_id: str, event_id: str) -> Json:
     return _call(
         "calendars/" + _quote(calendar_id) + "/events/" + _quote(event_id), _write_token(c, as_mailbox), write=True
     )
+
+
+def own_event(c: Conn, as_mailbox: str, calendar_id: str, event_id: str) -> Json | None:
+    """An event Tico wrote, read back by its id as a write answers it (`google_sequence` included) plus `tico_call`,
+    the scheduled call its private properties name; None when Google has it cancelled. For a write whose answer was
+    lost, or that Google says already exists."""
+    raw = get_raw(c, as_mailbox, calendar_id, event_id)
+    if raw.get("status") == "cancelled":
+        return None
+    row = _written(raw, as_mailbox, calendar_id)
+    private = _dict(_dict(raw.get("extendedProperties")).get("private"))
+    row["tico_call"] = str(private.get("tico_call") or "")
+    return row
 
 
 def meeting_url(raw: Json) -> str:

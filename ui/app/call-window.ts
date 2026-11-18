@@ -159,17 +159,20 @@ async function cwLoad(st: CwState): Promise<void> {
   // A Google Meet is in Google's own tab: this address opens its thread.
   if (v.provider === 'google_meet') { location.replace(threadHref(st.threadId)); return; }
   void cwMembers(st);
-  if (v.state === 'live') {
-    cwChatMount(st);
-    if (st.meeting) void cwLiveRead(st, true);
-    await cwJoin(st);
-  }
+  if (v.state === 'live') cwLiveMount(st);
+  if (v.state === 'live' || v.state === 'scheduled') await cwJoin(st);
   callWindowDraw();
 }
-// Join, once, when the window was opened to.
+// The chat and the transcript's stream, once the call is live (a booked call goes live with its first join).
+function cwLiveMount(st: CwState): void {
+  if (st.chat || !st.threadId) return;
+  cwChatMount(st);
+  if (st.meeting) void cwLiveRead(st, true);
+}
+// Join, once, when the window was opened to. A booked call's first join starts it (docs/meet.md, Scheduled calls).
 async function cwJoin(st: CwState): Promise<void> {
   const v = cwView(st);
-  if (!st.join || st.joinTried || !v || v.state !== 'live' || CALL?.id === v.id) return;
+  if (!st.join || st.joinTried || !v || (v.state !== 'live' && v.state !== 'scheduled') || CALL?.id === v.id) return;
   st.joinTried = true;
   await callJoin(st.threadId, v, st.title).catch((e: unknown) => callNoted(st.threadId, e));
 }
@@ -378,7 +381,8 @@ function callWindowDraw(): void {
   st.drawn = window.setTimeout(() => { st.drawn = 0; if (CW === st) cwDraw(st); }, 0);
 }
 function cwDraw(st: CwState): void {
-  const v = cwView(st), el = st.el, live = v?.state === 'live', ended = !!v && !live;
+  const v = cwView(st), el = st.el, live = v?.state === 'live', booked = v?.state === 'scheduled', ended = !!v && !live && !booked;
+  if (live) cwLiveMount(st);
   // Live to ended while open: the chat and the stream stop and the notes are read.
   if (ended && !st.ended) { st.ended = true; void cwAfterLoad(st); }
   el.classList.toggle('cw-ended', ended);
@@ -395,7 +399,7 @@ function cwDraw(st: CwState): void {
     const mine = sharer === myActor() || sharer === cwHere(st)?.room?.localParticipant?.identity;
     const sharing = sharer && !mine ? `${actorName(sharer)} sharing` : sharer || cwHere(st)?.sharing ? 'You are sharing' : '';
     patchHTML(meta, live ? `<span class="cw-live-dot" aria-hidden="true"></span>Live${since ? ` · <span data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${sharing ? ` · ${esc(sharing)}` : ''}`
-      : ended ? esc(cwWhen(v)) : '');
+      : ended ? esc(cwWhen(v)) : booked ? esc(callWhen(v.scheduled_start)) : '');
   }
   const tools = el.querySelector<HTMLElement>('.cw-tools');
   if (tools) patchHTML(tools, ended
@@ -411,6 +415,14 @@ function cwDraw(st: CwState): void {
   if (ended) {
     for (const part of el.querySelectorAll<HTMLElement>('.cw-tabs, .cw-bar')) part.replaceChildren();
     cwAfterDraw(st); return;
+  }
+  // Booked, not started: when, and Join, which starts it.
+  if (booked) {
+    el.querySelector('.cw-tabs')?.replaceChildren();
+    for (const pane of el.querySelectorAll<HTMLElement>('.cw-pane')) pane.hidden = true;
+    const bar = el.querySelector<HTMLElement>('.cw-bar');
+    if (bar) patchHTML(bar, `<span class="spacer"></span><button type="button" class="primary cw-join" data-cw="join">Join</button>`);
+    return;
   }
   const tabs = el.querySelector<HTMLElement>('.cw-tabs');
   const people = cwCount(faces);
