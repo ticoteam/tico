@@ -1109,14 +1109,19 @@ def normalize_check_models(value, record, saved=()):
 def check_order(record):
     """The models a review or check subtask may run on, best first: the owner's check-model order, then one model
     per other enabled provider in the owner's order (the company default for its own provider). An entry whose
-    provider is off or whose model is retired is skipped."""
+    provider is off or whose model is retired is skipped. Under a models choice that never spends the Gateway
+    (`subscriptions`, `own-keys`), the Tico AI Gateway is not added for being on: it stays on for the Gateway services
+    (decide, search, meetings), not for reviews. Only a Tico model the owner lists in the order runs a check there."""
     rows = []
     for entry in record["check_models"]:
         try:
             rows.append(_check_row(entry, record))
         except ProviderError:
             continue
+    no_gateway = bool(models_preset.of(record)) and not models_preset.spends_gateway(record)
     for name in record["enabled"]:
+        if no_gateway and (PROVIDER_BY_ID.get(name) or {}).get("gateway"):
+            continue
         default = MODEL_BY_ID.get(record["model"])
         row = (
             default if default and default["provider"] == name and not default.get("deprecated") else recommended(name)
