@@ -86,6 +86,8 @@ fn count(v: &Value) -> i64 {
 
 /// The running `agy`: its stdin, and the task that owns, signals and reaps it.
 struct Proc {
+    /// The scope it was started in where turns are limited (crate::turn_limits::launch_unit).
+    unit: Option<String>,
     stdin: mpsc::UnboundedSender<String>,
     kill: mpsc::UnboundedSender<i32>,
     exited: watch::Receiver<bool>,
@@ -181,6 +183,22 @@ impl AntigravityHost {
     pub fn alive(&self) -> bool {
         let inner = self.inner();
         inner.up && inner.proc.as_ref().is_none_or(|p| !*p.exited.borrow())
+    }
+
+    /// Whether its process has started: a warm host an earlier attempt kept (crate::warm) already has one.
+    pub fn started(&self) -> bool {
+        self.inner().proc.is_some()
+    }
+
+    /// The scope its process was started in (crate::turn_limits::launch_unit), which an attempt that reuses it asks
+    /// by: it may be an earlier attempt's.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner()
+            .proc
+            .as_ref()
+            .and_then(|p| p.unit.clone())
+            .into_iter()
+            .collect()
     }
 
     fn path(&self, thread: &str) -> Option<PathBuf> {
@@ -285,6 +303,7 @@ impl AntigravityHost {
             .spawn()
             .map_err(|e| failed(format!("could not start agy: {e}")))?;
         self.0.allocation.mark();
+        let unit = crate::turn_limits::launch_unit(&settings.env, child.id());
         let host = self.clone();
         let _stderr = crate::run_diagnostics::Stderr::capture_with(
             &mut child,
@@ -340,6 +359,7 @@ impl AntigravityHost {
         });
         Ok((
             Proc {
+                unit,
                 stdin: lines,
                 kill,
                 exited,
@@ -738,11 +758,34 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = AntigravityHost::new(&dir.join("home"), vec![cmd.clone()], tx);
         host.start().unwrap();
-        let s = settings(&dir, &[("CUMULATIVE", "1".into())]);
+        let stem = |aid: &str| crate::turn_limits::scope_key(aid);
+        let scoped = |aid: &str| {
+            settings(
+                &dir,
+                &[
+                    ("CUMULATIVE", "1".into()),
+                    (crate::turn_limits::SCOPE_ENV, stem(aid)),
+                ],
+            )
+        };
+        let s = scoped("attempt-1");
         let thread = host.start_thread(&s);
+        assert!(!host.started() && host.scopes().is_empty());
         host.start_turn(&thread, "one", Some("medium")).unwrap();
         let first = turn_events(&mut rx).await;
-        assert_eq!(host.resume_thread(&thread, &s).unwrap(), thread);
+        // The next attempt names its own scope; the process stays in the first one's, and says so.
+        assert_eq!(
+            host.resume_thread(&thread, &scoped("attempt-2")).unwrap(),
+            thread
+        );
+        assert!(host.started());
+        let units = host.scopes();
+        assert!(
+            units.len() == 1
+                && units[0].starts_with(&format!("{}-", stem("attempt-1")))
+                && units[0].ends_with(".scope"),
+            "{units:?}"
+        );
         host.start_turn(&thread, "two", None).unwrap();
         let second = turn_events(&mut rx).await;
         for (events, text) in [(&first, "turn 1"), (&second, "turn 2")] {

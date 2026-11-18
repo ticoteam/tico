@@ -30,12 +30,14 @@ pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones). The `claude_*` marks are a
 /// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`. `refreshed` is
-/// its checkouts brought up to date, `skills_ready` its company skills staged.
-const PHASES: [&str; 18] = [
+/// its checkouts brought up to date, `skills_ready` its company skills staged. `harness_reused` is a pi or Antigravity
+/// turn that took a process kept from an earlier attempt (crate::warm, hosts/pi.rs Pool) instead of starting one.
+const PHASES: [&str; 19] = [
     "claimed",
     "refreshed",
     "placed",
     "harness_started",
+    "harness_reused",
     "skills_ready",
     "claude_spawned",
     "harness_spawned",

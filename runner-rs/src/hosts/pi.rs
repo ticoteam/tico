@@ -991,6 +991,9 @@ impl Pool {
 struct Proc {
     /// What it was started with (`fingerprint`): a turn that would start it differently starts a new one.
     key: String,
+    /// The scope it was started in where turns are limited (crate::turn_limits::launch_unit): the attempt that
+    /// started it names that scope, and a later attempt that takes it asks by this.
+    unit: Option<String>,
     stdin: mpsc::UnboundedSender<String>,
     stopper: super::Stopper,
     exited: watch::Receiver<bool>,
@@ -1240,8 +1243,8 @@ impl Drop for Proc {
     }
 }
 
-/// What a process for this turn would be started with, its effort aside: its command line, environment (HUB_TOKEN
-/// aside, which is the token file's), user, groups and folder, and what its agent directory holds.
+/// What a process for this turn would be started with, its effort aside: its command line, environment (the token file
+/// and scope stem aside, crate::warm::PER_ATTEMPT), user, groups and folder, and what its agent directory holds.
 fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     let mut argv = argv.to_vec();
     if let Some(at) = argv.iter().position(|a| a == "--thinking") {
@@ -1249,7 +1252,7 @@ fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     }
     let rest: Env = env
         .iter()
-        .filter(|(k, _)| *k != "HUB_TOKEN")
+        .filter(|(k, _)| !crate::warm::PER_ATTEMPT.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     // A leased user's checkout groups are its process's from the start (crate::checkout_groups).
@@ -1292,6 +1295,8 @@ struct Shared {
     cmd: Vec<String>,
     tx: Events,
     pool: Arc<Pool>,
+    /// The attempt this host runs (`set_attempt`), for its timing marks.
+    attempt: Mutex<String>,
     inner: Mutex<Inner>,
 }
 
@@ -1307,8 +1312,25 @@ impl PiHost {
             cmd,
             tx,
             pool,
+            attempt: Mutex::default(),
             inner: Mutex::new(Inner::default()),
         }))
+    }
+
+    /// The run this host's turns belong to: a turn that takes a process kept from an earlier attempt marks
+    /// `harness_reused` on it.
+    pub fn set_attempt(&self, aid: &str) {
+        *self.0.attempt.lock().unwrap_or_else(|p| p.into_inner()) = aid.to_string();
+    }
+
+    /// The scopes of the processes this attempt holds (crate::turn_limits::launch_unit): a kept one is still in the
+    /// scope of the attempt that started it.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner()
+            .procs
+            .values()
+            .filter_map(|p| p.unit.clone())
+            .collect()
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -1470,6 +1492,7 @@ impl PiHost {
     ) -> std::io::Result<Arc<Proc>> {
         let mut child = self.command(argv, settings, env)?.spawn()?;
         self.0.allocation.mark();
+        let unit = crate::turn_limits::launch_unit(env, child.id());
         let sink: Arc<Mutex<Option<Events>>> = Arc::default();
         let to = sink.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(
@@ -1505,6 +1528,7 @@ impl PiHost {
         };
         let proc = Arc::new(Proc {
             key,
+            unit,
             stdin: lines,
             stopper,
             exited: dead,
@@ -1536,13 +1560,24 @@ impl PiHost {
         let key = fingerprint(&argv, &env, &t.settings);
         let token = env.get("HUB_TOKEN").cloned().unwrap_or_default();
         let held = self.inner().procs.remove(thread_id);
-        let held = match held {
-            Some(p) => Some(p),
-            None => self.0.pool.take(thread_id).await,
+        let (held, pooled) = match held {
+            Some(p) => (Some(p), false),
+            None => (self.0.pool.take(thread_id).await, true),
         };
         if let Some(p) = held {
             if p.key == key && p.alive() {
                 self.0.allocation.mark();
+                if pooled {
+                    let aid = self
+                        .0
+                        .attempt
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    if !aid.is_empty() {
+                        crate::util::mark("harness_reused", &aid);
+                    }
+                }
                 p.token(&token);
                 self.inner().procs.insert(thread_id.into(), p.clone());
                 return Ok(p);
@@ -2728,6 +2763,13 @@ mod tests {
         let next = PiHost::new("acme", host.0.cmd.clone(), tx, host.0.pool.clone());
         next.start();
         let second = crate::turn_limits::scope_key("attempt-2");
+        // Its timings say the process was a kept one (flight.rs `harness_reused`); a new one's do not.
+        let aids = [1, 2].map(|_| format!("reuse-{}", uuid::Uuid::new_v4().simple()));
+        crate::flight::track();
+        for aid in &aids {
+            crate::flight::phase("claimed", aid);
+        }
+        next.set_attempt(&aids[0]);
         next.resume_thread(
             &thread,
             &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2"), (scope, &second)]),
@@ -2739,11 +2781,15 @@ mod tests {
             1,
             "one pi for both attempts"
         );
+        // It is still in the first attempt's scope, so a memory kill in this one is looked up there.
+        let pid = |n: usize| logged(&dir, "starts.log")[n]["pid"].as_u64().unwrap();
+        assert_eq!(next.scopes(), vec![format!("{first}-{}.scope", pid(0))]);
         next.release(true, OWNER, Held::default()).await;
         // A real change to the environment still starts a new one.
         let (tx, mut rx) = mpsc::unbounded_channel();
         let third = PiHost::new("acme", host.0.cmd.clone(), tx, host.0.pool.clone());
         third.start();
+        third.set_attempt(&aids[1]);
         let stem = crate::turn_limits::scope_key("attempt-3");
         third.resume_thread(
             &thread,
@@ -2759,6 +2805,16 @@ mod tests {
         third.start_turn(&thread, "changed", None).await.unwrap();
         assert!(turn_events(&mut rx).await.contains(&completed));
         assert_eq!(logged(&dir, "starts.log").len(), 2);
+        assert_eq!(third.scopes(), vec![format!("{stem}-{}.scope", pid(1))]);
+        let reused =
+            |aid: &str| crate::flight::timings(aid).unwrap()["phases"]["harness_reused"].is_u64();
+        assert_eq!(
+            (reused(aids[0].as_str()), reused(aids[1].as_str())),
+            (true, false)
+        );
+        for aid in &aids {
+            crate::flight::turn_end(aid, "acme", "pi", "completed", true);
+        }
         third.stop().await;
         host.0.pool.prune(true).await;
         std::fs::remove_dir_all(dir).unwrap();
@@ -3129,6 +3185,7 @@ mod tests {
         let leased = host.0.pool.home().unwrap();
         let proc = Proc {
             key: String::new(),
+            unit: None,
             stdin: mpsc::unbounded_channel().0,
             stopper: super::super::Stopper(mpsc::unbounded_channel().0),
             exited: watch::channel(false).1,

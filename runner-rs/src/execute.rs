@@ -2367,6 +2367,9 @@ impl Runner {
                     self.warm.discard(&attempt).await;
                 }
                 let (warm, turn_env) = self.warm.acquire(&attempt, &env, make).await.map_err(Fail::runtime)?;
+                if warm.started() {
+                    mark("harness_reused", &aid);
+                }
                 warm.attach(tx);
                 env = turn_env;
                 Host::Antigravity(warm)
