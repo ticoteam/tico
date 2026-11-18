@@ -154,11 +154,14 @@ def _views(c, v, rows, *, summaries=None):
     if v._members is None:
         v._members = {}
     v._members.update(T._prefetch_members(c, v, ids))
+    if not (v.is_person and v.admin(c)):  # an admin manages every thread without the owner check
+        T.prime_owners(c, v, rows)
     summaries = T.subtree_summaries(c, v, ids) if summaries is None else summaries
     followers = T._followers_of(c, v, ids)
     dms = T.dm_with(c, v, rows)
     pins = T.pin_rows(c, v.actor, ids)
     calls = T.live_calls(c, ids)
+    _prime_names(c, v, rows)
     out = {}
     for r in rows:
         summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
@@ -271,8 +274,10 @@ def _title_page(c, v, where, args, after, limit):
             f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM conversations r "
             f"WHERE {where}){cond} ORDER BY t_blank, t_key, id LIMIT :fetch"
         )
-        found = [T.thread_row(c, dict(r)) for r in c.execute(sql, {**args, **at, "fetch": fetch})]
+        page = c.execute(sql, {**args, **at, "fetch": fetch})
+        found = [row for r in page if (row := T.thread_row(c, dict(r))) is not None]  # never None: a stored row
         T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
+        task_privacy.prime_rooms(c, [r["id"] for r in found])  # each readable check's room and meeting provenance
         dms, members = [r["id"] for r in found if T.audience_of(r) in ("personal", "participants")], {}
         if dms:
             members = T._member_rows(c, v, dms)
@@ -382,6 +387,7 @@ def _unread_items(c, v, found, kind, args, marks):
     off = [it for it in found if it["row"]["id"] not in held]
     _count_exact(c, v, off)
     with_dm = T.dm_with(c, v, [it["row"] for it in off])
+    _prime_names(c, v, [it["row"] for it in off])
     out = []
     for it in off:
         r = it["row"]
@@ -405,6 +411,22 @@ def _unread_items(c, v, found, kind, args, marks):
             }
         )
     return out
+
+
+def _prime_names(c, v, rows):
+    """Read together the names `T._name` gives these rows one at a time: each untitled root's members, or its owner for
+    a Home, so naming them reads no bot or person again (names.lookup keeps them for the snapshot). A row named by its
+    title or task needs neither; one missed here is still named, by its own read."""
+    from . import names
+
+    untitled = [r for r in rows if not r.get("subject") and not r.get("task_id")]
+    homes = [r for r in untitled if T.audience_of(r) == "home"]
+    others = [r for r in untitled if T.audience_of(r) != "home"]
+    members = T._member_rows(c, v, [r["id"] for r in others])
+    actors = {a for r in homes if (a := T.home_owner(r))}
+    actors.update(a for r in others for a in T._dm_members(c, r, members[r["id"]]))
+    if actors:
+        names.lookup(c, sorted(actors))
 
 
 # ----------------------------------------------------------------------------- browse

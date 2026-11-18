@@ -869,7 +869,7 @@ def can_manage(c, v, thread):
     row = thread_row(c, thread)
     if row is None or denial(c, v, row) is not None:
         return False
-    root = root_of(c, row)
+    root = root_of(c, row) or row  # a thread's root is never None
     if v.is_person and v.admin(c):
         return True
     if root.get("owner_id") == v.actor and audience_of(root) != "home":
@@ -879,12 +879,31 @@ def can_manage(c, v, thread):
 
         owner = home_owner(root)
         return bool(owner) and teammate_access.can(c, v.who, "manage", owner, auth=v.auth)
-    return (
-        c.execute(
-            "SELECT 1 FROM thread_members WHERE thread_id=? AND actor=? AND role='owner'", (root["id"], v.actor)
-        ).fetchone()
-        is not None
-    )
+    # prime_owners seeds these rows for a list's roots, so each row's check reads none of them again.
+    return read_cache.one(c, _OWNER_SQL, (root["id"], v.actor)) is not None
+
+
+_OWNER_SQL = "SELECT 1 FROM thread_members WHERE thread_id=? AND actor=? AND role='owner'"
+
+
+def prime_owners(c, v, roots):
+    """Seed `can_manage`'s owner check for these root rows, one query a chunk, for the rows that follow in this snapshot.
+    The seeded rows are the ones that check reads: (1,) where the viewer is an owner member, else none. A Home and a
+    root the viewer started are decided before that check, so they are not read."""
+    if read_cache.cache(c) is None:
+        return
+    ids = [r["id"] for r in roots if audience_of(r) != "home" and r.get("owner_id") != v.actor]
+    found = set()
+    for part in H.chunks(list(dict.fromkeys(ids))):
+        found.update(
+            r[0]
+            for r in c.execute(
+                "SELECT thread_id FROM thread_members WHERE actor=? AND role='owner' AND thread_id IN (%s)"
+                % ",".join("?" * len(part)),
+                (v.actor, *part),
+            )
+        )
+    read_cache.prime(c, _OWNER_SQL, {(i, v.actor): (1,) if i in found else None for i in ids})
 
 
 # ----------------------------------------------------------------------------- C1 as SQL and for SSE

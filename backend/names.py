@@ -77,10 +77,27 @@ def _collect(node, found, notices):
 
 
 def lookup(conn, ids):
-    """{actor id: display name} for the human and bot ids among `ids`; an unknown id is left out."""
+    """{actor id: display name} for the human and bot ids among `ids`; an unknown id is left out. Inside a snapshot each
+    actor is read once: a caller that names many threads one at a time (the rail's unread rows) reads the names it
+    looked up before, or that it looked up together first, from the snapshot's cache."""
+    ids = set(ids)
+    out = {SUPPORT_ACTOR: SUPPORT_NAME} if SUPPORT_ACTOR in ids else {}
+    known = read_cache.cache(conn)
+    known = known.setdefault(("names.lookup",), {}) if known is not None else None
+    if known is not None:
+        out.update({i: known[i] for i in ids if known.get(i) is not None})
+        ids = {i for i in ids if i not in known}
+    found = _read_names(conn, ids)
+    if known is not None:
+        known.update({i: found.get(i) for i in ids if i.startswith(("human:", "bot:"))})
+    out.update(found)
+    return out
+
+
+def _read_names(conn, ids):
     humans = sorted({i.split(":", 1)[1] for i in ids if i.startswith("human:")})
     bots = sorted({i.split(":", 1)[1] for i in ids if i.startswith("bot:")})
-    out = {SUPPORT_ACTOR: SUPPORT_NAME} if SUPPORT_ACTOR in ids else {}
+    out = {}
     for start in range(0, len(humans), 500):
         chunk = humans[start : start + 500]
         sql = "SELECT id,name FROM humans WHERE id IN (%s)" % ",".join("?" * len(chunk))
