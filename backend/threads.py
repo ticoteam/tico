@@ -885,14 +885,15 @@ def can_manage(c, v, thread):
 _OWNER_SQL = "SELECT 1 FROM thread_members WHERE thread_id=? AND actor=? AND role='owner'"
 
 
-def prime_owners(c, v, root_ids):
-    """Seed `can_manage`'s owner check for these roots, one query a chunk, for the rows that follow in this snapshot.
-    The seeded rows are the ones that check reads: (1,) where the viewer is an owner member, else none."""
+def prime_owners(c, v, roots):
+    """Seed `can_manage`'s owner check for these root rows, one query a chunk, for the rows that follow in this snapshot.
+    The seeded rows are the ones that check reads: (1,) where the viewer is an owner member, else none. A Home and a
+    root the viewer started are decided before that check, so they are not read."""
     if read_cache.cache(c) is None:
         return
+    ids = [r["id"] for r in roots if audience_of(r) != "home" and r.get("owner_id") != v.actor]
     found = set()
-    ids = list(dict.fromkeys(i for i in root_ids if i))
-    for part in H.chunks(ids):
+    for part in H.chunks(list(dict.fromkeys(ids))):
         found.update(
             r[0]
             for r in c.execute(

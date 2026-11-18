@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 
-from . import read_cache, task_privacy
+from . import task_privacy
 from . import threads as T
 from .store import H, Problem
 
@@ -155,12 +155,13 @@ def _views(c, v, rows, *, summaries=None):
         v._members = {}
     v._members.update(T._prefetch_members(c, v, ids))
     if not (v.is_person and v.admin(c)):  # an admin manages every thread without the owner check
-        T.prime_owners(c, v, ids)
+        T.prime_owners(c, v, rows)
     summaries = T.subtree_summaries(c, v, ids) if summaries is None else summaries
     followers = T._followers_of(c, v, ids)
     dms = T.dm_with(c, v, rows)
     pins = T.pin_rows(c, v.actor, ids)
     calls = T.live_calls(c, ids)
+    _prime_names(c, v, rows)
     out = {}
     for r in rows:
         summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
@@ -275,6 +276,7 @@ def _title_page(c, v, where, args, after, limit):
         )
         found = [T.thread_row(c, dict(r)) for r in c.execute(sql, {**args, **at, "fetch": fetch})]
         T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
+        task_privacy.prime_rooms(c, [r["id"] for r in found])  # each readable check's room and meeting provenance
         dms, members = [r["id"] for r in found if T.audience_of(r) in ("personal", "participants")], {}
         if dms:
             members = T._member_rows(c, v, dms)
@@ -418,10 +420,12 @@ def _prime_names(c, v, rows):
 
     untitled = [r for r in rows if not r.get("subject") and not r.get("task_id")]
     homes = [r for r in untitled if T.audience_of(r) == "home"]
-    members = T._member_rows(c, v, [r["id"] for r in untitled if T.audience_of(r) != "home"])
+    others = [r for r in untitled if T.audience_of(r) != "home"]
+    members = T._member_rows(c, v, [r["id"] for r in others])
     actors = {a for r in homes if (a := T.home_owner(r))}
-    actors.update(a for found in members.values() for a in found)
-    names.lookup(c, [a for a in actors if str(a).startswith(("human:", "bot:"))])
+    actors.update(a for r in others for a in T._dm_members(c, r, members[r["id"]]))
+    if actors:
+        names.lookup(c, sorted(actors))
 
 
 # ----------------------------------------------------------------------------- browse
@@ -889,19 +893,14 @@ def _walk(c, v, flags, after=None):
             if position:
                 cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
                 at = {"at_seq": position[0], "at_id": position[1]}
-            stored = [
-                dict(r)
+            found = [
+                T.thread_row(c, dict(r))
                 for r in c.execute(
                     f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
                     f"{' AND '.join([*where, phase])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                     {**args, **at, "batch": batch},
                 )
             ]
-            # These are the rooms' stored rows: prime_rooms reads them from here, not in a second query.
-            read_cache.prime(
-                c, H.CONVERSATION_SQL, {(r["id"],): {k: x for k, x in r.items() if k != "activity"} for r in stored}
-            )
-            found = [T.thread_row(c, dict(r)) for r in stored]
             ids = [r["id"] for r in found if r]
             T.prime_members(c, v, ids, roots=ids)
             task_privacy.prime_rooms(c, ids)  # their meeting provenance too, not one room at a time

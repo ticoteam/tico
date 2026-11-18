@@ -337,19 +337,24 @@ def test_revived_within_checks_each_root_once_a_snapshot_across_chunks(api, monk
 
 
 def _members_threads(api, start, stop):
-    """Members threads ana starts and cara is in (every third one cara starts, so she owns it), each with a post."""
+    """Members threads ana starts and cara is in, each with a post: every third one cara starts (she owns it), every
+    fifth ana makes cara an owner of; and an untitled DM to cara from ana or ben, off the rail, named by its people."""
     with api.app.state.store.transaction() as c:
         for i in range(start, stop):
             starter, other = ("human:cara", "human:ana") if i % 3 == 0 else ("human:ana", "human:cara")
             out = threads.post(c, starter, None, f"Plan {i}", start={"title": f"Plan {i}", "audience": "members"})
             tid = out.get("thread_id") or out.get("conversation_id")
-            threads.add_member(c, starter, tid, other)
+            threads.add_member(c, starter, tid, other, role="owner" if i % 5 == 0 and i % 3 else "member")
             threads.post(c, other, tid, f"Seen {i}")
+        for i in range(start, stop, 10):
+            sender = ("human:ana", "human:ben")[i // 10 % 2]
+            threads.post(c, sender, None, f"Ping {i}", start={"dm": ["human:cara"], "title": ""})
 
 
 def test_a_plain_members_rail_checks_its_rows_together(api, monkeypatch):
     """cara is neither admin nor owner of most rows: 5 then 30 members threads add at most 10 statements to her rail
-    (each row's owner check and names are read with the page's), list every thread, and read the same with no cache."""
+    (each row's owner check and names are read with the page's), list every thread, and read the same with no cache:
+    the threads she started or was made owner of are hers to manage, the others not."""
     counts, done = {}, 0
     for size in (5, 30):
         _members_threads(api, done, size)
@@ -357,11 +362,12 @@ def test_a_plain_members_rail_checks_its_rows_together(api, monkeypatch):
         page, counts[size] = _first_page(api, "cara-test")
         assert len([r for r in page["threads"] if r["title"].startswith("Plan ")]) == size, page["threads"]
     assert counts[30] - counts[5] <= 10, counts
-    batched = {r: get(api, "threads/rail", r) for r in ("cara-test", "ana-test")}
+    batched = {r: get(api, "threads/rail", r) for r in ("cara-test", "ana-test", "ben-test")}
     monkeypatch.setattr(read_cache, "cache", lambda c: None)
     for reader, page in batched.items():
         alone = get(api, "threads/rail", reader)
         page.pop("seq", None), alone.pop("seq", None)
         assert alone == page, f"priming changed the rail for {reader}"
     managed = {r["title"]: r["me"]["can_manage"] for r in batched["cara-test"]["threads"]}
-    assert managed["Plan 0"] and not managed["Plan 1"], managed
+    assert managed == {f"Plan {i}": i % 3 == 0 or i % 5 == 0 for i in range(30)}, managed
+    assert [r["name"] for r in batched["cara-test"]["unread"] if r["title"] == ""], batched["cara-test"]["unread"]
