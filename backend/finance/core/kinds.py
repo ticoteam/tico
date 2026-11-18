@@ -460,7 +460,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("provider", "mercury|stripe|brex", ""),
         ("credential_id", "str", ""),
         ("name?", "str", ""),
-        ("probe?", "bool", ""),
+        ("probe", "obj", "the provider read; POST /api/v2/finance/connections makes it: use that route"),
         ("approver_email?", "str", ""),
         ("token_creator_email?", "str", ""),
         ("server_ip?", "str", ""),

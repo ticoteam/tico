@@ -93,7 +93,8 @@ class FinanceConnectionRequest(Contract):
     """Connect a bank, Stripe or Brex with a stored credential. Mercury's token: the approver is a Mercury user other than
     the token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key and
     Brex's token need no approver. history_from is the first day of history Finance reads (Jan 1 of this year when left
-    out); the opening balance is the balance less the rows from that day on."""
+    out); the opening balance is the balance less the rows from that day on. transfer_account_id and capital_account_id
+    (Stripe only) name the lines its Connect transfers and Capital paydowns post to."""
 
     provider: Literal["mercury", "stripe", "brex"] = "mercury"
     credential_id: str = Field(min_length=1, max_length=120)
@@ -102,6 +103,8 @@ class FinanceConnectionRequest(Contract):
     token_creator_email: str | None = Field(None, max_length=200)
     server_ip: str | None = Field(None, max_length=64)
     history_from: str | None = Field(None, pattern=DAY)
+    transfer_account_id: str | None = Field(None, max_length=120)
+    capital_account_id: str | None = Field(None, max_length=120)
 
 
 class FinanceActionRequest(Contract):
@@ -1232,6 +1235,11 @@ def install(app, store, auth, mutate):
                 ("approver_email", body.approver_email),
                 ("token_creator_email", body.token_creator_email),
                 ("server_ip", body.server_ip),
+            ]
+        if body.provider == "stripe":
+            extra += [
+                ("transfer_account_id", body.transfer_account_id),
+                ("capital_account_id", body.capital_account_id),
             ]
         payload = {
             "provider": body.provider,

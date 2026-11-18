@@ -186,6 +186,9 @@ def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if str(p.get("provider") or "") in BOOKS_PROVIDERS:
         # A books connection is made only by its claim (books_link.finish), never as a bank connection.
         raise invalid("QuickBooks and Xero connect through POST /api/v2/finance/books/connect, not here")
+    if not isinstance(p.get("probe"), dict):
+        # The probe is the provider read the connect route makes with the key, outside any transaction.
+        raise invalid("connect through POST /api/v2/finance/connections: it reads the provider and sends the probe")
     if V.opt_text(p, "provider", 20) == "stripe":
         from . import stripe_sync  # lazy: it imports this module
 
