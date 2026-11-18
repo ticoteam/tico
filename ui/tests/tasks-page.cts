@@ -451,7 +451,6 @@ async function youSince(browser: Browser) {
   assert.match(await age('r1'), /^Since [A-Z][a-z]{2} \d{1,2}(, \d{4})?$/, 'an OK asked two days ago says the day');
   assert.equal(await age('r2'), '1h', 'a question asked an hour ago keeps its short age');
   assert.equal(await age('task:t-3'), '2d', 'her own task is not an ask: its short age');
-  assert.equal(await page.locator('[data-need] .tk-late').count(), 0, 'no Needs you row says Late');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('You: an ask past a day says Since <day>: ok');

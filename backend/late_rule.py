@@ -52,7 +52,7 @@ def is_late(owner_id: Any, due_at: Any, entered_at: Any, expected_minutes: Any, 
 
 def last_answers(conn: sqlite3.Connection, visits: Sequence[tuple[str, str, str]]) -> dict[str, str]:
     """{visit id: when a person last answered on it} for (visit id, task id, entered at) rows, the visits with an answer
-    only: a person's answer to an OK or a question (answers; a bot's own "done" is not one), or a reply that cleared a ❓ (question_marks). Two reads for any
+    only: a person's answer to an OK or a question (answers; a bot's own "done" is not one), or the end of a ❓ (question_marks: the reply, or its person can no longer answer it). Two reads for any
     number of visits."""
     if not visits:
         return {}
@@ -66,7 +66,7 @@ def last_answers(conn: sqlite3.Connection, visits: Sequence[tuple[str, str, str]
         out[str(visit_id)] = str(at)
     for visit_id, at in conn.execute(
         "SELECT json_extract(j.value, '$[0]'), MAX(q.cleared_at) FROM json_each(?) j JOIN question_marks q "
-        "ON q.task_id = json_extract(j.value, '$[1]') AND q.cleared_message_id IS NOT NULL "
+        "ON q.task_id = json_extract(j.value, '$[1]') AND q.cleared_at IS NOT NULL "
         "AND q.cleared_at >= json_extract(j.value, '$[2]') GROUP BY json_extract(j.value, '$[0]')",
         (rows,),
     ).fetchall():

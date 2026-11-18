@@ -840,7 +840,7 @@ def _late(
         _late_release(conn, row, at, spent, minutes, done)
         return
     manager = _manager(conn, row, seen)
-    if _asks_only(waits):
+    if W.persons_turn(waits):
         # It waits only on people's answers: the person's turn, never Late (the bot is not behind, and the ask is in
         # the person's Needs you with its age). The manager bot still looks once where it may push past an ask.
         _person_look(conn, row, spent, minutes, manager, waits, done, seen)
@@ -862,19 +862,30 @@ def _late(
         target = W.turn(conn, fresh, waits)
         if target and level == "owner" and manager and manager != target:
             # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
-            # set, and never back down from a person.
-            _to_manager(conn, fresh, manager, f"{said} {_name(conn, target)} has it.", at, done)
+            # set (Late again after a person's answer is the label only), and never back down from a person.
+            if not _handed_this_visit(conn, fresh):
+                _to_manager(conn, fresh, manager, f"{said} {_name(conn, target)} has it.", at, done)
         elif head and _looks(conn, fresh, waits, manager, head.who):
-            # No bot has a turn: it waits on another task or the outside, and the manager bot looks once. A bot that
-            # cannot run is one row for its cause in a person's list, and its tasks carry on when the cause is fixed:
-            # nothing is sent for it.
+            # No bot has a turn: it waits on another task, a cause a person fixes or the outside, and the manager bot
+            # looks once. A bot that cannot run is one row for its cause in a person's list, and its tasks carry on
+            # when the cause is fixed: nothing is sent for it.
             waits_on = W.unnamed(head, task_wakes.told(conn, fresh, manager)).line  # a sub-task it may not be told of
             lead = (
                 f"{said} It waits on: {waits_on}. Look once: push past with a reason where that is allowed, "
                 "reassign it, snooze it or close it."
             )
+            if _asks_only(waits):
+                # Asks with a cause a person fixes first (Connect GitHub): the manager bot's one move is to push past an
+                # ask it may push past; with none it is not woken. Never a snooze: the ask stays in the person's list.
+                lead = (
+                    f"{said} It waits on: {waits_on}. It stays in {_name(conn, head.who)}'s list. Look once: if the "
+                    "answer is not needed, push past it with a reason where that is allowed; otherwise leave the task "
+                    "as it is."
+                    if _pushable(conn, waits)
+                    else ""
+                )
             key = f"{row['id']}:{visit['id']}:late"
-            if task_wakes.add(
+            if lead and task_wakes.add(
                 conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
             ):
                 done["woken"] += 1
@@ -947,6 +958,18 @@ def minutes_have_passed(H: Any, visit: Row, at: str, minutes: int) -> bool:
     return bool(now and entered and (now - entered).total_seconds() >= minutes * 60)
 
 
+def _handed_this_visit(conn: "sqlite3.Connection", row: Row) -> bool:
+    """Whether Late or the ladder already handed the task to the manager bot on this visit (a `ladder` event to
+    manager since it entered the stage)."""
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='ladder' AND new='manager' "
+            "AND created_at >= ? LIMIT 1",
+            (row["id"], str(row["visit"]["entered_at"])),
+        ).fetchone()
+    )
+
+
 def _answered_since_late(conn: "sqlite3.Connection", visit: Row) -> bool:
     """Whether a person answered on this visit after it was marked Late."""
     answered, told = last_answer(conn, visit), visit.get("late_told_at")
@@ -987,8 +1010,8 @@ def _person_look(
 
 def _asks_only(waits: list[W.Wait]) -> bool:
     """Whether all a task waits on is OKs and answers asked of people, and causes a person fixes first (`Wait.fix`,
-    Connect GitHub): a person's turn (waiting_on.persons_turn)."""
-    return W.persons_turn(waits)
+    Connect GitHub). Only answers and OKs are a person's turn that is never Late (waiting_on.persons_turn)."""
+    return bool(waits) and all((wait.state == W.PERSON and wait.ask) or wait.fix for wait in waits)
 
 
 def _pushable(conn: "sqlite3.Connection", waits: list[W.Wait]) -> bool:

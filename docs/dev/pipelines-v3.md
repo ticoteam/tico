@@ -111,8 +111,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   page version, an ask, a snooze, a sub-task filed. A comment alone does not count, so a bot can't loop on "working on
   it".
 - **C5.** Late has two steps and no extra settings. At the stage's expected time the manager bot gets the task. At 3
-  times that, the ladder rests, once. A person's turn (all the task waits on is people's answers) is never Late, and
-  the bot's clock starts again at the person's last answer.
+  times that, the ladder rests, once. A person's turn (all the task waits on is people's answers to asks; a Connect
+  GitHub hold is not one) is never Late, and the bot's clock starts again at the person's last answer.
 - **C6.** A task owned by a person is never chased. It shows Late only after its due date.
 - **C7.** Asks never expire and tasks never close by themselves. *Today: questions expire after 7 days or go ahead on a
   default answer, and done Engineering tasks close after 24 hours.*

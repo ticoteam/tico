@@ -647,9 +647,10 @@ def turn(
 
 
 def persons_turn(waits: Sequence[Wait]) -> bool:
-    """Whether all a task waits on is OKs and answers asked of people, and causes a person fixes first (`Wait.fix`,
-    Connect GitHub). Such a task is never Late: the bot is not behind (never_stuck._late, late_rule.late_of)."""
-    return bool(waits) and all((wait.state == PERSON and wait.ask) or wait.fix for wait in waits)
+    """Whether all a task waits on is OKs and answers asked of people (a ❓ included). Such a task is never Late: the
+    bot is not behind (never_stuck._late, late_rule.late_of). A cause a person fixes first (`Wait.fix`, Connect GitHub)
+    is not one: its time is not given back when it ends, so it stays Late as before."""
+    return bool(waits) and all(wait.state == PERSON and wait.ask and not wait.fix for wait in waits)
 
 
 def on_person(

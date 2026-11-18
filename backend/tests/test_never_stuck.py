@@ -478,12 +478,28 @@ def test_a_late_task_shows_no_late_on_a_persons_turn_and_is_late_again_only_if_t
     assert H.task_view(c, task_id, ANA)["late"] is None
     assert later(hours=10).get("late") is None
     H.task_comment(c, ANA, task_id, "Formal, please.")  # her reply clears the ❓
-    assert _states(c, task_id)[0][0] == "bot"
+    assert _states(c, task_id)[0][0] == "bot" and H.task_view(c, task_id, ANA)["late"] is None
     # The bot's turn again, but its clock started at her answer: not Late yet.
     assert _list_row(c, task_id)["late"] is None and not _late_listed(c, task_id)
     assert later(hours=23).get("late") is None and _list_row(c, task_id)["late"] is None
     assert later(hours=1).get("late") == 1 and _late_events(c, task_id) == 2
     assert _list_row(c, task_id)["late"] and _late_listed(c, task_id) and H.task_view(c, task_id, ANA)["late"]
+
+
+def test_a_task_late_again_after_a_persons_answer_goes_to_the_manager_bot_once_per_visit(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    first = later(days=1)
+    assert first.get("late") == 1 and first.get("to_manager") == 1
+    _settled(c)
+    QM.ask(c, MANAGER, task_id, ANA, "Which tone should the launch note use?", checked=False)
+    assert later(hours=2).get("late") is None
+    H.task_comment(c, ANA, task_id, "Formal, please.")  # her answer starts the bot's clock again
+    _settled(c)
+    done = later(days=1)
+    assert done.get("late") == 1 and done.get("to_manager") is None  # Late again, but the manager was told already
+    handed = "SELECT COUNT(*) FROM history_events WHERE subject_id=? AND kind='ladder' AND new='manager'"
+    assert c.execute(handed, (task_id,)).fetchone()[0] == 1
 
 
 def test_a_bots_own_answer_does_not_start_its_clock_again(c, general, later):
