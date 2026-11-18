@@ -3,6 +3,9 @@ bot Homes: each reply names the run that wrote it, and the per-message check rea
 messages they reply to together, never one reply at a time. Priming changes no row or count. Fictional people only:
 ana (owner), ben (bot admin) and cara."""
 
+import collections
+import re
+
 from backend import read_cache, thread_rail, threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -351,17 +354,27 @@ def _members_threads(api, start, stop):
             threads.post(c, sender, None, f"Ping {i}", start={"dm": ["human:cara"], "title": ""})
 
 
+def _shape(statement):
+    """A statement with its values and IN lists folded, to name what a load repeats."""
+    return re.sub(r"\?(, ?\?)+", "?", re.sub(r"'[^']*'|\b\d+\b", "?", statement))[:160]
+
+
 def test_a_plain_members_rail_checks_its_rows_together(api, monkeypatch):
     """cara is neither admin nor owner of most rows: 5 then 30 members threads add at most 10 statements to her rail
     (each row's owner check and names are read with the page's), list every thread, and read the same with no cache:
     the threads she started or was made owner of are hers to manage, the others not."""
-    counts, done = {}, 0
+    counts, shapes, done = {}, {}, 0
     for size in (5, 30):
         _members_threads(api, done, size)
         done = size
-        page, counts[size] = _first_page(api, "cara-test")
+        page, statements = traced(api, lambda: get(api, "threads/rail", "cara-test"))
+        counts[size], shapes[size] = (
+            len(statements),
+            collections.Counter(_shape(s) for s in statements),
+        )
         assert len([r for r in page["threads"] if r["title"].startswith("Plan ")]) == size, page["threads"]
-    assert counts[30] - counts[5] <= 10, counts
+    grew = {s: n - shapes[5][s] for s, n in shapes[30].items() if n > shapes[5][s]}
+    assert counts[30] - counts[5] <= 10, (counts, grew)
     batched = {r: get(api, "threads/rail", r) for r in ("cara-test", "ana-test", "ben-test")}
     monkeypatch.setattr(read_cache, "cache", lambda c: None)
     for reader, page in batched.items():
