@@ -870,6 +870,7 @@ def installs(monkeypatch):
         "paths": [],
         "outcome": "healthy",
         "down": set(),
+        "misses": {},  # install -> how many more of its reads go unanswered (502) before it answers again
     }
 
     def call(target, method, path, body=None, key=True):
@@ -877,6 +878,9 @@ def installs(monkeypatch):
         state["paths"].append((name, method, path, key))
         if name in state["down"]:
             return 0, {"error": "URLError"}
+        if method == "GET" and state["misses"].get(name):
+            state["misses"][name] -= 1
+            return 502, {}
         if (method, path) == ("POST", rt.UPDATE_PATH):
             version = body["version"]
             state["updated"].append((name, version))
@@ -909,6 +913,23 @@ def test_a_rolled_back_or_unreadable_update_fails(installs):
     installs["down"].add("stable")
     with pytest.raises(rt.Fail, match="cannot be read"):
         rt.update_install(rt.install("STABLE", ENV), "v0.5.201")
+
+
+def test_a_status_read_that_goes_unanswered_is_read_again_before_the_step_fails(installs, monkeypatch):
+    # Nov 18: single reads of stable went unanswered about one train step in two while it was up; each failed the step.
+    stable = rt.install("STABLE", ENV)
+    installs["misses"]["stable"] = rt.READ_TRIES - 1
+    assert rt.running(stable) == "0.5.199"
+    installs["misses"]["stable"] = rt.READ_TRIES
+    with pytest.raises(rt.Fail, match=r"stable: its update status cannot be read \(.*HTTP 502, 3 tries\)"):
+        rt.running(stable)
+    installs["down"].add("stable")
+    with pytest.raises(rt.Fail, match="no answer"):
+        rt.running(stable)
+    # Promotion holds, naming why, rather than reading stable once.
+    installs["canary"].update(running="0.5.200")
+    with pytest.raises(rt.Fail, match="promote: holding, stable: its update status cannot be read"):
+        rt.promote(FakeGitHub([]), ENV)
 
 
 def test_a_near_instant_failure_is_judged_at_once(monkeypatch):

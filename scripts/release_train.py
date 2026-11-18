@@ -112,6 +112,9 @@ VALIDATION_WAIT = 150 * 60
 DISPATCH_WAIT = 120
 UPDATE_WAIT = 30 * 60  # the updater pulls, snapshots, restarts and checks health, or rolls back
 UPDATE_PATH = "/api/v2/system/update"
+# Reads of an install's update status before it counts as unreadable, POLL apart: on Nov 18 single reads of stable
+# (TIDY) went unanswered about one train step in two while it was up, and each such miss failed the whole step.
+READ_TRIES = 3
 POLL = 20
 REPUBLISH_AFTER = timedelta(minutes=30)  # a tag still unpublished this long after its Release run started
 RELEASE_RUNS = 2  # the first Release run on a tag, and one more
@@ -595,9 +598,28 @@ def update_status(target):
     return status if code == 200 and isinstance(status, dict) else None
 
 
+def read_status(target):
+    """update_status for a step that cannot go on without it: read up to READ_TRIES times, POLL apart, so one unanswered
+    read (a proxy blip, an answer slower than the 30-second timeout) is not an unreadable install. Fail names the last
+    answer's HTTP code (no answer: none)."""
+    code = 0
+    for attempt in range(READ_TRIES):
+        if attempt:
+            sleep(POLL)
+        try:
+            code, status = rollout.call(target, "GET", UPDATE_PATH)
+        except rollout.Stop as exc:
+            raise Fail(str(exc.args[0])) from exc
+        if code == 200 and isinstance(status, dict) and rollout.plain(status.get("running")):
+            return status
+    raise Fail(
+        "%s: its update status cannot be read (GET %s with the update key: %s, %d tries)"
+        % (target["name"], UPDATE_PATH, "HTTP %s" % code if code else "no answer", READ_TRIES)
+    )
+
+
 def running(target):
-    status = update_status(target)
-    return rollout.plain(status.get("running")) if status else ""
+    return rollout.plain(read_status(target).get("running"))
 
 
 BUSY = ("pulling", "restarting", "uncertain")
@@ -611,10 +633,8 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     `pulling`, then restarts the server; or its state, target or message is no longer what it said before the request):
     an earlier update's outcome, even one to the same version, is never judged."""
     want, name = rollout.plain(version), target["name"]
-    snapshot = update_status(target)
-    before = rollout.plain((snapshot or {}).get("running"))
-    if not before:
-        raise Fail("%s: its update status cannot be read (GET %s with the update key)" % (name, UPDATE_PATH))
+    snapshot = read_status(target)
+    before = rollout.plain(snapshot.get("running"))
     if before == want:
         note("%s already runs v%s" % (name, want))
         return
@@ -1340,13 +1360,12 @@ def promote(gh, env):
     if not canary or not stable:
         note("Promote: skipped, " + missing("CANARY" if not canary else "STABLE"))
         return
-    status = update_status(canary)
-    canary_release = rollout.plain((status or {}).get("running"))
-    if not canary_release:
-        raise Fail("promote: holding, the canary's update status cannot be read")
-    stable_release = running(stable)
-    if not stable_release:
-        raise Fail("promote: holding, stable's update status cannot be read")
+    try:
+        status = read_status(canary)
+        stable_release = running(stable)
+    except Fail as exc:
+        raise Fail("promote: holding, %s" % exc) from exc
+    canary_release = rollout.plain(status.get("running"))
     want, have = as_tag(canary_release), as_tag(stable_release)
     if want == have:
         note("Promote: stable already runs %s" % want)
