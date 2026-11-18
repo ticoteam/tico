@@ -196,7 +196,7 @@ def task_create(api, args):
         "title": _s("What to do"),
         "message": _s("The first message on its chat", default=""),
         "check_model": _s(
-            "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
+            "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.2-sol`; `auto` for "
             "the company's check model, from a provider other than the parent's author when one can run it"
         ),
         "check_role": {
@@ -591,6 +591,7 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "not_known": {"type": "boolean", "description": "Ask even if Tico answered"},
         "requirement": _s("With withdraw: the OK's requirement id, if several"),
         "why": _s("With withdraw: why"),
         "version": VERSION,
@@ -608,7 +609,10 @@ def task_ask(api, args):
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
     if not any(args.get(field) for field in _STAGE_ASK):
         # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
-        return api.post(f"tasks/{args['id']}/questions", {"to": args["to"], "text": args["line"]}, key=_key(args))
+        question = {"to": args["to"], "text": args["line"]}
+        if args.get("not_known"):
+            question["not_known"] = True  # past Tico's own answer (backend/ask_known.py)
+        return api.post(f"tasks/{args['id']}/questions", question, key=_key(args))
     if args.get("kind") != "ok" and not args.get("subject"):
         raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
@@ -1344,7 +1348,7 @@ TASK = (
         "the model a bot-owned task's runs use; no model shows it",
         args=(Arg("model", positional=True, nargs="?"),),
         omit=("on_behalf_of",),
-        example="tico task model T1 gpt-6.1-sol --effort high",
+        example="tico task model T1 gpt-6.2-sol --effort high",
     ),
     Command(
         "task child",
@@ -1353,6 +1357,7 @@ TASK = (
         args=(
             Arg("title", "--title"),
             Arg("message", default=""),
+            Arg("message", "--body"),
             Arg("check_model", "--check-model", nargs="?", const="auto", metavar="RUNTIME[:MODEL]"),
             Arg("check_role", "--role"),
         ),

@@ -18,7 +18,7 @@ type AskKind = 'ok' | 'other' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
     load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
-    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. `shows`: the refs it
+    a page requirement, the version key of the pages an answer is for. `shows`: the refs it
     was read from. Held per ask (decideOkKey): a stage's requirement is the same on every task in the stage. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
@@ -760,9 +760,11 @@ function decidePaintBody(st: DecState) {
     // and the document in the app's colours. The served page stands in only when the task has no such document.
     if (it.ask?.approval) decideAboutLoad(decideTaskId(it));
     const about = it.ask?.approval ? decideAboutOf(it) : undefined;
+    const docs = decideApprovalDocs(it);
     html = bare ? changed + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
       : about?.state === 'loading' ? skelRows(4)
-      : decideApprovalDoc(it) ? changed + '<div class="dc-docview"></div>'
+      : docs.length ? changed + docs.map(doc =>
+        `<div class="dc-docview" data-dc-doc="${esc(doc.file_id)}"></div>`).join('')
       : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
@@ -788,16 +790,23 @@ function decidePaintBody(st: DecState) {
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
 }
-/** The task document a document approval asks about, once the task is read; null for any other item. */
-function decideApprovalDoc(it: NeedsEntry): TaskDoc | null {
-  const fid = it.ask?.approval?.file_id;
-  return fid ? decideAboutOf(it)?.task?.documents?.find(d => d.file_id === fid) || null : null;
+/** The documents in the submission, when the task read can supply each viewer. */
+function decideApprovalDocs(it: NeedsEntry): TaskDoc[] {
+  const ask = it.ask?.approval;
+  if (!ask?.file_id) return [];
+  const docs = decideAboutOf(it)?.task?.documents || [];
+  const pages = ask.pages?.length ? ask.pages : [{file_id: ask.file_id, version: ask.version}];
+  const found = pages.map(p => docs.find(d => d.file_id === p.file_id && d.name === ask.document &&
+    d.versions.some(v => v.n === p.version)));
+  return found.every((doc): doc is TaskDoc => !!doc) ? found : [];
 }
 /** The approval's document on the left (wide screen), mounted as the phone's tab mounts it (task-docs.ts docViewMount),
     so it follows the app's theme unless its own HTML sets its colours; drawn again it moves to a newer version. */
 function decideOkDocMount(host: HTMLElement, it: NeedsEntry) {
-  const slot = host.querySelector<HTMLElement>(':scope > .dc-docview'), doc = decideApprovalDoc(it);
-  if (slot && doc) docViewMount(slot, doc, decideApprovalOn(it, doc));
+  for (const doc of decideApprovalDocs(it)) {
+    const slot = host.querySelector<HTMLElement>(`:scope > [data-dc-doc="${CSS.escape(doc.file_id)}"]`);
+    if (slot) docViewMount(slot, doc, decideApprovalOn(it, doc));
+  }
 }
 /** A document approval's one muted version line over the document on the left ("v2 · submitted for approval ·
     changed: …"), as a phone shows it on the document's tab (task-docs.ts docVersionLine). '' for any other OK. */
@@ -837,6 +846,10 @@ function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
 const DEC_BROWSED = new Set<string>();
 const decideBtn = (dc: string, label: string, main = false, extra = '') =>
   `<button type="button" class="${main ? 'primary' : 'ghost'}" data-dc="${dc}"${extra}>${esc(label)}</button>`;
+/** An OK's chat-row button that takes the box's words along: a comment icon before its label, shown only while the box
+    has words (decideChatTyped). `only` hides the button itself until then (Send back, Close). */
+const decideNoteBtn = (dc: string, label: string, aria: string, main: boolean, extra = '', only = false) =>
+  `<button type="button" class="${main ? 'primary' : 'ghost'} dc-note-btn${only ? ' dc-note-only' : ''}" data-dc="${dc}" aria-label="${esc(aria)}" title="${esc(aria)}"${extra}><span class="nav-icon dc-note-ic" aria-hidden="true">chat_bubble</span>${esc(label)}</button>`;
 /** The right side: the sentence, who asks, and the buttons for this kind. */
 function decidePaintSide(st: DecState) {
   const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-side');
@@ -871,17 +884,27 @@ function decidePaintSide(st: DecState) {
   const busy = st.busy ? ' disabled' : '';
   let body = '';
   if (chat) {
-    // The task's chat answers it (decideChatMount): under the composer only Approve on an OK, then Snooze and ⋯.
+    // The task's chat answers it (decideChatMount): under the composer an OK has Approve, and once the box has words Send
+    // back, Close and Approve, each with a comment icon (decideChatTyped); then Snooze and ⋯ (appended by the caller).
     const v = st.ok.get(decideOkKey(it)), ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
     // The forward button says what it does: Pay $1,240.00, Send email, OK (a Validate page), else Approve.
-    const label = decideCheckedOk(it) ? 'OK' : decideAction(v)?.verb || 'Approve', words = DEC_CHAT?.item === it.id && DEC_CHAT.typed.trim();
-    // An OK approved whose comment did not go has no Approve left: the arrow sends the comment.
+    const checked = decideCheckedOk(it), label = checked ? 'OK' : decideAction(v)?.verb || 'Approve', words = !!(DEC_CHAT?.item === it.id && DEC_CHAT.typed.trim());
     // A browser ask on a phone: Open browser is the forward action, Done once the person is back from it (on a bot's ❓,
     // where "Done" is the reply).
     const browse = decidePhone() && (it.ask?.shows || it.shows || []).some(r => r.startsWith('browser:'))
       ? DEC_BROWSED.has(it.id) && it.kind === 'question' ? decideBtn('browse-done', 'Done', true, busy) : decideBtn('browse', 'Open browser', true, busy) : '';
-    body = `<div class="dc-acts dc-acts-row">${kind === 'ok' && !DEC_APPROVED.has(it.id) ? decideBtn('approve', words ? `${label} with comments` : label, true,
-      ` data-dc-label="${label}"` + (!ready || !(it.ask?.may || []).includes('ok') || st.busy ? ' disabled' : '')) : browse}</div>${decideMoreHTML(st, it)}`;
+    if (kind === 'ok' && !DEC_APPROVED.has(it.id)) {
+      // An OK approved whose comment did not go has no Approve left: the arrow sends the comment.
+      const may = it.ask?.may || [];
+      // Send back is a "no" the person may give, its words the note; Close is for whoever may close the task. Both show
+      // only with words in the box (the row's dc-with-words), and Approve's comment icon with them.
+      const back = may.includes('no') ? decideNoteBtn('chat-back', checked ? 'Not validated' : 'Send back', `${checked ? 'Not validated' : 'Send back'} with your comment`, false, busy, true) : '';
+      const shut = decideMayClose(it) ? decideNoteBtn('close-task', 'Close', 'Close with your comment', false, busy, true) : '';
+      const approve = decideNoteBtn('approve', label, words ? `${label} with your comment` : label, true,
+        ` data-dc-label="${esc(label)}"` + (!ready || !may.includes('ok') || st.busy ? ' disabled' : ''));
+      body = `<div class="dc-acts dc-acts-row${words ? ' dc-with-words' : ''}">${back}${shut}${approve}<span class="dc-break" aria-hidden="true"></span></div>`;
+    } else body = `<div class="dc-acts dc-acts-row">${browse}</div>`;
+    body += decideMoreHTML(st, it);
   } else if (kind === 'ok') {
     const v = st.ok.get(decideOkKey(it)), may = it.ask?.may || [];
     const ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
@@ -971,7 +994,9 @@ function decideBarSet(): HTMLElement | null {
 }
 const DEC_BAR_WATCH = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { decideBarSet(); });
 // ---- a page that comes back: the right side in parts
-const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['–', 'Not checked'], not_met: ['✗', "Doesn't"]};
+/** The Decision model's word on the meta line and in its menu: "Meets the bar", "Not sure", "Falls short" or "Not
+    checked", never a bare "Unsure" or "Doesn't" (task #389). */
+const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets the bar'], unsure: ['?', 'Not sure'], failed: ['–', 'Not checked'], not_met: ['✗', 'Falls short']};
 /** A person's own words, cut to 2 lines, with "more" (shown in full once opened). */
 function decideClampHTML(st: DecState, it: NeedsEntry, part: string, text: string): string {
   const open = st.open.has(`${it.id}:more:${part}`);
@@ -984,6 +1009,26 @@ function decideRoundAnswer(r: DecRound, last: boolean): string {
   const a = decideAnswerOf(r, myActor(), true);
   if (a) return a.answer === 'no' ? 'Sent back' : "OK'd";
   return last ? '' : 'Replaced';
+}
+/** Notes longer than this, with no verdict line of their own, show this much and More. */
+const DEC_NOTICE_CUT = 120;
+/** One notice above the page's parts (why they are asked again, what a reviewer said of the new commits): its first
+    line alone, the verdict ("No blockers", "Blocks: …", "Unsure: …"), and More for the rest, so at most a few lines sit
+    above Notes on a phone (task #389: 18 lines of commits and commands came first). A note with no line break of its own
+    shows its first DEC_NOTICE_CUT characters. */
+function decideNoticeHTML(st: DecState, it: NeedsEntry, notice: string): string {
+  const text = notice.trim(), br = text.indexOf('\n');
+  let head = br < 0 ? text : text.slice(0, br).trim(), rest = br < 0 ? '' : text.slice(br + 1).trim();
+  if (!rest && head.length > DEC_NOTICE_CUT) {
+    const cut = head.lastIndexOf(' ', DEC_NOTICE_CUT);
+    const at = cut > DEC_NOTICE_CUT / 2 ? cut : DEC_NOTICE_CUT;
+    [head, rest] = [`${head.slice(0, at).trim()}…`, head.slice(at).trim()];
+  }
+  if (!rest) return `<p class="dc-notice" role="note">${esc(head)}</p>`;
+  const key = `notice:${text.length}:${head.slice(0, 40)}`, open = st.open.has(`${it.id}:more:${key}`);
+  return `<div class="dc-notice" role="note"><p>${esc(open && head.endsWith('…') && br < 0 ? text : head)}</p>`
+    + (open ? (br < 0 ? '' : `<p class="dc-notice-rest">${esc(rest)}</p>`)
+      : `<button type="button" class="linkish dc-more-btn" data-dc-more="${esc(key)}">More</button>`) + '</div>';
 }
 /** The right side of a page's OK, in parts. First one meta line, one control: who asked (`by`), the stage, the
     version, its date and Jev's word (a phone keeps the mark and leaves the date and the word to the menu), then the
@@ -1019,7 +1064,7 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   const sub = `<div class="dc-meta"><span class="dc-vwrap"><button type="button" class="dc-vbtn${since?.on ? ' on' : ''}" data-dc-vmenu aria-haspopup="menu" aria-expanded="${menu}">`
     + `${line}${TL_ICON.caret}</button><span class="dc-menu dc-vmenu" role="menu"${menu ? '' : ' hidden'}>${sheet}</span></span>${tag}</div>`
     // Why they are asked again, and a conflict their OK hands to the Builder: said before anything else is read.
-    + notices.map(n => `<p class="dc-notice" role="note">${esc(n)}</p>`).join('');
+    + notices.map(n => decideNoticeHTML(st, it, n)).join('');
   const parts: string[] = [];
   if (now.changed.length) {
     parts.push(`<section class="dc-part"><h4>What changed in v${now.version}</h4><ul class="dc-changed-list">${now.changed.slice(0, 5).map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`);
@@ -1493,8 +1538,12 @@ async function decideLetSee(st: DecState, it: NeedsEntry, whom: string[]) {
   st.error = said;
   decidePaintSide(st);
 }
-/** A page requirement's ask: the page attached now (`<file id>@<version>`), '' when there is none. */
-const decidePage = (it: NeedsEntry): string => it.ask?.page ? `${it.ask.page.file_id}@${it.ask.page.version}` : '';
+/** A page requirement's version key, covering every submitted page. */
+const decidePage = (it: NeedsEntry): string => {
+  const approval = it.ask?.approval, page = it.ask?.page;
+  if (approval?.pages && approval.pages.length > 1 && approval.page_version) return approval.page_version;
+  return page ? `${page.file_id}@${page.version}` : '';
+};
 /** The page on screen, which an answer is for. A refresh that brought another page leaves the screen as it was read:
     that page is read and shown with "It changed. Look again." and nothing is sent (null). */
 async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | undefined | null> {
@@ -1543,8 +1592,8 @@ function decideMayClose(it: NeedsEntry): boolean {
 }
 // ---- the task's chat: an ask on a task is answered in the task's own thread, drawn by the chat every thread uses
 // (thread-view.ts threadMount): its messages, the ask as the asker's last message (`tail`), and the composer, whose
-// arrow sends a reply (decideChatSend). Under it only Approve on an OK, Snooze and ⋯. Underneath an ask stays an ask:
-// an OK's reply is its send back.
+// arrow sends a reply (decideChatSend). Under it an OK has Approve, and with words in the box Send back, Close and Approve
+// (each with a comment icon); then Snooze and ⋯. Underneath an ask stays an ask: an OK's reply is its send back.
 let DEC_CHAT: {item: string; cid: string; view: ThvView | null; typed: string} | null = null;
 /** The chat a message item sits in: a bot's ❓'s (its task's, or a direct chat with the bot), an @'s own conversation. */
 const decideMarkRoom = (it: NeedsEntry): string => it.kind === 'question' ? it.root_id || it.conversation_id || ''
@@ -1612,7 +1661,7 @@ let DEC_TAB = 'chat';   // the tab shown for the item on screen: 'chat', 'task' 
 /** The task document an OK's page is, by its file: only then is what the OK shows that document. */
 function decideOkDoc(it: NeedsEntry, docs: TaskDoc[]): TaskDoc | null {
   const fid = decideKind(it) === 'ok' ? it.ask?.page?.file_id : '';
-  return fid ? docs.find(d => d.file_id === fid) || null : null;
+  return fid ? docs.find(d => d.file_id === fid && (!it.ask?.approval || d.name === it.ask.approval.document)) || null : null;
 }
 /** An OK's own tab: the title of what it shows (its page, its content), else what it is (Proof, Spec, Invoice...);
     never the name of a document it is not. */
@@ -1632,9 +1681,10 @@ function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
   const bar = host.querySelector<HTMLElement>(':scope > .dc-tabs');
   if (!bar) return;
   const tabs = decideTabsOf(st, it), said = JSON.stringify(tabs);
-  const own = DEC_TAB === 'task' ? decideOkDoc(it, decideAboutOf(it)?.task?.documents || []) : null;
-  if (own) DEC_TAB = docKey(own.name);   // the OK's page is this document: its tab, with its version line
-  if (!tabs.some(t => t.key === DEC_TAB)) DEC_TAB = 'chat';
+  const docs = decideAboutOf(it)?.task?.documents || [], own = decideOkDoc(it, docs);
+  const active = tabs.some(t => t.key === DEC_TAB);
+  if (own && (DEC_TAB === 'task' || !active)) DEC_TAB = docKey(own, docs);
+  else if (!active) DEC_TAB = 'chat';
   if (bar.dataset.tabs !== said) {
     bar.dataset.tabs = said;
     bar.querySelector('.doc-tabs')?.remove();
@@ -1664,7 +1714,9 @@ function decideTabShow(it: NeedsEntry, key: string) {
     …"): only when the item's page is this document. */
 function decideApprovalOn(it: NeedsEntry, doc: TaskDoc): DocApproval | null {
   const a = it.ask?.approval;
-  return a && a.version != null && a.file_id === doc.file_id ? {version: a.version, unchecked: a.unchecked} : null;
+  if (!a || a.document !== doc.name) return null;
+  const version = a.pages?.find(p => p.file_id === doc.file_id)?.version ?? (a.file_id === doc.file_id ? a.version : null);
+  return version != null ? {version, unchecked: a.unchecked} : null;
 }
 /** The second tab, named for what it holds: the Spec a page's OK is about, the Proof a Validate or QA OK shows, an
     action's Invoice or Email, else the Task. */
@@ -1766,14 +1818,19 @@ function decideReceiptHTML(v: AskOkView | undefined): string {
   if (!a) return '';
   return `<div class="dc-receipt">${a.amount ? `<p class="dc-amt">${esc(a.amount)}</p>` : ''}<p class="dc-act-line">${esc(a.line)}</p>${a.facts}</div>`;
 }
-/** The words in the chat's box, as they change: Approve says "Approve with comments" while there are some. */
+/** The words in the chat's box, as they change. With words on an OK, its row shows Send back, Close and Approve with their
+    comment icon (decideChatMount painted them, hidden); the arrow (a comment alone) goes quiet. Only the row's own parts
+    change here: nothing is painted again, so the caret stays and Snooze and ⋯ stay at the end of the row. */
 function decideChatTyped(text: string) {
   if (DEC_CHAT) DEC_CHAT.typed = text;
-  // An OK with words typed: "Approve with comments" is the one filled control, the arrow (a comment alone) goes quiet.
-  const it = DEC && decideCurrent(DEC);
-  $('.decide')?.classList.toggle('dc-typed-ok', !!text.trim() && !!it && decideKind(it) === 'ok');
-  const b = $('.decide [data-dc="approve"]') as HTMLButtonElement | null;
-  if (b?.dataset.dcLabel) b.textContent = text.trim() ? `${b.dataset.dcLabel} with comments` : b.dataset.dcLabel;
+  const it = DEC && decideCurrent(DEC), words = !!text.trim();
+  $('.decide')?.classList.toggle('dc-typed-ok', words && !!it && decideKind(it) === 'ok');
+  const row = $('.decide .dc-side > [data-key] > .dc-acts-row') as HTMLElement | null, approve = row?.querySelector<HTMLButtonElement>('[data-dc="approve"]');
+  if (!row || !approve) return;
+  row.classList.toggle('dc-with-words', words);
+  const label = approve.dataset.dcLabel || 'Approve', aria = words ? `${label} with your comment` : label;
+  approve.setAttribute('aria-label', aria);
+  approve.title = aria;
 }
 /** What the chat's box holds now, read from the box itself (a draft put back counts): its view, words and files, for one
     submission that keeps them whatever is on screen when it ends. Null when the item has no chat. */
@@ -1786,6 +1843,14 @@ function decideChatTake(): DecChatTake | null {
 function decideChatGone(take: DecChatTake) {
   take.view.composer.files.splice(0); thvChips(take.view); thvComposerClear(take.view);
   if (DEC_CHAT?.view === take.view) decideChatTyped('');
+}
+/** The chat's words go with an answer or a close (Send back, Close): the box is locked while they go, and clears once
+    `go` says they went. Nothing typed meanwhile is cleared with them. */
+async function decideChatWords(take: DecChatTake, go: () => Promise<boolean>) {
+  take.box.readOnly = true;
+  let went = false;
+  try { went = await go(); } finally { take.box.readOnly = false; }
+  if (went) decideChatGone(take);
 }
 /** The composer's files, up to the task's Files one by one; null (and the error on the item) when one fails. */
 async function decideChatUpload(st: DecState, itemId: string, taskId: string, files: File[]): Promise<DecFile[] | null> {
@@ -1878,7 +1943,7 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
     const ups = await decideChatUpload(st, it.id, taskId, take?.files || []);
     if (!ups) { st.busy = false; decidePaintSide(st); return; }
     const r = await okGive(taskId, rid, hash);
-    // "Approve with comments" on an OK bound to what it shows: the OK carries nothing else, so the words follow it on
+    // Approve with words in the box, on an OK bound to what it shows: the OK carries nothing else, so the words follow it on
     // the task's thread, where everyone sees them. One that does not go stays in the box, with why.
     const said = take ? decideWithFiles(take.text, ups) : '';
     let left = '';
@@ -2017,12 +2082,22 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'browse': ($('.decide .dc-thing [data-bv-launch], .decide .dc-thing [data-dc-browser-open]') as HTMLElement | null)?.click(); return;
     case 'browse-done': if (it.kind === 'question') await decideChatSend(st, 'Done', []); return;
+    case 'chat-back': {
+      // Send back with the chat's words, as the arrow sends them (decideChatSend: the words are the note). The box clears once
+      // they went.
+      const take = decideChatTake();
+      if (take?.text) await decideChatWords(take, () => decideChatSend(st, take.text, take.files));
+      return;
+    }
     case 'close-task': {
       // Close (a stuck item's) and Close task (⋯): what is typed in the item's box is the reason, kept on the close (its
       // history, and the news a bot that asked for the task gets: task_effects._tell_requester). No confirm: ↶ reopens it.
+      // A chat item's reason is its chat box's words; a stuck item's is its Notes box.
       st.more = '';
-      const why = [...document.querySelectorAll<HTMLTextAreaElement>('.decide .dc-side textarea')].map(b => b.value.trim()).find(Boolean);
-      await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver, why), decideUndoReopen(taskId));
+      const take = decideChatTake();
+      const why = take ? take.text : [...document.querySelectorAll<HTMLTextAreaElement>('.decide .dc-side textarea')].map(b => b.value.trim()).find(Boolean);
+      const close = async () => { await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver, why), decideUndoReopen(taskId)); return !st.error; };
+      if (take) await decideChatWords(take, close); else await close();
       return;
     }
     case 'snooze':

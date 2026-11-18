@@ -237,10 +237,13 @@ def test_both_tasks_show_the_order_and_a_reader_who_cannot_open_the_earlier_one_
     gh = FakeGitHub()
     b6, b7 = pair(c)
     green(c, gh, 2)
+    c.execute("UPDATE tasks SET number=CASE id WHEN ? THEN 40 ELSE 41 END WHERE id IN (?,?)", (b6, b6, b7))
     later_rows = TR.grouped(c, [b7])[b7]["after"]
     earlier_rows = TR.grouped(c, [b6])[b6]["after"]
     assert [(r["id"], r["direction"], r["stage"]) for r in later_rows] == [(b6, "out", "Build")]
     assert [(r["id"], r["direction"], r["stage"]) for r in earlier_rows] == [(b7, "in", "Merge")]
+    # Both halves of the relations read carry the other task's number: "After #40" and "Before #41".
+    assert ([r["number"] for r in later_rows], [r["number"] for r in earlier_rows]) == ([40], [41])
     wait = turn(c, b7)
     shown = W.view(wait, lambda task_id: task_id != b6)
     assert (shown["who"], shown["line"]) == (None, MO.UNNAMED)

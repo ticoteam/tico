@@ -4,6 +4,7 @@ Engineering pair a company set up before 0.6 has (`legacy_pair`)."""
 import json
 
 from backend import bot_settings as BS
+from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -57,6 +58,37 @@ def _team(c):
     _seat(c, "Reviewer 1", "reviewer", "rev-a")
 
 
+def legacy_review_stages(c, record):
+    """Give a test pipeline the separate Review and Fixes stages that existing companies can have."""
+    prefix = record["id"]
+    stages = record["stages"]
+    at = next(i for i, stage in enumerate(stages) if stage["id"] == f"{prefix}-review-1")
+    review, fixes = stages[at : at + 2]
+    page = review["requirements"][0]
+    page["settings"]["rubric"] = PS.LEGACY_REVIEW_RUBRIC
+    review.update(name="Review 1", purpose="Review the newest commit and attach a Review page.", requirements=[page])
+    fixes["name"] = "Fixes 1"
+    stages[at + 2 : at + 2] = [
+        {
+            **review,
+            "id": f"{prefix}-review-2",
+            "name": "Review 2",
+            "purpose": "Review the newest commit again and attach a Review page.",
+            "owner": S.resolve(c)[S.REVIEWER_2] or record["manager_id"],
+            "requirements": [{**page, "id": None}],
+        },
+        {
+            **fixes,
+            "id": f"{prefix}-fixes-2",
+            "name": "Fixes 2",
+            "purpose": fixes["purpose"].replace("the review", "the second review")
+            + " When it found nothing, say done at once.",
+            "requirements": [{**r, "id": None} for r in fixes["requirements"]],
+        },
+    ]
+    return record
+
+
 def legacy_pair(c):
     """The Product and Engineering pair (pipeline_settings.LEGACY) as a company set up before 0.6 has it: made the way
     ensure_presets made them then, with the Product factory. Its next start keeps them and their upkeep, and does not
@@ -64,4 +96,5 @@ def legacy_pair(c):
     PS._ensure_factory(c)
     for key in ("engineering", "product"):
         if not PS._made_from(c, key):
-            PS.save(c, PS.SYSTEM, PS.preset(c, key))
+            record = PS.preset(c, key)
+            PS.save(c, PS.SYSTEM, legacy_review_stages(c, record) if key == "engineering" else record)

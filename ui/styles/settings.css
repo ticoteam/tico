@@ -130,7 +130,8 @@ p:empty{display:none}
 .tl-pop.sb-choice-pop{width:min(360px,calc(100vw - 16px));max-height:min(80vh,620px);padding:12px 14px 14px;overflow-x:hidden}
 @media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;max-height:86vh;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
 .sb-choice-head{margin:0 0 10px;font-size:var(--t-sm);font-weight:600;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* The model picker's panel: Harness, Model, Effort and Compact read top to bottom, each with a short visible label. */
+/* The model picker's panel: Harness, Model and Effort read top to bottom, each with a short visible label; More folds
+   Compact, Output style and Verbosity under them. */
 .mp-panel{display:grid;gap:10px;min-width:0}
 .mp-row{display:grid;gap:4px;min-width:0;margin:0;padding:0;border:0}
 .mp-row[hidden]{display:none}
@@ -154,16 +155,21 @@ p:empty{display:none}
 .mp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mp-mark{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:400}
 .mp-compact select{width:100%;min-width:0;padding:6px 8px;font-size:var(--t-sm);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.mp-more{min-width:0}
+.mp-more[hidden]{display:none}
+.mp-more>summary{width:max-content;font-size:var(--t-xs);font-weight:600;color:var(--muted);cursor:pointer}
+.mp-more>summary:hover{color:var(--ink)}
+.mp-more-rows{display:grid;gap:10px;min-width:0;margin-top:8px}
 .mp-note{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .mp-note:empty{display:none}
 .mp-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 .mp-foot .primary{padding:6px 14px}
 .settings-bulk-pick{display:flex;min-width:0}
-/* In a form (the bot editor, Add bot, bulk change, Hire) the picker's button is a dropdown like the selects beside it:
-   the same box, height and type; only the bots table keeps it as text. */
-#bot-editor .settings-choice>.sb-pick,.sb-task-under .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
-#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
-#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret{opacity:1}
+/* In a form (the bot editor, Add bot, bulk change, Hire, a step's Runs on) the picker's button is a dropdown like the selects beside it:
+   the same box, height and type; the bots table and a task's Runs on fact keep it as text. */
+#bot-editor .settings-choice>.sb-pick,.sb-task-under .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick,div[data-run-picker] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
+#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover,div[data-run-picker] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
+#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret,div[data-run-picker] .sb-pick .sb-pick-caret{opacity:1}
 /* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
    marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
 .sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
@@ -361,6 +367,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .stopped-run h3{margin:0 0 4px}.stopped-run p{margin:4px 0}.stopped-run [data-details]{margin-top:8px}.stopped-run+.stopped-run{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
 .settings-issue:last-child{border-bottom:0}.settings-issue p{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .settings-issue .tag{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 6px;vertical-align:middle}
+.settings-issue-more summary{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm);cursor:help;list-style:none;text-decoration:underline dotted;text-underline-offset:3px}.settings-issue-more summary::-webkit-details-marker{display:none}.settings-issue-more[open] summary{color:var(--ink)}
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .machine-head{display:flex;align-items:center;gap:10px}

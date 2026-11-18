@@ -227,7 +227,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "size",
                         ):
                             row.pop(field, None)
-                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "human_id"):
+                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "human_id", "came_from"):
                             if row.get(field) is None:
                                 row.pop(field, None)
 
@@ -530,6 +530,7 @@ def readers(auth):
             "acceptance_criteria": json.loads(row.get("acceptance") or "[]"),
             "labels": H.task_labels(row),
             "lane": row.get("lane") or "company",
+            "came_from": row.get("came_from"),
             "private": H.task_private(c, row),
             "cover": None,
         }
@@ -551,7 +552,7 @@ def readers(auth):
         viewer = (who.task_actor or who.actor) if who is not None else None
         # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
         rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
-        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True) or {})
+        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True) or {"stage_since": None})
         # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
         parent = TR.parent_of(c, row["id"])
         value["parent_id"] = (
@@ -679,7 +680,7 @@ def readers(auth):
         for event in c.execute(
             f"SELECT target,detail FROM events WHERE actor=? AND action='task.origin' "
             f"AND target IN ({marks}) ORDER BY target,created_at DESC",
-            (H.KEEPER, *ids),
+            (H.TICO_ACTOR, *ids),
         ):
             if event["target"] in origins:
                 continue

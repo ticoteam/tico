@@ -29,7 +29,7 @@ def stamp(at):
 
 
 def next_due(expr, at, zone):
-    # Preserve the existing keeper's AND semantics for day-of-month and day-of-week.
+    # Preserve the existing Tico's AND semantics for day-of-month and day-of-week.
     return croniter(expr, at.astimezone(ZoneInfo(zone)), day_or=False).get_next(datetime)
 
 

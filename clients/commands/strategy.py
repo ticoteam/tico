@@ -340,6 +340,7 @@ CHANNEL_PROPS = {
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number", "description": "The most that KPI may reach"},
+    "input_kpi_id": _s("The input KPI the channel moves; \"\" clears"),
     "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
 }
 
@@ -371,12 +372,23 @@ def growth_channel_list(api, args):
 
 @tool(
     "tico_growth_channel_show",
-    "One channel by slug, with its open marketing tasks (labelled channel:<slug>)." + SETUP_NOTE,
+    "One channel by slug: KPI vs target, 6 months, what changed and what lines up, tests, sources, open tasks."
+    + SETUP_NOTE,
     {"slug": _s("Channel slug")},
     required=("slug",),
 )
 def growth_channel_show(api, args):
     return api.get("growth/channels/" + args["slug"])
+
+
+@tool(
+    "tico_growth_segment_show",
+    "One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change.",
+    {"label": _s("Segment label, as customer facts name it: agency")},
+    required=("label",),
+)
+def growth_segment_show(api, args):
+    return api.get("growth/segments/" + args["label"])
 
 
 @tool(
@@ -394,7 +406,7 @@ def growth_channel_add(api, args):
 @tool(
     "tico_growth_channel_update",
     "Change a channel, only the fields sent. Owner or admin; the bot that owns the "
-    "channel may change its why, stage and monthly budget.",
+    "channel may change its why, stage, monthly budget and input KPI.",
     {"slug": _s("Channel slug"), **CHANNEL_PROPS},
     required=("slug",),
     writes=True,
@@ -830,19 +842,21 @@ def growth_customers_delete(api, args):
 
 @tool(
     "tico_growth_numbers",
-    "The growth numbers over the last months: each month's total, each channel's economics, "
-    "the KPI tree with its series, and the markers. may_edit: you may record months." + SETUP_NOTE,
+    "Monthly totals, channel economics, KPI tree, markers, and line: one month joined source to channel "
+    "to KPI, with how each number was made. may_edit: may record months." + SETUP_NOTE,
     {
         "months": {
             "type": "integer",
             "minimum": 1,
             "maximum": 24,
-            "description": "How many months back, ending now; default 12",
-        }
+            "description": "Months back; default 12",
+        },
+        "month": _s("Last month, YYYY-MM; default newest"),
     },
 )
 def growth_numbers(api, args):
-    return api.get("growth/numbers", months=args.get("months"))
+    query = {k: args[k] for k in ("months", "month") if args.get(k) is not None}
+    return api.get("growth/numbers", **query)
 
 
 @tool(
@@ -909,6 +923,7 @@ _CHANNEL = (
     Arg("source_id", "--source", metavar="ID"),
     Arg("guardrail_kpi_id", "--guardrail-kpi", metavar="ID"),
     Arg("guardrail_max", "--guardrail-max", metavar="N"),
+    Arg("input_kpi_id", "--input-kpi", metavar="ID"),
 )
 _SOURCE = (
     Arg("truth_for", "--truth-for"),
@@ -951,7 +966,10 @@ CLI = (
         example="tico growth channel list",
     ),
     Command(
-        "growth channel show", "one channel", render=_growth_text, example="tico growth channel show google-search"
+        "growth channel show",
+        "one channel: its KPI against target, 6 months, what changed and what lines up with it, its tests, its sources",
+        render=_growth_text,
+        example="tico growth channel show google-search",
     ),
     Command(
         "growth channel add",
@@ -962,7 +980,7 @@ CLI = (
     ),
     Command(
         "growth channel update",
-        "change a channel (owner or admin; the owning bot may change why, stage, budget)",
+        "change a channel (owner or admin; the owning bot may change why, stage, budget, input KPI)",
         args=_CHANNEL,
         render=_growth_text,
         example="tico growth channel update google-search --stage scaling",
@@ -972,6 +990,13 @@ CLI = (
         "retire a channel (owner or admin)",
         render=_growth_text,
         example="tico growth channel retire google-search",
+    ),
+    Group("growth segment", "the numbers for one segment, from customer facts"),
+    Command(
+        "growth segment show",
+        "one segment: 6 months of new customers, kept at 30 and 90 days, LTV, and the change",
+        render=_growth_text,
+        example="tico growth segment show agency",
     ),
     Group("growth source", "which system holds the truth for each number"),
     Command(
@@ -1092,9 +1117,9 @@ CLI = (
     Command(
         "growth numbers",
         "the monthly series, each channel's economics, the KPI tree, markers",
-        args=(Arg("months", metavar="N"),),
+        args=(Arg("months", metavar="N"), Arg("month", metavar="YYYY-MM")),
         render=lambda args, result: json.dumps(result, indent=2),
-        example="tico growth numbers --months 6",
+        example="tico growth numbers --months 6 --month 2026-10",
     ),
     Command(
         "growth kpis", "the KPI tree: North Star, inputs, guardrails", render=_growth_text, example="tico growth kpis"

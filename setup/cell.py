@@ -106,8 +106,10 @@ from .ui import MissingInput
 ROOT = "/srv/tico-cell"
 SERVER_IMAGE = "ghcr.io/ticoteam/tico"
 # The same pinned images compose.yaml uses for the single-company front doors (a test keeps them equal).
-ROUTER_IMAGE = "caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b"
-TUNNEL_IMAGE = "cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf"
+ROUTER_IMAGE = "caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0"
+TUNNEL_IMAGE = (
+    "cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d"
+)
 ROUTER_ADDRESS, ROUTER_PORT = "127.0.0.1", 8080
 ROUTER_CONTAINER, EDGE_PROJECT = "tico-cell-router", "tico-cell"
 ROUTER_HEALTH_HOST, ROUTER_HEALTH_PATH = "cell-health.invalid", "/cell-healthz"
@@ -250,7 +252,7 @@ WAKE_HEADER = "X-Tico-Cell-Wake"
 WAKE_UNIT = "etc/systemd/system/tico-cell-wake.service"
 WAKE_SERVICE = "tico-cell-wake.service"
 # The hold: a dial to a server that is down (restarting, updating) is tried again, not answered with a 502. A request
-# with a body is retried with its body from Caddy 2.11 on (ROUTER_IMAGE is 2.11.4); 2.10 closed the body after the
+# with a body is retried with its body from Caddy 2.11 on. Caddy 2.10 closed the body after the
 # first failed dial, so such a request got the 503. No request_buffers: in 2.10.2 it mixed up concurrent bodies.
 HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 # A config reload (every add, remove, sleep and wake) leaves open WebSockets this long before closing them.

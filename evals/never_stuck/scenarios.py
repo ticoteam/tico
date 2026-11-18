@@ -1222,7 +1222,7 @@ def c_held_run(r: Rig) -> None:
     r.ran(task, BUILDER, "expired")  # it may have acted: its job is uncertain
     found = r.w.read(lambda c: c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task,)).fetchone())
     attempt, job = str(found[0]), str(found[1])
-    r.raw(lambda c: H.event(c, H.KEEPER, "job.held", attempt, {"job_id": job, "tools": ["Bash"]}))
+    r.raw(lambda c: H.event(c, H.TICO_ACTOR, "job.held", attempt, {"job_id": job, "tools": ["Bash"]}))
     r.later(hours=2)
     expect(r.waits(task) == [("paused", BUILDER)], f"the held task waits on {r.waits(task)}")
     expect(r.queued(task, BUILDER) == 0, "a wake was written that the bot cannot take")

@@ -104,11 +104,23 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   const rows: string[] = [];
   // Stage: the pipeline and the stage it is in (Done or Closed once finished); its menu moves it back or on.
   const stageName = taskStatusLabel(t), pipeName = t.pipeline?.name || '';
-  rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
+  // In a side stage: "↳ Rejected · from Bot QA · 2h", and Send back, a plain move to the stage it came from.
+  const from = t.status === 'open' ? taskCameFrom(t) : null;
+  if (from) {
+    const said = [`from ${from.name}`, ageShort(taskStageSince(t))].filter(Boolean).join(' · ');
+    rows.push(row('stage', 'Stage', `${SIDE_MARK}${txt(stageName)}<span class="prop-txt prop-from">· ${esc(said)}</span>`,
+      {edit: r.edit && !!t.pipeline_id, words: `Side stage ${stageName} · ${said}`,
+        extra: r.edit ? `<button type="button" class="ghost small prop-back" data-prop-send-back="${esc(from.id)}">Send back</button>` : ''}));
+  } else rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
     {edit: r.edit && !!t.pipeline_id, words: stageName}));
   // Owner. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
+  const developer = t.assignee_id;
+  if (developer && developer !== t.owner_id) {
+    const name = actorLabel(developer);
+    rows.push(row('developer', 'Developer', actorFace(developer, 16) + txt(name), {words: name}));
+  }
   // Code: its worktrees and pull requests, one line each (task-code.ts taskRailPaint fills it from the full task).
   rows.push('<div class="prop prop-code" data-prop-row="code" hidden><span class="prop-k" aria-hidden="true">Code</span><div class="prop-vwrap" data-task-code aria-label="Code"></div></div>');
   // From: the task it was filed from, by its short name (P213, #304) when it has one, else its title; a link to it, its
@@ -166,6 +178,10 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   }
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
+// When a task entered its stage: its own read's (stage_since), else its row's on the Tasks page while that row is in the
+// same stage.
+const taskStageSince = (t: PropTask): string | null =>
+  t.stage_since || TASKS_ST?.tasks.find(x => x.id === t.id && x.stage_id === t.stage_id)?.stage_since || null;
 // The goal row's title, read once per goal (tasks.ts keeps them in GOAL_TITLES).
 async function taskGoalRowFill(root: ParentNode): Promise<void> {
   const a = root.querySelector<HTMLAnchorElement>('[data-goal-row]'); if (!a) return;
@@ -380,10 +396,10 @@ function propMenu<T extends PropMenuItem>(d: HTMLElement, anchor: HTMLElement, {
   return pop;
 }
 // A redraw replaces the dialog's content; one that lands while a menu is open waits for it to close.
-// What a redraw must not pull away: a row's menu, the Runs on form (task-modal.ts) or the Pages search (pages.ts). Each
+// What a redraw must not pull away: a row's menu, the Runs on panel (settings-bots-choice.ts) or the Pages search (pages.ts). Each
 // says `menuclosed` when it closes.
 function taskMenuOpen(d: TaskDialog): HTMLElement | null {
-  const pop = [...d.querySelectorAll<HTMLElement>('.prop-pop, [data-run-model-pop]')].find(p => p.matches(':popover-open'));
+  const pop = [...d.querySelectorAll<HTMLElement>('.prop-pop, #sb-choice-pop')].find(p => p.matches(':popover-open'));
   return pop || d.querySelector<HTMLElement>('[data-task-pages] .tp-picker:not([hidden])');
 }
 function taskMenuSettled(d: TaskDialog) {
@@ -452,6 +468,8 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       void save('people', cur => ({roles: {[role]: ((cur.roles || {})[role] || []).filter(a => a !== gone)}}));
       return;
     }
+    const back = eventElement(ev)?.closest<HTMLElement>('[data-prop-send-back]');
+    if (back) { void save('stage', {move: back.dataset.propSendBack ?? ''}); return; }
     const clear = eventElement(ev)?.closest<HTMLElement>('[data-prop-clear]');
     if (clear) {
       const field = clear.dataset.propClear ?? '';
@@ -477,21 +495,27 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
         }});
     } else if (key === 'visible') {
       const now = taskVisibleNow(task);
-      const items = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k))
-        .map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now, html: `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
-      propMenu(d, b, {label: 'Visible to', items, onPick: it => {
-        const to = it.value as TaskVisible;
-        if (to === now) return;
-        if (to === 'private') {
-          // Private opens the people picker once it is saved.
-          void Promise.resolve(save('visible', {private: true})).then(ok => {
-            if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
-          });
-        } else if (now === 'private') {
-          void save('visible', {private: false});
-          if (to === 'public') void save('visible', {visibility: 'public'});
-        } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
-      }});
+      const offered = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k));
+      // In a pipeline, Private says who still reads it as it moves (Product #449); the menu opens without it on a miss.
+      const note = offered.includes('private') && now !== 'private' && task.pipeline_id
+        ? pipelinePrivateReaders(task.pipeline_id, {task: String(task.id)}).then(r => r.line, () => null) : Promise.resolve(null);
+      void note.then(line => {
+        const items = offered.map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now,
+          html: k === 'private' && line ? `<span class="prop-vis"><span>${esc(VISIBLE_WORDS[k])}</span><span class="prop-vis-note">${esc(line)}</span></span>` : `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
+        propMenu(d, b, {label: 'Visible to', items, onPick: it => {
+          const to = it.value as TaskVisible;
+          if (to === now) return;
+          if (to === 'private') {
+            // Private opens the people picker once it is saved.
+            void Promise.resolve(save('visible', {private: true})).then(ok => {
+              if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
+            });
+          } else if (now === 'private') {
+            void save('visible', {private: false});
+            if (to === 'public') void save('visible', {visibility: 'public'});
+          } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
+        }});
+      });
     } else if (key === 'readers') {
       const have = new Set([...(task.readers || []), task.owner_id, task.requester_id]);
       const items = threadAddable().filter(it => !have.has(it.actor)).map(it => ({value: it.actor, text: it.label ?? '',
@@ -583,11 +607,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (r.edit && waiting('due')) items.push({text: 'Set a due date…', icon: 'today', run: () => setTimeout(() => taskPropShow(d, 'due'))});
     if (r.links && waiting('tags')) items.push({text: 'Add a tag…', icon: 'label', run: () => setTimeout(() => taskPropShow(d, 'tags'))});
     if (r.links && !$('[data-sub-add]', d)) items.push({text: 'Add subtask', icon: 'add', run: () => { taskTabShow(taskModalOf(d), 'details'); taskRailAdd(d, task); }});
-    // Add a file: the Files section's picker (task-files.ts), for whoever may add files; it shows the section, which
-    // hides while the task has none.
-    const files = $('[data-task-files]', d) as HTMLElement | null, fileInput = files && $('[data-tf-input]', files) as HTMLInputElement | null;
-    if (fileInput && !$('[data-tf-add][hidden]', files)) items.push({text: 'Add a file…', icon: 'draft', run: () => {
-      taskTabShow(taskModalOf(d), 'details'); files.classList.add('tf-shown'); fileInput.click();
+    const modal = taskModalOf(d), fileInput = d.querySelector<HTMLInputElement>('[data-tf-input]');
+    if (fileInput && modal.canComment !== false) items.push({text: 'Add a file…', icon: 'draft', run: () => {
+      taskTabShow(modal, TASK_FILES_TAB); fileInput.click();
     }});
     // Make page: the Pages section's Describe box (pages.ts), when the reader may add pages here.
     if (taskModalOf(d).tpEl?.tpCanLink) items.push({text: 'Make a page…', icon: 'description', run: () => { taskTabShow(taskModalOf(d), 'details'); taskPageMakeOpen(d); }});

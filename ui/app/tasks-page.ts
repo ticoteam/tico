@@ -247,7 +247,11 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
   state.more = false; state.edge = null; state.after = ''; state.stalled = false;
   state.loading = true;
   tasksKept(state);
-  void tasksLoad(state);
+  // A task's window choosing what is behind it (`write` false) keeps the pipelines already read: opening a task reads
+  // them once (ui/tests/live-first-open.cts). A read still on its way is joined (api.ts get).
+  const kept = state.pipelines.length ? state.pipelines : TASK_PIPELINES;
+  if (!write && kept?.length) state.pipelines = kept;
+  void tasksLoad(state, write || !state.pipelines.length);
   tasksRender(state);
 }
 // A view seen before draws its last read at once while the new one is out; the app's own Needs you list wins for You.
@@ -591,11 +595,12 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean), line = it.line.toLowerCase();
   return !taskFiltersOn(state.filters) && words.every(w => line.includes(w));
 }
-/** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
+/** A Needs you row's first line: what an OK is about when its task is titled by its kind alone ("Send an email"), else
+    its task's title; a Paused cause or a mention outside a task by its own line. */
 function needsTitle(it: NeedsEntry): string {
   // A bot's ❓: its task's title like any ask; in a direct chat with the bot, the bot's name. Its question goes under it.
-  if (it.kind === 'question') return it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
-  return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
+  if (it.kind === 'question') return it.about || it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
+  return it.about || (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
 }
 /** Its second line: the question, under an Answer row's title; other asks keep it as the tooltip. */
 function needsAsk(it: NeedsEntry): string {
@@ -793,6 +798,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
       <form class="task tc-form" id="task-create-form">
         <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
         <textarea name="message" aria-label="Message" placeholder="Message" rows="6"></textarea>
+        <p class="tc-readers" id="task-create-readers" role="status" hidden></p>
         <div class="tc-row">
           <div class="tc-pick"><span aria-hidden="true">For:</span>${giveToFieldHTML({name: 'owner', label: 'For', placeholder: 'Who is this for?', selected: forWho, task: parent})}</div>
           <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
@@ -814,8 +820,20 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
     pick.innerHTML = list.map(p => `<option value="${esc(p.id)}"${p.id === want || (!want && p.preset === 'general') ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
       || '<option value="">General</option>';
   };
-  if (TASK_PIPELINES) fill(TASK_PIPELINES);
-  void tasksPipelinesRead().then(list => { if (d.open && form.isConnected) fill(list); }).catch(() => {});
+  // Who else reads it as it moves, when it will be private (Product #449): said before Create, never a refusal.
+  const readers: HTMLElement = $('#task-create-readers', d);
+  let asked = 0;
+  const readersShow = () => {
+    const who = field<HTMLInputElement>('owner').value, n = ++asked;
+    if (!pick.value) { readers.hidden = true; return; }
+    void pipelinePrivateReaders(pick.value, {owner: who && !who.includes(':') ? 'bot:' + who : who, parent: parent?.id})
+      .then(r => { if (n !== asked) return; readers.textContent = r.line || ''; readers.hidden = !r.line; })
+      .catch(() => { if (n === asked) readers.hidden = true; });
+  };
+  pick.onchange = readersShow;
+  form.addEventListener('change', ev => { if ((ev.target as HTMLInputElement | null)?.name === 'owner') readersShow(); });
+  if (TASK_PIPELINES) { fill(TASK_PIPELINES); readersShow(); }
+  void tasksPipelinesRead().then(list => { if (d.open && form.isConnected) { fill(list); readersShow(); } }).catch(() => {});
   form.onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
     const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);

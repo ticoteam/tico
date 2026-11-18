@@ -48,7 +48,7 @@ def readers(conn: "sqlite3.Connection", pipeline_row: Row) -> list[str]:
 
 def admit(conn: "sqlite3.Connection", task_id: str, pipeline_row: Row) -> None:
     """Make a task about to enter private pipeline `pipeline_row` private, with the pipeline's readers on its list.
-    The system does it (KEEPER in the history), before the task enters its first stage, so the engine's rule that a
+    The system does it (TICO_ACTOR in the history), before the task enters its first stage, so the engine's rule that a
     private task only goes where its owner reads it (`task_engine.shut_out`) holds for the manager's stages."""
     H = _h()
     row = H._one(conn, "SELECT id, private, readers, requester_id FROM tasks WHERE id=?", (task_id,))
@@ -60,7 +60,7 @@ def admit(conn: "sqlite3.Connection", task_id: str, pipeline_row: Row) -> None:
     if added:
         conn.execute("UPDATE tasks SET readers=? WHERE id=?", (H._dump(have + added), task_id))
         for who in added:
-            H._task_event(conn, task_id, H.KEEPER, "reader", None, who, "")
+            H._task_event(conn, task_id, H.TICO_ACTOR, "reader", None, who, "")
     if not H.task_private(conn, row):
         # A company task coming back into one (a restore): private now, its thread narrowed to who reads it.
-        H._made_private(conn, H.KEEPER, task_id)
+        H._made_private(conn, H.TICO_ACTOR, task_id)

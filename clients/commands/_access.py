@@ -283,12 +283,15 @@ AUDIENCE = {
     "tico_org_models": KINDS,
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
     **{name: BOTS for name in ("tico_file_publish", "tico_file_link", "tico_file_touch", "tico_file_import")},
-    "tico_page_publish": BOTS + ("assistant",),  # the route authenticates the initiating Make page request
+    "tico_page_publish": KINDS,  # people publish too; until wave 2 a person's page is stored under their Assistant bot
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "tico_file_delete": ("owner", "botops"),
     "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)
     "tico_page_archive": PEOPLE + BOTS,
     "tico_page_access": PEOPLE + BOTS,
+    # Anyone who may write a page links it (the route checks the writer and the target's read rights).
+    "tico_page_link": NOT_ASSISTANT,
+    "tico_page_unlink": NOT_ASSISTANT,
     # A bot's read-only view of the app (backend/app_view.py): an owner or admin turns it on, as themselves; the bot
     # takes its own screenshots with it.
     "tico_bot_app_view": PEOPLE,
@@ -339,6 +342,7 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_contacts_history",
         # Finance ad spend setup, run from the CLI; hidden to keep the listing under its size cap.
         "tico_growth_source_campaigns",
+        "tico_growth_segment_show",  # a segment owner bot's read, not a person's; hidden for the listing's size cap
         "tico_credential_grant",
         "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",
@@ -463,6 +467,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_answer",
         "tico_task_attach",
         "tico_task_create",
+        # A Reviewer files its second review as a check-model sub-task.
+        "tico_task_child_create",
         "tico_task_close",
         "tico_task_link",
         "tico_task_relate",

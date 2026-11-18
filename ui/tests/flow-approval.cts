@@ -21,10 +21,14 @@ const brief = () => ({id: 't1', title: 'Pipeline boards show where work waits', 
   turn: {state: 'person', who: null, line: 'Waiting on a person', since: ago(30), until: null, ask: true, requirement_id: 'r1'}, version: 5});
 const NOTES: Record<number, string> = {1: 'First draft', 2: 'Empty state for a pipeline with no tasks', 3: 'Counts are per stage'};
 /** The item as Needs you lists it once version `n` is submitted and checked. */
-const approval = (n: number): Item => ({kind: 'ask', id: 'v1:r1', task_id: 't1', requirement_id: 'r1', since: ago(30), line: 'Spec', task: brief(),
+const versionKey = (n: number, supplement: boolean) => `f-spec@${n}${supplement ? ',f-supplement@1' : ''}`;
+const approval = (n: number, supplement = false): Item => ({kind: 'ask', id: 'v1:r1', task_id: 't1', requirement_id: 'r1', since: ago(30), line: 'Spec', task: brief(),
   ask: {requirement_id: 'r1', kind: 'page', line: 'Spec', who: null, asked_by: 'bot:tpo', choices: null, may: ['ok', 'no'], met: false,
-    shows: [`page:f-spec@${n}`], standing: 'waiting', answer: null, page: {file_id: 'f-spec', version: n, ref: `page:f-spec@${n}`},
-    approval: {document: 'Spec', visit_id: 'visit-7', file_id: 'f-spec', version: n, unchecked: false}}});
+    shows: [`page:f-spec@${n}`, ...(supplement ? ['page:f-supplement@1'] : [])], standing: 'waiting', answer: null,
+    page: {file_id: 'f-spec', version: n, ref: `page:f-spec@${n}`},
+    approval: {document: 'Spec', visit_id: 'visit-7', file_id: 'f-spec', version: n, unchecked: false,
+      ...(supplement ? {page_version: versionKey(n, true), pages: [{file_id: 'f-spec', version: n}, {file_id: 'f-supplement', version: 1}]} : {}),
+    }}});
 const spec = (n: number) => ({name: 'Spec', file_id: 'f-spec', version: n, by: 'bot:tpo', at: ago(5),
   versions: Array.from({length: n}, (_, i) => n - i).map(v => ({n: v, by: 'bot:tpo', at: ago(v === n ? 5 : 60 * (n - v)), note: NOTES[v]}))});
 const page = (n: number) => `<!doctype html><html><body><h1>Pipeline boards</h1><p>Spec v${n}.</p>`
@@ -39,7 +43,7 @@ const round = (n: number) => ({file_id: 'f-spec', version: n, at: ago(5), by: 'b
   try {
     const errors: string[] = [], sent: Record<string, unknown>[] = [];
     // `submitted`: the version the bot wrote last; `listed`: the one Needs you lists (read again after a refusal).
-    let submitted = 2, listed = 2, needs: Item[] = [approval(2)];
+    let submitted = 2, listed = 2, supplement = false, needs: Item[] = [approval(2)];
     const view = await browser.newPage({viewport: {width: 1200, height: 860}, serviceWorkers: 'block'});
     view.on('pageerror', (error: Error) => errors.push(error.message));
     await view.route('**/*', async (route: Route) => {
@@ -57,22 +61,24 @@ const round = (n: number) => ({file_id: 'f-spec', version: n, at: ago(5), by: 'b
       if (p === '/api/v2/pipelines') return json({pipelines: []});
       if (p === '/api/v2/needs-you') {
         listed = submitted;
-        needs = needs.map(n => n.id === 'v1:r1' ? approval(listed) : n);
+        needs = needs.map(n => n.id === 'v1:r1' ? approval(listed, supplement) : n);
         return json({actor: 'human:ana', count: needs.length, items: needs, version: needs.map(n => `${n.id}@${listed}`).join(','), next: null});
       }
       if (p === '/api/v2/oks/r1') return json({error: 'not_found'}, 404);   // a stage's approval: no grant
       if (p === '/api/v2/flow/opinions') return json({opinions: []});
       if (p === '/api/v2/tasks/t1/asks/r1/rounds') return json({rounds: [round(listed)], notices: []});
       if (p === '/api/v2/tasks/t1' && r.method() === 'GET') return json({task: {...brief(), body: '', created_at: ago(60 * 30), attachments: [],
-        links: [], conversation_id: 'c1', documents: [spec(submitted)]}});
+        links: [], conversation_id: 'c1', documents: [{...spec(submitted), title: 'Boards spec'},
+          ...(supplement ? [{...spec(1), file_id: 'f-supplement', title: 'Boards supplement'}] : [])]}});
       if (p === '/api/v2/files/f-spec') return route.fulfill({contentType: 'text/html', body: page(Number(url.searchParams.get('v')) || submitted)});
+      if (p === '/api/v2/files/f-supplement') return route.fulfill({contentType: 'text/html', body: '<p>Supplement v1.</p>'});
       if (p === '/api/v2/threads/c1/timeline') return json({thread: {id: 'c1', title: 'Pipeline boards', me: {can_post: true}}, messages: [
         {id: 'm1', seq: 1, sender_id: 'human:ana', body: 'Boards should show where work waits.', kind: 'say', created_at: ago(60 * 26), conversation_id: 'c1'}], next_cursor: null});
       if (r.method() === 'POST' && p === '/api/v2/tasks/t1/asks/r1/answer') {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
         sent.push(body);
         // answers._page_version: the key's version is not the one submitted now.
-        if (body['page_version'] !== `f-spec@${submitted}`) {
+        if (body['page_version'] !== versionKey(submitted, supplement)) {
           return json({error: 'task_changed', detail: 'A newer version is submitted. Look again.',
             approval: {document: 'Spec', visit_id: 'visit-7', file_id: 'f-spec', version: submitted}}, 409);
         }
@@ -151,26 +157,31 @@ const round = (n: number) => ({file_id: 'f-spec', version: n, at: ago(5), by: 'b
     await view.setViewportSize({width: 1200, height: 860});
     await shoot('flow-approval');
 
-    // ---- 2. The bot wrote v3 meanwhile: the key is stale, nothing is approved, and v3 is shown.
+    // ---- 2. The bot updated the first Spec and added a second: Flow reads the whole submission again.
     submitted = 3;
+    supplement = true;
     await approve.click();
     const V3 = 'v3 · submitted for approval · changed: Counts are per stage';
     await leftSays(V3);
     await dialog.locator('.dc-thing .dc-changed', {hasText: 'It changed. Look again.'}).waitFor();
     assert.deepEqual(sent[0], {value: 'ok', version: 5, page_version: 'f-spec@2', visit_id: 'visit-7'}, 'the whole key');
     assert.equal(needs.length, 1, 'nothing approved');
+    await dialog.locator('.dc-thing [data-dc-doc="f-supplement"] iframe').contentFrame().locator('body', {hasText: 'Supplement v1.'}).waitFor();
     await view.setViewportSize({width: 390, height: 844});
     await view.waitForFunction(t => document.querySelector('.decide .dc-docpane [data-doc-ver] .doc-ver-t')?.textContent?.trim() === t, V3);
     await dialog.locator('.dc-side > .dc-docpane iframe.html-view').contentFrame().locator('body', {hasText: 'Spec v3.'}).waitFor();
     await dialog.locator('.dc-side > .dc-docnote', {hasText: 'It changed. Look again.'}).waitFor();
+    await dialog.getByRole('tab', {name: 'Boards supplement'}).click();
+    await dialog.locator('.dc-side > .dc-docpane iframe').contentFrame().locator('body', {hasText: 'Supplement v1.'}).waitFor();
+    assert.match(await said(tab), /^v1 · submitted for approval/);
     await view.setViewportSize({width: 1200, height: 860});
     await shoot('flow-stale-refusal');
 
-    // ---- 3. Approve again: v3's key, and the item goes.
+    // ---- 3. Approve again: both versions go in the key, and the item goes.
     await approve.and(view.locator(':not([disabled])')).waitFor();
     await approve.click();
     await view.waitForFunction(() => !document.querySelector('.decide [data-dc="approve"]') || document.querySelector('.decide .dc-done'));
-    assert.deepEqual(sent.at(-1), {value: 'ok', version: 5, page_version: 'f-spec@3', visit_id: 'visit-7'});
+    assert.deepEqual(sent.at(-1), {value: 'ok', version: 5, page_version: 'f-spec@3,f-supplement@1', visit_id: 'visit-7'});
     assert.equal(needs.length, 0);
     assert.deepEqual(errors, []);
     console.log('flow-approval: ok');

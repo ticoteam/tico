@@ -5,7 +5,7 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
 - `trigger_kind`: what woke it. The place that writes a wake stamps it in the wake's refs (`trigger`, plus
   `trigger_source` where there is a source to name); the claim copies it onto the run. A message a person
   wrote is `person_message`, and a message a bot wrote (a task comment, a direct message) is `comment`: the
-  message is the wake and its author says which. A keeper wake nothing stamped is `other`.
+  message is the wake and its author says which. A Tico wake nothing stamped is `other`.
 - tokens: `input_tokens` (the uncached input), `cached_tokens` (the cached part of the input, where the harness
   reports it) and `output_tokens`, as the run's usage records them.
 - `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
@@ -249,7 +249,7 @@ def new_session(c, task_id, why, actor=None):
     from .store import H
 
     if task_id and c.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
-        H._task_event(c, task_id, actor or H.KEEPER, "session", "", "new", session_words(why))
+        H._task_event(c, task_id, actor or H.TICO_ACTOR, "session", "", "new", session_words(why))
 
 
 def session(conn, turn_id, session):
@@ -284,7 +284,7 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     else the latest run of the bot that worked it before (a person's OK in a stage another bot owns). An open task counts
     only for `overridden` (given to someone else). `event` is H.event (this module is below hubdb). Returns the event
     row, or None when there is no result, no run, or the run already has its outcome."""
-    from .hubdb_core import KEEPER
+    from .hubdb_core import TICO_ACTOR
 
     owner = str(row.get("owner_id") or "")
     status = row.get("status")
@@ -292,7 +292,7 @@ def turn_result(conn, actor, row, outcome, event, to=None):
         outcome not in TASK_OUTCOMES
         or not (status in RESULT_STATES or status == "open" and outcome == "overridden")
         or not owner.startswith("bot:")
-        or actor in (owner, KEEPER)
+        or actor in (owner, TICO_ACTOR)
     ):
         return None
     # When the task reached Done: the move into a Done stage (task_engine writes `move` rows, new = the stage).

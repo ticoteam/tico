@@ -29,12 +29,14 @@ SECTIONS = {
     "change-spec": ("goal", "behaviour", "details", "scope", "criteria"),
     "validation": ("criteria", "details", "version", "not-checked"),
     "review": ("checked", "details", "head", "findings", "not-checked"),
-    "qa": ("plan", "proof", "findings", "details", "head", "reviews", "not-checked"),
+    "qa": ("strip", "plan", "proof", "how", "risk", "findings", "details", "head", "reviews", "not-checked"),
     "release": ("changelog", "confidence", "plan", "risks", "details", "tasks"),
 }
 # What the opening of each spec starts with: a bug its report, a change its goal.
 OPENS_WITH = {"bug-spec": "report", "screen-spec": "goal", "change-spec": "goal"}
 MAX_RISKS = 3
+TILES = 4  # a QA page's verdict strip: criteria, checks, review findings, risk
+FOLD_LINES = 10  # output longer than this sits in a <details>, never on the face of the page
 MAX_BYTES = 8 * 1024 * 1024
 LEAD_WORDS = 70
 PAGE_WORDS = {
@@ -63,6 +65,21 @@ FIGURE = re.compile(r"<figure\b(?:[^>\"]|\"[^\"]*\")*>(.*?)</figure>", re.S | re
 ATTRS = r"((?:[^>\"]|\"[^\"]*\")*?)"
 SHOT = re.compile(r"<figure\b" + ATTRS + r"\bdata-shot=\"([^\"]+)\"" + ATTRS + r">(.*?)</figure>", re.S | re.I)
 ARROW = re.compile(r"(\d+)\s*:\s*(\d+)\s*,\s*(\d+)\s*->\s*(\d+)\s*,\s*(\d+)")
+STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.S | re.I)
+STYLE_ATTR = re.compile(r"""\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+# A colour or background declaration, and a literal colour in its value (#hex, rgb(), hsl(), a colour name). page.py's own
+# red arrows are fill and stroke, which are not here, so they never count.
+COLOUR_DECL = re.compile(
+    r"(?:^|[^\w-])(?:color|background(?:-color|-image)?|border(?:-(?:top|right|bottom|left))?(?:-color)?|outline-color)"
+    r"\s*:([^;{}]*)",
+    re.I,
+)
+LITERAL_COLOUR = re.compile(
+    r"#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\("
+    r"|(?:^|[^\w-])(?:white|black|gray|grey|silver|red|green|blue|yellow|orange|purple|pink|brown|navy|teal|maroon"
+    r"|olive|lime|aqua|fuchsia|cyan|magenta)\b",
+    re.I,
+)
 CHROMES = (
     "google-chrome",
     "google-chrome-stable",
@@ -157,6 +174,19 @@ def words(fragment):
     return re.findall(r"[\w'’-]+", html.unescape(re.sub(r"<[^>]+>", " ", fragment)))
 
 
+def own_css(text):
+    """The CSS the page carries itself: its <style> blocks and its style= attributes."""
+    return "\n".join(STYLE_BLOCK.findall(text)) + "\n" + "\n".join(a or b for a, b in STYLE_ATTR.findall(text))
+
+
+def own_colours(css):
+    """The literal colours the CSS writes in a colour or background declaration. A token (var(), its fallback included)
+    and a picture's url() are not the page's own colours, so they do not count."""
+    css = re.sub(r"url\((?:\"[^\"]*\"|'[^']*'|[^)\"'])*\)", "", css, flags=re.I)
+    css = re.sub(r"var\([^()]*\)", "", css, flags=re.I)
+    return [m.group(0) for m in COLOUR_DECL.finditer(css) if LITERAL_COLOUR.search(m.group(1))]
+
+
 def problems_in(text, kind):
     out = []
     low = text.lower()
@@ -203,6 +233,11 @@ def problems_in(text, kind):
         out.append("a screen spec shows before and after: at least two screenshots")
     if re.search(r"class=\"[^\"]*\bmock", text, re.I):
         out.append("a drawn mock-up: show the real app instead")
+    css = own_css(text)
+    if own_colours(css) and not re.search(r"prefers-color-scheme", css, re.I):
+        out.append(
+            "colours are light-only: use the template's tokens (var(--ink)...) or add dark values under prefers-color-scheme"
+        )
     if kind == "change-spec":
         behaviour = section(text, "behaviour")
         if behaviour and len(re.findall(r"<pre\b", behaviour, re.I)) < 2:
@@ -212,6 +247,8 @@ def problems_in(text, kind):
         pairs = len(re.findall(r"<figure\b", solution, re.I)), len(re.findall(r"<pre\b", solution, re.I))
         if max(pairs) < 2:
             out.append("a bug spec shows the solution before and after: two screenshots, or two <pre> blocks")
+    if kind == "qa":
+        out += qa_problems(text)
     if kind == "release":
         risks = len(re.findall(r"<li\b", section(text, "risks") or "", re.I))
         if risks > MAX_RISKS:
@@ -227,6 +264,60 @@ def problems_in(text, kind):
         out.append(f"'{m.group(0)}': say what it does instead")
     if len(words(text)) > PAGE_WORDS[kind]:
         out.append(f"{len(words(text))} words; a {kind} page keeps under {PAGE_WORDS[kind]}: cut the details")
+    return out
+
+
+def qa_problems(text):
+    """A QA page's own parts: the verdict strip, the diagram of how it works with the files changed, risk and
+    rollback, and long output folded away. Each missing part is named, so the page is fixed before Jev reads it."""
+    out = []
+    strip = section(text, "strip")
+    if strip is not None:
+        tiles = len(re.findall(r"class=\"[^\"]*\btile\b", strip))
+        if tiles != TILES:
+            out.append(
+                f"the verdict strip has {tiles} tiles; it has {TILES}: criteria passed, checks at the head, open "
+                "review findings, risk"
+            )
+        if not re.search(r"approve\s*=\s*ship to production", html.unescape(re.sub(r"<[^>]+>", " ", strip)), re.I):
+            out.append('the verdict strip does not say "Approve = ship to production"')
+    how = section(text, "how")
+    if how is not None:
+        rows = re.findall(
+            r"<tr\b.*?(?:</tr>|(?=<tr\b)|$)", re.sub(r"<thead\b.*?</thead>", "", how, flags=re.S | re.I), re.S | re.I
+        )
+        if not rows:
+            out.append("how it works has no table of the files changed, with their lines and a total")
+        files = [row for row in rows if not re.search(r">\s*(?:<b>\s*)?total\b", row, re.I)]
+        changed = re.search(r"class=\"[^\"]*\bbox\b[^\"]*\bchanged\b", how)
+        boxes = len(re.findall(r"class=\"[^\"]*\bbox\b", how))
+        if not changed and len(files) > 1:
+            out.append(
+                "how it works has no diagram: the parts the change touches as boxes, the changed ones "
+                'class="box changed" (only a one-file change may name its file instead)'
+            )
+        elif changed and boxes < 2:
+            out.append("how it works shows one box: draw the parts around the change too, for context")
+    risk = section(text, "risk")
+    if risk is not None:
+        # Each under a heading of its own (the section's own "Risk and rollback" names both and proves neither).
+        parts = re.split(r"(?=<h3\b)", risk, flags=re.I)
+        risk_part = next((p for p in parts if re.match(r"<h3\b[^>]*>\s*risk\b", p, re.I)), None)
+        rollback = next((p for p in parts if re.match(r"<h3\b[^>]*>\s*rollback\b", p, re.I)), None)
+        if not risk_part:
+            out.append('risk and rollback has no "Risk: low | medium | high" heading over what could go wrong')
+        if not rollback:
+            out.append('risk and rollback has no "Rollback" heading over how to undo it')
+        elif not re.search(r"\bdata\b|\bmigration\b", " ".join(words(rollback)), re.I):
+            out.append("the rollback does not say whether stored data changes")
+    folded = re.sub(r"<details\b.*?</details>", "", text, flags=re.S | re.I)
+    for i, block in enumerate(re.findall(r"<pre\b[^>]*>(.*?)</pre>", folded, re.S | re.I), 1):
+        lines = len(block.strip().splitlines())
+        if lines > FOLD_LINES:
+            out.append(
+                f"output {i} on the face of the page is {lines} lines: fold anything over {FOLD_LINES} into "
+                "<details><summary>…</summary><pre>…</pre></details>"
+            )
     return out
 
 

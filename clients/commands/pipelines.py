@@ -103,6 +103,7 @@ def _stage(stage, actors):
         "held_by": stage.get("owner"),
         "held_by_name": _holder(stage, actors),
         **_pick_shown(stage, actors),
+        "side": bool(stage.get("side")),
         "by_hand": bool(stage.get("by_hand")),
         "task_limit": stage.get("task_limit"),
         "to_leave": [
@@ -462,6 +463,8 @@ def _stage_fields(api, args, stage):
         if args.get(arg) is not None:
             stage[field] = args[arg]
     _pick_fields(api, args, stage)
+    if args.get("side") is not None:
+        stage["side"] = bool(args["side"])
     if args.get("by_hand") is not None:
         stage["by_hand"] = bool(args["by_hand"])
     if args.get("no_limit"):
@@ -559,6 +562,7 @@ STAGE_FIELDS = {
         "description": "One of several: the pick becomes the task's owner (Build); off, it holds only this stage "
         "(Review)",
     },
+    "side": {"type": "boolean", "description": "A side stage after a main stage. Tasks enter and leave it by hand."},
     "by_hand": {"type": "boolean", "description": "Tasks leave it only when someone moves them"},
     "limit": {
         "type": "integer",
@@ -679,7 +683,7 @@ def pipeline_remove(api, args):
     "tico_stage_add",
     "Add a stage to a pipeline: last, first, or after a stage; held by `assignee` (whoever the task is for) unless "
     "a holder is given. Who may change the pipeline. "
-    'Example: tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2',
+    'Example: tico stage add engineering "Security review" --after engineering-review-1 --holder reviewer-2',
     {
         "pipeline": PIPELINE,
         "name": _s("The stage's name"),
@@ -709,7 +713,7 @@ def stage_add(api, args):
     "tico_stage_update",
     "Change a stage: its name, purpose, who holds it (one holder, or One of several with `pick_from`, `pick`, "
     "`limit_each`, `prefer` and `owns_task`; only a person changes who a stage picks from), whether tasks leave it "
-    "by hand, its task limit, its expected time. Who may change the pipeline. "
+    "by hand, whether it is a side stage, its task limit, its expected time. Who may change the pipeline. "
     "Example: tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new",
     {
         "stage": STAGE,
@@ -730,7 +734,7 @@ def stage_update(api, args):
 @tool(
     "tico_stage_move",
     "Put a stage in another place in its pipeline: first, or after another stage. Who may change the pipeline. "
-    "Example: tico stage move engineering-review-2 --after engineering-review-1",
+    "Example: tico stage move engineering-fixes-1 --after engineering-review-1",
     {
         "stage": STAGE,
         "after": _s("The stage it comes after: its id or name"),
@@ -754,7 +758,7 @@ def stage_move(api, args):
     "tico_stage_remove",
     "Take a stage out of its pipeline (it is retired; its history stays). Refused while it holds open tasks. "
     "`confirm` is its exact name. Who may change the pipeline. "
-    'Example: tico stage remove engineering-fixes-2 --confirm "Fixes 2"',
+    "Example: tico stage remove engineering-qa --confirm QA",
     {"stage": STAGE, "confirm": CONFIRM, "version": VERSION_SEEN},
     required=("stage", "confirm"),
     writes=True,
@@ -1199,14 +1203,15 @@ CLI = (
     Command(
         "stage add",
         "add a stage to a pipeline: last, first, or after a stage" + CHANGERS,
-        args=(_FIRST, _either("by_hand"), _either("owns_task"), Arg("no_limit_each", default=None)),
-        example='tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2',
+        args=(_FIRST, _either("side"), _either("by_hand"), _either("owns_task"), Arg("no_limit_each", default=None)),
+        example='tico stage add engineering "Security review" --after engineering-review-1 --holder reviewer-2',
     ),
     Command(
         "stage update",
         "change a stage: name, purpose, holder or the bots it picks from, by hand, task limit, expected time"
         + CHANGERS,
         args=(
+            _either("side"),
             _either("by_hand"),
             Arg("no_limit", default=None),
             _either("owns_task"),
@@ -1218,13 +1223,13 @@ CLI = (
         "stage move",
         "put a stage first, or after another stage of its pipeline" + CHANGERS,
         args=(_FIRST,),
-        example="tico stage move engineering-review-2 --after engineering-review-1",
+        example="tico stage move engineering-fixes-1 --after engineering-review-1",
     ),
     Command(
         "stage remove",
         "take a stage out of its pipeline (refused while it holds open tasks); --confirm is its exact name" + CHANGERS,
         args=(_CONFIRM,),
-        example='tico stage remove engineering-fixes-2 --confirm "Fixes 2"',
+        example="tico stage remove engineering-qa --confirm QA",
     ),
     Group("company", "the company's shape"),
     Command(

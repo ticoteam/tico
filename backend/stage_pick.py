@@ -11,7 +11,8 @@ enters the stage (a hand-off, a task a bot files into it, a kickback), with no m
 3. Take turns or Random among those not paused, who can read the task, and under their Limit each.
 4. Everyone is full: the task waits ("Waiting for a free Reviewer") and nobody is woken; the never-stuck pass gives
    the oldest waiting task to the first bot with room (task_engine.pick_again).
-5. Nobody can take it (all paused, or none can read a private task): the manager is woken, told why.
+5. Nobody can take it (all paused, or none can read a private task): the manager is woken, told why. Where the pick
+   becomes the task's owner and every bot on the list is paused, the pipeline's manager is given the task instead.
 
 `owns_task` says whether the pick becomes the task's owner for life (Build: its assignee, so Fixes and kickbacks go back
 to the same Builder) or holds only this stage (Review: `visits.holder_id`). Every pick is written on the task's
@@ -40,6 +41,7 @@ ANYONE, NEW, FAMILY = "anyone", "new", "family"
 PREFERS = (ANYONE, NEW, FAMILY)
 FULL, NOBODY = "full", "nobody"  # visits.pick_state
 
+_TO_MANAGER = ", so it went to the manager"  # a pick's reason when every bot on the list is paused
 _HOW_LINE = {TURNS: "took turns", RANDOM: "picked at random"}
 _PREFER_LINE = {NEW: "new to this task", FAMILY: "a different model family"}
 _SKIPPED_LINE = {NEW: "nobody new to this task was free", FAMILY: "nobody of a different model family was free"}
@@ -74,6 +76,7 @@ class Choice:
     why: str
     state: str | None = None
     back: bool = False  # it had it here before
+    fallback: bool = False  # every bot on the list is paused: it went to the pipeline's manager
 
 
 def _decoded(value: object) -> Row | None:
@@ -309,6 +312,32 @@ def _nobody_why(screen: _Screen) -> str:
     return "each bot it picks from is paused, cannot see this private task or is refused by a stage rule"
 
 
+def _manager_fallback(
+    conn: "sqlite3.Connection", row: Row | None, stage: Row, pick: Pick, screen: _Screen
+) -> Choice | None:
+    """Where the pick becomes the task's owner (On deck, Build) and every bot it picks from is paused, the pipeline's
+    manager gets the task instead of nobody, so the work is still done (step 5's one exception). A list cut by a private
+    task or a stage rule still wakes the manager to pick, and so does a manager that is a person, cannot run, cannot
+    already read a private task (the engine never adds a reader to one), or that a rule refuses. No turn is taken: the
+    bots' order is kept for when one is back."""
+    from . import task_engine
+    from . import task_wakes as _task_wakes
+
+    task_wakes: Any = _task_wakes
+    H = _h()
+    if not pick.owns_task or not screen.paused or screen.unreadable or screen.refused:
+        return None
+    pipe = task_engine.pipeline(conn, str(stage.get("pipeline_id") or ""))
+    manager = str((pipe or {}).get("manager_id") or "")
+    if not manager or not H.is_bot(manager) or task_wakes.cannot_run(conn, manager, {}):
+        return None
+    if row is not None and H.task_private(conn, row) and not H.task_private_readable(conn, manager, row):
+        return None
+    if refused_by(conn, row, stage, manager):
+        return None
+    return Choice(manager, f"every {role(conn, pick.bots)} it picks from is paused{_TO_MANAGER}", fallback=True)
+
+
 def _preferred(conn: "sqlite3.Connection", row: Row | None, prefer: str, free: list[str]) -> list[str]:
     if prefer == ANYONE or not row:
         return free
@@ -335,6 +364,9 @@ def choose(conn: "sqlite3.Connection", row: Row | None, stage: Row, pick: Pick, 
             return Choice(before, "had it here before", back=True)
     screen = _screen(conn, row, stage, pick)
     if not screen.can:
+        fallback = _manager_fallback(conn, row, stage, pick, screen)
+        if fallback:
+            return fallback
         return Choice(None, _nobody_why(screen), NOBODY)
     if not screen.free:
         return Choice(None, f"Waiting for a free {role(conn, pick.bots)}", FULL)
@@ -387,6 +419,8 @@ def next_line(conn: "sqlite3.Connection", stage: Row) -> str:
     if choice.state == FULL:
         return f"The next task waits for a free {role(conn, pick.bots)}: each has {pick.limit_each} already."
     name = H.actor_name(conn, choice.bot)
+    if choice.fallback:
+        return f"The next task goes to {name}, the manager: {choice.why.removesuffix(_TO_MANAGER)}."
     if pick.how == RANDOM:
         names = [str(H.actor_name(conn, bot)) for bot in pick.bots]
         said = f"The next task goes to {name}"
@@ -408,7 +442,9 @@ def first_picks(conn: "sqlite3.Connection", pipeline_id: str | None) -> bool:
     stage picks one as it arrives (a bot filing into Build). Naming an owner always wins."""
     from . import task_engine
 
-    first = next((s for s in task_engine.stages(conn, str(pipeline_id or "general")) if s["kind"] == "work"), None)
+    first = next(
+        (s for s in task_engine.stages(conn, str(pipeline_id or "general")) if task_engine.is_main_work(s)), None
+    )
     return config(first) is not None
 
 

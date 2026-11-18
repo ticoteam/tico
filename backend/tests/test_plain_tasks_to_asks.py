@@ -66,7 +66,7 @@ def test_a_person_asked_on_a_bots_task_finds_it_in_needs_you_and_the_bot_holds_i
 
 def test_with_no_such_bot_the_task_is_the_persons_and_botops_asks(c):
     made = PA.ask(
-        c, H.KEEPER, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.", bot="bot:ghost"
+        c, H.TICO_ACTOR, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.", bot="bot:ghost"
     )
     assert made["owner_id"] == ANA and len(asked(c, ANA, made["id"])) == 1
 
@@ -122,7 +122,7 @@ def test_a_bots_task_for_a_person_through_the_api_is_its_own_with_a_question_to_
 
 
 def test_a_question_on_the_persons_own_task_ends_when_they_finish_it(c):
-    made = PA.ask(c, H.KEEPER, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.")
+    made = PA.ask(c, H.TICO_ACTOR, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.")
     assert asked(c, ANA, made["id"])
     from backend import task_engine as E
 
@@ -138,7 +138,7 @@ def test_a_bot_that_cannot_run_has_botops_ask_for_it_and_with_no_bot_nobody_asks
     )
     assert made["owner_id"] == "bot:curator" and len(asked(c, ANA, made["id"])) == 1
     c.execute("UPDATE bots SET state='archived' WHERE id IN ('botops','builder')")
-    alone = PA.ask(c, H.KEEPER, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.")
+    alone = PA.ask(c, H.TICO_ACTOR, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.")
     # Tico never writes the question: with no bot to ask, the task is only in her Tasks.
     assert alone["owner_id"] == ANA and not asked(c, ANA, alone["id"])
     assert (
@@ -151,7 +151,7 @@ def test_a_bot_that_cannot_run_has_botops_ask_for_it_and_with_no_bot_nobody_asks
 
 
 def test_a_question_that_would_fail_the_ask_checks_is_asked_in_plain_words(c):
-    made = PA.ask(c, H.KEEPER, ANA, "Fix the webhook", "x", "Can you fix backend/hooks/orders.py?", "It failed.")
+    made = PA.ask(c, H.TICO_ACTOR, ANA, "Fix the webhook", "x", "Can you fix backend/hooks/orders.py?", "It failed.")
     [item] = asked(c, ANA, made["id"])
     assert item["line"] == PA.PLAIN_ASK
 

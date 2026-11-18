@@ -433,7 +433,7 @@ def test_removing_a_subscription_in_use_confirms_then_takes_it_off_every_compute
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = machine(api)
     give(api, m, "codex", sid)
@@ -549,8 +549,8 @@ def test_a_reconnect_confirms_then_restarts_runs_on_the_old_value_and_their_late
 def test_a_run_reads_only_the_revision_it_was_handed_or_the_same_accounts_refresh(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m, n = machine(api), machine(api, bot="cpo", label="Other Mac")
     give(api, m, "codex", sid)
@@ -744,7 +744,7 @@ def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z", runtime="claude"
 def limit(api, bot="ops"):
     """The bot is limited, as a limit with a named reset leaves it."""
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, bot, state="limited", focus="Usage limit", reason="test")
+        H.status_set(c, H.TICO_ACTOR, bot, state="limited", focus="Usage limit", reason="test")
 
 
 def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):
@@ -853,13 +853,13 @@ def test_a_switch_leaves_a_bot_of_another_runtime_on_the_same_computer_alone(api
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api)
     assign(api, m, "cpo")
     limited_on(api, m, plan_a)
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "cpo", state="limited", focus="Usage limit on ChatGPT", reason="test")
+        H.status_set(c, H.TICO_ACTOR, "cpo", state="limited", focus="Usage limit on ChatGPT", reason="test")
     give(api, m, "claude", plan_b)
     # Nothing re-judged cpo: its runtime is codex, and it has no hold on its own login to lift it.
     assert status(api, "cpo")["state"] == "limited" and status(api, "cpo")["focus"] == "Usage limit on ChatGPT"
@@ -912,7 +912,7 @@ def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keep
     # the bot (it runs Claude as its fallback), and it is freed only when that fallback can take the turn.
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     with api.app.state.store.transaction() as c:
         config = BS.read(c, 'ops')
         config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
@@ -959,7 +959,7 @@ def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
     # switch leaves it alone.
     setup(api)
     company(api)
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     on(api, "ops", "claude", "claude-sonnet-5-5")
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api, signed_in=True)
@@ -981,7 +981,7 @@ def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_
 
     setup(api)
     company(api)
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = machine(api, signed_in=True)
     assign(api, m, "cpo")
@@ -1000,7 +1000,7 @@ def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_
             },
         )
     with api.app.state.store.transaction() as c:
-        assert clear_limits(c, api.app.state.store.settings, H.KEEPER, "ops") == 1
+        assert clear_limits(c, api.app.state.store.settings, H.TICO_ACTOR, "ops") == 1
     with api.app.state.store.read() as c:
         assert login_holds.get(c, m["runner_id"], "", "codex")["until"] <= H.now()
 
@@ -1042,7 +1042,7 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
             config = BS.read(c, 'ops')
             config["fallback"] = {
                 "harness": "codex" if mode == "named" else "claude",
-                "model": "gpt-6.1-sol" if mode == "named" else "claude-sonnet-5-5",
+                "model": "gpt-6.2-sol" if mode == "named" else "claude-sonnet-5-5",
             }
             BS.write(c, 'ops', config)
         if mode in ("absent", "uninstalled"):
@@ -1075,7 +1075,10 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     eligible = mode in ("automatic", "named", "same_runtime")
-    assert [s["id"] for s in turn.get("subscriptions", [])] == ([sid] if eligible else [])
+    # A usable ChatGPT login is handed to every turn on its computer for the turn's own commands (`for_shell`), whether
+    # or not the turn may move to Codex: `fallback_choice` below decides that.
+    usable = eligible or mode in ("disabled", "bot_off", "incomplete_named")
+    assert [s["id"] for s in turn.get("subscriptions", [])] == ([sid] if usable else [])
     with api.app.state.store.read() as c:
         config = providers.fill(
             providers.load(c),
@@ -1086,8 +1089,8 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
         choice = execution.fallback_choice(c, api.app.state.store.settings, m["runner_id"], "ops", config)
         assert choice == ((login_holds.subscription_login(sid), "codex") if eligible else None)
     values = get(api, "credential-runtime?subscription_runtime=codex", turn["token"]).get("subscriptions", [])
-    assert [(v["runtime"], v["id"]) for v in values] == ([("codex", sid)] if eligible else [])
-    if eligible:
+    assert [(v["runtime"], v["id"]) for v in values] == ([("codex", sid)] if usable else [])
+    if usable:
         assert json.loads(values[0]["value"])["tokens"]["account_id"] == "acct-1"
     # A later claim after Claude's limit must be admitted directly on the subscription fallback.
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
@@ -1189,7 +1192,7 @@ def test_live_primary_survives_unused_automatic_login_changes_but_active_fallbac
             "UPDATE runner_states SET capabilities=? WHERE runner_id=?",
             (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
         )
-    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    sid = add(api, "openai_key", "sk-" + "c" * 24, name="OpenAI")["id"]
     give(api, m, "codex", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
@@ -1214,7 +1217,7 @@ def test_live_primary_survives_unused_automatic_login_changes_but_active_fallbac
         return api.post(
             f"/api/v2/model-subscriptions/{sid}",
             headers=headers(),
-            json={"secret": codex_file(refresh="r-2"), "confirm": confirm},
+            json={"secret": "sk-" + "d" * 24, "confirm": confirm},
         )
 
     response = changed()
@@ -1241,14 +1244,14 @@ def test_automatic_login_is_rechecked_at_activation(api, blocked):
             "UPDATE runner_states SET capabilities=? WHERE runner_id=?",
             (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
         )
-    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    sid = add(api, "openai_key", "sk-" + "c" * 24, name="OpenAI")["id"]
     give(api, m, "codex", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(
         api,
         "runner-model-subscription-refresh",
-        {"attempt": turn["id"], "subscription": sid, "revision": 1, "value": codex_file(refresh="r-not-used")},
+        {"attempt": turn["id"], "subscription": sid, "revision": 1, "value": "sk-" + "e" * 24},
         m["token"],
         expected=403,
     )
@@ -1274,7 +1277,7 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = machine(api, signed_in=True)
-    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    sid = add(api, "openai_key", "sk-" + "c" * 24, name="OpenAI")["id"]
     give(api, m, "codex", sid)
     if named:
         with api.app.state.store.transaction() as c:
@@ -1283,12 +1286,12 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
                 (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
             )
             config = BS.read(c, 'ops')
-            config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}
+            config["fallback"] = {"harness": "codex", "model": "gpt-6.2-sol"}
             BS.write(c, 'ops', config)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
-    # A legacy automatic fallback is handed lazily, so its first delivery activates the restart fence; a named fallback
-    # is one of the bot's own runtimes and is not.
+    # A legacy automatic fallback is handed lazily (an API key: a ChatGPT login is handed up front, `for_shell`), so its
+    # first delivery activates the restart fence; a named fallback is one of the bot's own runtimes and is not.
     assert turn["subscriptions"][0].get("activate", False) is (not named)
     assert get(api, "credential-runtime?subscription_runtime=codex", turn["token"])["subscriptions"][0]["id"] == sid
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-legacy"}, m["token"])
@@ -1586,7 +1589,7 @@ def test_a_rename_keeps_the_readings_taken_for_a_plan_and_a_new_secret_ends_them
 def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -1606,7 +1609,7 @@ def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api
 def test_a_chatgpt_login_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -1628,7 +1631,7 @@ def test_a_background_login_read_during_a_subscription_turn_is_not_that_plans_us
     # read taken while the plan's turn runs is no reading of the plan. Only the turn's own reading (its origin and id) is.
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(email=""), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -1749,7 +1752,7 @@ def test_a_persons_plans_list_in_use_first_across_tools(api):
     by their soonest weekly reset (`place`). Each tool's `order` stays its own pick order."""
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     claude = add(api)["id"]
     chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = machine(api)
@@ -1767,3 +1770,36 @@ def test_a_chatgpt_plan_added_with_no_name_takes_its_login_email(api):
     company(api)
     assert add(api, "codex_login", codex_file(), name=None)["name"] == "ana@acme.example"
     assert add(api, name=None)["name"] == "Claude"
+
+
+def test_a_chatgpt_login_signs_in_every_turns_commands_on_its_computer(api):
+    """A bot on Claude runs `codex exec` on its computer's ChatGPT plan: the login is handed up front to every turn
+    there, whatever runtime the turn runs; an OpenAI API key, which spends per use, is not."""
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET capabilities=? WHERE runner_id=?",
+            (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
+        )
+        # No fallback at all: the login comes only as a shell login, never as a runtime the turn may move to.
+        config = BS.read(c, "ops")
+        config["fallback"] = {"off": True}
+        BS.write(c, "ops", config)
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    [handed] = [s for s in turn["subscriptions"] if s["runtime"] == "codex"]
+    assert handed["id"] == sid and not handed.get("activate")
+    assert [v["id"] for v in get(api, "credential-runtime", turn["token"])["subscriptions"]] == [sid]
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
+
+    key = add(api, "openai_key", "sk-" + "c" * 24, name="OpenAI")["id"]
+    give(api, m, "codex", key)
+    post(api, "chat/ops", {"text": "And the Beta account."})
+    turn = claim(api, m)
+    assert not [s for s in turn.get("subscriptions") or [] if s["runtime"] == "codex"]

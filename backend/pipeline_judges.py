@@ -1,5 +1,5 @@
 # pyright: strict
-"""How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model.
+"""How Decide judges a piece of evidence against a requirement: one attachment, one rubric, one model.
 
 `judge_once` is the seam. A check Tico ships (the Spec, Review, QA and Checked in production pages: `CHECKS`) is asked as
 its named parts, each a yes/no question (a probability) in the same one call; the check's bar (`BARS`) reads each part as
@@ -12,8 +12,8 @@ did not give an answer (an error, a timeout, an answer that cannot be read, no m
 verdict at all: it is `failed`, with what went wrong as its reason, and the caller retries it (page_verdicts). Nothing
 unsure or failed passes work.
 
-The judge model is Jev alone: Decide Low (`tico-decide-low`), by Chris's decision on Nov 9. No pipeline picks another
-model. Jev goes through judge.server_engine, so its spend counts against the team's Decide cap.
+Pipeline judges use Decide Low (`tico-decide-low`) through judge.server_engine, so their spend counts against the
+team's Decide cap. The gateway chooses the current model.
 
 A page requirement's verdicts call it (backend/page_verdicts.py, through `judge_many`), and the eval
 (evals/pipeline_judge). The model is never asked while a write transaction is open.
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("tico.pipeline_judges")
 
-# The judge model: the name -> the Gateway's model id. Jev is the only judge.
+# The pipeline's historical judge identifier maps to the Gateway's Decide Low tier.
 MODELS: dict[str, str] = {"jev": "tico-decide-low"}
 DEFAULT_MODEL = "jev"
 QUESTION_SET = "pipeline-requirement"
@@ -173,6 +173,29 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "Can't tell what Reviewer 2 found.",
             "Has Reviewer 2's findings.",
         ),
+        # Task #389 (Chris, Nov 13: the QA review "should look really, really clear", with architecture diagrams): what
+        # a person reads first, how the change works, and how to undo it. Nov 14's five QA pages had none of the three.
+        Part(
+            "strip",
+            "opens with a verdict a person reads first, before the details: how many of the acceptance criteria passed, "
+            "the checks, the open review findings and the risk (four short tiles or one line)",
+            "No verdict strip to read first (criteria passed, checks, findings, risk).",
+            "Can't tell if there is a verdict to read first.",
+        ),
+        Part(
+            "how",
+            "shows how the change works: a diagram of the parts it touches with the changed ones marked, and the files "
+            "changed with their line counts; a change to one file may name that file instead of a diagram",
+            "No diagram of how it works, or no list of the files changed.",
+            "Can't tell if it shows how the change works.",
+        ),
+        Part(
+            "rollback",
+            "says the risk (what could go wrong, and for whom) and the rollback: how to undo the change, and whether "
+            "stored data changes",
+            "No risk and rollback (how to undo it, and whether stored data changes).",
+            "Can't tell if it says how to undo the change.",
+        ),
     ),
     "validate": (
         Part(
@@ -231,7 +254,8 @@ def check_of(rubric: object) -> str | None:
         return None
     known: dict[str, tuple[str, ...]] = {
         "spec": (S.SPEC_RUBRIC, *S.EARLIER.get("product-spec/page/rubric", ())),
-        "review": (S.REVIEW_RUBRIC, *S.EARLIER.get("engineering-review-1/page/rubric", ())),
+        # The combined Review uses the whole rubric. These parts only check a single review.
+        "review": S.EARLIER.get("engineering-review-1/page/rubric", ()),
         "qa": (S.QA_RUBRIC, *S.EARLIER.get("engineering-qa/page/rubric", ())),
         "validate": (S.VALIDATE_RUBRIC, *S.EARLIER.get("product-validate/page/rubric", ())),
     }
@@ -301,7 +325,7 @@ _installed_store: Any = None
 
 
 def judge_model_of(conn: sqlite3.Connection, pipeline_id: str | None) -> str:
-    """The judge model a pipeline is judged by: Jev, for every pipeline."""
+    """The pipeline judge's identifier. The Gateway chooses the underlying Decide Low model."""
     return DEFAULT_MODEL
 
 
@@ -515,7 +539,7 @@ def _read(result: dict[str, Any], qid: str | list[str], model: str, cost: object
 
 
 def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
-    """The engine the server asks: Jev, through judge.server_engine."""
+    """The decision engine the server asks through judge.server_engine."""
 
     ask = raw_engine(store)
 

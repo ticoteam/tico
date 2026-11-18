@@ -47,7 +47,7 @@ def parent_turn(api):
             runtime="claude",
             harness="claude",
             model="claude-sonnet-5-5",
-            fallback={"harness": "codex", "model": "gpt-6.1-sol"},
+            fallback={"harness": "codex", "model": "gpt-6.2-sol"},
         )
         BS.write(c, 'ops', config)
     machine = runner(api)

@@ -254,7 +254,7 @@ def is_person(actor: str) -> bool:
 
 
 def known_actor(c: sqlite3.Connection, actor: str) -> bool:
-    """Whether hubdb would accept `actor` as a writer (a roster person, a bot, or the keeper)."""
+    """Whether hubdb would accept `actor` as a writer (a roster person, a bot, or Tico)."""
     kind, _, ident = actor.partition(":")
     if actor == "keeper":
         return True
@@ -438,23 +438,23 @@ def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
 
 # ------------------------------------------------------------------------------------------------ telling people
 def notice(c: sqlite3.Connection, person: str, text: str) -> None:
-    """A keeper notice to one person, the kind usage limits send."""
-    _H.say(c, _H.KEEPER, person, text, kind="notice")
+    """A Tico notice to one person, the kind usage limits send."""
+    _H.say(c, _H.TICO_ACTOR, person, text, kind="notice")
 
 
 def bot_note(c: sqlite3.Connection, bot: str, text: str) -> str:
-    """A keeper note for a bot's next run: the line it is given when its next turn starts. Its id."""
+    """A Tico note for a bot's next run: the line it is given when its next turn starts. Its id."""
     ident = str(_H.new_id())
     c.execute(
         "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-        (ident, _H.KEEPER, bot, text[: int(_H.NOTE_MAX)], str(_H.now())),
+        (ident, _H.TICO_ACTOR, bot, text[: int(_H.NOTE_MAX)], str(_H.now())),
     )
-    _H.event(c, _H.KEEPER, "note.create", ident, {"to": bot, "finance": True})
+    _H.event(c, _H.TICO_ACTOR, "note.create", ident, {"to": bot, "finance": True})
     return ident
 
 
 def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, private: bool | None = None) -> str | None:
-    """One Needs-you item (a keeper task the person owns); an open one with the same title is reused. None when the
+    """One Needs-you item (a Tico task the person owns); an open one with the same title is reused. None when the
     person cannot be given one. `private` (True for a notice that names an amount) keeps it to the person and its
     requester; left None, Tico's default applies."""
     try:
@@ -463,7 +463,7 @@ def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, priv
         # BotOps' question to the person on their task (person_asks), so the item is in their Needs you.
         made: Any = person_asks.task_for(
             c,
-            _H.KEEPER,
+            _H.TICO_ACTOR,
             title[:200],
             body,
             person,
@@ -489,7 +489,7 @@ def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, obje
     R.judge_event(
         c, name, {"subject": subject, "type": subject, "delivery": str(facts.get("event_id") or subject), "data": facts}
     )
-    _H.hook(c, name, subject, lambda: facts, _H.KEEPER)
+    _H.hook(c, name, subject, lambda: facts, _H.TICO_ACTOR)
 
 
 def person_by_email(c: sqlite3.Connection, email: str) -> str:

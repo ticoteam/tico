@@ -115,6 +115,7 @@ const pages: Record<string, string> = {
       const doc = dialog.locator('.dc-page-md');
       await doc.waitFor();
       assert.equal(await frame.count(), 0);
+      assert.equal(await dialog.locator('.dc-said').count(), 0, 'one item, one name: the line repeats the title');
       assert.equal(await doc.locator('h2').innerText(), 'What was built');
       assert.deepEqual(await doc.locator('li').allInnerTexts(), ['Retry on a failed paste', 'A size limit']);
       assert.equal(await doc.locator('strong').innerText(), 'Retry');

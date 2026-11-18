@@ -105,6 +105,7 @@ jobs:
           sparse-checkout: |
             scripts/release_increment.py
             scripts/pr_checks.py
+            scripts/flake_quarantine.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       # An incremental validation makes its plan from the candidate's history (the anchor is an ancestor of main).
@@ -383,7 +384,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/release-venv"
           # uv installs the same pinned lock as pip, in seconds instead of about a minute.
-          python3 -m pip install --disable-pip-version-check uv==0.13.1
+          python3 -m pip install --disable-pip-version-check uv==0.13.9
           python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
           # The UI's TypeScript, compiled as the image compiles it (backend/ui_build.py refuses a missing build). A
           # candidate from before the build step has nothing to compile.
@@ -411,7 +412,7 @@ jobs:
       - if: steps.browsers.outputs.needed == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: candidate/package-lock.json
       - if: steps.browsers.outputs.needed == 'true'
@@ -582,7 +583,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.workflow_sha }}
-          sparse-checkout: scripts/pr_checks.py
+          sparse-checkout: |
+            scripts/pr_checks.py
+            scripts/flake_quarantine.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -620,7 +623,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.has.outputs.check == 'true'
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - name: Install Rust
         if: steps.has.outputs.check == 'true'
         run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92
@@ -649,3 +652,28 @@ jobs:
         run: |
           echo "Release gate parts: $GATE; images: $IMAGES"
           test "$GATE" = success && test "$IMAGES" = success
+
+  # The train dispatches this workflow with GITHUB_TOKEN, and GitHub starts no workflow_run for a run that token started,
+  # so main-red.yml never heard of the train's validations (none ran from Nov 16 to Nov 18). A dispatch from GITHUB_TOKEN
+  # does start a run: this job hands main-red.yml this run's id, and main-red waits for the run to finish before reading it.
+# The same goes for the release train's own workflow_run trigger, so this job hands the run to train.yml as well.
+  main-red:
+    needs: release-check
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Hand this run to main-red.yml
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run main-red.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"
+      # The train ships a green candidate, or reports a red one, as soon as this run ends rather than at the next push
+      # or backstop. It waits for this run to complete first.
+      - name: Hand this run to the release train
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run train.yml --repo "$GITHUB_REPOSITORY" --ref main -f validation_run="$GITHUB_RUN_ID"

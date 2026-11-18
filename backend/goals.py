@@ -677,8 +677,8 @@ def arm_pass(conn):
         return False
     if conn.execute("SELECT 1 FROM events WHERE action='goal_manager.armed'").fetchone():
         return False
-    routines.update(conn, H.KEEPER, sid, {"enabled": True})
-    H.event(conn, H.KEEPER, "goal_manager.armed", sid, {})
+    routines.update(conn, H.TICO_ACTOR, sid, {"enabled": True})
+    H.event(conn, H.TICO_ACTOR, "goal_manager.armed", sid, {})
     return True
 
 
@@ -1382,23 +1382,23 @@ def seed(conn, document, resolve):
                 str(entry.get("body") or ""),
                 stated,
                 str(entry.get("status_note") or ""),
-                H.KEEPER if stated else None,
+                H.TICO_ACTOR if stated else None,
                 ts if stated else None,
                 "person" if stated else None,
                 _next_rank(conn, owner),
                 ts,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 ts,
             ),
         )
-        _event(conn, gid, H.KEEPER, "created", None, entry.get("title"), "registry/goals.yaml")
+        _event(conn, gid, H.TICO_ACTOR, "created", None, entry.get("title"), "registry/goals.yaml")
         for measure in entry.get("kpis") or []:
             kid = str(measure.get("id") or "").strip() or None
             if kid and kpi(conn, kid):
                 continue
             made = K.create(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 owner,
                 {
                     "name": measure.get("name") or kid or "KPI",
@@ -1414,7 +1414,7 @@ def seed(conn, document, resolve):
                 target = {"kind": "improve", "target": measure["target"], "deadline": measure.get("deadline")}
             K.set_link(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 gid,
                 made["id"],
                 {
@@ -1431,7 +1431,7 @@ def seed(conn, document, resolve):
                 try:
                     K.add_reading(
                         conn,
-                        resolve(reading.get("by")) or H.KEEPER,
+                        resolve(reading.get("by")) or H.TICO_ACTOR,
                         made,
                         float(reading.get("value")),
                         period_end=reading.get("at"),

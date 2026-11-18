@@ -173,8 +173,13 @@ async function stripSteady(browser: Browser) {
       const phone = await open(browser, {viewport: {width: 390, height: 844}, theme});
       await phone.page.locator('.pv-phone .tk-card').first().waitFor();
       const pm = phone.page.locator('.pv-phone-head [data-pv-col-menu]');
-      await pm.waitFor();
-      const box = (await pm.boundingBox())!;
+      // Waited for and measured in one step in the page: the head can redraw between a separate wait and measure, which
+      // replaces the ⋯ and leaves the locator's box null.
+      const measured = await phone.page.waitForFunction(() => {
+        const r = document.querySelector('.pv-phone-head [data-pv-col-menu]')?.getBoundingClientRect();
+        return r && r.width > 0 ? {x: r.x, width: r.width, height: r.height} : null;
+      });
+      const box = (await measured.jsonValue())!;
       assert.ok(box.width >= 44 && box.height >= 44, `44 px: ${box.width}x${box.height}`);
       assert.ok(box.x + box.width <= 390, 'on screen');
       assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll');

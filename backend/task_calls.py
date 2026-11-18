@@ -37,7 +37,7 @@ Row = dict[str, Any]
 _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
-SYSTEM: str = _core.KEEPER
+SYSTEM: str = _core.TICO_ACTOR
 
 # The engine's words for where a move goes (task_engine.NEXT and the rest), spelled out so that loading this module
 # never depends on the engine being loaded first.
@@ -203,7 +203,7 @@ def task_done(
     "owner says done" and that is not met, whoever may say so (the owner, the pipeline's manager, a person, the
     engine) answers it, and the engine moves the task on once everything else is met: in the last stage, to Done.
     Otherwise it is a forward move with no reason, refused with what is missing while anything is. To go on anyway is
-    `task_move(NEXT, why=...)`."""
+    `task_move(NEXT, why=...)`. A side stage refuses this call and requires an explicit move."""
     from . import task_engine as E
     from . import answers as A
     from . import task_requirements as R
@@ -215,6 +215,15 @@ def task_done(
     if row["status"] == "done":
         return row
     if row["status"] == "open":
+        if row["stage"].get("side"):
+            _refuse(
+                conn,
+                actor,
+                "task_side_stage",
+                f"This task is in a side stage ({row['stage']['name']}). Move it with "
+                f'`tico task move {task_id} --to "{row["pipeline_id"]}/<stage>" --version {row["version"]}`.',
+                task_id,
+            )
         from . import question_marks
 
         question_marks.refuse_ending(conn, actor, task_id)  # a bot's own open ❓ here waits for its reply
@@ -290,7 +299,7 @@ def task_move_to(
     row = _open(conn, actor, task_id, mover, work=False)
     pipe = E.pipeline_named(conn, actor, to_pipeline, task_id)
     if pipe["id"] == row.get("pipeline_id"):
-        first = next((str(s["id"]) for s in E.stages(conn, str(pipe["id"])) if s["kind"] == "work"), "")
+        first = next((str(s["id"]) for s in E.stages(conn, str(pipe["id"])) if E.is_main_work(s)), "")
         return task_move(conn, actor, task_id, str(to or "").strip() or first, why, seen_version, mover=mover)
     with task_effects.because(actor):
         return E.refile(conn, task_id, str(pipe["id"]), to, actor, why, seen_version, batch=batch)
@@ -514,6 +523,7 @@ def task_answer(
     page_version: str | None = None,
     visit_id: str | None = None,
     keyed: bool = False,
+    page_reader: Callable[[list[str]], bool] | None = None,
 ) -> Row:
     """Answer what is asked: `ok` or `no` with a note (send back) on an OK; `ok` or `no` on a page, for the page shown
     (`page_version`, `<file id>@<version>`; a document approval's key adds `visit_id`, and a person's answer from a
@@ -541,6 +551,7 @@ def task_answer(
             page_version=page_version,
             visit_id=visit_id,
             keyed=keyed,
+            page_reader=page_reader,
         )
 
 
@@ -743,7 +754,15 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     if not found:
         return None
     ref = f"page:{found['file_id']}@{found['version']}"
-    return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
+    page = {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
+    pages = task_pages.current_pages(conn, visit_id, requirement["id"])
+    if len(pages) > 1:
+        page["pages"] = [
+            {"file_id": p["file_id"], "version": int(p["version"]), "ref": f"page:{p['file_id']}@{p['version']}"}
+            for p in pages
+        ]
+        page["page_version"] = task_pages.version_key(pages)
+    return page
 
 
 def _page_checks(conn: "sqlite3.Connection", ref: object) -> list[str]:
@@ -998,7 +1017,7 @@ def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
     return {
         "kind": requirement["kind"],
         "line": R.approval_line(requirement),
-        "shows": [page["ref"]] if page else list(requirement.get("shows") or []),
+        "shows": [p["ref"] for p in page.get("pages", [page])] if page else list(requirement.get("shows") or []),
         **({"page": page} if page else {}),
     }
 
@@ -1024,7 +1043,7 @@ def _leave_entry(
     private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
     asked = ask_shown(conn, row, requirement)
     page: Row | None = asked.get("page")
-    shows: list[Any] = [page["ref"]] if page else [] if private else asked["shows"]
+    shows: list[Any] = [] if private else asked["shows"]
     # An OK that names nothing to show: the task's page from an earlier stage, for its parties alone.
     earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
     # An OK that shows a page first (Validate's): what Jev passed on that page, as its check rows.
@@ -1067,6 +1086,14 @@ def _approval_of(row: Row, standing: Any, page: Row | None) -> Row | None:
         "file_id": page["file_id"] if page else None,
         "version": page["version"] if page else None,
         "unchecked": bool(getattr(standing, "unchecked", False)),
+        **(
+            {
+                "pages": [{"file_id": p["file_id"], "version": p["version"]} for p in page["pages"]],
+                "page_version": page["page_version"],
+            }
+            if page and page.get("pages")
+            else {}
+        ),
     }
 
 
@@ -1109,6 +1136,7 @@ def task_view(
     `inputs`: also what earlier stages handed on (stage_inputs), for the task's own read; a list of many tasks
     (Needs you) leaves it out."""
     from . import task_engine as E
+    from . import task_reads
     from . import task_requirements as R
     from . import waiting_on as W
 
@@ -1172,7 +1200,10 @@ def task_view(
             "name": stage.get("name"),
             "kind": stage.get("kind"),
             "by_hand": bool(stage.get("by_hand")),
+            "side": bool(stage.get("side")),
         },
+        "came_from": task_reads.came_from(conn, [task_id]).get(task_id) if stage.get("side") else None,
+        "stage_since": visit.get("entered_at") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
         "turn": waits[0] if waits else None,

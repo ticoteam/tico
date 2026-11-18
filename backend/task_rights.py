@@ -64,7 +64,7 @@ def mover(c, actor, row, current=None):
     """A report's mover rights apply only to a task on which that report is a party."""
     from . import hubdb as H
 
-    if current or actor == H.KEEPER or current is None and H.can_move(c, actor):
+    if current or actor == H.TICO_ACTOR or current is None and H.can_move(c, actor):
         return True
     return any(
         H.is_human(row[k]) and represents(c, actor, row[k]) and H.can_move(c, row[k])

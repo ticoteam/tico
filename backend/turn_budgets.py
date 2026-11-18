@@ -184,18 +184,20 @@ def _hold(c, settings, bot, window, runs, budget, now):
         holds.RUNAWAY,
         "bot",
         bot,
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         reason=_sentence(name, runs, window),
         details={"window": window, "runs": runs, "budget": budget},
         upkeep_task_id=task_id,
     )
-    H.event(c, H.KEEPER, "bot.budget_held", bot, {"window": window, "runs": runs, "budget": budget, "task": task_id})
+    H.event(
+        c, H.TICO_ACTOR, "bot.budget_held", bot, {"window": window, "runs": runs, "budget": budget, "task": task_id}
+    )
     H.hook(
         c,
         "bot.held",
         bot,
         lambda: {"bot": bot, "reason": "budget", "window": window, "runs": runs, "budget": budget, "task": task_id},
-        H.KEEPER,
+        H.TICO_ACTOR,
         revision=now,
     )
     # One notice each to BotOps and Health when the guard trips (CONTRACT §1 run guard); the hold itself is the same.
@@ -205,7 +207,7 @@ def _hold(c, settings, bot, window, runs, budget, now):
     )
     for slug in ("botops", "health-monitor"):
         if H.bot(c, slug):
-            H.say(c, H.KEEPER, H.bot_actor(slug), words, kind="notice", refs={"held": bot})
+            H.say(c, H.TICO_ACTOR, H.bot_actor(slug), words, kind="notice", refs={"held": bot})
 
 
 def _sentence(name, runs, window):

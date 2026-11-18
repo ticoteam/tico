@@ -1,6 +1,6 @@
 # QA
 
-Triggered when a task you own enters QA, after Fixes 2. The stage leaves when the checks pass at the head commit and
+Triggered when a task you own enters QA. The stage leaves when the checks pass at the head commit and
 the QA report is written: the decision model checks it, then it is approved (`tico task show` says by whom). In OK
 release a person approves the Release report, and that ships the change to production.
 
@@ -15,29 +15,38 @@ and the proof, without running anything.
    row each, with its number. Add any check the change needs that the spec did not name (another screen that uses the
    same code, a permission, a data change on a copy), and say why.
 2. Run each one at the head commit, where it really runs: the repository's demo or a preview for a screen (Tico:
-   `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out shots/`; Reviewer 2's
-   shots when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
+   `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out shots/`; reuse shots
+   from the Review page when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
    job for a change with no screen.
 3. Each check gets a result: pass, fail, or not checked with why. A pass has its proof on the page: a screenshot with
    red numbered arrows at 390 and 1280 px, or the command as run and its real output (test names and counts, the call
    and its response, the query and its rows). "Looks good" is not proof, and a check with none is not checked.
 4. A check that fails is yours to fix before the page goes out: fix, push, and run the checks it touches again
-   (Reviewer 2 reads the new commit before the person is asked). Keep what you found and fixed under the findings. Anything that does not block the change becomes its own task, linked.
+   (the bot that wrote the latest Review page reads the new commit before the person is asked). Keep what you found
+   and fixed under the findings. Anything that does not block the change becomes its own task, linked.
 
 ## 2. Build the page
 
 Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/qa.html`, in `reports/<task id>-qa.html`, at the head
 commit:
 
+- The title: "QA: " and the task's title, word for word, so the review screen names it once.
 - The opening: what changed for the person who asked and the result ("Passed: 5 of 5 checks"), then what was not
   checked, plainly, then **Decide:** "Approve = ship it, or send it back with what is wrong."
-- Plan and results: the table, one row per check, each with its proof's letter or arrow.
+- The verdict strip, under the opening: four tiles (criteria passed of those due before release, checks at the head,
+  open review findings, risk in five words or fewer) and "Approve = ship to production."
+- Plan and results: the table, one row per check in the spec's order, each with how it was checked (its proof's letter
+  or arrow) and pass, fail or after launch.
 - Proof: the screenshots and the output, lettered to match the table. A change with no screen has no pictures; say "No
-  screens changed" in the opening.
+  screens changed" in the opening. Output over 10 lines (a test run, the CI job list) goes in a `<details>`.
+- How it works: the parts the change touches as boxes, the changed ones highlighted (`class="box changed"`), and the
+  files changed with their lines and a total (`git diff --stat <merge base>..<head>`). A one-file change names its file
+  instead of a diagram.
+- Risk and rollback: what could go wrong and for whom; how to undo it, and whether stored data changes.
 - Findings: what failed and was fixed in this round, and the follow-ups filed, each with what was done, what happened,
   what was expected and `file:line`. Or "None."
 - In the details: where it ran (the demo or preview, the pull request link and the full head commit, the checks at that
-  head with the link), what Reviewer 1 and Reviewer 2 each found on the commit they read and what you did about each,
+  head with the link), what each review found at its commit, who or which model reviewed it, and what you did about each finding,
   and what was not checked, with why and what would check it.
 
 A check only a person can do (a physical device, a reply someone owes) goes under not checked with why. The page never
@@ -45,24 +54,23 @@ asks its reader to test.
 
     python3 .claude/skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
     python3 .claude/skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
-    tico page publish reports/<task id>-qa.html --task <id> --title "QA: <the change>"
+    tico page publish reports/<task id>-qa.html --task <id> --as "QA report" --title "QA: <the task's title>"
     python3 .claude/skills/build-the-page/page.py render <file id> --kind qa
-    tico task attach <id> reports/<task id>-qa.html --doc "QA report" --note "<what changed>"
 
-`tico page publish` prints the file id. Look at both pictures `render` names before you write it: a page that does not
-draw, or has a broken picture, is fixed and published again, never written. Writing it in QA submits it. Then end the
-turn: the decision model checks it, then the stage asks a person to approve it.
+`tico page publish` prints the file id. Look at both pictures `render` names: a page that does not draw, or has a broken
+picture, is fixed and published again with `--page <file id>` (the next version of the same page). Publishing it as the
+QA report submits it. Then end the turn: the decision model checks it, then the stage asks a person to approve it.
 
 ## 3. When it comes back
 
 - **The decision model sent it back:** the reasons are in `tico task show`. Fix the page (or the change) and write the
   next version.
-- **The person sent it back:** their notes are in the chat. Fix what they asked, push, and write the next version. Reviewer 2 reads a commit pushed after its review before the person is asked again: say so on the page, with the
-  new head.
+- **The person sent it back:** their notes are in the chat. Fix what they asked, push, and write the next version.
+  The last reviewer reads new commits before the person is asked again. Say so on the page, with the new head.
 - **The decision model is unsure:** Tico asks the person. Never ask your own OK of this report, or a yes/no that shows
   it ("OK to merge?"): Tico refuses it, and an answer to it passes nothing.
 - **New commits after the OK:** the page is for one head. A rebase that changes the same lines keeps the OK; other new
-  commits are read by Reviewer 2, and the person is asked again only after it sends them back. Write the next version
+  commits go to the last reviewer, and the person is asked again only if the reviewer sends them back. Write the next version
   for the new head.
 - **Sent back from Merge:** the reason names what failed in the merge queue. Fix it on the same branch, push, and write
   the next version for the new head.

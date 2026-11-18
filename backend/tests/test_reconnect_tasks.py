@@ -7,6 +7,8 @@ Ana owns the company and Ben is an admin (both credential administrators); Cara 
 page's owner."""
 
 from backend import api_tools, reconnect_tasks
+from backend import pipeline_settings as PS
+from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers.api import get, post, put
 from backend.tests.helpers.api_tools import key, level, tool
@@ -128,6 +130,35 @@ def test_the_task_ends_itself_when_the_tool_works_again(api, monkeypatch):
         assert H.task(c, task["id"])["status"] == "done"
         assert c.execute("SELECT status FROM credential_requests WHERE id=?", (request["id"],)).fetchone()[0] == "saved"
     assert not get(api, f"credential-requests/{request['id']}")["can_save"]
+
+
+def test_the_working_health_check_leaves_a_reconnect_task_in_its_side_stage(api, monkeypatch):
+    tid, _ = connected(api)
+    answer = checks(api, monkeypatch)
+    post(api, f"api-tools/{tid}/check", {})
+    [task] = tasks(api, tid)
+    _, request = card(api, task["id"])
+    with api.app.state.store.transaction() as c:
+        record = PS.read(c, task["pipeline_id"])
+        record["stages"].append({"name": "Hold", "side": True, "owner": "assignee"})
+        PS.save(c, "human:ana", record)
+        held = H.task_move(c, "human:ana", task["id"], "Hold")
+
+    answer.reply = api_tools.Reply(200)
+    assert post(api, f"api-tools/{tid}/check", {})["detail"] == "Working"
+    wait, updated_request = card(api, task["id"])
+    assert (wait["ended"], updated_request["id"], updated_request["status"]) == ("fixed", request["id"], "saved")
+    with api.app.state.store.read() as c:
+        after = E.task(c, task["id"])
+        assert (after["status"], after["visit"]["id"], after["version"]) == (
+            "open",
+            held["visit"]["id"],
+            held["version"],
+        )
+        assert not c.execute(
+            "SELECT 1 FROM events WHERE action='tool.reconnect_task_closed' AND target=?", (tid,)
+        ).fetchone()
+        assert not c.execute("SELECT 1 FROM refusals WHERE rule='task_side_stage'").fetchone()
 
 
 def test_proxied_calls_open_it_after_rejections_in_a_row_and_a_2xx_ends_it(api):

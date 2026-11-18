@@ -276,7 +276,7 @@ def doc_owner(c, auth, who, detail):
             raise Problem("owner", DOC_OWNER_DEFAULT, 422)
         return bot
     actor = H.resolve_actor(c, named)
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         raise Problem("owner", DOC_OWNER_NAMED, 422)
     if actor.startswith("bot:"):
         auth.require_write(c, who, H.actor_id(actor), missing=DOC_OWNER_NAMED)

@@ -128,6 +128,16 @@ def name_of(requirement: Row) -> str:
 ENDS = (".", "!", "?", "…")
 
 
+def verdict_and_rest(notes: object) -> tuple[str, str]:
+    """A reviewer's notes as (its first line, everything after it), each on one line: the first is its verdict ("No
+    blockers", "Blocks: …", "Unsure: …") when it wrote one, as the reviewer's skill asks (task #389)."""
+    lines = [line.strip() for line in str(notes or "").strip().splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return "", ""
+    return lines[0], " ".join(" ".join(lines[1:]).split())
+
+
 def sentence(text: str) -> str:
     """`text` as one sentence: a period added only when it has no end mark of its own, inside a closing quote or
     bracket too, so a person's note that ends with one is never followed by a second ("criterion.." was)."""
@@ -274,7 +284,7 @@ def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     return _rows(
         conn.execute(
             "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
-            "COALESCE(t.status, 'closed') AS status, t.number, "
+            "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
             "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
             "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
             "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
@@ -315,7 +325,9 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     if still_open:
         first = still_open[0]
         return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
-    closed = [f for f in filed if f["status"] != "done"]
+    has_done = any(f["status"] == "done" for f in filed)
+    # A finished retry can replace closed work, but a deleted task still needs the owner's attention.
+    closed = [f for f in filed if f["status"] != "done" and (f["deleted"] or not has_done)]
     if closed:
         first = closed[0]
         why = (first.get("why") or "").strip()
@@ -372,7 +384,43 @@ DOCUMENT_OK_HINT = "Write the new version of the {document}; it is submitted for
 STALE_REVIEW = "New commits since the review"
 
 
+def _previous_page(conn: "sqlite3.Connection", sql: str, visit_id: str, requirement: Row, file_id: str) -> bool:
+    """A document's earlier decision-model round belongs to this page, never another page sharing the role."""
+    args: tuple[Any, ...] = (visit_id, requirement["id"])
+    if document_of(requirement):
+        sql = sql.replace(" LIMIT 1", " AND p.file_id=? LIMIT 1")
+        args = (*args, file_id)
+    return bool(conn.execute(sql, args).fetchone())
+
+
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    """A document approval meets the check only when every submitted page version does."""
+    from . import task_pages as P
+
+    document = document_of(requirement)
+    if not document:
+        return _one_page(conn, task, requirement, answer)
+    linked = P.live_documents(conn, task["id"], document)
+    pages = P.current_pages(conn, task["visit"]["id"], requirement["id"])
+    if linked and not pages:
+        page, _ = page_for(conn, task, requirement)
+        if page:
+            pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"])
+    if not pages or linked.keys() != {str(p["file_id"]) for p in pages}:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "No page attached")
+    results = [_one_page(conn, task, requirement, answer, page) for page in pages]
+    # Work owed to the writer or decision model comes before asking a person to decide the complete set.
+    result = next((r for r in results if r.state == NOT_MET), None)
+    result = result or next((r for r in results if r.on == JEV and not r.met), None)
+    result = result or next((r for r in results if not r.met), results[0])
+    result.notices = tuple(dict.fromkeys(n for r in results for n in r.notices))
+    result.unchecked = any(r.unchecked for r in results)
+    return result
+
+
+def _one_page(
+    conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None, submitted: Row | None = None
+) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on,
     except a person's OK of an earlier version of the same page at the same commits (`_same_code_ok`), which stays.
@@ -390,6 +438,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     visit_id = task["visit"]["id"]
     owner = task.get("owner_id")
     page, carried = page_for(conn, task, requirement)
+    page = submitted or page
     if not page:
         return Standing(requirement, NOT_MET, owner, "No page attached")
     settings: Row = requirement.get("settings") or {}
@@ -399,6 +448,14 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if signoff and answer and _reviews_new(requirement, answer):
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
     answer = answer or carried
+    if answer and document_of(requirement):
+        from . import task_pages as P
+
+        approved = P.answer_pages(conn, task["id"], answer)
+        if approved.get(page["file_id"]) != page["version"]:
+            answer = None
+        elif answer.get("page_version") != page["version"]:
+            answer = dict(answer, page_version=page["version"])
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         # Given on an earlier page. A person's OK of an earlier version of this same page, at the commits the PRs are
         # at now, stays: publishing the page again changed no code (Nov 13, #3584: Chris was asked again for nothing).
@@ -445,7 +502,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if (
         said == "not_met"
         and gates
-        and not (oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone())
+        and not (oks_anyway and _previous_page(conn, NOT_MET_BEFORE_SQL, visit_id, requirement, page["file_id"]))
     ):
         return Standing(
             requirement,
@@ -511,7 +568,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         if routed:
             routed.since = asked if routed.state == WAITING else None
             return routed
-        if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
+        if _previous_page(conn, ASKED_ONCE_SQL, visit_id, requirement, page["file_id"]):
             return Standing(requirement, NOT_MET, owner, line)
         return Standing(requirement, WAITING, person, line, since=asked)
     if oks_anyway:
@@ -523,6 +580,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
 def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:
     """Whether `answer`, given on an earlier version of the page now attached, is a person's OK that still holds: the
     same file (another page is another thing to OK), and the linked PRs' newest commits the ones it was given at."""
+    if document_of(requirement):
+        return False
     if answer["answer"] != "ok" or not str(answer["by_id"]).startswith("human:"):
         return False
     heads = _heads_of(answer.get("heads"))
@@ -905,9 +964,13 @@ def _new_commits(
     new = _new_heads(conn, task)
     if not new:
         if last and last["answer"] == "ok" and _heads_of(last["heads"]) == here:
-            said = " ".join(str(last.get("notes") or "").split())
             read = f"{_name(conn, last['by_id'])} reviewed the commits since the reviews"
-            return None, sentence(f"{read}: {said}" if said else read) + " "
+            verdict, rest = verdict_and_rest(last.get("notes"))
+            if not verdict:
+                return None, sentence(read) + " "
+            # The verdict on a line of its own, the rest after a line break: the review screen shows the first and
+            # folds the rest behind More (task #389).
+            return None, sentence(f"{read}: {verdict}") + (f"\n{rest}" if rest else "") + " "
         return None, ""
     if last and last["answer"] == "no" and _heads_of(last["heads"]) == here:
         said = " ".join(str(last.get("notes") or "").split())
@@ -918,7 +981,8 @@ def _new_commits(
     if reviewer and rounds < DELTA_ROUNDS:
         line = (
             f"{REVIEW_NEW} since the reviews ({_where(conn, task, new)}): read only them, against what the reviews "
-            "found and the spec. OK them or send them back, and say what you read"
+            "found and the spec. OK them or send them back. Your note's first line is the verdict (No blockers, "
+            "Blocks: …, or Unsure: …); what you read goes on the lines after it"
         )
         return Standing(requirement, WAITING, reviewer, sentence(line), since=asked), ""
     return None, f"New commits since the reviews ({_where(conn, task, new)}): {NOT_REVIEWED} "

@@ -21,11 +21,15 @@ A task's status is `open`, `done` or `closed`. Nothing else is stored about wher
 its owner, all changed only by the engine. Every change raises the task's `version`. A bot's command carries the version
 it was last shown, and a move made against an old one is refused: "changed since you looked".
 
+Details shows the stage's **Owner** and adds a **Developer** row when the task's assignee is someone else.
+A stage move keeps the task's rank.
+
 The moves ([The moves](dev/pipelines-v3.md#the-moves)):
 
 - **Forward.** The engine moves the task the moment everything is met and the next stage has room.
 - **Push past.** Forward with something unmet, with a reason. Anyone may, bots included.
 - **Back.** To an earlier stage. Never refused.
+- **Side.** Move a task into or out of a side stage by hand. Entry rules and the destination's limit still apply.
 - **Close.** From any stage. Never refused. Its open sub-tasks close with it. A bot gives a reason.
 - **Reopen.** From Done or Closed back to a stage, with a note.
 - **Reassign.** A new owner for this visit to the stage.
@@ -33,6 +37,10 @@ The moves ([The moves](dev/pipelines-v3.md#the-moves)):
   stage of another pipeline (the first by default). See below.
 
 A bot cannot close a task a person asked for. It asks that person instead.
+
+A side stage such as **Rejected** sits beside a main stage. Automatic moves skip it. Move a task there or back
+without giving a reason. In a side stage, **Send back** returns the task to the last main stage it visited.
+Reopening a task that ended in a side stage returns it there.
 
 ### Moving a task to another pipeline
 
@@ -265,8 +273,8 @@ tico task tree <id>
 A bot can have another model look at its work without a second bot:
 
 ```sh
-tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --message "https://github.com/..."
-tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --message "..."
+tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
+tico task child <parent-id> --check-model codex:gpt-6.2-sol --title "Check the migration plan" --body "..."
 ```
 
 `--check-model` takes a runtime or `runtime:model`. With no value it takes the company's check model (Settings >
@@ -432,8 +440,8 @@ each OK or send back given while it counted.
 A task's **followers** are the people and bots who follow its thread, each at a level: `live` (everything),
 `mentions`, `digest` or `muted`.
 
-- The owner follows, at `live`. A new owner follows; the old owner stops unless they chose to follow or were
-  @mentioned.
+- The owner follows, at `live`. A new owner follows. The old owner keeps following if they are still the assignee,
+  chose to follow, or were @mentioned.
 - Filing or commenting on a task does not follow it. An @mention does. `tico task create --follow` follows the task you
   file.
 - Only someone who can see the task follows it.

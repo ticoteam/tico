@@ -30,7 +30,7 @@ def test_a_quarantined_bot_reads_quarantined_to_its_computer_until_its_cooldown_
     assert _listed(api, computer)["state"] == "active"
     with api.app.state.store.read() as c:
         [hold] = c.execute(HELD).fetchall()
-    assert (hold["released_how"], hold["released_by_id"]) == ("expired", H.KEEPER)
+    assert (hold["released_how"], hold["released_by_id"]) == ("expired", H.TICO_ACTOR)
 
 
 def test_a_cooldown_never_brings_back_an_archived_bot(api):

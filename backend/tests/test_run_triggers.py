@@ -59,7 +59,7 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         )
         assert G.flush_wakes(c) == [task["id"]]
         assert RT.of_message(newest(c, "ops", "%Unit tests failed")) == ("pr_checks", None)
-        # other: a keeper message nothing stamped (a Slack digest).
+        # other: a Tico message nothing stamped (a Slack digest).
         conv = H.conversation(c, task["conversation_id"])
         H.feed(c, "bot:ops", "Three new posts in #general.", conv)
         assert RT.of_message(newest(c, "ops", "Three new posts")) == ("other", None)
@@ -130,7 +130,7 @@ def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
     with api.app.state.store.transaction() as c:
         H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "Sort the inbox.",
             kind="notice",

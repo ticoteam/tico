@@ -1,10 +1,52 @@
 # pyright: strict
 """The answers of the Pipelines routes (backend/openapi_v2.py gathers them)."""
 
+from ..api_contract import ref
 from ._base import SCHEMAS, items, obj
+
+STAGE_SIDE = {
+    "type": "boolean",
+    "description": "A side stage is a work stage that tasks enter and leave by hand. It follows a main work stage.",
+}
+STAGE_PLACE = obj({"id": "s", "name": "s", "side": "b"})
 
 SCHEMAS.update(
     {
+        "PipelineSettingsInput": obj(
+            {
+                "settings_version": {"type": ["integer", "null"]},
+                "stages": items(obj({"side": STAGE_SIDE}, required=[])),
+            },
+            required=[],
+        ),
+        "PipelineSettingsStage": obj(
+            {
+                "id": "s",
+                "name": "s",
+                "purpose": "s",
+                "owner": "n",
+                "side": STAGE_SIDE,
+                "by_hand": "b",
+                "requests_move_on": "b",
+                "task_limit": {"type": ["integer", "null"]},
+                "expected_minutes": {"type": ["integer", "null"]},
+                "expected_bots_only": "b",
+                "on_enter": "o",
+                "requirements": items("o"),
+            }
+        ),
+        "PipelineSettings": obj(
+            {
+                "id": "s",
+                "name": "s",
+                "settings_version": "i",
+                "stages": items(ref("PipelineSettingsStage")),
+                "done": {"oneOf": [STAGE_PLACE, {"type": "null"}]},
+                "closed": {"oneOf": [STAGE_PLACE, {"type": "null"}]},
+            }
+        ),
+        "PipelineSettingsResult": obj({"pipeline": ref("PipelineSettings")}),
+        "PipelineSettingsList": obj({"pipelines": items(ref("PipelineSettings"))}),
         "PipelineLog": obj(
             {
                 "log": items(obj({"at": "s", "text": "s", "task_id": "n", "by": "n", "why": "s"})),

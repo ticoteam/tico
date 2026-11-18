@@ -1,7 +1,7 @@
 """Feedback on work: a person's thumbs up or down, with an optional reason, on something a bot or another person made.
 
 - Subjects: a message a bot or a person wrote (Assistant chat, threads, DMs, task comments) and a task a bot or a
-  person filed (its requester). Work with no such author (the keeper's, the system's) is refused (422), and so is the
+  person filed (its requester). Work with no such author (Tico's, the system's) is refused (422), and so is the
   rater's own (rating yourself says nothing). Rows rated on an ask before asks lost their thumbs stay as history:
   no read lists them.
 - One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names who made the
@@ -83,7 +83,7 @@ def _missing(subject_type):
 
 
 def _author(actor, said):
-    """The actor who made the rated work: a bot or a person. Anything else (the keeper, the system) takes no feedback."""
+    """The actor who made the rated work: a bot or a person. Anything else (Tico, the system) takes no feedback."""
     if not (H.is_bot(actor) or H.is_human(actor)):
         raise Problem("not_rateable", said, 422)
     return actor

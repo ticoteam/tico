@@ -20,8 +20,8 @@ Who gets what:
   key in place (`api_tools.update_key`): every grant stays as it was.
 
 One open task a tool: a repeat finds it (event `tool.reconnect_task`, its target the tool) and adds nothing, notifies
-nobody. The task closes itself, its card saying fixed, when the tool reads Working (or Works (limited)) again or its
-key's value is replaced, however (the card, Tools, the API), and closes as not needed when the tool is deleted.
+nobody. When the tool reads Working (or Works (limited)) again or its key's value is replaced, its card says fixed
+and the task closes unless it is in a side stage. When the tool is deleted the task closes as not needed.
 """
 
 import json
@@ -31,7 +31,7 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from . import hubdb
+from . import hubdb, task_engine
 from . import reconnects as _reconnects
 from .store import Problem as _Problem
 
@@ -270,32 +270,34 @@ def start(c: Any, tool_id: str, why: str) -> Row:
     )
     try:
         task: Row = H.task_create(
-            c, H.KEEPER, title_of(tool), body, owner, lint=False, deduplicate=False, private=False
+            c, H.TICO_ACTOR, title_of(tool), body, owner, lint=False, deduplicate=False, private=False
         )
     except H.Refused:
         log.warning("Could not file the reconnect task for tool %s", tool_id)
         return None
     rid = _card(c, task, owner, person, tool, key) if person and key else None
-    H.event(c, H.KEEPER, EVENT, tool_id, {"task": task["id"], "request": rid, "person": person, "why": why})
+    H.event(c, H.TICO_ACTOR, EVENT, tool_id, {"task": task["id"], "request": rid, "person": person, "why": why})
     return task
 
 
 # ---------------------------------------------------------------------------------------------------- closing
 def close(c: Any, tool_id: str, why: str, done: bool = True) -> Row:
-    """The tool's open Reconnect task ends: its card says fixed (or not needed) and wakes nobody, and the task is done
-    (`done`) or closed. The task, or None when none was open."""
+    """Settle the tool's open Reconnect task's card without a wake. Finish or close the task unless it waits in a side
+    stage for an explicit move after a fix. Return the task if it moved."""
     task = open_task(c, tool_id)
     if not task:
         return None
     RC.settle(c, task["id"], key_of(tool_id), "fixed" if done else "retired")
+    if done and (task_engine.stage(c, task["stage_id"]) or {}).get("side"):
+        return None
     try:
         if done:
-            H.task_done(c, H.KEEPER, task["id"], why)
+            H.task_done(c, H.TICO_ACTOR, task["id"], why)
         else:
-            H.task_close(c, H.KEEPER, task["id"], why)
+            H.task_close(c, H.TICO_ACTOR, task["id"], why)
     except H.Refused:
-        H.task_close(c, H.KEEPER, task["id"], why)
-    H.event(c, H.KEEPER, "tool.reconnect_task_closed", tool_id, {"task": task["id"], "why": why})
+        H.task_close(c, H.TICO_ACTOR, task["id"], why)
+    H.event(c, H.TICO_ACTOR, "tool.reconnect_task_closed", tool_id, {"task": task["id"], "why": why})
     return task
 
 

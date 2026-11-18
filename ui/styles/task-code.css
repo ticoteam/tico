@@ -37,9 +37,9 @@
 /* The panes fill the body; the one not shown is hidden but kept, so a file opened from a message still shows in the
    Files section's own viewer (task-files.ts, a modal dialog in the top layer, which takes visibility back). */
 #task-modal .tmodal-body.task-layout{position:relative;flex:1;min-height:0;max-height:none;display:block;overflow:hidden;padding:0;margin:0}
-#task-modal .task-layout>:is(.task-chat,.task-doc,.task-side){position:absolute;inset:0;min-width:0;overflow:auto;overscroll-behavior:contain}
+#task-modal .task-layout>:is(.task-chat,.task-doc,.task-side,.task-files-tab){position:absolute;inset:0;min-width:0;overflow:auto;overscroll-behavior:contain}
 #task-modal .task-layout:not([data-task-tab-shown="doc"])>.task-doc,#task-modal .task-layout:not([data-task-tab-shown="chat"])>.task-chat,
-#task-modal .task-layout:not([data-task-tab-shown="details"])>.task-side{visibility:hidden;pointer-events:none}
+#task-modal .task-layout:not([data-task-tab-shown="details"])>.task-side,#task-modal .task-layout:not([data-task-tab-shown="files"])>.task-files-tab{visibility:hidden;pointer-events:none}
 #task-modal .task-layout>.task-doc{overflow:hidden}
 #task-modal .task-layout>.task-side .tf-view{visibility:visible;pointer-events:auto}
 /* What the task is, first in Details: who asked and when, Edit, the request; then Done looks like and the owner's
@@ -67,10 +67,29 @@
 #task-modal .task-layout .lbl{margin:0;color:var(--muted);font-size:var(--t-sm);font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
 #task-modal .task-side :is(.rail-h,.tp-head) .prop-add{margin-left:auto;width:var(--ctl);height:var(--ctl)}
 /* A stage with nothing to leave by has no To leave at all; ⋯ › Ask someone… opens its form (task-props.ts). */
-#task-modal .task-side .tsec-empty:not(:has(form:not([hidden]))):not(.tf-shown){display:none}
+#task-modal .task-side .tsec-empty:not(:has(form:not([hidden]))){display:none}
+/* The Files tab: the task's pages and files (a page's roles as chips), then Link a page or file at its foot (task-pages.ts). */
+#task-modal .task-layout>.task-files-tab{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3) var(--s4) var(--s5);margin:0;border:0;font-size:var(--t-base)}
+#task-modal .tft-list{display:flex;flex-direction:column;gap:0}
+#task-modal .tft-row{display:flex;align-items:center;gap:var(--s2);width:100%;min-width:0;padding:6px 0;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
+#task-modal .tft-row:hover .tft-t{text-decoration:underline}
+#task-modal .tft-row:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+#task-modal .tft-ico{display:grid;place-items:center;flex:none;width:26px;height:26px;border-radius:4px}
+#task-modal .tft-ico img{border-radius:inherit}
+#task-modal .tft-ic{flex:none;font-size:18px;width:18px;height:18px;color:var(--muted)}
+#task-modal .tft-main{display:flex;flex-direction:column;flex:1;min-width:0}
+#task-modal .tft-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#task-modal .tft-m{font-size:var(--t-sm)}
+#task-modal .tft-chip{flex:none;padding:0 6px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:var(--t-sm);line-height:18px;white-space:nowrap}
+#task-modal .tft-none{margin:0;font-size:var(--t-sm)}
+#task-modal .tft-btn{height:var(--ctl);padding:0 var(--s2);border:1px solid var(--line);border-radius:var(--r-ctl);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
+#task-modal .tft-btn:hover{background:var(--surface2)}
+#task-modal .tft-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 /* Pages: a row is the page's mark and name, and opens it; + opens the page search. */
 #task-modal .task-pages:not([hidden]){display:flex;flex-direction:column;gap:0}
+#task-modal .task-pages .tp-head{justify-content:flex-start;flex-wrap:wrap;margin:0 0 var(--s2)}
 #task-modal .task-pages .tp-pages{display:flex;flex-direction:column;gap:0}
+#task-modal .task-pages .tp-pages[hidden]{display:none}
 #task-modal .task-pages .tp-row{gap:var(--s2);padding:5px 0;border-radius:var(--r-ctl)}
 #task-modal .task-pages .tp-row .nav-icon{font-size:18px;width:18px;height:18px}
 #task-modal .task-pages .tp-unlink{border:0;background:none;color:var(--muted)}
@@ -110,7 +129,6 @@
 .tl-pop.task-run-pop .task-run-form{grid-template-columns:minmax(0,1fr)}
 #task-modal .task-rail .rail-sec{padding:0}
 #task-modal .task-rail .rail-h{margin:0}
-#task-modal .task-side>.task-files .tf-strip{margin-top:2px}
 /* Activity and links, last: only its parts with something in them (a session, runs, related tasks, meetings, links, the
    public roadmap's text), and none at all when all are empty; ⋯ › Activity and links opens it with the empty ones too,
    to add a link or a session. */
@@ -138,8 +156,14 @@
   #task-modal .tw-head .tmodal-act{min-height:44px}
   #task-modal .tw-head>.tw-tabs{flex:0 1 auto;max-width:none;align-self:center}
   #task-modal .tw-head:has(>.tw-tabs) .tmodal-title{flex:1 0 40%;padding-top:0;align-self:center;min-width:40%;-webkit-line-clamp:2;line-clamp:2}
-  #task-modal .tw-head:has(>.tw-tabs) :is(.tw-details,[data-task-finish]){display:none}
+  /* Chat and Files get their own row so the title can fit beside the full set of 44px actions. */
+  #task-modal .tw-head:has(>.tw-tabs):not(:has(>.tw-tabs [data-task-tab^="doc:"])){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+  #task-modal .tw-head:has(>.tw-tabs):not(:has(>.tw-tabs [data-task-tab^="doc:"]))>.tmodal-title{min-width:0}
+  #task-modal .tw-head>.tw-tabs:not(:has([data-task-tab^="doc:"])){grid-column:1/-1;grid-row:2;justify-self:start;max-width:100%}
+  /* With a document's tab, a phone head drops Archive and Details (the style guide's phone-with-documents head). Chat and Files alone keep them. */
+  #task-modal .tw-head:has(>.tw-tabs [data-task-tab^="doc:"]) :is(.tw-details,[data-task-finish]){display:none}
   #task-modal .task-side .rail-h .prop-add,#task-modal .task-pages .tp-drop{min-height:44px;min-width:44px}
+  #task-modal .tft-row,#task-modal .tft-btn{min-height:44px}
   #task-modal .task-pages .tp-row,#task-modal .task-pages .tp-result,#task-modal .task-requirements .task-req{min-height:44px}
   #task-modal .task-side .prop{min-height:44px}
 }
@@ -165,6 +189,11 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 .prop-v.empty{color:var(--muted);font-weight:400}
 .prop-v .av{flex:none}
 .prop-txt{overflow:hidden;text-overflow:ellipsis;min-width:0}
+/* A task in a side stage (task-props.ts): ↳ and its stage, where it came from and how long it has been there in the quiet
+   ink, then Send back at the row's end. */
+.prop-v .side-mark{margin-right:-3px}
+.prop-v .prop-from{flex:0 1 auto;color:var(--muted);font-weight:400;margin-left:-3px}
+.prop-back{flex:none;margin-left:auto}
 .prop-ic{display:inline-flex;color:var(--muted);flex:none}
 .prop-ic.late,.prop-txt.late{color:var(--fail)}
 .prop-x,.prop-add{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer}

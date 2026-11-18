@@ -252,3 +252,242 @@ def test_the_migration_names_documents_and_retires_pitch(api):
         assert not c.execute(
             "SELECT 1 FROM requirements WHERE json_extract(settings, '$.body_max') IS NOT NULL"
         ).fetchone()
+
+
+def _attach_second_spec(api, row, name="other.html"):
+    page = post(api, f"tasks/{row['id']}/files", {"name": name, "text": "<h1>Another spec</h1>"})
+    entry = _entry(api, row["id"])
+    post(api, f"tasks/{row['id']}/pages", {"requirement": entry["requirement_id"], "page": "page:" + page["file_id"]})
+    return page
+
+
+def _all_verdicts(api, tid):
+    with api.app.state.store.transaction() as c:
+        for page in c.execute(
+            "SELECT p.* FROM requirement_pages p JOIN visits v ON v.id=p.visit_id "
+            "WHERE v.task_id=? AND v.left_at IS NULL AND p.replaced_at IS NULL",
+            (tid,),
+        ).fetchall():
+            _say(c, dict(page), "met")
+
+
+def test_two_specs_are_one_approval_with_both_submitted_versions(api, monkeypatch):
+    from backend import page_rounds as rounds
+    from backend import task_pages as P
+
+    _, row = _flow(api)
+    first = _write(api, row["id"], SPEC, "ana-test")
+    second = _attach_second_spec(api, row)
+    assert _standing(api, row["id"]).on == R.JEV
+    _all_verdicts(api, row["id"])
+    entry = _entry(api, row["id"])
+    approval = entry["approval"]
+    expected = {first["file_id"]: 1, second["file_id"]: 1}
+    documents = get(api, "tasks/" + row["id"])["task"]["documents"]
+    assert [d["name"] for d in documents] == ["Spec", "Spec"]
+    ambiguous = api.post(f"/api/v2/tasks/{row['id']}/files", json={"document": "Spec", "text": SPEC}, headers=headers())
+    assert ambiguous.status_code == 409
+    assert {p["file_id"]: p["version"] for p in approval["pages"]} == expected
+    assert len(entry["shows"]) == 2
+    # A single page key cannot approve the unseen rest of a submission.
+    assert _approve(api, row["id"], entry, 1).status_code == 409
+    out = post(
+        api,
+        f"tasks/{row['id']}/asks/{entry['requirement_id']}/answer",
+        {"value": "ok", "page_version": approval["page_version"], "visit_id": approval["visit_id"]},
+    )
+    assert out["task"]["stage_id"] == "approvals-build"
+    from backend import task_documents
+
+    calls = []
+    read = task_documents._read_approvals
+
+    def tracked(c, ids):
+        calls.append(ids)
+        return read(c, ids)
+
+    monkeypatch.setattr(task_documents, "_read_approvals", tracked)
+    listed = get(api, "pages?ids=" + ",".join(expected))["pages"]
+    assert calls == [[row["id"]]]
+    assert {
+        p["file_id"]: next(link["approval"]["version"] for link in p["links"] if link["role"] == "Spec") for p in listed
+    } == expected
+    calls.clear()
+    documents = get(api, "tasks/" + row["id"])["task"]["documents"]
+    assert calls == [[row["id"]]]
+    assert {doc["page_id"]: doc["approved_version"] for doc in documents} == expected
+    with api.app.state.store.read() as c:
+        answer = dict(
+            c.execute("SELECT * FROM answers WHERE visit_id=? AND answer='ok'", (row["visit"]["id"],)).fetchone()
+        )
+        assert P.answer_pages(c, row["id"], answer) == expected
+        history = rounds.rounds(c, row["id"], entry["requirement_id"])
+        assert len(history) == 2 and all(p["answers"][0]["answer"] == "ok" for p in history)
+        from backend import stage_effects
+
+        body = stage_effects._handoff_body(c, E.task(c, row["id"]))
+        assert all(f"Spec: page:{fid}@1" in body for fid in expected)
+
+
+def test_a_shared_spec_has_separate_task_oks_and_changes_since_each(api):
+    from backend import task_documents as TD
+    from backend import task_pages as P
+
+    _, a = _flow(api)
+    with api.app.state.store.transaction() as c:
+        b = X.new_task(c, ANA, "Another export", "approvals", assignee=OPS)
+    written = _write(api, a["id"], SPEC, "ana-test")
+    post(
+        api,
+        f"tasks/{b['id']}/pages",
+        {"requirement": _entry(api, b["id"])["requirement_id"], "page": "page:" + written["file_id"]},
+    )
+    _all_verdicts(api, a["id"])
+    _all_verdicts(api, b["id"])
+    assert _approve(api, a["id"], _entry(api, a["id"]), 1).status_code == 200
+    assert not _standing(api, b["id"]).met
+    links = get(api, "pages/" + written["file_id"])["page"]["links"]
+    assert {link["target"]: link.get("approval") for link in links if link["role"] == "Spec"} == {
+        "task:" + a["id"]: {"version": 1},
+        "task:" + b["id"]: None,
+    }
+    requirement_id = _entry(api, b["id"])["requirement_id"]
+    assert _approve(api, b["id"], _entry(api, b["id"]), 1).status_code == 200
+    _write(api, a["id"], SPEC + "<p>Changed</p>", "ben-test")
+    for task in (a, b):
+        doc = get(api, "tasks/" + task["id"])["task"]["documents"][0]
+        assert (doc["page_id"], doc["approved_version"], doc["version"], doc["changed_since_ok"]) == (
+            written["file_id"],
+            1,
+            2,
+            True,
+        )
+    with api.app.state.store.read() as c:
+        assert TD.approved_versions(c, a["id"]) == TD.approved_versions(c, b["id"]) == {written["file_id"]: 1}
+        assert TD.approved_tasks(c, written["file_id"], "Spec") == {a["id"]: 1, b["id"]: 1}
+        assert len(P.current_pages(c, a["visit"]["id"], requirement_id)) == 1
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (b["id"],))
+    visible = get(api, "pages/" + written["file_id"], "cara-test")["page"]
+    assert [(link["target"], link["approval"]) for link in visible["links"] if link["role"] == "Spec"] == [
+        ("task:" + a["id"], {"version": 1})
+    ]
+
+
+def test_unlinking_a_spec_removes_it_from_the_approval_set(api):
+    from backend import page_links as L
+
+    _, row = _flow(api)
+    first = _write(api, row["id"], SPEC, "ana-test")
+    second = _attach_second_spec(api, row)
+    _all_verdicts(api, row["id"])
+    with api.app.state.store.transaction() as c:
+        L.unlink(c, second["file_id"], "task:" + row["id"], "Spec", ANA)
+    entry = _entry(api, row["id"])
+    assert entry["shows"] == [f"page:{first['file_id']}@1"]
+    assert _approve(api, row["id"], entry, 1).status_code == 200
+
+
+def test_every_spec_version_is_checked_before_the_set_can_be_approved(api):
+    _, row = _flow(api)
+    _write(api, row["id"], SPEC, "ana-test")
+    _verdict(api, row["id"], "met")
+    second = _attach_second_spec(api, row)
+    entry = _entry(api, row["id"])
+    approval = entry["approval"]
+    refused = post(
+        api,
+        f"tasks/{row['id']}/asks/{entry['requirement_id']}/answer",
+        {"value": "ok", "page_version": approval["page_version"], "visit_id": approval["visit_id"]},
+        expected=409,
+    )
+    assert refused["error"] == "task_requirement"
+    _all_verdicts(api, row["id"])
+    assert _standing(api, row["id"]).state == R.WAITING
+    assert any(p["file_id"] == second["file_id"] for p in approval["pages"])
+
+
+def test_a_report_cannot_borrow_another_pages_decision_model_round(api):
+    _, row = _flow(api, "QA report")
+    _write(api, row["id"], SPEC, "ana-test", "QA report")
+    _verdict(api, row["id"], "not_met")
+    _write(api, row["id"], SPEC + "<p>Fixed</p>", "ana-test", "QA report")
+    _verdict(api, row["id"], "met")
+    second = _attach_second_spec(api, row)
+    with api.app.state.store.transaction() as c:
+        page = c.execute(
+            "SELECT p.* FROM requirement_pages p JOIN visits v ON v.id=p.visit_id "
+            "WHERE v.task_id=? AND p.file_id=? AND p.replaced_at IS NULL",
+            (row["id"], second["file_id"]),
+        ).fetchone()
+        _say(c, dict(page), "not_met")
+    standing = _standing(api, row["id"])
+    assert (standing.state, standing.on) == (R.NOT_MET, OPS)
+
+
+def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
+    from backend import page_links as L
+    from backend import task_documents as TD
+
+    _, row = _flow(api)
+    written = _write(api, row["id"], SPEC, "ana-test")
+    _all_verdicts(api, row["id"])
+    assert _approve(api, row["id"], _entry(api, row["id"]), 1).status_code == 200
+    with api.app.state.store.transaction() as c:
+        L.link(c, written["file_id"], "task:" + row["id"], "QA report", ANA)
+    with api.app.state.store.read() as c:
+        assert TD.approved_tasks(c, written["file_id"], "Spec") == {row["id"]: 1}
+        assert TD.approved_tasks(c, written["file_id"], "QA report") == {}
+    documents = {d["name"]: d for d in get(api, "tasks/" + row["id"])["task"]["documents"]}
+    assert documents["Spec"]["approved_version"] == 1
+    assert "approved_version" not in documents["QA report"]
+    listed = get(api, "pages?ids=" + written["file_id"])["pages"][0]
+    assert {
+        link["role"]: link.get("approval") for link in listed["links"] if link["target"] == "task:" + row["id"]
+    } == {
+        "Spec": {"version": 1},
+        "QA report": None,
+    }
+
+
+def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(api):
+    from backend.tests.helpers.api import as_member
+
+    as_member(api, "ben@acme.example")
+    _, row = _flow(api)
+    first = _write(api, row["id"], SPEC, "ana-test")
+    second = _attach_second_spec(api, row)
+    _all_verdicts(api, row["id"])
+    entry = _entry(api, row["id"])
+    rid, fid = entry["requirement_id"], second["file_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET person_id='human:ben' WHERE id=?", (rid,))
+    restricted = api.patch(f"/api/v2/pages/{fid}", json={"audience": {"people": ["ana"]}}, headers=headers())
+    assert restricted.status_code == 200, restricted.text
+    assert api.get(f"/api/v2/pages/{fid}", headers=headers("ben-test")).status_code == 404
+    assert get(api, "tasks/" + row["id"], "ben-test")["task"]["id"] == row["id"]
+    path = f"/api/v2/tasks/{row['id']}/asks/{rid}/answer"
+    payload = {"value": "ok", "page_version": f"{first['file_id']}@999", "visit_id": row["visit"]["id"]}
+    refused = api.post(path, json=payload, headers=headers("ben-test"))
+    assert refused.status_code >= 400 and "approval" not in refused.json(), refused.text
+    assert all(p["file_id"] not in refused.text for p in (first, second))
+    exact = api.post(
+        path,
+        json={"value": "ok", "page_version": entry["approval"]["page_version"], "visit_id": row["visit"]["id"]},
+        headers=headers("ben-test"),
+    )
+    assert exact.status_code >= 400 and "approval" not in exact.json(), exact.text
+    allowed = api.patch(f"/api/v2/pages/{fid}", json={"audience": None}, headers=headers())
+    assert allowed.status_code == 200, allowed.text
+    unauthorized = _approve(api, row["id"], entry, 999, token="cara-test")
+    assert unauthorized.status_code >= 400 and "approval" not in unauthorized.json(), unauthorized.text
+    assert all(p["file_id"] not in unauthorized.text for p in (first, second))
+    request_headers = headers("ben-test")
+    stale = api.post(path, json=payload, headers=request_headers)
+    assert stale.status_code == 409, stale.text
+    assert {p["file_id"] for p in stale.json()["approval"]["pages"]} == {first["file_id"], fid}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET person_id='human:cara' WHERE id=?", (rid,))
+    replay = api.post(path, json=payload, headers=request_headers)
+    assert replay.status_code >= 400 and "approval" not in replay.json(), replay.text
+    assert all(p["file_id"] not in replay.text for p in (first, second))

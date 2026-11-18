@@ -700,6 +700,13 @@ def parser():
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
+    s.add_argument(
+        "--not-known",
+        dest="not_known",
+        action="store_true",
+        default=None,
+        help="send it to the person even though Tico answered it (its answer did not cover your question)",
+    )
     s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
@@ -781,15 +788,15 @@ def parser():
     s.add_argument(
         "--doc",
         metavar="NAME",
-        help="an .html file as the next version of the task's document NAME (a tab beside the task's chat): Spec, "
-        "QA report, Release report and Invoice are the names a stage approves, and writing one in that stage "
-        "submits it for approval; say what changed with --note",
+        help="an .html file as the task's document NAME: a page linked to the task with that role, the same as "
+        "tico page publish FILE --task ID --as NAME. Spec, QA report, Release report and Invoice are the names a "
+        "stage approves; say what changed in a comment (no --note)",
     )
     s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
-    s.add_argument("--note", help="short note on this version (at most 500 characters)")
+    s.add_argument("--note", help="short note on this version (at most 500 characters); not with --doc")
     s.add_argument(
         "--changed",
         action="append",
@@ -1128,7 +1135,9 @@ def parser():
     s.add_argument("--wait-ms", dest="wait_ms", type=int, default=argparse.SUPPRESS)
     s.add_argument("--full", action="store_true", default=argparse.SUPPRESS)
     s.set_defaults(fn="bot app-shot")
-    s = bot.add_parser("model", help="list the models, or change this bot's model or where it compacts (BotOps)")
+    s = bot.add_parser(
+        "model", help="list the models, or change this bot's model, where it compacts or its output style (BotOps)"
+    )
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
     s.add_argument("--effort")
@@ -1137,6 +1146,17 @@ def parser():
         type=_compact_at,
         help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
         "600000, 700000, 800000, 900000 or 1000000; default puts it back on its model's default",
+    )
+    s.add_argument(
+        "--output-style",
+        dest="output_style",
+        choices=("default", "Concise", "Explanatory", "Learning", "Proactive"),
+        help="Claude Code's output style for its turns; default is Claude Code's own",
+    )
+    s.add_argument(
+        "--verbosity",
+        choices=("default", "low", "medium", "high"),
+        help="Codex's verbosity for its turns; default is the model's own",
     )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")

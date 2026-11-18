@@ -37,7 +37,7 @@ def _budget(api, c, rig):
         holds.RUNAWAY,
         "bot",
         "ops",
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         reason="Tico stopped ops: 300 runs in the last hour. This looks like a runaway loop, not normal work.",
         details={"window": "hour", "runs": 300, "budget": 300},
     )
@@ -48,17 +48,17 @@ def _usage_limit(api, c, rig):
         c,
         {"runner_id": rig["runner_id"], "profile": "", "runtime": "fake", "since": NOW, "until": LATER, "reset": LATER},
     )
-    H.status_set(c, H.KEEPER, "ops", state="limited", focus="Usage limit")
+    H.status_set(c, H.TICO_ACTOR, "ops", state="limited", focus="Usage limit")
 
 
 def _cant_start(api, c, rig):
-    review = H.task_create(c, H.KEEPER, "Find why ops's runs can't start", "Why.", "human:ana", lint=False)
+    review = H.task_create(c, H.TICO_ACTOR, "Find why ops's runs can't start", "Why.", "human:ana", lint=False)
     holds.put(
         c,
         holds.CANT_START,
         "task",
         rig["task_id"],
-        actor=H.KEEPER,
+        actor=H.TICO_ACTOR,
         bot_id="ops",
         reason="x",
         upkeep_task_id=review["id"],
@@ -66,7 +66,7 @@ def _cant_start(api, c, rig):
 
 
 def _task_quarantine(api, c, rig):
-    holds.put(c, holds.QUARANTINE, "task", rig["task_id"], actor=H.KEEPER, bot_id="ops", reason="refusals")
+    holds.put(c, holds.QUARANTINE, "task", rig["task_id"], actor=H.TICO_ACTOR, bot_id="ops", reason="refusals")
 
 
 def _claim_held(api, c, rig):
@@ -152,7 +152,7 @@ def _start(api, monkeypatch):
     made = post(api, "tasks", {"owner": "ops", "title": "Review the change", "body": "Please review it."})
     task_id = made.get("task", made).get("id") or made["refs"]["task"]
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "ops", state="idle", focus="Checked the queue")  # a status row to overlay
+        H.status_set(c, H.TICO_ACTOR, "ops", state="idle", focus="Checked the queue")  # a status row to overlay
         job = c.execute(
             "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON "
             f"cv.id=m.conversation_id WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=?",
@@ -230,7 +230,7 @@ def test_a_bot_on_a_login_another_bot_met_the_limit_on_shows_the_limit(api, monk
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
         _usage_limit(api, c, rig)
-        H.status_set(c, H.KEEPER, "finance", state="idle", focus="Checked the queue")
+        H.status_set(c, H.TICO_ACTOR, "finance", state="idle", focus="Checked the queue")
     with api.app.state.store.read() as c:
         assert (H.status(c, "finance") or {}).get("state") == "idle"
         assert execution.bot_refusal(c, settings, rig["runner_id"], "finance") == "cooling_off"

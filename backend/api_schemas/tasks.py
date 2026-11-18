@@ -24,6 +24,11 @@ SCHEMAS.update(
                 "version": "i",
                 "pipeline_id": "n",
                 "stage_id": "n",
+                "came_from": {
+                    "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
+                    "description": "In a side stage, the last main work stage this task visited in this pipeline. "
+                    "Null when there is no origin. A brief list omits the field when it is null.",
+                },
                 "turn": {
                     "oneOf": [ref("TaskWait"), {"type": "null"}],
                     "description": "The headline wait: whose turn it is",
@@ -88,7 +93,15 @@ SCHEMAS.update(
             },
             stage={
                 "oneOf": [
-                    obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "kind": {"enum": ["work", "done", "closed"]},
+                            "by_hand": "b",
+                            "side": "b",
+                        }
+                    ),
                     {"type": "null"},
                 ],
                 "description": "On the task's own read: the stage it is in",
@@ -117,7 +130,9 @@ SCHEMAS.update(
             },
             stage_since={
                 "type": ["string", "null"],
-                "description": "On a list row: when it entered its stage, else when it was filed",
+                "format": "date-time",
+                "description": "On the task's own read, when it entered its current open visit, or null if it has none. "
+                "On a list row, when it entered its stage, falling back to when it was filed.",
             },
             waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
             to_leave=items(ref("TaskRequirement"))
@@ -246,7 +261,16 @@ SCHEMAS.update(
                 "asked_by": "n",
                 "shows": items({"type": "string"}),
                 # A page requirement: the page attached now, at the version an OK of it is for.
-                "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
+                "page": obj(
+                    {
+                        "file_id": "s",
+                        "version": "i",
+                        "ref": "s",
+                        "page_version": "s",
+                        "pages": items(obj({"file_id": "s", "version": "i", "ref": "s"})),
+                    },
+                    required=["file_id", "version", "ref"],
+                ),
                 # A stage's OK that names nothing to show: the page that counted last on an earlier visit of the task (the
                 # QA page at OK release), to a reader who may open it; to anyone else {removed, label} or absent.
                 "earlier": obj(
@@ -276,6 +300,8 @@ SCHEMAS.update(
                         "file_id": "n",
                         "version": {"type": ["integer", "null"]},
                         "unchecked": "b",
+                        "page_version": "s",
+                        "pages": items(obj({"file_id": "s", "version": "i"})),
                     },
                     required=["document", "visit_id", "file_id", "version", "unchecked"],
                 ),
@@ -324,7 +350,10 @@ SCHEMAS.update(
             required=["tasks", "next_offset", "cursor"],
             actors=ACTORS,
         ),
-        "TaskResult": obj({"task": ref("Task")}),
+        "TaskResult": obj(
+            {"task": ref("Task"), "private_readers": "s"},
+            ["task"],
+        ),  # private_readers: a private task's filer is told who else reads it (backend/private_readers.py)
         "TaskMergeResult": obj({"task": ref("Task"), "closed": ref("Task"), "note": "s"}),
         "TaskMergeChecks": obj(
             {
@@ -444,7 +473,7 @@ SCHEMAS.update(
         ),
         "TaskDetail": obj(
             {
-                "task": ref("Task"),
+                "task": {"allOf": [ref("Task"), obj({"stage_since": "n"})]},
                 "events": "a",
                 "children": "a",
                 # The parent ticket (null: none, or the reader may not read it), with its label and stage
@@ -494,9 +523,12 @@ SCHEMAS.update(
             {
                 "id": "s",
                 "name": "s",
+                "title": "s",
                 "mime": "s",
                 "current_version": "i",
                 "archived": "b",
+                "links": items(ref("PageLinkView")),
+                "writers": items(ref("PageWriter")),
                 "versions": items(ref("TaskFileVersion")),
             }
         ),
@@ -545,11 +577,18 @@ SCHEMAS["TaskDocument"] = obj(
             "description": ", ".join(DOCUMENT_NAMES) + " (the names Tico knows), or a bot's own",
         },
         "file_id": "s",
+        "title": "s",
+        "kind": {"type": "string", "enum": ["html", "markdown"]},
+        "page_id": "s",
+        "links": items(ref("PageLinkView")),
+        "changed_since_ok": "b",
+        "approved_version": "i",
         "version": "i",
         "by": "s",
         "at": "s",
         "versions": items(obj({"n": "i", "by": "s", "at": "s", "note": "n"})),
-    }
+    },
+    required=["name", "file_id", "version", "by", "at", "versions"],
 )
 
 SCHEMAS["Task"]["properties"]["documents"] = items(ref("TaskDocument"))
@@ -610,7 +649,17 @@ SCHEMAS.update(
             }
         ),
         'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
-        'TaskContextPage': obj({'id': 's', 'title': 's', 'version': 'i', 'updated_at': 's'}),
+        'TaskContextPage': obj(
+            {
+                'id': 's',
+                'title': 's',
+                'version': 'i',
+                'updated_at': 's',
+                'links': items(ref('PageLinkView')),
+                'writers': items(ref('PageWriter')),
+                'may_write': 'b',
+            }
+        ),
         'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
         'TaskContext': obj(
             {

@@ -92,7 +92,7 @@ def test_rows_override_by_scope_task_over_bot_over_team_and_the_floor_stays(api)
         last = c.execute("SELECT refs FROM messages WHERE sender_id='human:ana' ORDER BY rowid DESC").fetchone()
         assert json.loads(last[0])["rule"] == "person_message" and "quiet" not in json.loads(last[0])
         # What the bot waits on still wakes it under a `*` row.
-        found = R.judge(c, H.KEEPER, "bot:cpo", "message", {"task": task["id"], "subtask": True}, "Done", None)
+        found = R.judge(c, H.TICO_ACTOR, "bot:cpo", "message", {"task": task["id"], "subtask": True}, "Done", None)
         assert (found.outcome, found.rule) == ("wake", "awaited_subtask")
 
 
@@ -218,12 +218,12 @@ def test_a_tag_rule_assigns_the_task_through_a_reassignment_and_records_the_rule
             "AND kind='reassign'",
             (task["id"],),
         ).fetchone()
-        assert tuple(moved) == (H.KEEPER, "bot:cpo", "bot:ops", f"Rule {row['id']}")
+        assert tuple(moved) == (H.TICO_ACTOR, "bot:cpo", "bot:ops", f"Rule {row['id']}")
         assert actions(c, row["id"]) == [{"rule": row["id"], "action": "assign", "owner": "bot:ops"}]
 
 
 def test_an_assign_rule_never_hands_a_private_task_to_someone_who_cannot_read_it(api):
-    # Rules act as the keeper, which passes the private-task check: the action itself must keep the task to its readers.
+    # Rules act as Tico, which passes the private-task check: the action itself must keep the task to its readers.
     setup(api)
     with api.app.state.store.transaction() as c:
         H.tag_create(c, "human:ana", "billing", mover=True)
@@ -242,7 +242,7 @@ def test_an_assign_rule_never_hands_a_private_task_to_someone_who_cannot_read_it
 
 
 def test_a_rule_never_changes_a_private_task_its_writer_cannot_read(api):
-    # The keeper passes the private-task check, so the writer's own access is what keeps a rule off another's task.
+    # Tico passes the private-task check, so the writer's own access is what keeps a rule off another's task.
     setup(api)
     with api.app.state.store.transaction() as c:
         H.tag_create(c, "human:ana", "urgent", mover=True)
@@ -320,6 +320,9 @@ def test_tag_actions_add_and_remove_once_and_cannot_retrigger_their_rule(api):
             "SELECT actor_id AS actor, note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='labels' ORDER BY rowid",
             (task["id"],),
         ).fetchall()
-        assert [tuple(r) for r in labels[1:]] == [(H.KEEPER, f"Rule {drop['id']}"), (H.KEEPER, f"Rule {add['id']}")]
+        assert [tuple(r) for r in labels[1:]] == [
+            (H.TICO_ACTOR, f"Rule {drop['id']}"),
+            (H.TICO_ACTOR, f"Rule {add['id']}"),
+        ]
         assert [a["changed"] for a in actions(c, add["id"])] == [True, False]
         assert [a["changed"] for a in actions(c, drop["id"])] == [True]

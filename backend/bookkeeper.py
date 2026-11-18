@@ -126,13 +126,13 @@ def grant_defaults(c):
         return []
     if not _has_event(c, "bookkeeper.rights_granted"):
         added = FA.grant_defaults(c, ACTOR)
-        H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
-        H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
         return added
     if not _has_event(c, "bookkeeper.rights_version"):
         added = FA.grant_defaults(c, ACTOR, [FA.RIGHT_RULES])
-        H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
-        H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
         return added
     return []
 
@@ -173,7 +173,7 @@ def seed_bot_payment_rule(c, at: str | None = None) -> bool:
     if not FR.is_set_up(c) or _has_event(c, BOT_PAYMENT_EVENT):
         return False
     name, words, when, outcome, examples = BOT_PAYMENT
-    by = finance_owner(c) or H.KEEPER
+    by = finance_owner(c) or H.TICO_ACTOR
     made = SK.seed_rule(
         c,
         rule_id=BOT_PAYMENT_RULE,
@@ -185,7 +185,7 @@ def seed_bot_payment_rule(c, at: str | None = None) -> bool:
         by=by,
         at=at or H.now(),
     )
-    H.event(c, H.KEEPER, BOT_PAYMENT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "made": made})
+    H.event(c, H.TICO_ACTOR, BOT_PAYMENT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "made": made})
     return made
 
 
@@ -229,13 +229,15 @@ def grant_view(c, owner: str, at: str | None = None):
         made = grant.id
         SA.insert_grant(c, grant, owner, when)
         SA.bump_view(c, f"grant {made}", when)
-    H.event(c, H.KEEPER, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything", "by": owner})
+    H.event(
+        c, H.TICO_ACTOR, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything", "by": owner}
+    )
     if made:
-        H.notice(c, H.KEEPER, owner, VIEW_NOTICE, refs={"finance_view_grant": made})
+        H.notice(c, H.TICO_ACTOR, owner, VIEW_NOTICE, refs={"finance_view_grant": made})
     for row in c.execute(
-        f"SELECT id FROM {H.TASKS} tasks WHERE title=? AND requester_id=? AND status='open'", (VIEW_TITLE, H.KEEPER)
+        f"SELECT id FROM {H.TASKS} tasks WHERE title=? AND requester_id=? AND status='open'", (VIEW_TITLE, H.TICO_ACTOR)
     ).fetchall():
-        H.task_close(c, H.KEEPER, row["id"], VIEW_CLOSED_NOTE)
+        H.task_close(c, H.TICO_ACTOR, row["id"], VIEW_CLOSED_NOTE)
     return made
 
 
@@ -278,7 +280,7 @@ def filing(c, owner):
     if not found:
         return None, None
     last = c.execute(
-        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND retired_at IS NULL "
+        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND side=0 AND retired_at IS NULL "
         "ORDER BY position DESC LIMIT 1",
         (found[0],),
     ).fetchone()
@@ -402,7 +404,7 @@ def _open_check(c, name=TITLE):
         c,
         f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? "
         "AND status='open' ORDER BY created_at DESC LIMIT 1",
-        (ACTOR, H.KEEPER, name + " (%"),
+        (ACTOR, H.TICO_ACTOR, name + " (%"),
     )
 
 
@@ -415,7 +417,7 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
 
         if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title)
+        H.task_update(c, H.TICO_ACTOR, open_task["id"], title=title)
         # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
         H._wake(
             c,
@@ -430,7 +432,7 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         title,
         body,
         ACTOR,
@@ -485,7 +487,7 @@ def _own_private_work(c, task_id: str) -> bool:
     return bool(
         row
         and row["owner_id"] == ACTOR
-        and row["requester_id"] == H.KEEPER
+        and row["requester_id"] == H.TICO_ACTOR
         and H.task_private(c, row)
         and row["title"].startswith((TITLE + " (", WATCH_TITLE + " ("))
     )
@@ -600,7 +602,7 @@ def watch(c, auth, at: str) -> dict[str, Any]:
         if shown:
             task_id, state = deliver(c, body, len(shown), name=WATCH_TITLE, event=WATCH_EVENT)
             _set_listed(c, task_id, [item["key"] for item in shown])
-            H.event(c, H.KEEPER, "bookkeeper.watch", SLUG, {"items": len(shown), "new": len(fresh), "state": state})
+            H.event(c, H.TICO_ACTOR, "bookkeeper.watch", SLUG, {"items": len(shown), "new": len(fresh), "state": state})
             left_out = {item["key"] for item in pool} - {item["key"] for item in shown}
         else:
             left_out = {item["key"] for item in pool}
@@ -623,8 +625,8 @@ def _reach_owner(c, auth, task_id: str) -> None:
     reads for them and the Finance Owner, never for the rest of the team."""
     owner = _owner(c, auth)
     row = H.task(c, task_id)
-    if owner and row is not None and H.task_reach_refusal(c, H.KEEPER, row, owner) is None:
-        H.task_reach(c, H.KEEPER, row, owner)
+    if owner and row is not None and H.task_reach_refusal(c, H.TICO_ACTOR, row, owner) is None:
+        H.task_reach(c, H.TICO_ACTOR, row, owner)
 
 
 def rules_digest(c, auth, at: str) -> dict[str, Any]:
@@ -645,7 +647,7 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
     into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         f"{DIGEST_TITLE} ({len(rules)})",
         body,
         ACTOR,
@@ -659,7 +661,7 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         trigger_source=DIGEST_EVENT,
     )
     _reach_owner(c, auth, made["id"])
-    H.event(c, H.KEEPER, "bookkeeper.rules_digest", SLUG, {"rules": len(rules)})
+    H.event(c, H.TICO_ACTOR, "bookkeeper.rules_digest", SLUG, {"rules": len(rules)})
     return {
         "items": len(rules),
         "words": f"{len(rules)} new posting rule{'' if len(rules) == 1 else 's'}",
@@ -692,7 +694,7 @@ def check(c, auth, at):
                 "stamp=excluded.stamp, seen_at=excluded.seen_at",
                 (item["key"], item["stamp"], at),
             )
-        H.event(c, H.KEEPER, "bookkeeper.check", SLUG, {"items": len(items), "new": len(fresh), "state": state})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.check", SLUG, {"items": len(items), "new": len(fresh), "state": state})
     c.execute("DELETE FROM bookkeeper_seen WHERE seen_at<?", (H.shift(at, days=-KEEP_DAYS),))
     words = f"{len(fresh)} new, {len(items)} in the queue" if fresh else "Nothing new"
     return {"items": len(fresh), "words": words, "task": task_id, "state": state}

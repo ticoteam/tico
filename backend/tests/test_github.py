@@ -157,14 +157,14 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
         key = 'github-task-wake:' + task['id']
         burst = R.metadata(c, key)
         assert len(burst['items']) == 2
-        # The notice wait owns the delay at enqueue time; GitHub adds no second debounce.
+        # News about a task's PR is its owner's turn: no notice wait, and GitHub adds no second debounce (#546).
         assert G.flush_wakes(c) == [task['id']]
         assert G.flush_wakes(c) == []
         assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before + 1
         message = c.execute('SELECT body FROM messages ORDER BY created_at DESC LIMIT 1').fetchone()[0]
         assert '2 review comments' in message and 'tico#412' in message
         job = c.execute("SELECT held,wake_preset FROM jobs WHERE bot_id='cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
-        assert job['held'] and job['wake_preset'] is None  # held by the notice wait; no preset is recorded
+        assert not job['held'] and job['wake_preset'] is None  # starts at once; no preset is recorded
 
 
 def test_each_merged_pr_ships_once_the_release_contains_it(api):
@@ -365,7 +365,7 @@ def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
 
     def broken(c, task_id, *args, **kwargs):
         if task_id == tasks[0]["id"]:
-            H.event(c, H.KEEPER, "wake.partial", task_id)
+            H.event(c, H.TICO_ACTOR, "wake.partial", task_id)
             raise RuntimeError("bad conversation")
         return tell(c, task_id, *args, **kwargs)
 

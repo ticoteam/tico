@@ -1054,6 +1054,20 @@ fn unstopped(flags: &Flags) -> Result<(), Fail> {
     Ok(())
 }
 
+/// Whether a turn takes the cold sign-in path (one at a time on this computer, `claude_cold_start`): its runtime renews
+/// a stale login on its first call, and the login it reads (the profile's, else the computer's own) is stale. A turn
+/// that a company plan signs in (`plan_signs_in`: a setup-token in its environment, or a full login whose token the
+/// plan's refresher keeps fresh in the turn's own config home) reads neither, so it never waits.
+fn cold_sign_in(
+    runtime: &str,
+    profile: Option<&crate::profiles::Profile>,
+    plan_signs_in: bool,
+) -> bool {
+    !plan_signs_in
+        && crate::harness_tools::caps(runtime, "").serial_cold_start
+        && crate::hosts::token_cold(runtime, profile)
+}
+
 /// One cold Claude sign-in renewal at a time on this computer (service.py claude_cold_start).
 fn claude_cold_start() -> &'static tokio::sync::Mutex<()> {
     static L: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -1952,6 +1966,9 @@ impl Runner {
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
+        // The key a thread of this turn's subscription was saved under before every Claude plan shared one
+        // (model_subscriptions::Delivered::legacy_binding).
+        let mut legacy_conv: Option<String> = None;
         // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
@@ -2141,8 +2158,12 @@ impl Runner {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
             }
-            if let Some(b) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).and_then(|d| d.binding()) {
-                conv.push_str(&b);      // nor across the computer's login and its subscriptions
+            if let Some(d) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime) {
+                // nor across the computer's login and its subscriptions; one Claude plan's thread resumes on another
+                legacy_conv = d.legacy_binding().map(|old| format!("{conv}{old}"));
+                if let Some(b) = d.binding() {
+                    conv.push_str(&b);
+                }
             }
             let start_attempt = attempt.clone();
             if p.has_checkout() {
@@ -2167,12 +2188,17 @@ impl Runner {
             }
             // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
             // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
-            conv.push_str(self.pre_start_lock(&start_attempt, &flags, async {
+            let placed = self.pre_start_lock(&start_attempt, &flags, async {
                 self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
-            }).await?);
+            }).await?;
+            conv.push_str(placed);
+            if let Some(old) = legacy_conv.as_mut() {
+                old.push_str(placed);
+            }
             if source_resume.is_some() {
                 // Save and lookup share the actual login binding and confirmed checkout placement.
                 conv = crate::source_resume::scope(&attempt, selected.as_ref(), p.session_path.is_some());
+                legacy_conv = None;
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
@@ -2208,7 +2234,7 @@ impl Runner {
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
             release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat;
             if release_run {
-                let adopted = if conv == key { adopted_key(&key) } else { None };
+                let adopted = if conv == key { adopted_key(&key) } else { legacy_conv.clone() };
                 one_off = self.state.session(&bot, &conv, &session_runtime)?.is_some()
                     || match adopted {
                         Some(old) => self.state.session(&bot, &old, &session_runtime)?.is_some(),
@@ -2226,6 +2252,22 @@ impl Runner {
                     previous = self.state.session(&bot, &old, &session_runtime)?;
                     if let Some(thread) = previous.as_ref() {
                         self.state.save_session(&bot, &key, &session_runtime, thread)?;
+                    }
+                }
+            }
+            if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) {
+                // A Claude plan's thread an older runner saved under the plan's own key is taken over once, unless a
+                // Clear (or a person's change of sign-in) moved its epoch since.
+                if let Some(old) = legacy_conv.as_deref() {
+                    let moved = match clear_epoch(&attempt, &key) {
+                        Some((conversation_id, epoch)) => self.state.epoch_moved(&bot, &conversation_id, old, epoch)?,
+                        None => false,
+                    };
+                    if !moved {
+                        previous = self.state.session(&bot, old, &session_runtime)?;
+                        if let Some(thread) = previous.as_ref() {
+                            self.state.save_session(&bot, &conv, &session_runtime, thread)?;
+                        }
                     }
                 }
             }
@@ -2273,6 +2315,7 @@ impl Runner {
             };
             let h = host.insert(made);
             h.track_allocation(flags.harness_allocated.clone());
+            h.set_attempt(&aid);
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
@@ -2300,14 +2343,23 @@ impl Runner {
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
+                output_style: hosts::output_style(&config),
+                verbosity: hosts::verbosity(&config),
             };
             let mut resumed = false;
             if side_run && previous.is_none() {
                 session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
             } else if let Some(prev) = &previous {
                 // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
-                // computer does not have, or a second refusal, gives it up.
-                match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                // computer does not have, or a second refusal, gives it up. One whose transcript the provider refused
+                // (continuity::transcript_refused, after a move to another plan) is not tried again.
+                let refused = self.state.repo_rules(&crate::continuity::refused_key(prev), None)?.as_deref() == Some("1");
+                let tried = if refused {
+                    Err((false, crate::continuity::TRANSCRIPT_REFUSED.to_string()))
+                } else {
+                    self.resume_saved(h, prev, &settings, &attempt, &flags).await
+                };
+                match tried {
                     Ok(t) => {
                         thread = Some(t);
                         resumed = true;
@@ -2387,7 +2439,10 @@ impl Runner {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
                 }
             }
-            let cold = crate::harness_tools::caps(&runtime, "").serial_cold_start && crate::hosts::token_cold(&runtime, selected.as_ref());
+            // A turn a company plan signs in (placed above, not held) never reads the computer's own login, so that
+            // login's age is no reason to wait for the cold sign-in path.
+            let plan_signs_in = held.is_none() && crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).is_some();
+            let cold = cold_sign_in(&runtime, selected.as_ref(), plan_signs_in);
             let mut cold_guard = if cold { Some(self.during_drain(&aid, self.wait_cold_start(&attempt, &flags)).await?) } else { None };
             if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
@@ -2543,6 +2598,18 @@ impl Runner {
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
             h.compaction_refresh(&th, None);
+            if resumed && drove.outcome == "failed" && !drove.acted
+                && [goal.failure.as_deref().unwrap_or_default(), drove.reply.as_str()].iter().any(|e| crate::continuity::transcript_refused(e))
+            {
+                // The provider will not take this session's transcript (a plan moved to another account it does not
+                // accept it from): never silently, the next turn starts a new session told what the room said since.
+                for thread in [th.clone(), h.session_id(&th)] {
+                    self.state.repo_rules(&crate::continuity::refused_key(&thread), Some("1"))?;
+                }
+                let line = "The provider refused this session's transcript; the next turn starts a new session, told what was said since.";
+                log(&format!("Tico runner: {bot}: {line}"));
+                self.diagnose(&aid, line);
+            }
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
@@ -2829,6 +2896,7 @@ impl Runner {
                 }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
+                h.set_attempt(&aid);
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -2854,6 +2922,8 @@ impl Runner {
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
+                    output_style: hosts::output_style(&config),
+                    verbosity: hosts::verbosity(&config),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
@@ -3483,12 +3553,19 @@ impl Runner {
             );
         }
         let active = self.active.lock().unwrap().len();
-        let completion = crate::perf::with_snapshot(Value::Object(completion), active)
+        let mut completion = crate::perf::with_snapshot(Value::Object(completion), active)
             .await
             .as_object()
             .unwrap()
             .clone();
         mark("finished", &aid);
+        // Where the turn's time went, up to here, kept with its result: saved before sending, so a resent result is
+        // the same. An older server refuses the field (`run_timings`).
+        if crate::follow::feature("run_timings") {
+            if let Some(timings) = crate::flight::timings(&aid) {
+                completion.insert("timings".into(), timings);
+            }
+        }
         // A nightly memory tidy pass commits and pushes nothing, whatever ended its turn: what it changed in its
         // checkout is discarded here, before the turn settles, and the run log says what it was (criterion 24).
         if crate::continuity::memory_pass(&attempt["config"]) {
@@ -3917,6 +3994,20 @@ mod tests {
             assert_eq!(crate::profiles::claude_token_cold(None), !warm);
             PrivateHome(home)
         }
+    }
+
+    #[test]
+    fn a_turn_a_plan_signs_in_skips_the_cold_sign_in_path() {
+        let stale = PrivateHome::claude(false);
+        // The computer's own Claude login is stale: a turn on it waits its turn to renew it.
+        assert!(cold_sign_in("claude", None, false));
+        // A turn signed in by a company plan never reads that login, so the stale file holds it up for nothing.
+        assert!(!cold_sign_in("claude", None, true));
+        drop(stale);
+        let _warm = PrivateHome::claude(true);
+        assert!(!cold_sign_in("claude", None, false));
+        // Other runtimes renew nothing on a first call.
+        assert!(!cold_sign_in("codex", None, false));
     }
 
     impl Drop for PrivateHome {
@@ -5121,6 +5212,31 @@ mod tests {
     }
 
     /// A server that answers `{}` to every request (events: acknowledged) and keeps each one: (method, path, JSON body).
+    /// What `credential-runtime` answers a turn whose run token is the key: its grants and subscriptions.
+    fn grants() -> &'static Mutex<std::collections::HashMap<String, Value>> {
+        static GRANTS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Value>>> =
+            std::sync::OnceLock::new();
+        GRANTS.get_or_init(Default::default)
+    }
+
+    /// The grants of the turn whose run token a request's head carries.
+    fn granted(head: &str) -> Option<Value> {
+        let grants = grants().lock().unwrap();
+        grants
+            .iter()
+            .find(|(token, _)| head.contains(token.as_str()))
+            .map(|(_, answer)| answer.clone())
+    }
+
+    /// A turn signed in with the Claude plan `id` (a setup-token subscription): its `attempt` fields for the rig.
+    fn on_plan(id: &str) -> Value {
+        let token = format!("run-{id}-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(token.clone(), json!({"subscriptions": [{
+            "id": id, "runtime": "claude", "kind": "claude_token", "env": "CLAUDE_CODE_OAUTH_TOKEN",
+            "value": format!("sk-ant-oat01-synthetic-{id}-0123456789abcdef"), "revision": 1, "billing": "subscription"}]}));
+        json!({"attempt": {"token": token, "credential_vault": true}})
+    }
+
     async fn recording_server() -> (
         String,
         Arc<Mutex<Vec<(String, String, Value)>>>,
@@ -5286,6 +5402,7 @@ mod tests {
                         None if model.is_some() => model.unwrap().1,
                         None if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         None if path.ends_with("/start-place") => json!({"reserved": !waiting}),
+                        None if path.contains("/credential-runtime") => granted(&text).unwrap_or_else(|| json!({})),
                         None => json!({}),
                     }
                     .to_string();
@@ -6280,6 +6397,7 @@ mod tests {
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
              if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
+             if [ -e '{d}/refuses-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"API Error: 400 invalid_request_error: messages.1.content.0: Invalid signature in thinking block\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
@@ -6679,6 +6797,114 @@ mod tests {
                 "{p}"
             );
         }
+    }
+
+    /// Each Claude process's arguments, one line per process.
+    fn claude_args(dir: &Path) -> Vec<Vec<String>> {
+        std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(|l| l.split_whitespace().map(String::from).collect())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_move_to_another_claude_plan_resumes_the_same_session_there() {
+        // The computer's set moves from Plan A to Plan B and back between turns: Claude Code's transcript is the
+        // bot's own, so each next turn `--resume`s the session the first began, on the plan it moved to.
+        let (threads, prompts, completions, _, _, dir) = claude_rig_kept(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-a")],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+        )
+        .await;
+        let args = claude_args(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert!(
+            args[0]
+                .windows(2)
+                .any(|w| w == ["--session-id", threads[0].as_str()]),
+            "{args:?}"
+        );
+        for n in [1, 2] {
+            assert!(
+                args[n]
+                    .windows(2)
+                    .any(|w| w == ["--resume", threads[0].as_str()]),
+                "{args:?}"
+            );
+            assert_eq!(session_of(&completions[n]).0, "resumed");
+        }
+        assert!(!prompts[1].contains("New session:"), "{}", prompts[1]);
+    }
+
+    #[tokio::test]
+    async fn a_session_missing_after_a_move_to_another_plan_starts_fresh_with_the_handoff_note() {
+        let (threads, prompts, completions, _) = claude_rig(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-b")],
+            &[],
+            &[1],
+            &[],
+            json!({}),
+            |_| (),
+        )
+        .await;
+        // Process 1 finds no transcript; Claude begins a new session in its place, told what was said since.
+        assert_eq!(prompts.len(), 4, "{prompts:?}");
+        assert!(
+            prompts[2].contains("New session: your previous session here was not on this computer")
+                && prompts[2].contains("Question 1"),
+            "{}",
+            prompts[2]
+        );
+        assert_eq!(session_of(&completions[1]).1, json!("not_found"));
+        assert_eq!(session_of(&completions[2]).0, "resumed");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+    }
+
+    #[tokio::test]
+    async fn a_session_the_provider_refuses_on_the_new_plan_is_replaced_and_says_so() {
+        // Turn 1 resumes on Plan B and Claude's API refuses the transcript: that turn fails and says so, and the next
+        // starts a new session, told what was said since and why.
+        let (threads, prompts, completions, _, seen, dir) = claude_rig_each_turn(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-b")],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, projects| {
+                if n == 1 {
+                    std::fs::write(projects.parent().unwrap().join("refuses-1"), "").unwrap();
+                }
+            },
+        )
+        .await;
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert_eq!(threads[1], threads[0]);
+        assert_eq!(completions[1]["outcome"], "failed");
+        let told = seen.iter().any(|(_, path, body)| {
+            path.ends_with("/attempts/a-claude-1/events")
+                && body
+                    .to_string()
+                    .contains("refused this session's transcript")
+        });
+        assert!(told, "{seen:?}");
+        assert_ne!(threads[2], threads[0], "{threads:?}");
+        assert!(
+            prompts[2].contains("New session: your previous session here could not be resumed")
+                && prompts[2].contains("Question 2"),
+            "{}",
+            prompts[2]
+        );
+        let (kind, why, detail) = session_of(&completions[2]);
+        assert_eq!((kind.as_str(), why), ("new", json!("resume_failed")));
+        assert_eq!(detail, json!(crate::continuity::TRANSCRIPT_REFUSED));
     }
 
     #[tokio::test]
@@ -8393,7 +8619,7 @@ for line in sys.stdin:
             std::fs::write(&script, r#"import json, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(10)
@@ -8439,7 +8665,7 @@ print(json.dumps({'type':'result','subtype':'success','result':'Acme completed o
         std::fs::write(&script, r#"import json, os, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(20)  # A failed guard cannot leave this synthetic process behind.
@@ -8532,7 +8758,7 @@ else:
         std::fs::write(&script, r#"import json, os, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(20)
@@ -8663,7 +8889,7 @@ else:
         std::fs::write(&script, r#"import json, pathlib, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 with (root / 'argv.jsonl').open('a') as f:

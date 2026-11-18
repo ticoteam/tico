@@ -313,7 +313,7 @@ def unsigned(conn: "sqlite3.Connection", row: Row) -> str | None:
     from .. import task_engine as E
     from .. import task_requirements as R
 
-    work = [s for s in E.stages(conn, row["pipeline_id"]) if s["kind"] == "work"]
+    work = E.main_work(E.stages(conn, row["pipeline_id"]))
     at = next((i for i, s in enumerate(work) if s["id"] == row["stage_id"]), 0)
     for stage in reversed(work[:at]):
         needed = [r for r in R.on_stage(conn, stage["id"]) if R.people_only(r)]

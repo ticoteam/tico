@@ -124,12 +124,22 @@ def blockers_of(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str
 
 def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> None:
     """Read the open dependencies of many tasks in one statement, for the `blockers` reads that follow."""
+    import json
+
     values = read_cache.cache(conn)
     if values is None:
         return
-    unread = sorted({str(t) for t in task_ids if t and (KIND, str(t)) not in values})
+    ids = {str(t) for t in task_ids if t}
+    unread = sorted(t for t in ids if (KIND, t) not in values)
     for task_id, found in _open_of(conn, unread).items():
         values[(KIND, task_id)] = found
+    # Each blocker's number, title and stage, for the "Blocked by #304 ..., in Build" lines that follow: one statement
+    # for the list, not one per blocker.
+    named = sorted({blocker for t in ids for blocker, _ in values.get((KIND, t)) or ()})
+    if named:
+        rows = conn.execute(_NAMED.replace("t.id=?", "t.id IN (SELECT value FROM json_each(?))"), (json.dumps(named),))
+        found = {str(row[0]): row for row in rows}
+        read_cache.prime(conn, _NAMED, {(blocker,): found.get(blocker) for blocker in named})
 
 
 def blocked(conn: "sqlite3.Connection", task_id: str) -> bool:

@@ -142,10 +142,10 @@ def webhook_result(conn, event_id, status):
 
 def _history(conn, item, rule, action, result):
     text = f"Trigger: {item['event']}. Action: {action}. Rule {rule['id']}: {result}"
-    H._task_event(conn, item["task"], H.KEEPER, "rule", None, rule["id"], text)
+    H._task_event(conn, item["task"], H.TICO_ACTOR, "rule", None, rule["id"], text)
     H.event(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "rule.task",
         item["task"],
         {"rule": rule["id"], "trigger": item["event"], "action": action, "result": result},

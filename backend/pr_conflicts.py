@@ -105,7 +105,7 @@ def applies(conn: "sqlite3.Connection", row: Row) -> bool:
     stage: Row = row.get("stage") or {}
     if row.get("status") != "open" or stage.get("kind") != "work" or stage.get("by_hand"):
         return False
-    work = [s for s in E.stages(conn, str(row["pipeline_id"])) if s["kind"] == "work"]
+    work = E.main_work(E.stages(conn, str(row["pipeline_id"])))
     at = next((i for i, s in enumerate(work) if s["id"] == stage.get("id")), None)
     return at is not None and any(GS.queues_prs(s) for s in work[at + 1 :])
 
@@ -117,9 +117,7 @@ def builder(conn: "sqlite3.Connection", row: Row) -> str | None:
     from . import task_engine as E
     from . import task_requirements as R
 
-    for stage in E.stages(conn, str(row["pipeline_id"])):
-        if stage["kind"] != "work":
-            continue
+    for stage in E.main_work(E.stages(conn, str(row["pipeline_id"]))):
         if any(
             r["kind"] == "item" and r.get("source") == "github" and r.get("condition") == "pr_open"
             for r in R.on_stage(conn, str(stage["id"]))

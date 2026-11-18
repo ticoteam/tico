@@ -146,12 +146,15 @@ def grouped(conn, task_ids, visible_sql="1"):
         # probe every page/visible-task pair through the composite relationship key.
         rows = conn.execute(
             "SELECT * FROM (SELECT r.from_task AS here, CASE WHEN r.kind='related' THEN 'both' ELSE 'out' END "
-            "AS direction, r.kind, r.created_at AS at, r.rowid AS rid, r.until, t.id, t.title, t.status, t.owner_id "
+            "AS direction, r.kind, r.created_at AS at, r.rowid AS rid, r.until, t.id, t.title, t.status, t.owner_id, "
+            "t.number, s.name AS stage "
             "FROM task_relations r INDEXED BY task_relations_from CROSS JOIN tasks t ON t.id=r.to_task "
+            "LEFT JOIN stages s ON s.id=t.stage_id "
             f"WHERE r.from_task IN ({marks}) "
             "UNION ALL SELECT r.to_task, CASE WHEN r.kind='related' THEN 'both' ELSE 'in' END, r.kind, r.created_at, "
-            "r.rowid, r.until, t.id, t.title, t.status, t.owner_id "
+            "r.rowid, r.until, t.id, t.title, t.status, t.owner_id, t.number, s.name "
             "FROM task_relations r INDEXED BY task_relations_to CROSS JOIN tasks t ON t.id=r.from_task "
+            "LEFT JOIN stages s ON s.id=t.stage_id "
             f"WHERE r.to_task IN ({marks}) AND r.kind<>'parent') x "
             # The other end's visibility by primary key, not a list of every visible task.
             f"WHERE EXISTS (SELECT 1 FROM tasks WHERE tasks.id=x.id AND ({visible_sql})) ORDER BY at, rid",
@@ -167,8 +170,8 @@ def grouped(conn, task_ids, visible_sql="1"):
             }
             if row["kind"] in ("after", "depends_on"):
                 # An order reads "After #40 · Merge", a dependency "Blocked by #304 · Build": the other task's number
-                # and the stage it is in.
-                entry.update(_place(conn, row["id"]))
+                # and the stage it is in, read with the relation itself.
+                entry.update({"number": row["number"], "stage": row["stage"]})
             if row["kind"] == "depends_on":
                 entry["since"] = row["at"]  # "Blocked since Nov 13"
             if row["until"]:
@@ -197,14 +200,6 @@ def grouped(conn, task_ids, visible_sql="1"):
                 }
             ]
     return out
-
-
-def _place(conn, task_id):
-    """{number, stage}: a task's number and the name of the stage it is in."""
-    found = conn.execute(
-        "SELECT t.number, s.name FROM tasks t LEFT JOIN stages s ON s.id=t.stage_id WHERE t.id=?", (task_id,)
-    ).fetchone()
-    return {"number": found[0], "stage": found[1]} if found else {"number": None, "stage": None}
 
 
 def for_prompt(conn, task_id, readable):
@@ -303,7 +298,7 @@ def _mine(conn, actor, row, mover):
         )
     )
     mine = mine or H.task_ancestor_party(conn, actor, row) or H.general_manager_acts(conn, actor, row)
-    if not mine and not mover and actor != H.KEEPER:
+    if not mine and not mover and actor != H.TICO_ACTOR:
         H.refuse(
             conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers"
         )
@@ -312,7 +307,7 @@ def _mine(conn, actor, row, mover):
 def _mover(conn, actor, mover):
     H = _H()
     if mover is None:
-        mover = actor == H.KEEPER or H.is_human(actor) and H.can_move(conn, actor)
+        mover = actor == H.TICO_ACTOR or H.is_human(actor) and H.can_move(conn, actor)
     return bool(mover)
 
 

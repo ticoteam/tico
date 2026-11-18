@@ -11,6 +11,9 @@ from backend import growth_computed as GX
 from backend.tests.helpers.api import get, headers, post, put
 from backend.tests.helpers.company import bot
 from backend.tests.helpers.growth_computed import TODAY, as_csv, september
+from backend.tests.helpers.growth_cards import classic_cards  # noqa: F401 (the fixture)
+
+pytestmark = pytest.mark.usefixtures("classic_cards")  # these test the Number and Channels cards
 
 SEPT = "2026-09"
 CHOOSE = {"channel": "search-ads", "month": SEPT, "field": "kept_d30"}

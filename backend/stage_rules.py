@@ -652,7 +652,7 @@ def ensure_defaults(conn: Any) -> list[str]:
                 json.dumps(rule["then_params"]),
                 rule["reason"],
                 rule["builtin"],
-                _core.KEEPER,
+                _core.TICO_ACTOR,
                 ts,
                 ts,
             ),
@@ -740,7 +740,7 @@ def sweep_owners(conn: Any) -> list[str]:
         if row["stage"].get("owner") == "assignee" or _picks_owner(row["stage"]):
             fields["assignee_id"] = None
         E._write(conn, task_id, **fields)
-        record(conn, task_id, rule, line, _core.KEEPER, data={"owner": row.get("owner_id"), "sweep": True})
+        record(conn, task_id, rule, line, _core.TICO_ACTOR, data={"owner": row.get("owner_id"), "sweep": True})
         pipe: Any = row.get("pipeline") or {}
         manager = pipe.get("manager_id")
         changed.setdefault(manager or "", []).append({**row, "line": line})
@@ -809,8 +809,8 @@ def sweep_snoozes(store: Any) -> list[str]:
             row = E.task(c, task_id)
             if not row or not row.get("snooze"):
                 continue
-            E.unsnooze(c, task_id, _core.KEEPER, line)
-            record(c, task_id, rule, line, _core.KEEPER, data={"sweep": True})
+            E.unsnooze(c, task_id, _core.TICO_ACTOR, line)
+            record(c, task_id, rule, line, _core.TICO_ACTOR, data={"sweep": True})
             pipe: Any = row.get("pipeline") or {}
             told.setdefault(str(pipe.get("manager_id") or ""), []).append((row, line))
         for manager, found_rows in told.items():

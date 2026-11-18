@@ -14,7 +14,7 @@ The route is an upsert of the work as the other system sees it now. The pair (se
 system's own `key` for the work) names one task, so a call never depends on an earlier one: the
 first call for a pair files the task, a later call changes what differs, `close` closes it, a call
 without `close` reopens a closed one, and a close for work that never had a task files nothing.
-Tasks are filed by Tico itself (the keeper, as routines file theirs), with every rule a create
+Tasks are filed by Tico itself, as routines file theirs, with every rule a create
 has, and their description ends with a line naming the key's label, which is what a person sees.
 """
 
@@ -167,13 +167,13 @@ def upsert(c, auth, who, body):
         # The pair is what makes it one task, so two pieces of work may share a title and an owner.
         row = H.task_create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             body.title,
             body.body + footer,  # the other system's words, and the line that names it: Tico's
             owner,
             body.due,
             deduplicate=False,
-            conversation_id=rooms.task_conversation_id(c, auth, owner, H.KEEPER),
+            conversation_id=rooms.task_conversation_id(c, auth, owner, H.TICO_ACTOR),
             labels=body.labels or [],
         )
         c.execute(
@@ -181,7 +181,7 @@ def upsert(c, auth, who, body):
             (key_id, body.key, row["id"], H.now()),
         )
         for url in dict.fromkeys(body.links):
-            H.task_link(c, H.KEEPER, row["id"], url)
+            H.task_link(c, H.TICO_ACTOR, row["id"], url)
         created = changed = True
     elif row and not (body.close and row["status"] == "closed"):  # closed, and to stay closed: as it is
         changed = _apply(c, body, row, footer, who.token_label)
@@ -202,11 +202,11 @@ def _apply(c, body, row, footer, label):
     task opens again, then goes to its new owner, then takes the new fields."""
     task_id, changed = row["id"], False
     if row["status"] == "closed" and not body.close:  # no `close`: the work is open again over there
-        H.task_move(c, H.KEEPER, task_id, H.TASK_REOPEN, f"Open again in {label}.")
+        H.task_move(c, H.TICO_ACTOR, task_id, H.TASK_REOPEN, f"Open again in {label}.")
         changed = True
     owner = _owner(c, body.owner) if body.owner else None
     if owner and owner != (H.task(c, task_id) or {}).get("owner_id"):
-        H.task_reassign(c, H.KEEPER, task_id, owner, f"Given to them in {label}.")
+        H.task_reassign(c, H.TICO_ACTOR, task_id, owner, f"Given to them in {label}.")
         changed = True
     row = H.task(c, task_id)
     if not row:
@@ -218,7 +218,7 @@ def _apply(c, body, row, footer, label):
     }
     fields = {name: value for name, value in wanted.items() if value is not None and value != current[name]}
     if fields:
-        H.task_update(c, H.KEEPER, task_id, **fields)
+        H.task_update(c, H.TICO_ACTOR, task_id, **fields)
     # New words from the other system: said on the task (a task has no description to rewrite), once each.
     said = body.body + footer if body.body is not None else None
     if said is not None and said.strip() not in H.task_words(c, task_id):
@@ -229,10 +229,10 @@ def _apply(c, body, row, footer, label):
     have = {link["url"] for link in H.task_links(c, task_id)}
     links = [url for url in dict.fromkeys(body.links) if url not in have]
     for url in links:
-        H.task_link(c, H.KEEPER, task_id, url)
+        H.task_link(c, H.TICO_ACTOR, task_id, url)
     closing = body.close and (H.task(c, task_id) or {}).get("status") != "closed"
     if closing:
-        H.task_close(c, H.KEEPER, task_id, body.note or "")
+        H.task_close(c, H.TICO_ACTOR, task_id, body.note or "")
     return bool(changed or fields or links or closing)
 
 

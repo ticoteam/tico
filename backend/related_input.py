@@ -54,7 +54,7 @@ PICKED, NONE, FAILED = "picked", "none", "failed"
 # The engine a test sets: (state, questions, label) -> {"answers": {...}, ...}. None asks the server's Jev.
 ENGINE: "Callable[[Row, Row, str], Row] | None" = None
 ASK = (
-    'Related input: Jev picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
+    'Related input: The decision model picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
     "documents, then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
     'tico task comment {task} "<your comment>". One round only: don\'t move, take or edit the task.'
 )
@@ -431,7 +431,7 @@ def run(store: Any, now: str | None = None) -> int:
         if why:
             detail["error"] = why
         with store.transaction() as c:
-            call_id = str(H.event(c, H.KEEPER, "judge.call", detail.get("label"), detail)["id"]) if bots else None
+            call_id = str(H.event(c, H.TICO_ACTOR, "judge.call", detail.get("label"), detail)["id"]) if bots else None
             if scores is None:
                 _failed(c, key, why or "error", at)
             else:

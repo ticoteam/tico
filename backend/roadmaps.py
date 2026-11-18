@@ -216,7 +216,7 @@ def add_requester(c, task_id, values, actor=None):
         ),
     )
     c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
-    H.event(c, actor or H.KEEPER, 'task.requester.add', task_id, {'requester_id': ident})
+    H.event(c, actor or H.TICO_ACTOR, 'task.requester.add', task_id, {'requester_id': ident})
     return {'id': ident, 'requester_token': token}
 
 
@@ -231,7 +231,7 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
     if not removed:
         raise Problem('not_found', 'Requester not found', 404)
     c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
-    H.event(c, actor or H.KEEPER, 'task.requester.remove', task_id, {})
+    H.event(c, actor or H.TICO_ACTOR, 'task.requester.remove', task_id, {})
     return {'removed': True}
 
 
@@ -253,7 +253,7 @@ def withdraw(c, task_id, token):
         raise Problem('not_found', 'Requester not found', 404)
     snapshot['rows']['task_requesters'] = kept
     c.execute('UPDATE task_trash SET rows=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
-    H.event(c, H.KEEPER, 'task.requester.remove', task_id, {'trashed': True})
+    H.event(c, H.TICO_ACTOR, 'task.requester.remove', task_id, {'trashed': True})
     return {'removed': True}
 
 

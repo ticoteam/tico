@@ -13,7 +13,6 @@ interface ModalDeferred { state: string; resume?: unknown; run?: string | null; 
 // The model a task's runs use (`run_model`), one row of GET /v2/models, and what a Runs on form has picked.
 interface ModalRunModel { model?: string; harness?: string; reasoning_effort?: string; compact_at?: number | null; }
 interface ModalModelRow { id: string; label?: string; harnesses?: string[]; efforts?: string[]; default_effort?: string; context_tokens?: number | null; deprecated?: boolean; meeting?: boolean; }
-interface ModalRunPick { model: string; harness: string; effort: string; compact: number | null; }
 interface ModalTask extends TaskRow {
   links?: ModalLink[];
   children?: unknown[];
@@ -110,7 +109,7 @@ function taskDialogWire(d: ModalDialog) {
     if (!anchor || anchor.hasAttribute('download') || ev.defaultPrevented) return;
     const url = new URL(anchor.href, location.href);
     const match = url.origin === location.origin && url.pathname.match(/^\/api\/v2\/files\/([^/]+)$/);
-    if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'), {scroll: true})) ev.preventDefault();
+    if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'))) ev.preventDefault();
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
@@ -319,6 +318,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
+  void taskFilesTabLoad(d, task.id);
   void taskRunsLoad(d, task.id);
   void githubNudgeTask(d, full);
 }
@@ -484,117 +484,35 @@ function taskRunCatalog() {
   }, () => { TASK_RUN_LOADING = null; return []; });
   return TASK_RUN_LOADING;
 }
-const taskRunOpts = (list: [string, string][], val: string) => list.map(([k, label]) => `<option value="${esc(k)}"${k === val ? ' selected' : ''}>${esc(label)}</option>`).join('');
-// The choice a form starts on: the task's own model, harness, effort and window, or none (the bot's task model).
-const taskRunPick = (run: ModalRunModel | null | undefined): ModalRunPick => ({model: run?.model || '', harness: run?.harness || '',
-  effort: run?.reasoning_effort || '', compact: run?.compact_at || null});
-function taskRunWords(run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null) {
-  const compact = run?.compact_at ? `compacts at ${compactWords(run.compact_at)}` : '';
-  if (!run?.model) return ['Same as bot', compact].filter(Boolean).join(' · ');
-  const row = (rows || []).find(m => m.id === run.model);
-  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort,
-    modelContextWords(row?.context_tokens), compact].filter(Boolean).join(' · ');
-}
-// Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
+// Only whoever the server says may set the task's model may pick (`can_set_run_model`, the answer POST
 // /v2/tasks/{id}/model gives); anyone else reads what it runs on.
 const taskRunMay = (t: ModalTask) => t.can_set_run_model === true;
-function taskRunModelBody(_run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null, pick: ModalRunPick) {
-  if (!rows) return '<p class="muted">Loading the models…</p>';
-  const row = rows.find(m => m.id === pick.model), harnesses = (row?.harnesses || []).length > 1 ? row!.harnesses! : [];
-  return `<form class="task-run-form" data-run-model-form aria-label="Runs on">
-    <label><span>Model</span><select data-run-model>${taskRunOpts([['', 'Same as bot'], ...rows.map((m): [string, string] => [m.id, [m.label || m.id, modelContextWords(m.context_tokens)].filter(Boolean).join(' · ')])], pick.model)}</select></label>
-    ${harnesses.length ? `<label><span>Harness</span><select data-run-harness>${taskRunOpts(harnesses.map((h): [string, string] => [h, harnessWords(h) || h]), pick.harness)}</select></label>` : ''}
-    ${row?.efforts?.length ? `<label><span>Effort</span><select data-run-effort>${taskRunOpts(row.efforts.map((e): [string, string] => [e, e]), pick.effort)}</select></label>` : ''}
-    ${compactsOn(pick.harness || row?.harnesses?.[0]) ? `<label><span>Compact</span><select data-run-compact>${compactOptions(pick.compact, row?.context_tokens)}</select></label>` : ''}
-    <button type="submit" class="ghost" data-run-model-apply disabled>Apply</button></form>`;
-}
 // Runs on, one line among the facts (shown on a bot's task once GET /v2/tasks/{id} has answered; list rows leave out
-// run_model): "Same as bot" or the model. For whoever may set it, the line opens the model form in a popover.
+// run_model): the shared model picker (settings-bots-choice.ts), "Same as bot" first; closed it reads "Same as bot" or
+// "GPT 6 Sol HIGH 400K".
 function taskRunModelRowHTML(t: ModalTask) {
   if (!String(t.owner_id || '').startsWith('bot:') || t.run_model === undefined) return '';
-  const words = esc(taskRunWords(t.run_model, TASK_RUN_ROWS));
-  const value = taskRunMay(t)
-    ? `<button type="button" class="prop-v prop-link" data-run-model-open aria-haspopup="dialog" aria-expanded="false" aria-label="Runs on: ${words}"><span class="prop-txt" data-run-model-now>${words}</span></button>`
-    : `<span class="prop-v ro" aria-label="Runs on: ${words}"><span class="prop-txt" data-run-model-now>${words}</span></span>`;
-  return `<div class="prop" data-prop-row="runs-on" data-task-run-model><span class="prop-k" aria-hidden="true">Runs on</span><span class="prop-vwrap">${value}</span>${
-    taskRunMay(t) ? '<div class="tl-pop task-run-pop" popover="auto" data-run-model-pop aria-label="Runs on"></div>' : ''}</div>`;
+  return `<div class="prop" data-prop-row="runs-on" data-task-run-model><span class="prop-k" aria-hidden="true">Runs on</span><span class="prop-vwrap">
+    <span class="task-run-pick" data-run-picker><span class="muted">Loading the models…</span></span></span></div>`;
 }
-// A model change redraws the harness and effort it offers, starting on that model's own (or the task's saved ones when
-// it is the model already saved). Apply saves what is picked; a blank model clears the task's own choice.
+// Apply saves the pick at once: a model with its harness, effort and window; Same as bot with a window alone keeps the
+// bot's model ("Same as bot 150K"); Same as bot with none clears the task's own choice.
 function taskRunModelBind(d: ModalDialog, task: ModalTask) {
-  const sec = $('[data-task-run-model]', d);
-  if (!sec) return;
-  const id = String(task.id), run = task.run_model || null, state = {pick: taskRunPick(run)};
-  const open = $('[data-run-model-open]', sec) as HTMLButtonElement | null, pop = $('[data-run-model-pop]', sec) as HTMLElement | null;
-  const same = () => state.pick.model === (run?.model || '') && (state.pick.compact || null) === (run?.compact_at || null)
-    && (!state.pick.model || (state.pick.harness === (run?.harness || '') && state.pick.effort === (run?.reasoning_effort || '')));
-  const paint = () => {
-    const now = $('[data-run-model-now]', sec);
-    if (now) now.textContent = taskRunWords(run, TASK_RUN_ROWS);
-    if (!pop) return;
-    pop.innerHTML = taskRunModelBody(run, TASK_RUN_ROWS, state.pick);
-    const apply = pop.querySelector<HTMLButtonElement>('[data-run-model-apply]'); if (apply) apply.disabled = same();
-  };
-  if (!TASK_RUN_ROWS) void taskRunCatalog().then(() => { if (sec.isConnected && TASK_RUN_ROWS) paint(); });
-  if (!open || !pop) return;
-  paint();
-  // The form opens under the line (a sheet on a phone, task-code.css), its first field focused; Esc or a press outside
-  // closes it and the focus goes back to the line.
-  open.onclick = () => {
-    if (pop.matches(':popover-open')) { pop.hidePopover(); return; }
-    state.pick = taskRunPick(run); paint();
-    pop.showPopover();
-    if (!matchMedia('(max-width:760px)').matches) {
-      const a = open.getBoundingClientRect();
-      const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
-      pop.style.top = `${Math.max(8, below ? a.bottom + 4 : a.top - pop.offsetHeight - 4)}px`;
-      pop.style.left = `${Math.max(8, Math.min(a.left, innerWidth - pop.offsetWidth - 8))}px`;
-    } else pop.style.top = pop.style.left = '';
-    open.setAttribute('aria-expanded', 'true');
-    pop.querySelector<HTMLElement>('select')?.focus();
-  };
-  pop.addEventListener('toggle', (ev: Event) => {
-    if ((ev as ToggleEvent).newState !== 'closed') return;
-    pop.dispatchEvent(new Event('menuclosed'));      // a redraw held for it goes on (taskMenuSettled)
-    open.setAttribute('aria-expanded', 'false');
-    if (pop.contains(document.activeElement) || document.activeElement === document.body) open.focus();
-  });
-  pop.onchange = (ev: Event) => {
-    const t = ev.target;
-    if (!(t instanceof HTMLSelectElement)) return;
-    if (t.matches('[data-run-model]')) {
-      const row = (TASK_RUN_ROWS || []).find(m => m.id === t.value);
-      // The window picked stays, lowered to the largest size the new model holds (spec scope 8).
-      const compact = state.pick.compact, window = row?.context_tokens || 0;
-      const fit = compact && window && compact > window ? (COMPACT_SIZES.filter(([size]) => size <= window).pop()?.[0] || null) : compact;
-      state.pick = !row ? {...taskRunPick(null), compact} : row.id === run?.model ? taskRunPick(run)
-        : {model: row.id, harness: row.harnesses?.[0] || '', effort: row.default_effort || row.efforts?.[0] || '', compact: fit};
-      paint(); pop.querySelector<HTMLElement>('[data-run-model]')?.focus();
-      return;
-    }
-    if (t.matches('[data-run-harness]')) state.pick.harness = t.value;
-    if (t.matches('[data-run-effort]')) state.pick.effort = t.value;
-    if (t.matches('[data-run-compact]')) state.pick.compact = Number(t.value) || null;
-    const apply = pop.querySelector<HTMLButtonElement>('[data-run-model-apply]'); if (apply) apply.disabled = same();
-  };
-  pop.onsubmit = async (ev: SubmitEvent) => {
-    ev.preventDefault();
-    const apply = pop.querySelector<HTMLButtonElement>('[data-run-model-apply]');
-    if (!apply || apply.disabled) return;
-    apply.disabled = true;
-    const {model, harness, effort, compact} = state.pick;
-    // No model keeps the bot's; a window alone is still the task's own ("Same as bot 150K"), and null is the bot's.
-    const body = {...(model ? Object.fromEntries(Object.entries({model, harness, effort}).filter(([, v]) => v)) : {model: null}),
-      compact_at: compact};
-    try {
-      const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
-      if (saved.warning) toast(saved.warning);
-      if (pop.matches(':popover-open')) pop.hidePopover();
-      const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
-      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
-      if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
-    } catch (e) { toast(errorMessage(e, ''), true); apply.disabled = same(); }
-  };
+  const host = $('[data-task-run-model] [data-run-picker]', d);
+  if (!host) return;
+  const id = String(task.id), run = task.run_model || null;
+  void settingsRunPickerMount(host, {bot: String(task.owner_id), name: 'Runs on', readonly: !taskRunMay(task),
+    run: run ? {model: run.model || '', harness: run.harness || '', effort: run.reasoning_effort || '', compact_at: run.compact_at || null} : null,
+    onPick: async pick => {
+      const body = pick.model ? {model: pick.model, harness: pick.harness, effort: pick.effort, compact_at: pick.compact_at} : {model: null, compact_at: pick.compact_at};
+      try {
+        const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
+        if (saved.warning) toast(saved.warning);
+        const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
+        if (TASKS_ST) void tasksCatchUp(TASKS_ST);
+        if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
+      } catch (e) { toast(errorMessage(e, ''), true); }
+    }});
 }
 // The relations backend/task_relations.py relate writes (a parent is fixed when the task is filed).
 const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of'],
@@ -758,6 +676,7 @@ function taskChatLive(state: TaskChatState) {
     if (!taskChatCurrent(state) || state.stopped) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});
+    void taskFilesTabLoad(state.dialog, state.id);
   }, 200);
 }
 const commentAuthor = (a: string | null | undefined, via?: string | null, src: {kind: string; name?: string} | null = null) => {
@@ -818,8 +737,10 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   pr_queue_removed: v => `dropped ${v || 'it'} from the merge queue`, merge_queue_failed: () => 'the merge queue sent it back',
   session: () => 'started a new session', task_model: v => `ran on ${v}`, before: () => 'set the order', after: () => 'set the order', work: () => 'stopped its work',
   title: () => 'renamed it', body: () => 'edited the request', goal_id: v => v ? 'tied it to a goal' : 'took it off its goal', human_id: v => v ? `made ${actorLabel(v)} its Human` : 'took its Human off',
+  assignee_id: v => v ? `made ${actorLabel(v)} its developer` : 'took its developer off',
   ladder: v => `asked the ${v || 'next person'} instead`, requester: v => v ? `made ${actorLabel(v)} a requester` : 'removed a requester',
   stage_rule: () => 'applied a stage rule', readers: () => 'changed who can see it',
+  private_readers: v => `was told who else reads it: ${clipLine(String(v || ''), 400)}`,
   private: v => ['1', 'true'].includes(String(v)) ? 'made it private' : 'made it visible to the team', from_private: () => 'filed it from a private task',
   visibility: v => v === 'public' ? 'put it on the public roadmap' : 'took it off the public roadmap', size: () => 'set its size',
   type: v => `made it a ${v || 'task'}`, step: v => `moved it to ${v || 'a step'}`};
@@ -1271,10 +1192,10 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   // `can_comment`: false for someone who may read the task but not comment on it; they get no box
   const can = data.can_comment !== false, d = state.dialog;
   $('form', host).hidden = !can;
-  if (d.canComment !== can) { d.canComment = can; if (d.tfEl) tfPaint(d); }
+  if (d.canComment !== can) { d.canComment = can; if (d.tfEl) tfPaint(d); taskPagesActions(d); }
   // a new comment may have carried a new version of a file, or answered a question on one
   const count = (data.comments || data.messages || []).length;
-  if (state.count != null && count !== state.count) void tfLoad(state.dialog, state.id);
+  if (state.count != null && count !== state.count) { void tfLoad(state.dialog, state.id); void taskFilesTabLoad(state.dialog, state.id); }
   state.count = count;
   const files = tfFiles(state.dialog);
   // What is happening now is the chat's last row: a run at work, what the next run waits for, whose turn it is, and
@@ -1456,11 +1377,12 @@ function taskCauseLinkHTML(href: string | null | undefined): string {
   if (!href || !TASK_CAUSE_PAGES[href]) return '';
   return (href === '#/settings/billing' && cloudCreditLinkHTML()) || ` <a href="${esc(href)}">${TASK_CAUSE_PAGES[href]}</a>`;
 }
-// The window shows one thing at a time with the full width: the task's chat; one of its documents (Spec, QA report…,
-// ui/app/task-docs.ts), from the tabs on the title row, which only a task with a document has; or Details (what it is,
-// pages, what it needs to leave its stage, a short list of facts, its files), from its icon in the head, which closes
-// back to what showed before. The style guide's Task window; kept on the dialog across redraws.
-type TaskTab = string;   // 'chat', 'details' or docKey(name)
+// The window shows one thing at a time with the full width: the task's chat; its Files (the pages and files linked to it,
+// task-pages.ts); or one of its documents (QA report…, ui/app/task-docs.ts), from the tabs on the title row (Chat, Files N,
+// then the documents; a Spec is a card under the title, taskSpecsHTML); or Details (what it is, what it needs to leave
+// its stage and a short list of facts), from its icon in the head, which closes back to what showed before. The
+// style guide's Task window; kept on the dialog across redraws.
+type TaskTab = string;   // 'chat', 'files', 'details' or a document's key
 /** The documents the window draws: the task's own read's, else the last read's for the same task. */
 const taskTabRow = (d: ModalDialog) => d.querySelector<HTMLElement>('.tw-tabs');
 const taskDetailsButton = (d: ModalDialog) => d.querySelector<HTMLElement>('[data-task-tab="details"]');
@@ -1469,10 +1391,10 @@ function taskDocsOf(d: ModalDialog, t: ModalTask): TaskDoc[] {
   return d.taskDocs || [];
 }
 function taskTabPaint(d: ModalDialog) {
-  // A document that is gone (archived, unreadable now) shows the chat in its place.
-  if (d.taskTab?.startsWith('doc:') && !docOf(d.taskDocs, d.taskTab)) d.taskTab = 'chat';
-  if (d.taskTabBack?.startsWith('doc:') && !docOf(d.taskDocs, d.taskTabBack)) d.taskTabBack = 'chat';
-  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = docOf(d.taskDocs, tab);
+  // A document that is gone (archived, unreadable now), or a Spec (its card sits under the title), shows the chat instead.
+  if (d.taskTab?.startsWith('doc:') && !taskDocOf(d, d.taskTab)) d.taskTab = 'chat';
+  if (d.taskTabBack?.startsWith('doc:') && !taskDocOf(d, d.taskTabBack)) d.taskTabBack = 'chat';
+  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = taskDocOf(d, tab);
   if (body) body.dataset.taskTabShown = doc ? 'doc' : tab;
   const row = taskTabRow(d);
   if (row) docTabsPaint(row, tab === 'details' ? d.taskTabBack || 'chat' : tab, b => b.dataset.taskTab, tab !== 'details');   // Details covers them: none selected
@@ -1504,12 +1426,16 @@ function taskTabsBind(d: ModalDialog) {
   const details = taskDetailsButton(d);
   if (details) details.onclick = () => taskTabShow(d, d.taskTab === 'details' ? d.taskTabBack || 'chat' : 'details');
 }
-// The documents' tabs on the title row (none when the task has no document), and the change of a document as the task
-// is read again: a new tab, a new version, one gone.
-function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[], tab: TaskTab | undefined) {
-  const on = tab === 'details' || !tab ? 'chat' : tab;
-  return docTabsHTML(docTabs(docs, [], taskYours(t)), docOf(docs, on) ? on : 'chat',
-    key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
+// Spec pages have cards under the title. Every other document gets a tab after Files.
+const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => (docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown');
+const taskDocOf = (d: ModalDialog, key: string | null | undefined): TaskDoc | null => docOf(taskTabDocs(d.taskDocs), key);
+/** The tabs on the title row, and the change of a document as the task is read again: a new tab, a new version, one gone. */
+function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined) {
+  const on = tab === 'details' || !tab ? 'chat' : tab, shown = taskTabDocs(docs);
+  const tabs: DocTab[] = [{key: 'chat', label: 'Chat', dot: taskYours(t)}, {key: TASK_FILES_TAB, label: taskFilesLabel(TFT_COUNT.get(String(t.id)))},
+    ...shown.map(x => docTab(x, shown))];
+  const valid = tabs.some(x => x.key === on);
+  return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
 }
 function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   if (!t || String(t.id) !== String(d.dataset.task) || !Array.isArray(t.documents) || d.classList.contains('thread')) return;
@@ -1517,8 +1443,12 @@ function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   d.taskDocs = t.documents;
   if (JSON.stringify(t.documents) === was) return;
   const row = taskTabRow(d), html = taskDocTabsHTML(t, t.documents, d.taskTab);
-  if (row) { if (html) row.outerHTML = html; else row.remove(); }
-  else if (html) $('.tw-head .tmodal-title', d)?.insertAdjacentHTML('afterend', html);
+  if (row) row.outerHTML = html;
+  else $('.tw-head .tmodal-title', d)?.insertAdjacentHTML('afterend', html);
+  // the Spec cards under the title
+  const specs = taskSpecsHTML(t.documents, String(t.id), TFT_TITLES), card = d.querySelector<HTMLElement>('[data-task-specs]');
+  if (card) { if (specs) card.outerHTML = specs; else card.remove(); }
+  else if (specs) d.querySelector<HTMLElement>('.tmodal-head')?.insertAdjacentHTML('afterend', specs);
   taskTabsBind(d);
 }
 // The tab a task opens on, once its conversation is read: Chat, where the box is and what is happening now. A tab the
@@ -1582,7 +1512,7 @@ function taskDetailsButtonHTML(t: ModalTask) {
     + `<span class="nav-icon" aria-hidden="true">fact_check</span>${blocking ? `<span class="tw-count tnum" data-task-blocking aria-hidden="true">${blocking}</span>` : ''}</button>`;
 }
 // The task in full: the head, a quiet line only while someone else is here or an edit did not save, then the panes:
-// the chat, the document open, and Details (what the task is first). What is happening now (the turn, Answer, a deferred hand-over, a working run) is the chat's last row
+// the chat, the Files tab, the document open, and Details (what the task is first). What is happening now (the turn, Answer, a deferred hand-over, a working run) is the chat's last row
 // (taskCommentsRender), not a line under the title.
 function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; tab?: TaskTab | undefined} = {}) {
   const owner = String(t.owner_id || ''), note = String(t.note || '').trim();
@@ -1593,21 +1523,24 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean; docs?: TaskDoc[]; t
     ? `<section class="tw-part task-note"><h3 class="tw-h">${esc(owner ? `Latest from ${actorLabel(owner)}` : 'Latest note')}</h3><div class="tdesc md">${safeMd(note)}</div></section>` : '';
   const criteria = (t.acceptance_criteria || []).length
     ? `<section class="tw-part"><h3 class="tw-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria!.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : '';
-  return `${taskHeadHTML(t, !!opts.thread, opts.docs, opts.tab)}
+  return `${taskHeadHTML(t, !!opts.thread, opts.docs, opts.tab)}${opts.thread ? '' : taskSpecsHTML(opts.docs, String(t.id), TFT_TITLES)}
     <div class="task-edit-meta muted" role="status"><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
     <div class="muted task-edit-current" data-task-edit-current hidden></div>
     <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
+    <div data-task-files></div>
     <div class="tmodal-body task-layout" data-task-tab-shown="chat">
       <section class="task-chat" id="task-pane-chat" role="tabpanel" aria-label="Chat"><p class="muted" role="status">Loading the conversation…</p></section>
       <section class="task-doc" role="tabpanel" aria-label="Document"></section>
+      <section class="task-files-tab" id="task-pane-files" role="tabpanel" aria-label="Files">
+        <div class="tft-list" data-tft-list>${TFT_ROWS.get(String(t.id)) || ''}</div>
+        <section class="task-pages" data-task-pages aria-label="Link a page or file" hidden></section>
+      </section>
       <aside class="task-side" id="task-pane-details" role="region" aria-label="Details">
         ${criteria || latest ? `<section class="task-desc">${criteria}${latest}</section>` : ''}
         ${githubNudgeTaskHostHTML(t)}
-        <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
         ${taskRequirementsHTML(t)}
         <section class="task-props" data-task-props aria-label="Facts">${taskPropsHTML(t, {runsOn: taskRunModelRowHTML(t), goal: t.goal_id || ''})}</section>
         <div class="task-rail" data-task-rail hidden></div>
-        <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
         <section class="task-activity" data-task-activity aria-label="Activity and links"><h3 class="tw-h rail-h">Activity and links</h3>
           <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
             ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x tap-mark" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}

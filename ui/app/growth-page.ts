@@ -257,6 +257,7 @@ DASH_PLACES.growth = {
     // A stale or failing source is said once, right under the head and over every other panel (grHealthRead).
     root.querySelector('header.ph')?.insertAdjacentHTML('afterend', '<div class="gr-banner gr-amber gr-health" data-gr-health role="status" hidden></div>');
     grResolveWire(root);
+    grLineMount(state, root);   // the Growth line over the cards (growth-line.ts)
     // A month picked reads every card again for it; the address keeps it. The picker sits in the header's tools, which
     // the header may fold into ⋯ and draw again, so the page listens for it rather than the element.
     root.addEventListener('change', ev => {
@@ -278,6 +279,7 @@ DASH_PLACES.growth = {
     if (!v || !root) return;   // G: drawn only once the place has its view and its grid
     grBoardLinks(root);
     void grHealthRead(state);
+    void grLineRead(state);
     // The month the cards read is the one the picker shows (its options are the header's tools, grMonthTool).
     const sel = root.querySelector<HTMLSelectElement>('select[data-gr-month]');
     if (sel && sel.value !== (v.month || '')) sel.value = v.month || '';
@@ -421,7 +423,8 @@ async function grHealthRead(state: DashState) {
   const el = DASH === state ? state.root?.querySelector<HTMLElement>('[data-gr-health]') : null;
   if (!el) return;
   const html = grHealthBanner(sources);
-  el.hidden = !html;
+  // The Growth line's headline says the same, so the banner gives way while the line shows (growth-line.ts).
+  el.hidden = !html || !!(GRL?.line && GRL.dash === state);
   patchHTML(el, html);
 }
 // The Funnel: Reach to Refer, each stage's KPI with its share of the stage before; the North Star marked, and Refer

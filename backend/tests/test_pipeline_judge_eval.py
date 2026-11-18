@@ -224,13 +224,16 @@ def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monk
 def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped_rubrics():
     """The three pages Jev was unsure of on Acme (Nov 11) and the two it passed are cases, built by the page step's own
     builder (page_verdicts.job_of): the page's text, the stage's shipped rubric, the PR and its newest commit."""
-    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC
+    from backend.pipeline_settings import LEGACY_REVIEW_RUBRIC, QA_RUBRIC
 
     cases = {c["id"]: c for c in run.chosen(run.load(), "acme-*")}
     assert set(cases) == {"acme-review-1", "acme-review-2", "acme-fixes-2", "acme-spec", "acme-validate"}
-    assert all(c["expected"] == "met" for c in cases.values())
+    # The QA page met the four-part line; since task #389 a QA page also shows a verdict strip, how it works and risk
+    # and rollback, which it has not.
+    assert all(c["expected"] == "met" for k, c in cases.items() if k != "acme-fixes-2")
+    assert (cases["acme-fixes-2"]["expected"], cases["acme-fixes-2"]["trap"]) == ("not_met", "before_qa_v2")
     state = adapter.state_for(cases["acme-review-1"])
-    assert state["requirement"]["rubric"] == REVIEW_RUBRIC and state["requirement"]["older_evidence_ok"] is True
+    assert state["requirement"]["rubric"] == LEGACY_REVIEW_RUBRIC and state["requirement"]["older_evidence_ok"] is True
     assert (state["work"]["repo"], state["work"]["pr"]) == ("ticoteam/pipeline-sandbox", 38)
     head = state["work"]["context"]["heads"]["ticoteam/pipeline-sandbox#38"]
     assert state["attachment"]["text"].startswith(f"Reviewed commit {head}")
@@ -248,12 +251,15 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
     """The nineteen good pages Jev was too often unsure of on rc.4 (Nov 11) and the traps cut from them: each with the
     stage's shipped rubric, the page shown as made for the work as it is now, and a pre-release page with the PR's newest
     commit beside it (task_pages.judged_against)."""
-    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
+    from backend.pipeline_settings import LEGACY_REVIEW_RUBRIC, QA_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
 
-    shipped = {QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
+    shipped = {QA_RUBRIC, LEGACY_REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
     live = run.chosen(run.load(), "live-*")
     traps = run.chosen(run.load(), "trap-*")
-    assert len(live) == 19 and all(c["expected"] == "met" for c in live)
+    qa = {c["id"] for c in live if c["requirement"]["rubric"] == QA_RUBRIC}
+    assert qa == {"live-a-fixes-2", "live-b-fixes-2", "live-c-fixes-2-v1", "live-c-fixes-2-v2"}
+    assert len(live) == 19 and all(c["expected"] == "met" for c in live if c["id"] not in qa)
+    assert all((c["expected"], c["trap"]) == ("not_met", "before_qa_v2") for c in live if c["id"] in qa), "task #389"
     assert len(traps) == 6 and all(c["expected"] == "not_met" and c["trap"] for c in traps)
     for case in live + traps + run.chosen(run.load(), "acme-*,dev-prerelease-*"):
         state = adapter.state_for(case)
@@ -261,7 +267,7 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
         assert state["attachment"]["work_version"] == state["work"]["work_version"] > 0, case["id"]
         if state["requirement"]["rubric"] == QA_RUBRIC:
             assert state["work"]["context"]["heads"], case["id"]
-    assert [c["id"] for c in run.load() if c.get("allow_unsure")] == ["live-c-fixes-2-v2"]
+    assert [c["id"] for c in run.load() if c.get("allow_unsure")] == []
 
 
 def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut():
@@ -272,10 +278,13 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
     from backend.pipeline_settings import QA_RUBRIC
 
     cases = run.chosen(run.load(), "nov12-*")
-    good = [c for c in cases if c["expected"] == "met"]
-    bad = [c for c in cases if c["expected"] != "met"]
+    # The six a person OK'd met the four-part line; since task #389 they are not met (no verdict strip, diagram or
+    # rollback), and v2-* holds the QA page that meets the seven-part line.
+    good = [c for c in cases if c["trap"] == "before_qa_v2"]
+    bad = [c for c in cases if c["trap"] != "before_qa_v2"]
     assert len(good) == 6 and all(c.get("live_p", 1) < 0.75 for c in good)
     assert {c["trap"] for c in bad} >= {"no_check_output", "reviewer_left_out", "check_failed"}
+    assert all(c["expected"] == "not_met" for c in good)
     assert all(c["expected"] == "not_met" for c in bad)
     for case in cases:
         state = adapter.state_for(case)
@@ -288,6 +297,36 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
     red = [c for c in bad if c["trap"] == "check_failed"]
     assert len(red) >= 2 and all("fail" in c["attachment"]["text"] for c in red)
     assert "but not failed" in QA_RUBRIC and "reports a check failed at the newest commit" in QA_RUBRIC
+
+
+def test_the_qa_page_v2_meets_the_shipped_rubric_and_each_part_cut_from_it_does_not():
+    """Task #389: #329's real QA page rebuilt to the v2 standard (verdict strip, every criterion, how it works, tests,
+    findings, risk and rollback) meets the seven-part line; the same page without its strip, its diagram or its
+    rollback does not, and the verdict names the part (pipeline_judges.CHECKS["qa"])."""
+    from backend import pipeline_judges as P
+    from backend.pipeline_settings import QA_RUBRIC
+
+    cases = {c["id"]: c for c in run.chosen(run.load(), "v2-*")}
+    assert set(cases) == {"v2-qa-t329", "v2-trap-qa-no-strip", "v2-trap-qa-no-how", "v2-trap-qa-no-rollback"}
+    good = cases.pop("v2-qa-t329")
+    assert good["expected"] == "met" and good["trap"] is None
+    text = good["attachment"]["text"]
+    assert all(part in text for part in ("Approve = ship to production", "How it works", "Risk and rollback"))
+    parts = {p.key for p in P.CHECKS["qa"]}
+    assert {"strip", "how", "rollback"} <= parts
+    for case in cases.values():
+        assert case["expected"] == "not_met" and case["trap"] in {"no_strip", "no_how", "no_rollback"}
+        assert len(case["attachment"]["text"]) < len(text)
+        state = adapter.state_for(case)
+        assert state["requirement"]["rubric"] == QA_RUBRIC
+        assert state["work"]["context"]["heads"]["ticoteam/tico#3617"].startswith("b4d3054")
+    # The five QA pages Builders made on Nov 14 have the criteria table but no diagram and no rollback: not met.
+    before = run.chosen(run.load(), "nov14-qa-*")
+    assert len(before) == 5
+    for case in before:
+        assert (case["expected"], case["trap"]) == ("not_met", "before_qa_v2")
+        assert adapter.state_for(case)["requirement"]["rubric"] == QA_RUBRIC
+        assert "Rollback" not in case["attachment"]["text"]
 
 
 def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():
@@ -313,8 +352,11 @@ def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():
 
 
 def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_not():
-    case = next(c for c in run.load() if c.get("allow_unsure"))
-    others = [c for c in run.load() if c["id"].startswith("live-")][:3]
+    # live-c-fixes-2-v2 allowed unsure on the four-part QA line (its reviews were of an earlier commit than its checks);
+    # since task #389 it is not met, so the rule is held on it as it was labelled then.
+    found = next(c for c in run.load() if c["id"] == "live-c-fixes-2-v2")
+    case = {**found, "expected": "met", "trap": None, "allow_unsure": True}
+    others = [c for c in run.load() if c["id"].startswith("live-") and c["expected"] == "met"][:3]
 
     def judge(p):
         return lambda c: ((p if c is case else 0.9), 0.0, 5)
@@ -555,3 +597,29 @@ def test_the_eval_scores_the_servers_unsure_even_where_its_p_would_band_as_met()
     assert run.verdict(0.5, "spec") == "met", "the case this test is about: p alone would read as met"
     row = run.score("j", lambda c: (0.5, 0.0, 5, "unsure"), [case], pause=lambda s: None)
     assert row["false_met"] == 0 and row["rows"][0]["got"] == "unsure"
+
+
+def test_openrouter_comparison_checks_paid_pinned_typed_answers(monkeypatch):
+    import httpx
+
+    model = "acme/decision-v1-20261117"
+    fixture = {"type": "score", "score": 0.9, "confidence": 0.9, "probabilities": {"1": 0.9, "0": 0.1}}
+    questions = {"score": {"type": "score", "instructions": "How urgent?", "criteria": ["No rush", "Today"]}}
+    payload = {"model": model, "answers": {"score": fixture}, "usage": {"cost": 0.0001}}
+
+    def post(url, **kwargs):
+        assert url == adapter.ROUTER_DECISIONS
+        assert kwargs["json"]["provider"] == {"only": ["acme/us"], "allow_fallbacks": False}
+        assert kwargs["json"]["model"] == model
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", post)
+    ask = adapter.openrouter("eval-key", model, "acme/us")
+    assert ask("today", questions)["answers"]["score"]["probabilities"] == {0: 0.1, 1: 0.9}
+    payload["model"] = "acme/another-version"
+    with pytest.raises(J.JudgeError, match="pinned"):
+        ask("today", questions)
+    payload["model"] = model
+    payload["usage"]["cost"] = 0
+    with pytest.raises(J.JudgeError, match="paid"):
+        ask("today", questions)

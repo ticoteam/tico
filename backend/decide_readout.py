@@ -1,5 +1,4 @@
-"""The weekly Decide readout: per question set, the window's calls, cost, model (Jev, Decide Medium or High, or the
-fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `tico decision readout`).
+"""The weekly Decide readout: per question set, the window's calls, cost, decision model usage and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `tico decision readout`).
 
 Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the spend rows
 (`backend/judge.py` `metered` writes one after every paid call, so a batch or a nightly run counts each call it paid
@@ -33,7 +32,7 @@ BANDS = ("under 0.3", "0.3 to 0.7", "0.7 and over")
 MAX_DAYS = 31
 RUN = {"learnings-route": "run"}  # backend/learnings.py audits a night's run as one `learnings-route@run` row
 # The Gateway's language-model levels (Decide Medium and High), as the id sent: the row's own id or its alias.
-TIER = re.compile(r"^tico-decide-(medium|high)(?:-1\.0)?$")
+TIER = re.compile(r"^tico-decide-(medium|high)(?:-[0-9]+\.[0-9]+)?$")
 
 
 def _inline_sets():
@@ -115,22 +114,19 @@ def _tier(model):
     return f"Decide {match.group(1).capitalize()}" if match else None
 
 
-def _on_jev(model):
-    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Decide Low;
-    a call recorded under an id from before this lineup counts as the id it is now). Decide Medium and High are not
-    Jev, whatever the Gateway's list of models says."""
+def _decision_model(model):
+    """Recognize typed decision models and every version of the Gateway's Decide tiers."""
     from .gateway_tiers import new_id
 
     model = new_id(model)
-    return str(model or "").lower().startswith("jev") or (model in J.GATEWAY_MODELS and _tier(model) is None)
+    return str(model or "").lower().startswith("jev") or J.is_gateway_decision_model(model)
 
 
 def _calls(detail):
-    """(answered on Jev, answered on another model, {error code: failed calls}, {Decide tier: calls}) for one `judge.call`
-    row. A tier's calls are neither Jev's nor the fallback's: they are counted under their own tier."""
+    """(native decisions, historical fallback calls, failures, Medium and High decisions) from one audit row."""
     if isinstance(detail.get("models"), dict):  # one nightly learnings run: its calls added up
         models = {str(m): int(n) for m, n in detail["models"].items() if isinstance(n, int) and not isinstance(n, bool)}
-        jev = sum(n for m, n in models.items() if _on_jev(m))
+        decisions = sum(n for m, n in models.items() if _decision_model(m))
         tiers = Counter()
         for m, n in models.items():
             if _tier(m):
@@ -144,15 +140,13 @@ def _calls(detail):
             if isinstance(detail.get("failed"), dict)
             else {}
         )
-        return jev, sum(models.values()) - jev - sum(tiers.values()), failed, dict(tiers)
+        return decisions - sum(tiers.values()), sum(models.values()) - decisions, failed, dict(tiers)
     calls = detail.get("calls") if isinstance(detail.get("calls"), int) and detail.get("calls") > 0 else 1
     if detail.get("error"):
         return 0, 0, {str(detail["error"]): calls}, {}
-    if _on_jev(detail.get("model")):
-        return calls, 0, {}, {}
     if _tier(detail.get("model")):
         return 0, 0, {}, {_tier(detail.get("model")): calls}
-    return 0, calls, {}, {}
+    return (calls, 0, {}, {}) if _decision_model(detail.get("model")) else (0, calls, {}, {})
 
 
 def _answers(detail):
@@ -208,12 +202,12 @@ def readout(c, settings, days=7, at=None):
         version = version_of(label, name, versions)
         if version:
             row["versions"].add(version)
-        jev, other, failed, tiers = _calls(detail)
-        row["jev"] += jev
+        native, other, failed, tiers = _calls(detail)
+        row["jev"] += native
         row["fallback"] += other
         row["tiers"].update(tiers)
         row["failed"].update(failed)
-        row["calls"] += jev + other + sum(tiers.values()) + sum(failed.values())
+        row["calls"] += native + other + sum(tiers.values()) + sum(failed.values())
         if name == OTHER_LABELS:
             continue
         for answers in _answers(detail):
@@ -229,10 +223,15 @@ def readout(c, settings, days=7, at=None):
                 "set": name,
                 "versions": sorted(row["versions"]),
                 "calls": row["calls"],
+                # Legacy API keys count native decisions. The neutral count includes all Decide tiers.
                 "jev": row["jev"],
+                "decision_model": row["jev"] + sum(row["tiers"].values()),
                 "fallback": row["fallback"],
                 "tiers": dict(sorted(row["tiers"].items())),
                 "failed": dict(sorted(row["failed"].items())),
+                "decision_model_share": round((row["jev"] + sum(row["tiers"].values())) / row["calls"], 4)
+                if row["calls"]
+                else None,
                 "jev_share": round(row["jev"] / row["calls"], 4) if row["calls"] else None,
                 "cost_usd": round(row["cost_usd"], 6),
                 "ceiling_priced": row["ceiling_priced"],
@@ -254,10 +253,12 @@ def readout(c, settings, days=7, at=None):
                 "versions": [],
                 "calls": 0,
                 "jev": 0,
+                "decision_model": 0,
                 "fallback": 0,
                 "tiers": {},
                 "failed": {},
                 "jev_share": None,
+                "decision_model_share": None,
                 "cost_usd": 0.0,
                 "ceiling_priced": 0,
                 "answers": {},
@@ -266,7 +267,8 @@ def readout(c, settings, days=7, at=None):
         row["gate"] = gate
         row["reconcile"] = recon
     calls = sum(r["calls"] for r in out)
-    jev = sum(r["jev"] for r in out)
+    native = sum(r["jev"] for r in out)
+    decisions = sum(r["decision_model"] for r in out)
     cap = budget_cap(c, settings)
     spent = spent_this_month(c, stamp(end))
     data = {
@@ -276,10 +278,12 @@ def readout(c, settings, days=7, at=None):
         "sets": out,
         "total": {
             "calls": calls,
-            "jev": jev,
+            "jev": native,
+            "decision_model": decisions,
+            "decision_model_share": round(decisions / calls, 4) if calls else None,
             "fallback": sum(r["fallback"] for r in out),
             "failed": sum(sum(r["failed"].values()) for r in out),
-            "jev_share": round(jev / calls, 4) if calls else None,
+            "jev_share": round(native / calls, 4) if calls else None,
             "cost_usd": round(sum(r["cost_usd"] for r in out), 6),
         },
         "month": {
@@ -316,7 +320,7 @@ def text(data):
         tiers = "".join(f", {name} {n}" for name, n in row["tiers"].items())
         head = (
             f"{row['set']}{' v' + '/'.join(row['versions']) if row['versions'] else ''}: {row['calls']} calls, "
-            f"{_usd(row['cost_usd'])}; Decision model {row['jev']} ({_pct(row['jev_share'])}){tiers}, "
+            f"{_usd(row['cost_usd'])}; Decision model {row['decision_model']} ({_pct(row['decision_model_share'])}){tiers}, "
             f"fallback {row['fallback']}" + (f", failed {failed}" if failed else "")
         )
         if row["ceiling_priced"]:
@@ -344,7 +348,7 @@ def text(data):
     if total["calls"]:
         lines.append(
             f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Decision model answered "
-            f"{_pct(total['jev_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}"
+            f"{_pct(total['decision_model_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}"
         )
     month = data["month"]
     cap = f"of the {_usd(month['cap_usd'])} cap ({_pct(month['share'])})" if month["cap_usd"] > 0 else "(no cap set)"

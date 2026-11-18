@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Flaky-test quarantine for PR checks and the merge queue.
 
-A test that fails and passes on the same commit is flaky: a rerun attempt of one run, or two runs that tested the same
-commit. ci/quarantine/ holds one JSON file per quarantined test (entry_name), so two new entries never conflict:
+A test that fails and passes on the same commit is flaky. The flip can happen on a leg's retry, on a rerun attempt,
+or across two runs. ci/quarantine/ holds one JSON file per quarantined pytest test (entry_name):
 
   {"test": "<pytest node id>", "first_seen": "YYYY-MM-DD", "commit": "<sha>", "runs": ["<run or job url>", ...],
    "ticket": "<the fix's ticket, or empty>", "reason": "<one line>"}
@@ -12,8 +12,8 @@ groups pass --quarantine to pytest (scripts/pr_checks.py run --quarantine): a qu
 non-strict xfail, so its failure does not fail the suite. Release validation never passes it, so it runs and fails on
 quarantined tests as before. The fix for a quarantined test deletes its entry file.
 
-  detect  reads PR-check runs from GitHub (gh api) and prints the tests that flipped; --write DIR writes an entry file
-          for each one that is not quarantined yet (.github/workflows/flaky-tests.yml, daily)
+  detect  reads PR-check runs and queue-flaky artifacts from GitHub (gh api) and prints the tests that flipped;
+          --write DIR writes an entry for each unquarantined pytest test (.github/workflows/flaky-tests.yml, daily)
   report  lists every entry with its age and ticket; exits 1 on an entry older than --max-age-days or a malformed one
           (the same workflow, weekly: it fails its own job, never the queue)
   check   exits 1 on a malformed entry
@@ -281,6 +281,16 @@ def _passed(test, other):
     return any(test in (leg.get("passed") or ()) for leg in other["legs"])
 
 
+def _record_flip(found, test, commit, failed, passes, created):
+    flip = found.setdefault(test, {"commit": commit, "failed": [], "passed": [], "first_seen": created})
+    if flip["commit"] != commit:
+        return
+    if failed not in flip["failed"]:
+        flip["failed"].append(failed)
+    flip["passed"] += [url for url in passes if url not in flip["passed"]]
+    flip["first_seen"] = min(flip["first_seen"], created)
+
+
 def flips(observed):
     """The tests that failed in one observation and passed in another of the same commit, by test id."""
     by_key = {}
@@ -291,24 +301,20 @@ def flips(observed):
         for o in group:
             for test, failure in o["failed"].items():
                 passes = [p["url"] for p in group if p is not o and _passed(test, p)]
-                if not passes:
-                    continue
-                flip = found.setdefault(test, {"commit": key, "failed": [], "passed": [], "first_seen": o["created"]})
-                if flip["commit"] != key:
-                    continue
-                if failure["url"] not in flip["failed"]:
-                    flip["failed"].append(failure["url"])
-                flip["passed"] += [u for u in passes if u not in flip["passed"]]
-                flip["first_seen"] = min(flip["first_seen"], o["created"])
+                if passes:
+                    _record_flip(found, test, key, failure["url"], passes, o["created"])
     return found
 
 
 def propose(found, quarantined, root=ROOT):
-    """An entry for each flip that no entry covers yet, by test id. A test whose file this checkout lacks (a test only a
-    pull request branch has) is left out: its entry would name a file main does not have."""
+    """An entry for each uncovered pytest flip whose file exists in this checkout."""
     out = []
     for test in sorted(found):
-        if matching(test, quarantined) is not None or not (Path(root) / test.split("::", 1)[0]).is_file():
+        if (
+            "::" not in test
+            or matching(test, quarantined) is not None
+            or not (Path(root) / test.split("::", 1)[0]).is_file()
+        ):
             continue
         flip = found[test]
         out.append(
@@ -387,8 +393,22 @@ class GitHub:
         self.repo = repo
         self.cache = Path(cache) if cache else None
 
-    def api(self, path):
-        return json.loads(subprocess.run(["gh", "api", path], capture_output=True, text=True, check=True).stdout)
+    def api(self, path, *, paginate=False):
+        flags = ["--paginate", "--slurp"] if paginate else []
+        return json.loads(
+            subprocess.run(["gh", "api", *flags, path], capture_output=True, text=True, check=True).stdout
+        )
+
+    def artifact(self, artifact, name):
+        """Read one file from an artifact, if its archive is still available."""
+        fetched = subprocess.run(["gh", "api", artifact["archive_download_url"]], capture_output=True, check=False)
+        if fetched.returncode:
+            return None
+        try:
+            with zipfile.ZipFile(io.BytesIO(fetched.stdout)) as archive:
+                return archive.read(name)
+        except (KeyError, zipfile.BadZipFile):
+            return None
 
     def results(self, run_id, leg):
         """The node ids a leg's JUnit report shows as passed, from its `results-<leg>` artifact (uploaded by the leg, so
@@ -405,23 +425,14 @@ class GitHub:
         ]
         if not made:
             return None
-        fetched = subprocess.run(["gh", "api", made[-1]["archive_download_url"]], capture_output=True, check=False)
-        if fetched.returncode:
+        # The retry report is evidence of a flip. Only the first report supplies ordinary passes.
+        report = self.artifact(made[-1], f"{leg['name']}.xml")
+        if report is None:
             return None
         try:
-            archive = zipfile.ZipFile(io.BytesIO(fetched.stdout))
-        except zipfile.BadZipFile:
+            return passed_tests(report)
+        except ET.ParseError:
             return None
-        passed = None
-        for name in archive.namelist():
-            if not name.endswith(".xml"):
-                continue
-            try:
-                found = passed_tests(archive.read(name).decode(errors="replace"))
-            except ET.ParseError:
-                continue
-            passed = (passed or set()) | found
-        return passed
 
     def log(self, job_id):
         cached = self.cache / f"{job_id}.log" if self.cache else None
@@ -457,11 +468,43 @@ def runs_since(gh, repo, days, today):
     return out
 
 
+def _add_retry_flips(gh, repo, days, today, found):
+    """Add the flips recorded by successful retries in recent merge queue legs."""
+    cutoff = (date.fromisoformat(today) - timedelta(days=days)).isoformat()
+    pages = gh.api(f"repos/{repo}/actions/artifacts?name=queue-flaky&per_page=100", paginate=True)
+    for page in pages:
+        for artifact in page["artifacts"]:
+            created = artifact["created_at"][:10]
+            run_id = (artifact.get("workflow_run") or {}).get("id")
+            if artifact.get("expired") or not cutoff <= created <= today or not run_id:
+                continue
+            report = gh.artifact(artifact, "flaky.json")
+            if report is None:
+                continue
+            try:
+                records = json.loads(report)
+            except ValueError:
+                continue
+            if not isinstance(records, list):
+                continue
+            url = f"https://github.com/{repo}/actions/runs/{run_id}"
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                commit, tests = record.get("commit"), record.get("tests")
+                if not isinstance(commit, str) or not commit or not isinstance(tests, list):
+                    continue
+                for test in tests:
+                    if isinstance(test, str) and test:
+                        _record_flip(found, test, commit, url, [url], created)
+
+
 def detect(gh, repo, days, today, quarantined):
-    """(markdown, proposed entries)."""
+    """Report flips from PR-check runs and queue retries, with proposed pytest entries."""
     runs = candidates(runs_since(gh, repo, days, today))
     observed = observations(gh, repo, runs)
     found = flips(observed)
+    _add_retry_flips(gh, repo, days, today, found)
     proposed = propose(found, quarantined)
     lines = [f"Read {len(runs)} PR-check run(s) that could flip, over {days + 1} day(s).", ""]
     proposed_tests = {p["test"] for p in proposed}
@@ -469,9 +512,11 @@ def detect(gh, repo, days, today, quarantined):
         lines += ["| Test | Commit | Failed | Passed | Quarantined |", "| --- | --- | --- | --- | --- |"]
         for test in sorted(found):
             flip = found[test]
-            failed = " ".join(f"[job]({u})" for u in flip["failed"])
-            passed = " ".join(f"[attempt]({u})" for u in flip["passed"][:3])
+            failed = " ".join(f"[log]({u})" for u in flip["failed"])
+            passed = " ".join(f"[log]({u})" for u in flip["passed"][:3])
             status = "yes" if matching(test, quarantined) else "proposed" if test in proposed_tests else "not on main"
+            if "::" not in test:
+                status = "browser script"
             lines.append(f"| `{test}` | {flip['commit'][:10]} | {failed} | {passed} | {status} |")
     else:
         lines.append("No test failed and passed on the same commit.")

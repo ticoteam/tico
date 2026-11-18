@@ -338,8 +338,8 @@ def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str)
     standing = R.standing(conn, row, requirement, answer)
     name = R.name_of(requirement)
     if standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
-        what_jev = "could not check" if "Decision model couldn't check" in standing.line else "is unsure of"
-        lead = f'Jev {what_jev} "{name}": you decide it, as the pipeline\'s manager.'
+        model_action = "could not check" if "Decision model couldn't check" in standing.line else "is unsure of"
+        lead = f'The decision model {model_action} "{name}": you decide it, as the pipeline\'s manager.'
         task_wakes.add(
             conn,
             row,

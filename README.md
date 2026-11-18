@@ -178,15 +178,21 @@ in Settings: [`docs/github-app.md`](docs/github-app.md).
 
 ## Skills in your own Claude Code
 
-The dev bots' and humans' own Claude Code sessions use the same team skill, from this repo:
-`skills/create-pr` (open a draft PR the way the team does). This repo is also a Claude Code plugin
-marketplace (`.claude-plugin/marketplace.json`) with one plugin, `tico`, that carries it. Install
-it once per computer:
+The dev bots' and humans' own Claude Code sessions use the same team skills, from this repo:
+
+- `skills/create-pr`: open a draft PR the way the team does.
+- `skills/ci-speed`: find the CI jobs that hold up a merge, speed them up, and prove the gain on
+  the real runners.
+- `skills/ci-security`: pin actions, keep untrusted values out of shell, and trim workflow
+  permissions.
+
+This repo is also a Claude Code plugin marketplace (`.claude-plugin/marketplace.json`) with one
+plugin, `tico`, that carries them. Install it once per computer:
 
     claude plugin marketplace add ticoteam/tico
     claude plugin install tico@tico
 
-Then `/tico:create-pr` works in any session, and Claude also reaches for it on its own. Bots keep
+Then `/tico:create-pr`, `/tico:ci-speed` and `/tico:ci-security` work in any session, and Claude also reaches for it on its own. Bots keep
 reading the same file from `$HUB_DIR/skills/`, so there is one copy to change.
 
 ## Hosted and self-hosted servers

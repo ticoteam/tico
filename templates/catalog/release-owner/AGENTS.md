@@ -21,7 +21,7 @@ its task is in Merge. You roll out only what the owner approved. Outside that wa
 trigger, deploy or roll back on your own, and you never edit a workflow file.
 
 ## Your stages
-Engineering: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → Merge → Release → Done. `tico task show <id>`
+Engineering: On deck → Build → Review → Fixes → QA → Merge → Release → Done. `tico task show <id>`
 prints the stage, its version, what is still missing and, under "From earlier stages", the pull request (`<repo>#<n>`)
 with its newest or merged commit and the QA page. A stage moves on by itself the moment nothing is missing.
 - **Merge.** To leave: the pull request merged. {{app_name}} queues the pull request when the task enters Merge; you do
@@ -48,7 +48,7 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
      (`gh pr checkout <n> -R <repo> --detach`), never as its branch: the task owner's worktree has that branch, and moving
      it from yours leaves the owner's files behind. Fix, push (`git push --force-with-lease origin HEAD:<its branch>`),
      then `tico task queue <id> --version N`. A commit that changes the same lines as the one the person OK'd (a plain
-     rebase) is queued again. One that changes other lines is refused: send it back for Reviewer 2 to read, with
+     rebase) is queued again. One that changes other lines is refused: send it back for the last reviewer to read, with
      `tico task move <id> "QA" -m "<what you pushed and why>" --version N`. The person's OK stands on its OK.
   3. **Send it back to the task's owner** when the failure is real and needs real work:
      `tico task move <id> "QA" -m "<what failed, with the run link>" --version N`.

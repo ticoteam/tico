@@ -16,6 +16,8 @@ FOLLOWED = (
     "harness",
     "reasoning_effort",
     "compact_at",
+    "output_style",
+    "verbosity",
     "session",
     "subtask_session",
     "task_goal",
@@ -400,7 +402,7 @@ def retire_assignments(c):
             c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
             from . import pages
 
-            pages.forget_audience_member(c, H.KEEPER, "bots", bot)
+            pages.forget_audience_member(c, H.TICO_ACTOR, "bots", bot)
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.setup_finished(c, bot, archived=True)
@@ -415,4 +417,4 @@ def retire_assignments(c):
         ).fetchall():
             # The engine's reassign wakes the role and does what a hand-over does. One it refuses stays with the
             # archived actor and says Paused in the list of whoever can fix it.
-            H.attempt(c, H.task_reassign, H.KEEPER, task_id, owner, "Back from a retired temporary assignment.")
+            H.attempt(c, H.task_reassign, H.TICO_ACTOR, task_id, owner, "Back from a retired temporary assignment.")

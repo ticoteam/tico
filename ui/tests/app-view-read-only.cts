@@ -45,7 +45,7 @@ const READS = [
   '#bot-more-btn', '#bot-incognito', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
   // The task window: open a subtask or a related task (or unfold the subtasks), open a file, copy a session,
   // and the head's ⋯ (in a view it holds only Copy link; checked open below).
-  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tft-file]', '[data-copy-session]', '[data-task-more]',
   // Retry after a failed load, a page's filter icon, and a filter's choices and search in the shared popover.
   '[data-use-retry]', '[data-rp-retry]', '[data-learned-retry]', '[data-roadmap-retry]', '[data-retry-changes]',
   '.use-filter', '#rp-filter', '[data-cl-filter]', '#task-filter-pop .tl-opt input', '#task-filter-pop .tl-menu-q',
@@ -195,7 +195,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await page.locator('.tmodal[open] .task-sessions .tlink:not(.primary)').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('.tmodal[open] .task-sessions .tlink.primary').count(), 1, 'the primary session is listed too');
     const inert = '.tmodal[open] :is([data-tp-add], [data-req-ask], [data-prop-follow], [data-fb-rate], [data-session-add], [data-link-add], '
-      + '[data-drop-link], [data-related-add], [data-tf-add], [data-tp-unlink], [data-req-withdraw], .prop-add, .prop-x)';
+      + '[data-drop-link], [data-related-add], [data-tft-new], [data-req-withdraw], .prop-add, .prop-x)';
     assert.deepEqual(await page.locator(inert).evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => e.outerHTML.slice(0, 80))), [], 'no greyed-out write in the task window');
     // No heading stands alone: Pages with no page and an empty To leave go with their +; Activity and links has its Sessions.
     assert.deepEqual(await page.locator('.tmodal[open] .task-side .rail-h').evaluateAll(hs => hs.filter(h => (h as HTMLElement).offsetWidth > 0)
@@ -224,13 +224,15 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await win.locator('.task-sessions .tlink:not(.primary) [data-copy-session]').click();
     await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 2, null, {timeout: t(15000)});
     assert.equal((await copied())[1], 'claude --resume th-view-1', 'Copy session copied the resume command');
-    await win.locator('[data-tf-file]').first().click();
+    await win.getByRole('tab', {name: /^Files/}).click();
+    await win.locator('[data-tft-file]').first().click();
     const viewer = page.locator('dialog[open] [data-tf-close]');
     await viewer.waitFor({timeout: t(15000)});
     assert.match(await page.locator('dialog[open] .tf-view-name').innerText(), /notes\.txt/, 'the file opened');
     await viewer.click();
     await viewer.waitFor({state: 'detached', timeout: t(15000)}).catch(() => viewer.waitFor({state: 'hidden', timeout: t(15000)}));
     // A subtask opens in the window.
+    await win.locator('[data-task-tab="details"]').click();
     await win.locator('[data-sub-open]', {hasText: 'A part of it'}).click();
     await page.locator('.tmodal[open] .tmodal-title', {hasText: 'A part of it'}).waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'the subtask offers nothing that writes either');

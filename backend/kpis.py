@@ -795,6 +795,10 @@ def add_reading(
         ":evidence, :quality, :definition_version, :supersedes)",
         reading,
     )
+    # A channel whose KPI or guardrail this is may have crossed a line (backend/growth_brief.py): its owner is told.
+    from . import growth_brief
+
+    growth_brief.safely(growth_brief.check_kpi, conn, row["id"], actor)
     return reading
 
 

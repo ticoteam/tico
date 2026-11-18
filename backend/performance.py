@@ -383,6 +383,41 @@ def attempt_snapshots(c, attempt_id):
     }
 
 
+def note_timings(c, attempt_id, rule_check_ms, arrived):
+    """The server's part of a run's `timings` (models.RunTimings), added when the runner sent its own: the person's
+    message to the claim (`send_to_claim_ms`, both on this server's clock), the claim to the result's arrival
+    (`received_ms`, the runner's clock against this one's) and the completion's org rule check (`rule_check_ms`)."""
+    row = c.execute(
+        "SELECT a.result,a.created_at,m.created_at AS sent_at FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+        "LEFT JOIN messages m ON m.id=coalesce(a.message_id,j.message_id) WHERE a.id=?",
+        (attempt_id,),
+    ).fetchone()
+    try:
+        timings = json.loads(row["result"] or "{}").get("timings") if row else None
+    except (ValueError, TypeError, AttributeError):
+        timings = None
+    if not isinstance(timings, dict):
+        return
+    timings["rule_check_ms"] = rule_check_ms
+    claimed, sent = H.parse_ts(row["created_at"]), H.parse_ts(row["sent_at"])
+    if claimed and sent:
+        timings["send_to_claim_ms"] = max(0, round((claimed - sent).total_seconds() * 1000))
+    if isinstance(timings.get("claimed_at"), (int, float)):
+        timings["received_ms"] = round((arrived - timings["claimed_at"]) * 1000)
+    c.execute(
+        "UPDATE attempts SET result=json_set(result,'$.timings',json(?)) WHERE id=?", (json.dumps(timings), attempt_id)
+    )
+
+
+def run_timings(result):
+    """A run's `timings` from its attempt's result: what the runner and the completion recorded, or None."""
+    try:
+        timings = json.loads(result or "{}").get("timings")
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return timings if isinstance(timings, dict) else None
+
+
 # ------------------------------------------------------------------------------------------------ overloads
 def reasons(point):
     """What made a point very loaded: any of cpu, memory, swap, disk."""

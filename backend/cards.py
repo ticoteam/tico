@@ -114,14 +114,11 @@ DEFAULTS = {
         ("updates", "medium"),
         ("latest_pages", "medium"),
     ],
-    # A default pin's third item is its card's settings beyond the template's own defaults.
+    # A default pin's third item is its card's settings beyond the template's own defaults. Growth's month numbers
+    # and channels are the Growth line's, drawn above the cards (backend/growth_line.py), so no Number or Channels
+    # card by default; a team that pinned them keeps them.
     "growth": [
         ("growth_funnel", "large"),
-        *(
-            ("growth_number", "small", {"metric": m})
-            for m in ("new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30")
-        ),
-        ("growth_channels", "large"),
         ("growth_retention", "medium"),
         ("growth_board", "medium"),
     ],
@@ -421,15 +418,19 @@ def needs_act(it):
 
 
 def needs_brief(items, n):
-    """The first `n` Needs you items (views.needs_items) as a card's rows. A row is titled by its task's title, from the
-    brief needs_items gives for a task the reader may read; a Paused cause and an item without a task by its own `line`.
+    """The first `n` Needs you items (views.needs_items) as a card's rows. A row is titled by what an OK is about
+    (`about`, for a task filed for an OK), else its task's title, from the brief needs_items gives for a task the reader
+    may read; a Paused cause and an item without a task by its own `line`.
     `line` (the ask, the missing work, the cause, the mention's first line) goes along as the row's tooltip, and `act`
     (needs_act) as the word at its right."""
     return [
         {
             "id": it.get("id"),
             "kind": it.get("kind"),
-            "title": (it.get("kind") != "paused" and (it.get("task") or {}).get("title")) or it.get("line") or "",
+            "title": it.get("about")
+            or (it.get("kind") != "paused" and (it.get("task") or {}).get("title"))
+            or it.get("line")
+            or "",
             "line": it.get("line") or "",
             "act": needs_act(it),
             "task_id": it.get("task_id") or (it.get("id") if it.get("kind") == "task" else None),
@@ -902,6 +903,23 @@ def growth_number(ctx, s):
     }
 
 
+MONEY_UNITS = {"usd", "$", "eur", "€", "gbp", "£", "dollars"}
+
+
+def _unit_kind(unit):
+    """A KPI unit's kind, for the Funnel's share: money, a percent, a time or a ratio, else a count ("", "visits")."""
+    u = (unit or "").strip().lower()
+    if u in MONEY_UNITS:
+        return "money"
+    if u in ("%", "pct", "percent"):
+        return "percent"
+    if u in ("months", "mo", "days", "weeks", "hours"):
+        return "time"
+    if u in ("ratio", "x", "×"):
+        return "ratio"
+    return "count"
+
+
 def growth_funnel(ctx, s):
     """The five stages, each with the KPI the growth tree names for it (the first with that stage, the North Star
     included), its reading, and the share of the stage before; the North Star on its own."""
@@ -910,7 +928,9 @@ def growth_funnel(ctx, s):
     upto = (lambda v: kpi_upto(v, ctx.asked_month)) if ctx.asked_month else (lambda v: v)
     north = upto(kpis["north_star"]) if kpis["north_star"] else None
     views = ([north] if north else []) + [upto(v) for v in kpis["inputs"] + kpis["guardrails"] + kpis["other"]]
-    stages, last = [], None
+    # A share of the stage before only between two KPIs of the same kind of unit (_unit_kind): visits to bookings is a
+    # conversion, customers over dollars means nothing.
+    stages, last, last_unit = [], None, None
     for key, label in (
         ("reach", "Reach"),
         ("acquire", "Acquire"),
@@ -929,12 +949,14 @@ def growth_funnel(ctx, s):
                 "unit": view["unit"] if view else "",
                 "value": value,
                 "prev": prev,
-                "conv": round(value / last * 100, 1) if value is not None and last else None,
+                "conv": round(value / last * 100, 1)
+                if value is not None and last and view and _unit_kind(view["unit"]) == _unit_kind(last_unit)
+                else None,
                 "north_star": bool(view and north and view["id"] == north["id"]),
                 "series": [p["value"] for p in view["series"]] if view else [],
             }
         )
-        last = value
+        last, last_unit = value, (view["unit"] if view else None)
     star = None
     if north:
         value, prev = kpi_reading(north)
@@ -1658,6 +1680,8 @@ def renumber(c, place):
 def drop_pin(ctx, pin):
     ctx.c.execute("DELETE FROM pins WHERE id=?", (pin["id"],))
     if pin["item"].startswith("page:"):
+        if pin["place"].startswith("task:"):
+            ctx.c.execute("DELETE FROM page_links WHERE id=?", ("pin:" + pin["id"],))
         if not pin["place"].startswith("person:"):
             file_activity(ctx.c, pin["item"][5:], ctx.who.actor, "unpinned", pin["place"])
     elif pin["item"].startswith("card:"):

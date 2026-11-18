@@ -175,7 +175,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
                 "UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,)
             )
             rows[doc_id] = (path.name, "unrepaired", want, 1 if want == original else 2)
-            # The same, last touched by Tico's keeper (a title fix): only librarian_wording35 picks it up.
+            # The same, last touched by Tico (a title fix): only librarian_wording35 picks it up.
             doc_id = legacy(path.stem, original, "_librarian/kept-by-keeper-" + path.name)
             c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired, keeper", want, 1 if want == original else 2)
@@ -187,7 +187,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
                 "UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
                 (broken, doc_id),
             )
-            store.snapshot(c, store.get_row(c, doc_id), H.KEEPER, "Updated generated Tico wording")
+            store.snapshot(c, store.get_row(c, doc_id), H.TICO_ACTOR, "Updated generated Tico wording")
             rows[doc_id] = (path.name, "broken", want, 3)
             # A person's own page where the repairs look: the person's words, Tico's terms included.
             doc_id = legacy(path.stem, original, "_librarian/person-" + path.name)

@@ -50,13 +50,13 @@ Row = dict[str, Any]
 _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
-SYSTEM: str = _core.KEEPER
+SYSTEM: str = _core.TICO_ACTOR
 
 WAITING, OK, SENT_BACK, WITHDRAWN, USED = "waiting", "ok", "sent_back", "withdrawn", "used"
 STANDINGS = (WAITING, OK, SENT_BACK, WITHDRAWN, USED)
-# How a visit ends that takes its asks with it: the task moved back, closed, was reopened from that stage, or moved to
-# another pipeline.
-ENDS_ASKS = ("back", "closed", "reopened", "moved")
+# How a visit ends that takes its asks with it: the task moved back, through a side stage, to another pipeline, or was
+# closed or reopened.
+ENDS_ASKS = ("back", "side", "closed", "reopened", "moved")
 FROM_PREVIEW = "OK this from its preview in Tico."
 
 # Each module's step is imported by name inside a small function: lazily, so task_asks imports none of them at load
@@ -251,6 +251,66 @@ FILED_TITLES: dict[str, str] = {
 }
 
 
+def _clip_words(text: object, most: int = 120) -> str:
+    said = " ".join(str(text or "").split())
+    return said if len(said) <= most else said[: most - 1].rstrip() + "…"
+
+
+def _named(content: object, *path: str) -> str:
+    """The text at `path` in an OK's content, or ""."""
+    at: object = content
+    for key in path:
+        at = cast("dict[str, object]", at).get(key) if isinstance(at, dict) else None
+    return _clip_words(at) if isinstance(at, str) else ""
+
+
+# What an OK of each OWNED kind is about, in its subject's own words, from the content it binds: the line a party's
+# Needs you row shows instead of the filed task's FILED_TITLES (task #389: "Send an email" twice on one phone). Read
+# from the content, not stored, so an OK asked before this shows its subject too. Only a party to the OK ever sees it
+# (views.needs_items gives it with the ask entry their own read of the task gives).
+ABOUT: dict[str, Callable[[object], str]] = {
+    "email_send": lambda c: f"Send email: {s}" if (s := _named(c, "subject")) else "",
+    "letter": lambda c: f"Mail a letter to {n}" if (n := _named(c, "recipient", "name")) else "",
+    "edition": lambda c: f"Publish: {t}" if (t := _named(c, "title")) else "",
+    "webhook": lambda c: f"Make webhook endpoint {n}" if (n := _named(c, "name")) else "",
+    "publish": lambda c: f"Publish to the roadmap: {t}" if (t := _published_title(c)) else "",
+}
+
+
+def _published_title(content: object) -> str:
+    """The public title a roadmap OK publishes: its content's text is the JSON of the published values
+    (roadmaps.publication_payload). "" when the change does not set one (a summary only); about() then reads the task's
+    own public title."""
+    text = cast("dict[str, object]", content).get("text") if isinstance(content, dict) else None
+    try:
+        values: object = json.loads(text) if isinstance(text, str) else None
+    except ValueError:
+        return ""
+    return _named(values, "public_title")
+
+
+def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "") -> str:
+    """What one OK is about for its parties' Needs you rows: its subject's words (ABOUT); else the ask's own line when it
+    says more than a question of the kind does (a Finance action's line names the payee and amount); else ""."""
+    found = grant(conn, requirement_id)
+    if not found:
+        return ""
+    kind = kind_of(found["subject"])
+    said = ABOUT.get(kind, lambda _c: "")(found["content"])
+    if said:
+        return said
+    if kind == "publish":
+        # A change that leaves the public title as it is: the task's public title is what the post is about (public text,
+        # never the internal title).
+        row = conn.execute(
+            "SELECT public_title FROM tasks WHERE id=?", (str(found["subject"]).partition(":")[2],)
+        ).fetchone()
+        if row and (title := _clip_words(row[0])):
+            return f"Publish to the roadmap: {title}"
+    line = _clip_words(line)
+    return line if line and not line.endswith("?") else ""
+
+
 def generic(subject: str) -> bool:
     """Whether a bot may ask for and use an OK of this subject through the generic routes: a GENERIC kind only."""
     return ":" in str(subject) and kind_of(subject) in GENERIC
@@ -375,7 +435,7 @@ def _task_status(conn: "sqlite3.Connection", task_id: object) -> str | None:
 
 
 def _taken_back(conn: "sqlite3.Connection", visit: Row) -> bool:
-    """Whether the task was moved back, closed or reopened since this visit ended: what it moved on with is undone."""
+    """Whether a move since this visit ended took back the asks the task moved on with."""
     found = conn.execute(
         f"SELECT 1 FROM visits WHERE task_id=? AND left_at>=? AND how IN ({','.join('?' for _ in ENDS_ASKS)}) LIMIT 1",
         (visit["task_id"], visit["left_at"], *ENDS_ASKS),
@@ -415,7 +475,8 @@ def _state(conn: "sqlite3.Connection", row: Row) -> tuple[str, Row | None, Row |
 
 def standing(conn: "sqlite3.Connection", requirement_id: str) -> str:
     """How an OK stands: waiting (on its person), ok (given from its preview, not used yet), sent_back, withdrawn (it
-    is not asked any more: withdrawn, replaced, its task moved back, closed, deleted or pushed past it), or used."""
+    is not asked any more: withdrawn, replaced, its task diverted, moved back, closed, deleted or pushed past it),
+    or used."""
     row = grant(conn, requirement_id)
     if not row:
         return WITHDRAWN

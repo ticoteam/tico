@@ -47,6 +47,7 @@ def _review_page_jev_unsure(c, eng):
     rid = c.execute(
         "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
     ).fetchone()[0]
+    X.stub_document(c, eng, rid, "f-rev2", "bot:rev-b", 1)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,1,?,?,?)",
@@ -170,6 +171,7 @@ def _met_page(c, eng, file_id, item_versions, version=1):
     rid = c.execute(
         "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
     ).fetchone()[0]
+    X.stub_document(c, eng, rid, file_id, "bot:builder", version)
     if version > 1:  # one page per visit and requirement: a new version replaces the one attached
         c.execute(
             "UPDATE requirement_pages SET file_id=?, version=?, item_versions=? WHERE visit_id=? AND requirement_id=?",

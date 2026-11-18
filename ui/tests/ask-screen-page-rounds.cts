@@ -1,7 +1,7 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of a page that comes back on the ask screen (spec #263, backend/page_rounds.py). The OK of a
 // page at version 3, which Ana sent back at versions 1 and 2:
-// - the right side is in parts, not one paragraph: one meta line (who asked · Spec · v3 · date · the Decision model's word · #80 ↗; the
+// - the right side is in parts, not one paragraph: one meta line (who asked · Spec · v3 · date · the Decision model's word, "✓ Meets the bar" · #80 ↗; the
 //   line opens a menu with it all in full and the Decision model's reason, never a p-value), the question ("OK the spec?"), one line of
 //   what changed in v3 (the bot's lines) and Your points (✓ done / ✗ not done, with why); Your note on v2 is Ana's
 //   message above the ask, in full;
@@ -10,6 +10,7 @@ import type {Page, Route} from 'playwright';
 // - the page opens clean, even though Ana sent v2 back; Changes since v2 marks each block not in v2 in its margin;
 // - a page the Decision model has not judged yet, at version 1: "Decision model checking", no versions in the menu;
 // - at 390 px the parts stack, nothing runs off the side and Approve is reachable.
+// - a reviewer's note of the new commits shows its verdict line and More (task #389).
 // TICO_UI_SHOTS=<dir> saves a screenshot of each (light and dark at 1040, and 390).
 declare function actorLabel(actor: string): string;
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -49,6 +50,14 @@ const pages: Record<string, string> = {
 };
 // What the ask says besides the send back and Jev: kept on the face when the parts replace the line.
 const CONFLICT = 'The PR has a merge conflict: Builder fixes it after your OK.';
+// What a reviewer said of the new commits: its verdict line, then what it read (task #389: 18 lines of it sat above
+// Notes on a phone). The verdict shows; the rest waits behind More.
+const READ = 'Review 2 reviewed the commits since the reviews: No blockers.\nBuilt/read: PR #3585 delta e4f77d095..9c1a2b3f4 '
+  + '(3 commits). Ran: npm run build:ui; node scripts/ui-tests.cts page-viewer; PYTHONPATH=. python -m pytest backend/tests/test_bundle.py '
+  + '(37 passed). Checked: the boot bundle is 1.1 MB -> 640 KB gzip 212 KB.';
+// A note with no line of its own: its first 120 characters, cut at a word, and More.
+const LONG = 'Review 1 reviewed the commits since the reviews: read e4f77d095..9c1a2b3f4, the bundle split keeps the viewer lazy and '
+  + 'the tests cover a cold start.';
 const round = (version: number, day: number, verdict: string | null, reason: string, answers: unknown[], more: Record<string, unknown> = {}) => ({
   file_id: 'pa', version, at: `2026-11-${day}T09:00:00Z`, by: 'bot:pm', replaced: version < 3, note: '', changed: [], answered: [],
   jev: {verdict, reason}, answers, ...more});
@@ -83,7 +92,7 @@ async function open(page: Page, errors: string[]) {
         + 'OK Ana (version 3) ' + CONFLICT),
       need('t-b', 'Paste images', 'pb', 1, 11, 'OK Ana (version 1)')]});
     if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);
-    if (p === `/api/v2/tasks/t-a/asks/${RID}/rounds`) return json({rounds, notices: ["New commits since Ana's OK.", CONFLICT]});
+    if (p === `/api/v2/tasks/t-a/asks/${RID}/rounds`) return json({rounds, notices: ["New commits since Ana's OK.", CONFLICT, READ, LONG]});
     if (p === `/api/v2/tasks/t-b/asks/${RID}/rounds`) return json({rounds: [{...round(1, 13, null, '', []), file_id: 'pb', replaced: false}]});
     if (p === '/api/v2/pages/pa') return json({page: {file_id: 'pa', title: 'Decision view', version: 3, kind: 'page', created_at: '2026-11-11T09:00:00Z',
       updated_at: '2026-11-13T09:00:00Z', owner: 'bot:pm'}, pinned: [], can_manage: false, can_delete: false});
@@ -119,12 +128,23 @@ async function open(page: Page, errors: string[]) {
     assert.equal(await side.locator('.dc-msg-ask .dc-q').innerText(), 'OK the spec?', 'the ask asks its question');
     assert.equal(await side.locator('.dc-msg-ask .dc-one').innerText(), 'Sources on every evidence row; Cut the repeated second section', 'then one line of what changed');
     // Why Ana is asked again, and the conflict her OK hands to the Builder, stay on the face, before the history.
-    assert.deepEqual(await side.locator('.dc-notice').allInnerTexts(), ["New commits since Ana's OK.", CONFLICT]);
-    assert.ok(await side.locator('.dc-meta ~ .dc-notice + .dc-msg-b').count() > 0, 'the notices come after the meta line, before the question');
+    assert.deepEqual(await side.locator('.dc-notice > p:first-child, p.dc-notice').allInnerTexts(),
+      ["New commits since Ana's OK.", CONFLICT, 'Review 2 reviewed the commits since the reviews: No blockers.',
+        'Review 1 reviewed the commits since the reviews: read e4f77d095..9c1a2b3f4, the bundle split keeps the viewer lazy and…']);
+    const long = side.locator('.dc-notice').nth(3);
+    await long.locator('[data-dc-more]').click();
+    assert.equal(await side.locator('.dc-notice').nth(3).innerText(), LONG);
+    // The reviewer's note: its verdict line and More; More shows what it read.
+    const read = side.locator('.dc-notice').nth(2);
+    assert.doesNotMatch(await read.innerText(), /npm run build/);
+    await read.locator('[data-dc-more]').click();
+    assert.match(await side.locator('.dc-notice').nth(2).innerText(), /No blockers\.\s+Built\/read: PR #3585.*37 passed/s);
+    assert.equal(await side.locator('.dc-notice').nth(2).locator('[data-dc-more]').count(), 0);
+        assert.ok(await side.locator('.dc-meta ~ .dc-notice + .dc-msg-b').count() > 0, 'the notices come after the meta line, before the question');
     assert.doesNotMatch(await side.innerText(), /p 0\.73|between 0\.2/, 'no p-value on the face');
     assert.doesNotMatch(await side.innerText(), /Version 3, after the send back/, "their note is not quoted back in the heading");
     const asker = await page.evaluate(() => actorLabel('bot:pm'));
-    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets #80 ↗`);
+    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets the bar #80 ↗`);
     // The ask is the asker's last message in the task's chat; the chat's box and Approve under it.
     // Your note on v2 is your message above it, not in it.
     const order = await side.locator('.dc-msg-said, .dc-msg-ask > .dc-meta, .dc-msg-ask .dc-q, .dc-one, .dc-points, .dc-open-task, .dc-part, .p-text, [data-dc="approve"]').evaluateAll(
@@ -135,7 +155,7 @@ async function open(page: Page, errors: string[]) {
     const ctl = side.locator('[data-dc-vmenu]');
     await ctl.click();
     assert.deepEqual(await side.locator('.dc-vmenu .dc-vinfo').allInnerTexts(), [`${asker} · Spec · v3 · Nov 13`,
-      'Decision model: Meets · Clear and complete; the counts cite their queries']);
+      'Decision model: Meets the bar · Clear and complete; the counts cite their queries']);
     await side.locator('.dc-msg-said .th-body').click();   // a click off the menu (above it: the menu opens down over the question)
 
     // The version menu: one line per version, its date, the Decision model's mark and Ana's answer, then Changes since v2.
@@ -144,7 +164,7 @@ async function open(page: Page, errors: string[]) {
     assert.deepEqual((await steps.allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()), [
       'v1 · Nov 11 · ? · Sent back', 'v2 · Nov 12 · ✗ · Sent back', 'v3 · Nov 13 · ✓']);
     assert.deepEqual(await steps.locator('.dc-vjev').evaluateAll(els => els.map(e => e.getAttribute('title'))), [
-      'Decision model: Unsure · Cannot tell who uses it', "Decision model: Doesn't · No sources on the counts", 'Decision model: Meets · Clear and complete; the counts cite their queries']);
+      'Decision model: Not sure · Cannot tell who uses it', "Decision model: Falls short · No sources on the counts", 'Decision model: Meets the bar · Clear and complete; the counts cite their queries']);
     assert.equal(await steps.nth(2).getAttribute('aria-current'), 'true');
     assert.equal(await side.locator('.dc-vmenu [data-dc-since]').innerText(), 'Changes since v2');
     await side.locator('.dc-msg-said .th-body').click();   // a click off the menu (above it: the menu opens down over the question)

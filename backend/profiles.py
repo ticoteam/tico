@@ -4,7 +4,7 @@
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
-    doer       people, hand-offs, asks, results        batched 5 min        yes               yes     any
+    doer       people, hand-offs, asks, results        note                 yes               yes     any
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
@@ -14,8 +14,8 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
 
-A profile has no wake numbers of its own (spec v4, Product #248): every bot's notices wait the one built-in wait and
-its routines keep the one repeat guard (backend/wake_presets.py). The one number left is a lead's digest hour, which a
+A profile has no wake numbers of its own (spec v4, Product #248): a notice a rule batches waits the one built-in wait,
+news about a task's pull request is its owner's turn (Product #546), and its routines keep the one repeat guard (backend/wake_presets.py). The one number left is a lead's digest hour, which a
 Lead or Custom bot may set (`profile_options`). Every profile wakes on its task roundup, the one grouped wake per
 bot per run; `sweeps` says whether the roundup also lists it its late, exception, backlog, assigned, restate, missed and quiet
 tasks (a profile with sweeps off gets its questions and its own follow-ups on it). `pulls`, `sweeps` and `takes` are fixed by the profile
@@ -98,7 +98,7 @@ SPEC = {
     DOER: {
         **BASE,
         "label": "Doer",
-        "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
+        "description": "Works the tasks it is given. News about them wakes it at once on its turn; people and hand-offs wake it at once.",
     },
     REVIEWER: {
         **BASE,
@@ -226,14 +226,14 @@ def effective(config):
 
 def summary(name, spec):
     """One line saying what the numbers mean for this profile."""
-    from .wake_presets import NOTICE_SECONDS, REPEAT_SECONDS, _duration
+    from .wake_presets import REPEAT_SECONDS, _duration
 
     sweep = f"; a routine runs at least {_duration(REPEAT_SECONDS)} after its last run" if spec["sweeps"] else ""
     if name == CUSTOM and spec["digest_hour"] is not None:  # checked first: a digest is what its news waits for
         hour = spec["digest_hour"]
         return f"The rest of the news arrives once a day, at {hour:02d}:00 team time."
     if name in (DOER, CUSTOM):
-        return f"News about its tasks waits {_duration(NOTICE_SECONDS)}{sweep}."
+        return f"News about its tasks wakes it at once, on its turn; the rest is a note for its next run{sweep}."
     return ""
 
 
@@ -331,7 +331,7 @@ def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, o
             f"{name} answers people in chat and takes no tasks (its profile is Responder), so it never "
             "sees tasks. Write to it in its chat, or give this task to a bot that works tasks.",
         )
-    if actor == H.KEEPER or routine:
+    if actor == H.TICO_ACTOR or routine:
         return None
     if takes == "review":
         if is_review_task(c, {"id": task, "title": title, "owner_id": owner}, parent_id=parent, labels=labels):
@@ -588,7 +588,7 @@ def migrate(c, tell=True):
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row["bot"],))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
             materialise(c, row["bot"], source)
-        H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
+        H.event(c, H.TICO_ACTOR, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
         if row["state"] == "archived":
             continue
         owner = row["owner_id"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
@@ -599,7 +599,7 @@ def migrate(c, tell=True):
         more = f"\n...and {len(bots) - 40} more." if len(bots) > 40 else ""
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             H.human_actor(owner),
             "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n"
             + "\n".join(lines)

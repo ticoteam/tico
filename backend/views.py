@@ -120,11 +120,11 @@ def prime_attempt_details(c, ids):
 
 def attempt_details(c, turn):
     """What a run's attempt row adds to its turn: `state` (run.state, backend/runs.py; None for a turn with no attempt
-    row), its diagnostics and load, and why it failed."""
+    row), its diagnostics and load, where its time went (`timings`), and why it failed."""
     attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
-    from .performance import attempt_snapshots
+    from .performance import attempt_snapshots, run_timings
 
     details = {
         "state": runs.state(attempt["state"]) if attempt else None,
@@ -132,6 +132,7 @@ def attempt_details(c, turn):
         "didnt_start": failed and not attempt["started_at"],
         **metadata(c, turn["id"]),
         **attempt_snapshots(c, turn["id"]),
+        "timings": run_timings(attempt["result"]) if attempt else None,
     }
     if failed:
         try:
@@ -881,13 +882,13 @@ def operation_issues(c, who, auth):
             )
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows, unreviewed
+            from .execution import held_back, held_runs, isolation_refused, left_by_tico, stopped_rows, unreviewed
 
             runs = held_runs(c, who, auth, slug)
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
             waiting, waiting_on = held_back(c, who, auth, slug)
-            left = left_by_keeper(c, who, slug)
+            left = left_by_tico(c, who, slug)
             if isolation_refused(c, who, auth, slug):
                 # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
                 # behind the held run until a person acts.
@@ -900,7 +901,7 @@ def operation_issues(c, who, auth):
                     "Tico's Docker runner, then review its stopped run.",
                 )
             elif waiting or left:
-                # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
+                # Work is stuck behind it (the claim's own fence), or Tico settled the rest of its run and left
                 # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
                 # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
                 # retry: the detail says only why they stopped and what waits; the rows name them.
@@ -1088,7 +1089,35 @@ def operation_issues(c, who, auth):
 
     # Whether a computer has stopped is the shared rule over all its queued work, not only what this viewer may read.
     silent = {x["id"] for x in silent_computers(c)} if offline else set()
+    # Machines Tico stopped because the company is out of credit are one account-wide cause with one fix, Add credit:
+    # one card for all of them, never restart advice that cannot help (task #423).
+    frozen = cloud_machines.credit_stopped(c) & set(offline) if offline else set()
+    if frozen:
+        stopped = [offline[r] for r in offline if r in frozen]
+        labels = [x["label"] for x in stopped]
+        named = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+        waiting_bots = sum(len(x["bots"]) for x in stopped)
+        queued_total = sum(x["queued"] for x in stopped)
+        add(
+            "cloud_credit",
+            "Out of credit",
+            f"{len(stopped)} cloud machine{'s' if len(stopped) != 1 else ''} stopped · "
+            f"{waiting_bots} bot{'s' if waiting_bots != 1 else ''} waiting",
+            needs_person=who.role == "owner",
+            more=f"Tico stopped {named} because the company is out of credit."
+            + (
+                f" {queued_total} saved request{'s are' if queued_total != 1 else ' is'} waiting."
+                if queued_total
+                else ""
+            )
+            + " Add credit and they start again; restarting them does not help.",
+            machines=sorted(frozen),
+            action="Add credit.",
+        )
+        issues[-1]["bots"] = [slug for x in stopped for slug in x["slugs"]]
     for runner_id, entry in offline.items():
+        if runner_id in frozen:
+            continue
         names = entry["bots"]
         listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         cannot = "cannot run until it reconnects"
@@ -1107,15 +1136,21 @@ def operation_issues(c, who, auth):
             mine = who.actor == "human:" + operator or (
                 who.role == "owner" and (not person or bool(person.get("hidden")))
             )
+            count = len(names)
+            action = (
+                f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
+                "`tico-computer status` says what stopped, `tico-computer restart` starts it again."
+            )
+            # One line on the card; the bots, the requests and the restart steps are its tooltip (`more`).
             add(
                 "machine",
-                entry["label"] + " stopped checking in",
-                f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting}",
+                entry["label"] + " offline",
+                f"{count} bot{'s' if count != 1 else ''} waiting · {quiet} min",
                 machine=runner_id,
                 since=entry["since"],
                 needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
-                action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
-                "`tico-computer status` says what stopped, `tico-computer restart` starts it again.",
+                action=action,
+                more=f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting} {action}",
             )
         else:
             # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.
@@ -1407,7 +1442,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         else ""
     )
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
-    # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
+    # person_sent: the message is a person's, or Tico carrier of one (the sender alone is Tico).
     job = c.execute(
         f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
         "a.stop_requested_at,a.started_at AS attempt_started_at,p.wait_reason AS start_wait_reason "
@@ -1995,7 +2030,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
-        from . import task_calls
+        from . import task_asks, task_calls
         from .files import readable_earlier
 
         # Every ask's task read together: the list costs what one task's view does.
@@ -2015,6 +2050,13 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 item["line"] = item["ask"]["line"]
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
+                    # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
+                    # this one is about, to its party, in place of that title (task #389).
+                    title = str((item.get("task") or {}).get("title") or "")
+                    if title in task_asks.FILED_TITLES.values():
+                        said = task_asks.about(c, item["requirement_id"], item["line"])
+                        if said:
+                            item["about"] = said
     return sorted(items, key=needs_key)
 
 

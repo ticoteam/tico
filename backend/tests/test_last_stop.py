@@ -79,7 +79,7 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
         assert H.task(c, task["id"])["status"] == "done"
         c.execute(
             "UPDATE messages SET sender_id=?,kind='notice',refs=? WHERE id=?",
-            (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]),
+            (H.TICO_ACTOR, json.dumps({"task": task["id"]}), message["id"]),
         )
         cursor = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     assert claim(api, machine) is None
@@ -159,7 +159,8 @@ def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkey
                 execution.wait_unstarted(c, job["id"], "ops", f"x{n}")
             hold = c.execute(holds.OPEN_SQL, (holds.CANT_START, "job", job["id"], "ops")).fetchone()
             assert hold["streak"] == n
-            waits.append(round((H.parse_ts(hold["until_at"]) - H.parse_ts(H.now())).total_seconds()))
+            # From when the hold was set, not now: the first hold is seconds old by the time it is read.
+            waits.append(round((H.parse_ts(hold["until_at"]) - H.parse_ts(hold["updated_at"])).total_seconds()))
     assert waits == [first, 2 * first, 4 * first]
 
 

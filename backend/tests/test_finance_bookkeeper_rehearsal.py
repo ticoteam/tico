@@ -78,7 +78,7 @@ def test_bookkeeper_rehearsal_setup_and_guards(environment):
 
 def _c6_a_failed_sync_reaches_the_owner_without_botops(api, token):
     """A bank connection whose sync fails tells its owner what failed, once for the failure run: one finance.sync.failed
-    event and one keeper notice to the owner. A retry that still fails says nothing more. No BotOps task is involved."""
+    event and one Tico notice to the owner. A retry that still fails says nothing more. No BotOps task is involved."""
     from backend.finance import sync
 
     store = api.app.state.store

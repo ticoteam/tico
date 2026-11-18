@@ -186,7 +186,7 @@ interface ThvOpts {
   autofocus?: boolean;               // the box takes the focus when the composer first draws
   // Flow's chat on a task (decide.ts): `tail` draws after the messages (the ask, as the asker's last message); `send`
   // takes the composer's words and files in place of a post to the thread, true once they went (the box clears);
-  // `typed` hears each change of the box's words, a draft put back included (Approve becomes "Approve with comments");
+  // `typed` hears each change of the box's words, a draft put back included (an OK's row then shows Send back, Close and Approve);
   // a composer with `send` offers uploads only.
   tail?: () => string;
   send?: (text: string, files: File[]) => Promise<boolean>;
@@ -241,6 +241,7 @@ interface ThvConv {
   memberList: { actor: string }[] | null;
   memberMore: boolean;
   run: { openSteps: Set<string>; steps: Record<string, string>; openFolds: Set<string> };
+  live: Map<string, ThvLiveRun>;    // the replies being written, by run (thvLiveRun)
 }
 interface ThvView extends ThvConv {
   key: number;
@@ -262,6 +263,7 @@ interface ThvView extends ThvConv {
   // The list's markup above its status rows, as last drawn: a status-only draw replaces only what follows it.
   listRows?: string;
   pidx?: PromptIndex;             // your messages on the timeline's edge (ui/app/chat-index.ts)
+  liveTimer?: ReturnType<typeof setTimeout> | 0;   // a live reply's next draw (thvLiveSoon)
 }
 // The parts of a view a change touches: the header, the message rows, the bots' status rows at the list's end, the composer.
 type ThvPart = 'head' | 'list' | 'status' | 'composer';
@@ -372,7 +374,7 @@ function threadMount(host: HTMLElement, opts: ThvOpts = {}): ThvView {
 // Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
 const thvConvFresh = (): ThvConv => ({id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading', execution: null,
   readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null, openUpdates: new Set(), openLines: new Set(),
-  flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}});
+  flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}, live: new Map()});
 function threadUnmount(view: ThvView | null | undefined) {
   if (!view || view.gone) return;
   thvDraftSave(view);
@@ -866,7 +868,7 @@ function thvStatusHTML(view: ThvView, b: ThvBotRow | null | undefined) {
   if (!b?.actor || !THV_STATUS_WORD[b.state]) return '';
   const slug = actorSlug(b.actor), name = b.name || actorName(b.actor);
   const word = b.state === 'working' ? `working · <span class="tnum" data-th-since="${esc(b.since || '')}">${thvMinSec(b.since)}</span>` : THV_STATUS_WORD[b.state];
-  const stop = b.state === 'working' && slug && settingsCanManageBot(botRow(slug))
+  const stop = b.state === 'working' && b.run_id && slug && settingsCanManageBot(botRow(slug))
     ? `<button type="button" class="ghost small th-status-act" data-th-stop="${esc(slug)}" data-run="${esc(b.run_id || '')}">Stop</button>` : '';
   const fix = b.state === 'cant_reply' && b.fix?.href ? `<a class="ghost small th-status-act" href="${esc(b.fix.href)}">${esc(b.fix.label || 'Fix')}</a>` : '';
   return `<div class="th-status th-status-${esc(b.state)}" data-th-status="${esc(b.actor)}" role="status">
@@ -890,6 +892,91 @@ function thvStatusReplied(view: ThvView, m: ThvMessage) {
   if (!view.botStatus?.length || !thvBot(m?.sender_id)) return;
   view.botStatus = view.botStatus.filter(b => b.actor !== m.sender_id);
 }
+// A send to a bot draws its row at once: "Starting" with its clock running from the send, the row a run draws before its
+// first step. A bot that already has a row keeps it. The server's next status replaces this row; so does a send that
+// fails or is held, and THV_START_MS with no status at all.
+const THV_START_MS = 30000;
+function thvStartRow(view: ThvView): ThvBotRow | null {
+  const bot = view.opts.dm || view.opts.home || '';
+  if (!thvBot(bot) || view.botStatus?.some(b => b.actor === bot)) return null;
+  const row: ThvBotRow = {actor: bot, name: actorName(bot), state: 'working', detail: 'Starting', since: new Date().toISOString(), run_id: null, fix: null};
+  view.botStatus = [...(view.botStatus || []), row].slice(0, 5);
+  setTimeout(() => { if (!view.gone) thvStartGone(view, row); }, THV_START_MS);
+  return row;
+}
+// Takes `row` away when it is still on the list (the server's status puts its own rows there instead).
+function thvStartGone(view: ThvView, row: ThvBotRow | null) {
+  const rows = view.botStatus;
+  if (!row || !rows?.includes(row)) return;
+  view.botStatus = rows.filter(b => b !== row);
+  thvDraw(view);
+}
+
+// ---- a bot's reply as it is written
+// One row per run under the status rows, from its `runs` output: a compact stream still sends a reply's text deltas and
+// messages whole (backend/events.py _live_text), and never for a bot org rules hide or to someone who may not read the
+// run. Pieces join as the server's live reply does (backend/turns.py reply_parts): deltas type into a piece, the message
+// that ends it replaces what they typed, and the closing (final) message is the whole reply. The posted message, which
+// names its run (`refs.turn_id`), takes the row's place in the same frame; a run that ends without one loses its row.
+// Only a run seen from its start is drawn: one already under way when the page opened would start mid-sentence.
+interface ThvLiveRun { bot: string; parts: string[]; typing: string | null; ended: boolean }
+interface ThvRunEvent {
+  run_id?: string; conversation_id?: string; bot_id?: string; state?: string;
+  output?: {kind?: string; compact?: boolean; payload?: {text?: string; final?: boolean; delta_kind?: string}};
+}
+const THV_LIVE_DRAW_MS = 80;   // a reply's row redraws at most this often however fast its pieces come
+const THV_LIVE_LATE = new Set<string>();   // runs whose output came before their start was seen: never drawn
+const thvLiveText = (r: ThvLiveRun) => [...r.parts, r.typing ?? ''].map(p => p.trim()).filter(Boolean).join('\n\n');
+function thvLiveHTML(view: ThvView) {
+  let out = '';
+  for (const [run, r] of view.live) {
+    const text = thvLiveText(r);
+    // Screen readers hear the posted reply once, not every piece of it (the list is a live region).
+    if (text) out += `<div class="th-msg th-live" data-th-live="${esc(run)}" aria-hidden="true"><div class="th-av">${actorAvatar(r.bot, 28)}</div>
+      <div class="th-main"><div class="th-head">${thvWhoHTML(r.bot)}</div>${messageMd('th-body md', text, r.bot, {shortLinks: true})}</div></div>`;
+  }
+  return out;
+}
+const thvLiveOwns = (view: ThvView, cid: string | undefined) => !!cid && !view.gone && (cid === view.id || view.messages.some(m => m.thread_id === cid));
+function thvLiveSoon(view: ThvView) {
+  if (view.liveTimer) return;
+  view.liveTimer = setTimeout(() => { view.liveTimer = 0; thvLater(view, ['status']); }, THV_LIVE_DRAW_MS);
+}
+// One run's piece of output or change of state, into each view that shows its conversation.
+function thvLiveStep(view: ThvView, run: string, d: ThvRunEvent) {
+  const r = view.live.get(run), out = d.output;
+  if (!out) {
+    if (['leased', 'running'].includes(String(d.state))) {
+      if (!r && d.bot_id && !THV_LIVE_LATE.has(run)) view.live.set(run, {bot: 'bot:' + d.bot_id, parts: [], typing: null, ended: false});
+    } else if (r && !r.ended && d.state && d.state !== 'input') {
+      // Its reply, posted as the run ends, may come in the next read: the row waits for it a moment.
+      r.ended = true;
+      setTimeout(() => { if (view.live.get(run) === r) { view.live.delete(run); thvLater(view, ['status']); } }, 2000);
+    }
+    return;
+  }
+  if (!r) { THV_LIVE_LATE.add(run); return; }
+  const text = String(out.payload?.text ?? ''), last = r.parts[r.parts.length - 1];
+  if (out.kind === 'delta' && !out.compact && out.payload?.delta_kind !== 'thought') r.typing = (r.typing ?? '') + text;
+  else if (out.kind === 'message' && !out.compact) {
+    if (out.payload?.final) { if (text.trim()) r.parts = [text]; }
+    else if (r.typing !== null) r.parts.push(text.trim() ? text : r.typing);
+    else if (text.trim() && last?.trim() !== text.trim()) r.parts.push(text);
+    r.typing = null;
+  } else if (out.kind === 'tool' && r.typing !== null) { r.parts.push(r.typing); r.typing = null; }
+  else return;
+  thvLiveSoon(view);
+}
+liveOn('runs', (d: ThvRunEvent) => {
+  const run = d?.run_id;
+  if (run) for (const view of THV_VIEWS) if (thvLiveOwns(view, d.conversation_id)) thvLiveStep(view, run, d);
+});
+// The reply posted: its row goes in the frame that draws the message.
+liveOn('messages', (d: ThvMessageEvent) => {
+  const run = d?.message?.refs?.turn_id;
+  if (run) for (const view of THV_VIEWS) if (view.live.delete(run)) thvLater(view, ['status']);
+});
+liveOn('reset', () => { for (const view of THV_VIEWS) if (view.live.size) { view.live.clear(); thvLater(view, ['status']); } });
 
 // ---- a daily update request and the bot's turn that writes the update
 // The server sends a bot its update request as a notice from the keeper that carries `refs.update_request`
@@ -957,7 +1044,7 @@ const thvRowsKey = (view: ThvView) => `${thvCanPost(view)}|${!!view.thread?.earl
 // The list is its rows (thvRowsHTML), then the bots' status rows (thvTailHTML), so a status change redraws only those.
 function thvTailHTML(view: ThvView, rows: string) {
   if (['loading', 'gone', 'error'].includes(view.state)) return '';
-  const status = (view.botStatus || []).map(b => thvStatusHTML(view, b)).join(''), tail = view.opts.tail?.() || '';
+  const status = (view.botStatus || []).map(b => thvStatusHTML(view, b)).join('') + thvLiveHTML(view), tail = view.opts.tail?.() || '';
   return status || rows || tail ? status + tail : `<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`;
 }
 function thvRowsHTML(view: ThvView) {
@@ -1020,7 +1107,8 @@ function thvRowsHTML(view: ThvView) {
   for (const p of view.pending) out.push(thvPendingHTML(view, p));
   return chatQuietMerge(out.join(''));
 }
-const thvAtBottom = (view: ThvView) => { const b = view.el?.querySelector('.thv-scroll'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 60; };
+// Within 48 px of the end the view keeps to it as rows come (a reply being written too); further up, what is read stays put.
+const thvAtBottom = (view: ThvView) => { const b = view.el?.querySelector('.thv-scroll'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 48; };
 const THV_ALL: ThvPart[] = ['head', 'list', 'status', 'composer'];
 // Draw a view now: what someone just did shows at once. A draw a live event left for the next frame is folded in, so it
 // does not run again. `parts` is what changed (all of it unless said); the message list is built only when 'list' is.
@@ -1412,7 +1500,7 @@ function thvWayPick(view: ThvView, mode: string) {
 function thvWaysWire(view: ThvView) {
   const C = view.composer, q = <T extends HTMLElement = HTMLElement>(sel: string) => C.el.querySelector(sel) as T, menu = q('.p-ways'), caret = q('.p-way');
   // The caret, a right-click or a long press on Send open the menu.
-  caret.onclick = () => thvWaysMenu(view, menu.hidden);
+  caret.onclick = () => thvWaysMenu(view, Boolean(menu.hidden));
   sendWayHold(q('.p-send'), () => thvWaysMenu(view, true), () => !q<HTMLButtonElement>('.p-send').disabled);
   menu.onclick = ev => { const b = eventElement(ev)?.closest<HTMLElement>('[data-deliver]'); if (b) thvWayPick(view, b.dataset.deliver!); };
   menu.addEventListener('keydown', ev => deliveryMenuKeys(menu, ev));
@@ -1623,6 +1711,7 @@ async function thvComposerSend(view: ThvView) {
 async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, replyTo = null, refs: more = null, unmarked = []}: {text: string; files?: File[]; lib?: ThvLibFile[]; way?: object | null; replyTo?: ThvMessage | null; refs?: ThvRefs | null; unmarked?: string[]}) {
   const p: ThvPending = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
+  const start = thvStartRow(view);
   thvDraw(view, {stick: true});
   const from = view.opts.from?.() || null;
   const extra = view.opts.context && !view.contextOff ? view.opts.context.refs() : null;
@@ -1648,7 +1737,7 @@ async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, r
       r = files.length ? await thvUpload(thvPath(view.id).replace('/v2/', '/v2/uploads/') + '/messages', body, files)
         : await post(thvPath(view.id) + '/messages', body);
     }
-    if (r?.held) thvHeld(view, p, r.held);
+    if (r?.held) { thvHeld(view, p, r.held); thvStartGone(view, start); }
     else {
       view.pending = view.pending.filter(x => x !== p);
       const m = r?.message || (r?.id && r?.seq !== undefined ? r : null);
@@ -1660,6 +1749,7 @@ async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, r
     }
   } catch (e) {
     p.state = 'failed'; p.error = errorMessage(e, '');
+    thvStartGone(view, start);
   }
   thvDraw(view, {stick: true});
 }

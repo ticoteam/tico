@@ -115,7 +115,7 @@ def answer_after_close(api, close):
     # Filed from a chat, the task answers in its room as the chat would (execution.complete): without the stop or the
     # close, this answer posts; so the room gets nothing only because the stopped turn's answer is filed on its run.
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "task.room", task["id"], {})
+        H.event(c, H.TICO_ACTOR, "task.room", task["id"], {})
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])
     if close:
         with api.app.state.store.transaction() as c:

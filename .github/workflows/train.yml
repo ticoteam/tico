@@ -7,8 +7,12 @@
 #     High risk item is approved automatically; otherwise a person approves it.
 #   - On every push to main, whenever a Release validation run finishes, on a manual run, and every 20 minutes as a
 #     backstop for a missed event (at :05, :25 and :45): ship the first green candidate (tag it, publish it with
-#     release.yml as not latest, update the canary, then mark it latest); otherwise, when no validation is running and
-#     main's head has none yet, validate main's head as the next patch (ci.yml).
+#     release.yml as not latest, update the canary, then mark it latest, then validate main's head if it moved past
+#     the candidate); otherwise, when no validation is running and main's head has none yet, validate main's head as
+#     the next patch (ci.yml).
+#   - A finished validation arrives as a workflow_dispatch with `validation_run`: ci.yml's last job sends it, because
+#     a run the train dispatched with GITHUB_TOKEN never fires workflow_run. The guard waits for that run to complete,
+#     and the dispatch counts as a finished run (RELEASE_TRAINS applies), not as a manual run.
 #   - A red or cancelled candidate goes on the one `release-train` issue, once; the next release that ships closes it.
 #     A tag whose release did not publish gets its Release workflow once more after 30 minutes.
 #   - A candidate that ships also gets its before and after pictures on its approval issue (release-shots.yml, in the
@@ -20,7 +24,8 @@
 # Schedules, pushes and finished runs act only when the repository variable RELEASE_TRAINS is `on`; a manual run always acts.
 name: Release train
 run-name: >-
-  ${{ github.event_name == 'workflow_dispatch' && format('Release train (manual, {0})', github.actor)
+  ${{ github.event_name == 'workflow_dispatch' && inputs.validation_run != '' && format('Release train: validation run {0} finished', inputs.validation_run)
+  || github.event_name == 'workflow_dispatch' && format('Release train (manual, {0})', github.actor)
   || github.event_name == 'schedule' && 'Release train check'
   || github.event_name == 'workflow_run' && format('Release train: {0}', github.event.workflow_run.display_title)
   || format('Release train: push {0}', github.sha) }}
@@ -35,6 +40,12 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      validation_run:
+        description: Leave empty for a manual run. ci.yml passes the Release validation run on main that just finished
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -42,7 +53,7 @@ permissions:
 jobs:
   guard:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 12
     permissions:
       actions: read     # validation and hotfix runs
       contents: read    # tags, releases, main
@@ -58,11 +69,22 @@ jobs:
             scripts/release_notes.py
             scripts/release_increment.py
             scripts/pr_checks.py
+            scripts/flake_quarantine.py
             templates/catalog/release-notes-writer/software/rollout.py
           sparse-checkout-cone-mode: false
+      - name: Wait for the validation run to finish
+        if: inputs.validation_run != ''
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.validation_run }}
+        run: |
+          case $RUN_ID in *[!0-9]*) echo "::error::validation_run must be a run number, not '$RUN_ID'"; exit 1 ;; esac
+          until [ "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json status --jq .status)" = completed ]; do sleep 15; done
       - id: guard
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          VALIDATION_RUN: ${{ inputs.validation_run }}
           RELEASE_TRAINS: ${{ vars.RELEASE_TRAINS }}
           RELEASE_NEEDS_PERSON: ${{ vars.RELEASE_NEEDS_PERSON }}
           RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
@@ -102,6 +124,7 @@ jobs:
       STABLE_UPDATE_KEY: ${{ secrets.STABLE_UPDATE_KEY }}
       RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
       RELEASE_NEEDS_PERSON: ${{ vars.RELEASE_NEEDS_PERSON }}
+      VALIDATION_RUN: ${{ inputs.validation_run }}
       RUN_EVENT: ${{ github.event.workflow_run.event }}
       RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
       RUN_TITLE: ${{ github.event.workflow_run.display_title }}
@@ -168,6 +191,7 @@ jobs:
             scripts/release_notes.py
             scripts/release_increment.py
             scripts/pr_checks.py
+            scripts/flake_quarantine.py
             templates/catalog/release-notes-writer/software/rollout.py
           sparse-checkout-cone-mode: false
       # With no artifact (the shots job ended before it uploaded), the download fails and the issue says the pictures

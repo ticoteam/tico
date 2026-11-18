@@ -204,15 +204,15 @@ def test_a_wake_that_names_a_list_of_tasks_is_one_fleet_wake_and_one_per_task(ap
     tasks = [f"list_task_{n}" for n in range(10)]
     with store.transaction() as c:
         L.record(c, "bot_list", tasks)
-        assert c.execute(L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, hour_ago)).fetchone()[0] == 1, (
+        assert c.execute(L.COUNT_FLEET, (H.TICO_ACTOR, L.BOT_ACTION, hour_ago)).fetchone()[0] == 1, (
             "ten tasks in one list are one wake toward the fleet cap"
         )
         assert all(
-            c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, task, day_ago)).fetchone()[0] == 1 for task in tasks
+            c.execute(L.COUNT_TARGET, (H.TICO_ACTOR, L.TASK_ACTION, task, day_ago)).fetchone()[0] == 1 for task in tasks
         ), "each task counts its one wake"
         assert not L.allow(c, "bot_list"), "the bot's one wake for this run is used"
         L.record(c, "bot_dup", ["dup_task", "dup_task"])
-        assert c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, "dup_task", day_ago)).fetchone()[0] == 1, (
+        assert c.execute(L.COUNT_TARGET, (H.TICO_ACTOR, L.TASK_ACTION, "dup_task", day_ago)).fetchone()[0] == 1, (
             "a task named twice in one wake counts once"
         )
         L.record(c, "bot_more", ["list_task_0"])

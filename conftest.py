@@ -320,7 +320,7 @@ def api_database(tmp_path_factory, request):
             for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")
             if "_fts" not in row[0]
         ]
-        # initialize writes system rows (markers, clocks, built-in types and rules, keeper events) that every
+        # initialize writes system rows (markers, clocks, built-in types and rules, Tico events) that every
         # fresh test database has too. What must never be shared between tests: a person, bot, credential,
         # session, key or computer, and this worker's temporary path.
         identity = re.compile(

@@ -132,6 +132,9 @@ EMPTY = (
     "compact_first",
     "model_logins",
     "model_login_cleared",
+    "claude_logins",
+    "claude_login_leases",
+    "claude_login_parks",  # full Claude logins' refresh leases and parked turns: the copy refreshes nothing
     # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
     "cloud_machine_deletions",
     "cloud_machine_enrollment_failures",
@@ -576,6 +579,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "page_links",
             "task_documents",
             "task_file_reviews",
             "task_links",
@@ -642,11 +646,15 @@ KEEP = (
             "growth_channels",
             "growth_cohorts",
             "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
+            "growth_line_uses",  # who used the Growth line on which day: the measure's counts, no content
             "growth_origins",
             "growth_settings",
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
             "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
+            "growth_alert_state",  # which line each channel was last on (backend/growth_brief.py): history, no customer keys
+            "growth_crossings",  # each crossing and how its owner was told: history, no customer keys
+            "growth_view_reads",  # how many times agents read a scoped view each day: counts only
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",

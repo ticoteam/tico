@@ -4,6 +4,10 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import _for_person
+from clients.tico import APIError
+
+# A task document is a page (`tico page publish FILE --task ID --as NAME`), which takes no note.
+DOCUMENT_NOTE = "A document is a page and takes no --note: say what changed in a comment on the task"
 
 
 VISUALS = {
@@ -161,6 +165,33 @@ def _model_id(catalog, requested):
 
 
 _CHANNEL = _s("The channel: #customer_success, customer_success or its id (C0123456789)")
+
+
+def ambiguous_page(publish):
+    """Run a publish that names a task's document role without `page`. When the task has more than one page with that
+    role, Tico answers 409 `ambiguous` with their ids: the refusal prints them and says to pass one as --page."""
+    try:
+        return publish()
+    except APIError as exc:
+        if exc.code != "ambiguous":
+            raise
+        ids = [str(page) for page in exc.extra.get("pages") or []]
+        detail = "More than one page on this task has that role" + (f": {', '.join(ids)}" if ids else "")
+        raise APIError(
+            "ambiguous",
+            detail + ". Pass --page with the one to write.",
+            exc.status,
+            exc.retryable,
+            exc.operation_id,
+            {"pages": ids},
+        ) from None
+
+
+def document_attachment(result, document):
+    """Keep the task attach shortcut's file id and version alongside the published page."""
+    if page := result.get("page"):
+        return {**result, "file_id": page["file_id"], "version": page["version"], "document": document}
+    return result
 
 
 def text_file(path):

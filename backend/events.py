@@ -13,8 +13,9 @@ signed-in person as they commit, filtered to what that person may read:
   to more than FAN_CAP tasks (a tag edit) is a single `bulk: true`: read task lists in full.
 - `messages`: a message as a conversation page shows it, a deleted one, or a chat goal change.
 - `runs`: a bot run's output step, or its state moving (queued, started, finished). `output=compact` (the web app)
-  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents; the
-  whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
+  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents, except
+  the reply's own text (a text delta, an assistant message), which goes whole so a chat draws the reply as it is
+  written; the whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
 - `bots`: a bot's status line, as `GET /api/v2/status` shows it.
 - `threads`: every thread the viewer reads, whatever is on screen: `conversation=` and `thread=` narrow `messages` and
   `runs` only, so the sidebar stays live while a thread is open (docs/dev/threads-contract.md §9).
@@ -517,6 +518,20 @@ TRIGGERS = [
     ),
     ("changes_task_assets_insert", "INSERT", "task_assets", None, _row("tasks", "files", "NEW.task_id")),
     ("changes_task_assets_delete", "DELETE", "task_assets", None, _row("tasks", "files", "OLD.task_id")),
+    (
+        "changes_page_links_insert",
+        "INSERT",
+        "page_links",
+        "NEW.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(NEW.target,6)", "NEW.page_id"),
+    ),
+    (
+        "changes_page_links_delete",
+        "DELETE",
+        "page_links",
+        "OLD.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(OLD.target,6)", "OLD.page_id"),
+    ),
     (
         "changes_pins_insert",
         "INSERT",
@@ -1214,7 +1229,7 @@ _ATTENTION_CHANGE_WHERE = (
 )
 # `bot_status` (backend/thread_bot_status.py): the status rows of a root may have moved. Written for the root of an open
 # wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
-# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
+# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last second.
 _OPEN_WAKE = (
     "recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
     "AND cause='human'"
@@ -1228,7 +1243,7 @@ _RUN_ROOT = (
 )
 _STATUS_QUIET = (
     "NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r "
-    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds'))"
+    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds'))"
 )
 
 
@@ -2235,10 +2250,17 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
-    from . import meeting_task_links, task_reads
+    from . import files, meeting_task_links, task_reads
 
     c, who = view.c, view.who
     rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
+    refs = {row["ref"] for row in rows if row["kind"] == "files" and row["ref"]}
+    if refs:
+        pages = files.page_rows(c, refs)
+        files.prime_visible(c, list(pages.values()))
+        cache = {}
+        visible_files = {ref for ref, page in pages.items() if files.file_visible(c, view.auth, who, page, cache)}
+        rows = [row for row in rows if row["kind"] != "files" or not row["ref"] or row["ref"] in visible_files]
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
@@ -2722,10 +2744,20 @@ def _step_shown(view, bot, event, watched):
     return (decoded,)
 
 
+def _live_text(event, shown):
+    """Whether a run step is the reply's own words as they are written (a text delta, an assistant message): a compact
+    stream still sends it whole, so a chat on screen draws the reply as it comes (thread-view.ts). A model's thinking
+    stays compact."""
+    if event["kind"] == "message":
+        return True
+    payload = (shown[0] or {}).get("payload")
+    return event["kind"] == "delta" and isinstance(payload, dict) and payload.get("delta_kind") != "thought"
+
+
 def _step_output(event, compact, shown):
     """A run step as a `runs` event's `output`: the whole stored step, or its compact signal (still truthy). `shown` is
     what `_step_shown` gave for it."""
-    if compact:
+    if compact and not _live_text(event, shown):
         return {
             **{key: event[key] for key in COMPACT_STEP},
             "bytes": len((event["payload"] or "").encode()),
@@ -3001,8 +3033,8 @@ def _within_budget(c, rows):
     counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
     or task still relies on read_in's final byte cut. The first row always goes, however large; a row
     this viewer may not see still counts, as its size is known before its check. A compact stream (`output=compact`)
-    is sized the same way: it is sent none of a step's payload, but its read still loads and decodes each one for the
-    content check (_step_shown)."""
+    is sized the same way: it is sent none of a step's payload but the reply's text, and its read still loads and
+    decodes each one for the content check (_step_shown)."""
     outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
     if not outputs:
         return rows
@@ -3378,7 +3410,7 @@ EVENTS_DESCRIPTION = (
     "(how many of the messages it stands for are unread for the viewer: add that many) and `thread` (`id`, `title`, "
     "`name`, `audience`, `root_id`, `parent_id`, `kind`, `last_message_at`, and `dm_with`/`dm_with_count` for a DM), "
     "so a list bumps its row, or adds one it does not hold, without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
-    "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
+    "root's readers, at most one a run step every 1 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
     "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
@@ -3474,7 +3506,8 @@ def install(app, store, auth, task_views, task_view):
         if needs not in (None, "", "list", "changes"):
             raise Problem("validation", "needs is list or changes", 422)
         held = {} if needs == "changes" and "needs" in wanted else None
-        # `output=compact`: each run step as its compact signal (_step_output), what the web app asks for.
+        # `output=compact`: each run step as its compact signal, the reply's text whole (_step_output), what the web app
+        # asks for.
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 

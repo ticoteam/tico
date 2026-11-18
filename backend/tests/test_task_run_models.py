@@ -335,7 +335,7 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
         )
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
         BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
-        H.task_reassign(c, H.KEEPER, mine["id"], "bot:ops-a1", "A temporary assignment takes it")
+        H.task_reassign(c, H.TICO_ACTOR, mine["id"], "bot:ops-a1", "A temporary assignment takes it")
         haiku = task_run_models.stamped("claude-haiku-5-5", "low", "claude")
         task_run_models.set_choice(c, "human:ana", mine["id"], haiku)
         assert task_run_models.of(c, mine["id"]) is not None

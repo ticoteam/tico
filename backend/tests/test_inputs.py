@@ -453,7 +453,7 @@ def test_a_persons_home_message_carried_by_its_notice_is_redirected_by_that_pers
     )
     assert response.status_code == 200, response.text
     sent = response.json()
-    # The bot hears the Home message through its keeper carrier: the queued job is the carrier, not the person's message.
+    # The bot hears the Home message through its Tico carrier: the queued job is the carrier, not the person's message.
     with api.app.state.store.read() as c:
         carrier = c.execute(
             "SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "

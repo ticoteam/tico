@@ -321,6 +321,16 @@ def _build():
         sourceless=True,
         outbound=False,
     )
+    # A Growth channel crossed a line the team set (backend/growth_brief.py): its KPI went red or came back, its
+    # guardrail went over or back under, or its source started or stopped failing. Ids only, as Finance's.
+    add(
+        "growth.channel.crossed",
+        "A Growth channel crossed a line: its KPI went red or back, its guardrail over its max, or its source failed.",
+        "Growth channel crossed a line",
+        {"channel_id": "ch1", "kind": "kpi", "kpi_id": "k1", "source_id": None, "crossing_id": "x1"},
+        sourceless=True,
+        outbound=False,
+    )
     # Finance's budget crossings (backend/finance/jobs.py): ids only, so whoever acts reads the budget in their own view.
     add(
         "finance.budget.warn",

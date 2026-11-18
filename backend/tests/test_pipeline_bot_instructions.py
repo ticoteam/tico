@@ -196,7 +196,7 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
 
 def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_session():
     # Nov 14 (one Product pipeline): the Product Owner and the Builder are one bot, so the code and the reasons are in
-    # context when it builds. It writes the Spec, owns Build and both Fixes, and never passes a person's approval.
+    # context when it builds. It writes the Spec, owns Build and Fixes, and never passes a person's approval.
     text = agent("feature-owner")
     assert card("feature-owner")["session"] == "task"
     assert yaml.safe_load((CATALOG / "feature-owner" / "bot.yaml").read_text())["session"] == "task"
@@ -205,7 +205,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         "Related input",
         "OK spec",
         "Build",
-        "Fixes 1 and Fixes 2",
+        "Fixes",
         "QA",
         "OK release",
         "Validate",
@@ -213,7 +213,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         assert f"**{stage}" in text, stage
     assert "Pitch" not in text  # a feature starts as a chat; its first approval is the Spec (Nov 16)
     assert "A person approves the Spec and the Release report: you never pass those yourself." in text
-    assert '--doc "Release report"' in text
+    assert '--task <id> --as "Release report"' in text
     for playbook in ("write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
@@ -347,6 +347,33 @@ def test_the_page_check_refuses_what_people_sent_back(tmp_path):
     assert any("never asks the reader" in p for p in tool.problems_in(asks, "screen-spec"))
 
 
+def test_a_page_of_its_own_light_colours_needs_dark_values_too(tmp_path):
+    # The Spec that read near-black on the app's dark background: its own light colours and no dark values. The template's
+    # tokens (fallbacks included), a picture's url() and the red arrows page.py draws are not its own colours and pass.
+    tool = page_tool()
+    (tmp_path / "shots").mkdir()
+    draft = tmp_path / "draft.html"
+    draft.write_text(filled("screen-spec", tmp_path))
+    tool.build(draft, tmp_path / "page.html")
+    good = (tmp_path / "page.html").read_text()
+    assert tool.problems_in(good, "screen-spec") == []
+    light_only = "colours are light-only"
+    styled = good.replace("</style>", ".card{background:#fff;color:#1d1d1f;border:1px solid #e5e5e5}\n</style>", 1)
+    assert any(light_only in p for p in tool.problems_in(styled, "screen-spec"))
+    inline = good.replace('<section id="details">', '<section id="details"><p style="color:rgb(34, 34, 34)">x</p>', 1)
+    assert any(light_only in p for p in tool.problems_in(inline, "screen-spec"))
+    named = good.replace("</style>", "p.note{color:white}\n</style>", 1)
+    assert any(light_only in p for p in tool.problems_in(named, "screen-spec"))
+    dark = styled.replace(
+        "</style>", "@media (prefers-color-scheme: dark){.card{background:#111;color:#eee}}\n</style>", 1
+    )
+    assert not any(light_only in p for p in tool.problems_in(dark, "screen-spec"))
+    picture = good.replace(
+        "</style>", ".hero{background:url(data:image/png;base64,iVBORw0KGgo=) no-repeat}\n</style>", 1
+    )
+    assert tool.problems_in(picture, "screen-spec") == []
+
+
 def test_each_page_opens_the_way_its_reader_needs(tmp_path):
     # A bug spec opens with the report, a change spec with its goal; a release report names at most three risks and
     # its changelog is written for customers, so it can be published as it is (Chris, Nov 13).
@@ -382,3 +409,79 @@ def test_the_release_label_flow_stays_off_stages_that_wait_for_a_published_relea
     routing = agent("release-owner")
     assert 'no automatic "in a release" requirement' in routing
     assert routing.index("labels nothing") < routing.index("release:YYYY-MM-DD.N")
+
+
+# A change that adds or changes SQL: its author runs the quick perf check, and its reviewer reads the numbers it posts.
+PERF_SKILL = ".claude/skills/quick-perf-check"
+
+
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer"])
+def test_a_sql_change_gets_the_quick_perf_check_from_its_author_and_its_reviewer(template):
+    assert PERF_SKILL in card(template)["shared_files"], template
+    skill = catalog.files(template)[f"{PERF_SKILL}/SKILL.md"].read_text()
+    assert len(skill.splitlines()) <= 25
+    for words in ("EXPLAIN QUERY PLAN", "N+1", "copy of the data", "before the change merges"):
+        assert words in skill, words
+    assert f"{PERF_SKILL}/SKILL.md" in agent(template), template
+    playbook = " ".join((CATALOG / "reviewer" / "playbooks" / "review-a-pull-request.md").read_text().split())
+    assert f"{PERF_SKILL}/SKILL.md" in playbook
+
+
+def test_the_qa_owner_records_one_choice_for_each_red_main_or_revert():
+    text = agent("qa-owner")
+    choice = "Record one choice on the task for each red main or revert"
+    assert choice in text
+    assert "a selection fix (test selection missed an existing test)" in text
+    assert "a regression test (the behaviour was not covered)" in text
+    assert "a flake or infrastructure remedy" in text
+    assert text.index("## When main is red") < text.index(choice) < text.index("## Blockers only a person can fix")
+
+
+def test_the_qa_page_check_names_each_part_a_person_reads_first(tmp_path):
+    # Task #389 (Chris, Nov 13: the QA review "should look really, really clear"): Nov 14's five QA pages had the
+    # criteria table but no verdict strip, no diagram of how the change works and no rollback. The check names each.
+    tool = page_tool()
+    (tmp_path / "shots").mkdir()
+    draft = tmp_path / "draft.html"
+    draft.write_text(filled("qa", tmp_path))
+    tool.build(draft, tmp_path / "page.html")
+    good = (tmp_path / "page.html").read_text()
+    assert tool.problems_in(good, "qa") == []
+
+    def cut(name):
+        return re.sub(rf'<section id="{name}">.*?</section>', "", good, count=1, flags=re.S)
+
+    for name in ("strip", "how", "risk"):
+        assert f'no section id="{name}"' in tool.problems_in(cut(name), "qa"), name
+    three = good.replace('<div class="tile ok">', '<div class="x">', 1)
+    assert any("3 tiles; it has 4" in p for p in tool.problems_in(three, "qa"))
+    unsaid = good.replace("Approve = ship to production.", "Approve.")
+    assert any("Approve = ship to production" in p for p in tool.problems_in(unsaid, "qa"))
+    no_diagram = good.replace('class="box changed"', 'class="box"')
+    assert any("has no diagram" in p for p in tool.problems_in(no_diagram, "qa"))
+    # A one-file change may name its file instead of a diagram: one row and the total (the total row is not a file).
+    good = good.replace("<tr><td><b>the account row</b></td>", "<tr><td><b>Total: 2 files</b></td>", 1)
+    arch, legend_end = good.index('<div class="arch">'), good.index("</p>", good.index('<p class="legend">')) + 4
+    two_files = good[:arch] + good[legend_end:]
+    assert any("has no diagram" in p for p in tool.problems_in(two_files, "qa")), "two files and the total"
+    no_total = two_files.replace("<tr><td><b>Total: 2 files</b></td><td></td><td><b>the account row</b></td></tr>", "")
+    assert any("has no diagram" in p for p in tool.problems_in(no_total, "qa")), "two files, no total row"
+    one_file = two_files.replace(
+        "<tr><td>the account row</td><td>the account row</td><td>the account row</td></tr>", ""
+    )
+    assert not any("diagram" in p for p in tool.problems_in(one_file, "qa"))
+    # A diagram of the changed part alone gives no context.
+    first = good.index('<div class="box changed">')
+    lone = good[: first + 1] + re.sub(r'<div class="box[^"]*">.*?</div>', "", good[first + 1 :], flags=re.S)
+    assert any("shows one box" in p for p in tool.problems_in(lone, "qa"))
+    no_rollback = good.replace("<h3>Rollback</h3>", "<h3>Undo</h3>")
+    assert any('no "Rollback" heading' in p for p in tool.problems_in(no_rollback, "qa"))
+    no_data = good.replace("Stored data:", "Also:")
+    assert any("whether stored data changes" in p for p in tool.problems_in(no_data, "qa"))
+    log = "<pre>" + "\n".join(f"job {n}: pass" for n in range(15)) + "</pre>"
+    raw = good.replace('<section id="findings">', log + '<section id="findings">', 1)
+    assert any("15 lines: fold" in p for p in tool.problems_in(raw, "qa"))
+    folded = good.replace(
+        '<section id="findings">', f"<details><summary>CI</summary>{log}</details>" + '<section id="findings">', 1
+    )
+    assert tool.problems_in(folded, "qa") == []
