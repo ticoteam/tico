@@ -43,7 +43,8 @@ review; a skipped run is not a pass. Main has no check run of its own: the queue
 Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
 ready. The PR checks and the queue fail a change when fewer than 80% of the Python statements it adds to backend/ and
 clients/ run under its selected tests (`scripts/diff_coverage.py`); a line opts out only with `# pragma: no cover - <reason>`
-on that line. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
+on that line. A run of up to about 100 Python tests, or one to three browser scripts, may run locally under `nice -n 19`
+with `-n 2` at most and never `-m slow`; anything bigger goes to RunsOn (`scripts/remote.py`) or PR checks. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
 queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
@@ -70,7 +71,10 @@ against a dev install with a real model, on demand only; `backend/tests/test_bot
 hold customer text and never enter this repository.
 
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
-never ship around a known failure. If a test may fail, it shouldn't exist.
+never ship around a known failure. If a test may fail, it shouldn't exist. A test that passes only on a rerun is flaky,
+not green. Fewer strong tests beat many weak ones: a low-value test is deleted, with its reason in the commit body.
+`skills/honest-code/SKILL.md` has the steps; `scripts/landmines.py` (run by `scripts/lint.sh`) holds fixed sleeps and
+waits, retries, raised timeouts and `unittest.mock` to counts that only go down.
 
 ## Before you push
 Turn on the pre-push hook once per clone: `git config core.hooksPath .githooks`. It is expected in every clone, bots' included.
@@ -146,4 +150,5 @@ flight file, not the database.
   vendor code, a Node test, or in the `KEPT_JS` list (the classic scripts that stay JavaScript, each with its reason).
   Each `.ts` must pass `ui/tsconfig.strict.json`; one with findings has a piece under `ui/baselines/strict/` that only
   shrinks, and a new `.ts` must be at zero (a renamed `.js` may keep its count).
-- Comments say why in the present tense; they do not name who asked or when.
+- Comments say why in the present tense; they do not name who asked or when. No divider lines, no narration of the
+  change, no commented-out code. A suppression (`noqa`, `type: ignore`, `#[allow]`) says why on the same line.

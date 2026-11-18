@@ -1,0 +1,6 @@
+{
+  "clients/tests/test_task_attach_stream.py": {
+    "no-global-sleep-patch": 1,
+    "no-unittest-mock": 1
+  }
+}

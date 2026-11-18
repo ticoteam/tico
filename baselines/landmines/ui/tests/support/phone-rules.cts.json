@@ -1,0 +1,6 @@
+{
+  "ui/tests/support/phone-rules.cts": {
+    "no-fixed-wait-ui": 8,
+    "no-raised-timeout": 1
+  }
+}

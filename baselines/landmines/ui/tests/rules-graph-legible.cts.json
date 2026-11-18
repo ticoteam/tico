@@ -1,0 +1,5 @@
+{
+  "ui/tests/rules-graph-legible.cts": {
+    "no-fixed-wait-ui": 2
+  }
+}

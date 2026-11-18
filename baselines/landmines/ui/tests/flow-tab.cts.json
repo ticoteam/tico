@@ -1,0 +1,5 @@
+{
+  "ui/tests/flow-tab.cts": {
+    "no-fixed-wait-ui": 2
+  }
+}

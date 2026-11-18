@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_company_apps.py": {
+    "no-global-sleep-patch": 6
+  }
+}

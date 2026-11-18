@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_screen_relay_ingress.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

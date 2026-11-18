@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_drains.py": {
+    "no-fixed-sleep-py": 3
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "clients/tests/test_bot_video_upload.py": {
+    "no-unittest-mock": 1
+  }
+}

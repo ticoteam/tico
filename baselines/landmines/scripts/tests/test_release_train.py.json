@@ -1,0 +1,5 @@
+{
+  "scripts/tests/test_release_train.py": {
+    "no-global-sleep-patch": 1
+  }
+}

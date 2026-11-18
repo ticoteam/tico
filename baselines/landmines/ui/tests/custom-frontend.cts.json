@@ -1,0 +1,6 @@
+{
+  "ui/tests/custom-frontend.cts": {
+    "no-fixed-wait-ui": 1,
+    "no-raised-timeout": 1
+  }
+}

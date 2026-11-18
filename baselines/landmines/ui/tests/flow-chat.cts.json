@@ -1,0 +1,5 @@
+{
+  "ui/tests/flow-chat.cts": {
+    "no-fixed-wait-ui": 12
+  }
+}

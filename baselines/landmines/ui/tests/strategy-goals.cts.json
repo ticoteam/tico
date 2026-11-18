@@ -1,0 +1,5 @@
+{
+  "ui/tests/strategy-goals.cts": {
+    "no-fixed-wait-ui": 1
+  }
+}

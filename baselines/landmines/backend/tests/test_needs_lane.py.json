@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_needs_lane.py": {
+    "no-fixed-sleep-py": 2
+  }
+}

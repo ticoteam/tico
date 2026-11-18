@@ -1,0 +1,5 @@
+{
+  "ui/tests/flow-approval.cts": {
+    "no-fixed-wait-ui": 5
+  }
+}

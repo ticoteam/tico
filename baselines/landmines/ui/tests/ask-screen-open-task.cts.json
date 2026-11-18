@@ -1,0 +1,6 @@
+{
+  "ui/tests/ask-screen-open-task.cts": {
+    "no-fixed-wait-ui": 2,
+    "no-raised-timeout": 14
+  }
+}

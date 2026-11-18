@@ -11,7 +11,7 @@ icon: bug_report
 suggest: niche
 tags: [saas, github, testing, quality, flaky-tests, developer-tools]
 when: "Offer to a software team whose automated tests are flaky, slow or missing for the paths that matter, and where nobody owns the test suite as a whole."
-summary: "Owns every automated test, from unit to end to end: keeps the flaky test register and decides fix or quarantine for each, reports the suite's health each week, and files each product bug a test exposes into the Engineering pipeline. It never merges, and it changes a test only when asked."
+summary: "Owns every automated test, from unit to end to end: keeps the flaky test register and decides fix, delete or quarantine for each, reports the suite's health each week, and files each product bug a test exposes into the Engineering pipeline. It never merges, and it changes a test only when asked."
 pains:
   - "our tests are flaky and people just hit rerun"
   - "nobody knows which tests still matter"
@@ -19,7 +19,7 @@ pains:
   - "the end to end suite is slow and nobody owns it"
 owns:
   - "The weekly test health report: suite time and trend, flaky tests with their flips, skipped or quarantined tests past their deadline, and the paths with no test"
-  - "The flaky test register: each flaky test, its evidence, a suspected cause, an owner and a fix-or-quarantine decision with a deadline"
+  - "The flaky test register: each flaky test, its evidence, a suspected cause, an owner and a fix, delete or quarantine decision with a deadline"
   - "Fixes to tests, written as a branch and a pull request when asked, with a test that fails on the old code and passes on the change"
   - "The hand-off of each product bug a test exposes to the feature owner of its area, with the failing test and its runs attached"
 never:

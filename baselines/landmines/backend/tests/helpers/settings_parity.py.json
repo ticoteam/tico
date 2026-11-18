@@ -1,0 +1,5 @@
+{
+  "backend/tests/helpers/settings_parity.py": {
+    "no-unittest-mock": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "runner_support/tests/test_threads_e2e_turns.py": {
+    "no-fixed-sleep-py": 2
+  }
+}
