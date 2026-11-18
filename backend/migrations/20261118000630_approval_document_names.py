@@ -8,6 +8,9 @@ approves that it could not place became the QA report, and bot-checked pages kep
   task never ends up with two Proposals and the page links and the older task_documents rows agree.
 - A live page whose line is "Results page" and that names no document approves the Results; its line is Results.
 - A live page whose line is "Checked in production" and that names no document approves that document.
+- A page already attached to one of those two on an open task's current visit is linked to the task with the
+  document's name, as attaching it now would link it: a task already in Running or Validate keeps its page counted
+  instead of waiting for it again.
 
 A review of the newest commit (`at_head`) is never a document and is left alone. Running it again changes nothing.
 """
@@ -45,6 +48,23 @@ def _document(stage_name, line, settings):
     return None
 
 
+def _link_attached(conn, made_documents):
+    """Link each page attached to a requirement that just became a document, on an open task's current visit, to
+    the task with that document's name (page_links, as task_documents does on attach). Already linked: left."""
+    if not made_documents or not all(_table(conn, t) for t in ("page_links", "requirement_pages", "visits", "tasks")):
+        return
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for requirement_id, document in made_documents:
+        conn.execute(
+            "INSERT OR IGNORE INTO page_links (id, page_id, target, role, created_by, created_at) "
+            "SELECT lower(hex(randomblob(16))), rp.file_id, 'task:' || v.task_id, ?, 'keeper', ? "
+            "FROM requirement_pages rp JOIN visits v ON v.id = rp.visit_id JOIN tasks t ON t.id = v.task_id "
+            "WHERE rp.requirement_id = ? AND rp.replaced_at IS NULL AND v.left_at IS NULL AND t.status = 'open' "
+            "AND EXISTS (SELECT 1 FROM bot_files f WHERE f.id = rp.file_id)",
+            (document, now, requirement_id),
+        )
+
+
 def up(conn):
     if not all(_table(conn, name) for name in ("stages", "requirements")):
         return
@@ -53,6 +73,7 @@ def up(conn):
         "WHERE r.withdrawn_at IS NULL AND s.retired_at IS NULL AND r.kind = 'page'"
     ).fetchall()
     proposal_stages = set()
+    made_documents = []  # (requirement id, document) for Results and Checked in production
     for requirement_id, stage_id, stage_name, line, text in rows:
         settings = _settings(text)
         document = _document(stage_name, line, settings)
@@ -64,6 +85,9 @@ def up(conn):
         )
         if document == "Proposal":
             proposal_stages.add(stage_id)
+        else:
+            made_documents.append((requirement_id, document))
+    _link_attached(conn, made_documents)
     if not proposal_stages or not _table(conn, "tasks"):
         return
     marks = ",".join("?" * len(proposal_stages))

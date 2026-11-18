@@ -598,3 +598,42 @@ def test_the_names_migration_never_gives_a_task_two_proposals_and_leaves_finishe
                 r[0] for r in c.execute("SELECT name FROM task_documents WHERE task_id=?", (both["id"],)).fetchall()
             ]
             assert names.count("Proposal") <= 1
+
+
+def test_the_names_migration_keeps_a_page_already_attached_in_validate_counted(api):
+    """A task already in Validate with its page attached: once Checked in production is a document, that page is linked
+    to the task with the document's name, so it still counts and nobody attaches it again. A done task is left."""
+    migration = importlib.import_module(NAMES_MIGRATION)
+    validate = {"name": "Validate", "owner": OPS, "requirements": [{"kind": "page", "line": "Checked in production"}]}
+    with api.app.state.store.transaction() as c:
+        made = X.pipeline(c, "ship", "Ship", (validate,))
+        live = X.new_task(c, ANA, "Acme lights", "ship", assignee=OPS)
+        done = X.new_task(c, ANA, "Bolt doors", "ship", assignee=OPS)
+    _, attempt = turn(api)
+    pages = {t["id"]: _write(api, t["id"], SPEC, attempt["token"], "Spec")["file_id"] for t in (live, done)}
+    with api.app.state.store.transaction() as c:
+        rid = c.execute("SELECT id FROM requirements WHERE stage_id=?", (made["stages"]["Validate"],)).fetchone()[0]
+        for task in (live, done):
+            visit = E.task(c, task["id"])["visit"]["id"]
+            c.execute(
+                "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, attached_by_id, "
+                "created_at) VALUES (?,?,?,?,1,?,?)",
+                (H.new_id(), visit, rid, pages[task["id"]], OPS, H.now()),
+            )
+        E.move(c, done["id"], E.DONE, ANA, "Checked by hand")
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+
+        def linked(task_id):
+            return [
+                tuple(r)
+                for r in c.execute(
+                    "SELECT role, page_id FROM page_links WHERE target=? AND role='Checked in production'",
+                    ("task:" + task_id,),
+                ).fetchall()
+            ]
+
+        assert linked(live["id"]) == [("Checked in production", pages[live["id"]])]
+        assert linked(done["id"]) == []
+        (standing,) = R.standings(c, E.task(c, live["id"]))
+        assert "No page attached" not in standing.line, standing.line

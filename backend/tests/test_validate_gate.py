@@ -21,7 +21,7 @@ from backend import validate_gate as G
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
+from backend.tests.helpers.product_engineering_presets import EPM, _answers, _team, legacy_pair
 
 ANA, BEN, PM = X.ANA, "human:ben", "bot:pm"
 CHECKED = "Checked on rc.13, phone and desktop width: the account row is 40 px and not clipped."
@@ -267,3 +267,24 @@ def test_a_passed_page_with_no_ask_goes_to_done_with_no_person(c):
     row = _jev(c, _attach(c, row))
     assert E.advance(c, row["id"])["status"] == "done"
     assert not c.execute("SELECT 1 FROM answers WHERE by_id LIKE 'human:%'").fetchone()
+
+
+def test_the_manager_bot_deciding_an_unsure_page_it_cannot_open_answers_it_and_no_other_bot_does(c):
+    """Checked in production is a document now. When Jev is unsure, the pipeline's manager bot decides it, as it does a
+    plain page, even when the page is another bot's own file it may not open: else Validate stays stuck. Another bot
+    is still refused."""
+    row = _in_validate(c)
+    rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (G.STAGE,)).fetchone()[0]
+    c.execute("UPDATE pipelines SET manager_id=? WHERE id='product'", ("bot:" + EPM,))
+    row = _jev(c, _attach(c, row), verdict="unsure")
+    standing = _standing(c, row["id"], rid)
+    if not (standing.on and standing.line.startswith(R.DECIDE)):
+        row = _jev(c, _attach(c, row, version=2), verdict="unsure", version=2)
+        standing = _standing(c, row["id"], rid)
+    manager = standing.on
+    assert manager and W.is_bot(manager) and standing.line.startswith(R.DECIDE), standing
+    assert manager != row["owner_id"]
+    with pytest.raises(Exception, match="asked of|unavailable"):
+        A.answer(c, row["id"], rid, "bot:rev-a", "ok", "Read it: it meets the check", seen_version=row["version"])
+    done = A.answer(c, row["id"], rid, manager, "ok", "Read it: it meets the check", seen_version=row["version"])
+    assert done["status"] == "done" or E.advance(c, row["id"])["status"] == "done"
