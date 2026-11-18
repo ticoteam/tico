@@ -1913,7 +1913,8 @@ def queue_jobs(changed):
 # Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
 # test files first, then the smoke set, then tests linked to a specific changed file (non-hub links first), then the
 # nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
-# (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
+# (narrow.left_transitive, narrow.left_over_budget), and narrow.dropped gives each left file its reason (depth or
+# budget), level and seconds. A light pull request also runs the browser
 # scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
 # them, the contracts, the static checks on its merge commit and the Rust and desktop jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
@@ -2073,6 +2074,9 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         "smoke_unless_capped": extra,
         "left_transitive": left,
         "tier": tier,
+        # How far each kept file is from the change (0 changed or guard, 1 direct, 2 one more), for dropped_reasons:
+        # the tier also ranks by link kind, so it does not give the distance.
+        "level": {p: level[p] for p in python if p in level},
     }
     if event == "pull_request":
         direct = {Path(p).stem for p in level if is_browser(p)}
@@ -2109,6 +2113,37 @@ def cap_tests(files, tier, seconds, budget):
     return sorted(kept), left
 
 
+def dropped_reasons(record, levels, seconds):
+    """One entry per Python test file a light plan left out, with why: `depth` (the change reaches it only past
+    record["depth"] levels) or `budget` (it was within reach, but did not fit record["budget_seconds"]). `level` is how
+    far from the change a budget drop was (`levels`, narrow's record["level"]; None when unknown); `seconds` is the
+    estimate the cap used, or the measured or committed time for a depth drop (None when the file has none)."""
+    out = [
+        {"file": name, "reason": "depth", "level": None, "seconds": seconds.get(name)}
+        for name in record["left_transitive"]
+    ]
+    out += [
+        {"file": name, "reason": "budget", "level": levels.get(name), "seconds": seconds.get(name)}
+        for name in record.get("left_over_budget", ())
+    ]
+    for entry in out:
+        took = entry["seconds"]
+        entry["seconds"] = round(float(took), 1) if isinstance(took, (int, float)) and math.isfinite(took) else None
+    # Nearest cut tests first: by reason, then level, then the longer file.
+    return sorted(
+        out, key=lambda e: (e["reason"], e["level"] if e["level"] is not None else 99, -(e["seconds"] or 0), e["file"])
+    )
+
+
+def dropped_line(entry, depth):
+    """A job summary line for one dropped file: its name and why it did not run here."""
+    took = "untimed" if entry["seconds"] is None else f"{entry['seconds']:.0f} s"
+    if entry["reason"] == "depth":
+        return f"- `{entry['file']}`: reached only past level {depth} ({took})"
+    where = "level ?" if entry["level"] is None else f"level {entry['level']}"
+    return f"- `{entry['file']}`: {where} ({took})"
+
+
 def committed_timings(root=ROOT):
     """The default suite's committed per-file seconds (TIMINGS_FILE), or {} when it cannot be read."""
     try:
@@ -2136,14 +2171,15 @@ def narrow_summary(record):
         "",
     ]
     over = record.get("left_over_budget", [])
+    dropped = record["dropped"]
     lines.append(f"- {len(record['left_transitive'])} test files reached only through more levels")
     lines.append(f"- {len(over)} test files over the time budget" + (":" if over else ""))
-    lines += [f"  - `{name}`" for name in over]
+    lines += ["  " + dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "budget"]
     if record.get("browser_left"):
         lines.append(f"- browser scripts not touched directly: {', '.join(record['browser_left'])}")
     if record["left_transitive"]:
         lines += ["", "<details><summary>Reached only through more levels</summary>", ""]
-        lines += [f"- `{name}`" for name in record["left_transitive"]]
+        lines += [dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "depth"]
         lines += ["", "</details>"]
     return "\n".join(lines) + "\n"
 
@@ -2197,6 +2233,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
         timings = {**committed_timings(), **timings}
         seconds = weights(counts, timings)
+        levels = record.pop("level", {})
         kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
         if record["left_over_budget"]:
             record["smoke"] = True
@@ -2208,6 +2245,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         timings |= {f: seconds[f] for f in kept}  # packing reuses the cap's estimates, untimed files included
         record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
         record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
+        # Why each file did not run (the plan's `dropped`, and the job summary): depth or budget, its level and time.
+        record["dropped"] = dropped_reasons(record, levels, {**timings, **seconds})
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])

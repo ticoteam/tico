@@ -3225,9 +3225,12 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
-    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0))  # ten minutes each
-    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
     far = "backend/tests/test_far.py"
+    # Ten minutes each; the depth drop has a time of its own.
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0) | {far: 12.0})
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    # The tier ranks by link kind as well as distance (#4093), so it is not the level: odd files are two levels away.
+    levels = {name: 0 if name.endswith("_00.py") else 1 + int(name[-5:-3]) % 2 for name in files}
 
     def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
@@ -3240,7 +3243,8 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
         tier = {name: 0 if name.endswith("_00.py") else 2 for name in files}
         record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
         record["smoke_unless_capped"] = []
-        return {**picked, "python": sorted(files), "narrow": {**record, "left_transitive": [far], "tier": tier}}
+        record |= {"left_transitive": [far], "tier": tier, "level": levels}
+        return {**picked, "python": sorted(files), "narrow": record}
 
     monkeypatch.setattr(checks, "selection", fake_selection)
     monkeypatch.setattr(checks, "narrow", fake_narrow)
@@ -3254,9 +3258,21 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     assert 1 <= len(python) <= 4
     assert len(kept) == int(checks.narrow_budget(4) // 600) and "backend/tests/test_00.py" in kept
     left = plan["narrow"]["left_over_budget"]
-    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"]
+    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"] and "level" not in plan["narrow"]
     text = summary.read_text()
     assert all(f"`{name}`" in text for name in left) and f"`{far}`" in text and "merge queue group" in text
+    # Each left file says why it did not run: past the depth, or within reach but over the time budget.
+    dropped = {entry["file"]: entry for entry in plan["narrow"]["dropped"]}
+    assert set(dropped) == {*left, far}
+    assert dropped[far] == {"file": far, "reason": "depth", "level": None, "seconds": 12.0}
+    assert all(dropped[name]["reason"] == "budget" and dropped[name]["level"] == levels[name] for name in left)
+    assert {dropped[name]["level"] for name in left} == {1, 2} and all(dropped[name]["seconds"] == 600 for name in left)
+    assert f"- `{far}`: reached only past level 1 (12 s)" in text
+    two = next(name for name in left if levels[name] == 2)
+    assert f"`{two}`: level 2 (600 s)" in text
+    # Nearest cut tests first.
+    budget = [entry["level"] for entry in plan["narrow"]["dropped"] if entry["reason"] == "budget"]
+    assert budget == sorted(budget)
     # Without --light, or for main, nothing is narrowed: the full selection runs.
     narrowed.clear()
     for event, light in (("pull_request", False), ("push", True)):
@@ -3288,7 +3304,7 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
     hub = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
     assert "backend/tests/test_helper.py" not in hub["python"]
     # A light queue group's summary says where the rest runs.
-    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": []})
+    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": [], "dropped": []})
 
 
 def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_group_leaves_out():
