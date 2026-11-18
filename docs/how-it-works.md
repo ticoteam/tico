@@ -656,8 +656,8 @@ Starting the server gives each bot without a profile one by its name once: `*-mo
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
 another platform Responders; BotOps, the General Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The wake presets (Token saver, Performance) are gone, and
-profiles have no wake numbers: every bot's nonblocking notices wait 5 minutes, one wake per conversation (a Lead's wait
-for its digest hour), and a routine's next run starts at least 15 minutes after its last one. A scheduled routine can
+profiles have no wake numbers: news about a bot's own task (checks, reviews, a finished request) wakes it at once, on
+its turn; only a notice a rule batches waits 5 minutes, one wake per conversation (a Lead's waits for its digest hour), and a routine's next run starts at least 15 minutes after its last one. A scheduled routine can
 wait for a warm session: released when its bot has been idle 45 to 55 minutes, up to the hours its settings say, then
 run cold or skipped (`backend/wake_presets.py`). **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
 a Responder with tasks, and a Doer whose runs for a week all did nothing.
