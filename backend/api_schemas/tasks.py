@@ -134,6 +134,11 @@ SCHEMAS.update(
                 "description": "On the task's own read, when it entered its current open visit, or null if it has none. "
                 "On a list row, when it entered its stage, falling back to when it was filed.",
             },
+            visit_id={
+                "type": ["string", "null"],
+                "description": "Its open visit: on the task's own read, null when it has none; on a list row, only when "
+                "its turn is an ask. With a requirement id it names that ask in Needs you (`ids=<visit>:<requirement>`)",
+            },
             waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
             to_leave=items(ref("TaskRequirement"))
             | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},

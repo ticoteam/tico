@@ -338,14 +338,15 @@ function needsWakeAt(until: string | null) {
   // A browser timer holds at most ~24.8 days; a later end is set again when that one fires and reads the list.
   NEEDS_WAKE = window.setTimeout(() => { NEEDS_WAKE = 0; void v2Refresh(); }, Math.min(Math.max(at - Date.now(), 0) + 1000, 2 ** 31 - 1));
 }
-// The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
+// The next page (`limit` items, NEEDS_PAGE by default), one read at a time: a read already out is shared, whatever its
+// size. Resolves true when the list grew (or was read again because it moved).
 let NEEDS_MORE: Promise<boolean> | null = null;
-function v2NeedsMore() {
+function v2NeedsMore(limit = NEEDS_PAGE) {
   if (needsAll()) return Promise.resolve(false);
   return NEEDS_MORE ||= (async () => {
     try {
       const cursor = S.v2.needsNext, read = NEEDS_READ;
-      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
+      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${Math.min(limit, NEEDS_PAGE_MAX)}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
       // A newer read owns the next snapshot even before it lands; this older page must not invalidate it.
       if (!r || read !== NEEDS_READ || S.v2.needsNext !== cursor) return false;
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }

@@ -105,9 +105,12 @@ interface DecState {
   botsName: string;
   ping: DecPing;
   asking: boolean;
-  /** The rest of Needs you is still being read for this walk (decideStageOpen): the mark moves, and with nothing held
-      to show yet the screen waits on it rather than say All done. */
+  /** The rest of Needs you is still being read for this walk (decideFill): the mark moves, and with nothing held to
+      show yet the screen waits on it rather than say All done. */
   filling: boolean;
+  /** An ask read by its id from past the pages held (decideAskRead): it stays in the walk while the list read again
+      does not reach it (decideRefresh). */
+  asked: NeedsEntry | null;
 }
 /** Who All done's "Ping your bots" asks (POST /v2/flow/ping): the person's reports, one bot, or a team's bots. */
 interface DecPing {scope: 'reports' | 'bot' | 'group' | 'setup'; id?: string}
@@ -302,7 +305,7 @@ const decideFocused = () => document.activeElement as HTMLElement | null;
 const decideBlank = (opener: HTMLElement | null): DecState => ({order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(),
   more: '', busy: false, error: '', barTimer: 0, opener, off: [], stage: '', pipeline: '', snoozedAsks: null,
   snoozedOpen: false, snzOther: false, files: [], open: new Set(), seen: new Set(), bots: [], botsName: '', ping: {scope: 'reports'},
-  asking: false, filling: false});
+  asking: false, filling: false, asked: null});
 /** "Getting ready to flow" with the mark, for well under a second over the first item, which is drawn and takes input
     under it (decide.css .dc-start). None with reduced motion. */
 function decideStart(d: HTMLDialogElement) {
@@ -328,33 +331,48 @@ async function decideFlow(from: HTMLElement): Promise<void> {
   if (!decidePipelines().length) void tasksPipelinesRead().catch(() => {});
 }
 /** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
-    id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
-    and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks
-    page's own copy is not read again behind an open task, so the shared list is looked in too. The list is read a page
-    at a time and the newest ask sorts last in its group, so a miss reads on through the pages (up to DEC_ASK_PAGES). */
-const DEC_ASK_PAGES = 20;
-async function decideOpenAsk(taskId: string, rid: string, quiet = false): Promise<boolean> {
-  const mine = (it: NeedsEntry) => it.kind === 'ask' && decideTaskId(it) === taskId && decideRid(it) === rid;
-  const find = () => [decideSource(), needsHeld()].map(items => ({items, it: items.find(mine)})).find(x => x.it);
-  let at = find();
-  if (!at) { await v2Refresh(); at = find(); }
-  for (let i = 0; !at && !needsAll() && i < DEC_ASK_PAGES; i++) {
-    if (!await v2NeedsMore()) break;
-    at = find();
-  }
-  if (at?.it && decideOpen(at.it.id, at.items)) return true;
+    id (`<visit id>:<requirement id>`, backend/waiting_on.py ask_id) and a stage's requirement is the same on every task
+    in the stage, so both the task and the requirement must match. Not in the list held: that one item is read by its id
+    (`visit`, the task's open visit), never the list page by page. Not found: say why, never nothing. */
+async function decideOpenAsk(taskId: string, rid: string, quiet = false, visit = ''): Promise<boolean> {
+  const at = decideAskHeld(taskId, rid) || await decideAskRead(taskId, rid, visit);
+  if (at && decideAskShow(at)) return true;
   if (quiet) return false;
   // Found but not opened: only a bot's decideOpen refuses, and a bot has no Answer; kept as a guard.
   toast(at ? 'This ask could not be opened here. Open it from Needs you.'
-    : needsAll() ? 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.'
+    : visit || needsAll() ? 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.'
       : 'This ask was not found in the part of your Needs you list read so far. Open it from Needs you.', true);
   return false;
+}
+/** One ask and the list it is walked in. */
+interface DecAsk {items: NeedsEntry[]; it: NeedsEntry}
+const decideAskOf = (taskId: string, rid: string) => (it: NeedsEntry) => it.kind === 'ask' && decideTaskId(it) === taskId && decideRid(it) === rid;
+/** The ask in what is held: the Tasks page's own copy (not read again behind an open task), then the shared list. */
+function decideAskHeld(taskId: string, rid: string): DecAsk | null {
+  const mine = decideAskOf(taskId, rid);
+  for (const items of [decideSource(), needsHeld()]) { const it = items.find(mine); if (it) return {items, it}; }
+  return null;
+}
+/** The ask read by its id (GET /v2/needs-you?ids=<visit>:<requirement>), walked after what is held. Without the visit
+    (a task read from an older server) the list is read again once instead. */
+async function decideAskRead(taskId: string, rid: string, visit: string): Promise<DecAsk | null> {
+  if (!visit) { await v2Refresh(); return decideAskHeld(taskId, rid); }
+  const r = await v2Get<NeedsRead>(`/v2/needs-you?ids=${encodeURIComponent(`${visit}:${rid}`)}`, {fresh: true});
+  const it = needsAsEntries(r?.items).find(decideAskOf(taskId, rid));
+  // A read of the list that landed meanwhile may hold it now: then it is walked from there.
+  return decideAskHeld(taskId, rid) || (it ? {items: [...decideSource().filter(x => x.id !== it.id), it], it} : null);
+}
+function decideAskShow(at: DecAsk): boolean {
+  if (!decideOpen(at.it.id, at.items)) return false;
+  if (DEC && !needsHeld().some(x => x.id === at.it.id)) DEC.asked = at.it;
+  return true;
 }
 /** Opening a task from anywhere (the board, a list, a #/task/ link, a link in chat, a bot's page): a task waiting on the
     person's own answer opens on that ask in this screen, as a click in Needs you does. False, and nothing said, when it
     is not waiting on them or the ask is not in their Needs you; the task page opens then (taskModalShow). */
 type DecWait = {ask?: boolean | null; requirement_id?: string | null; who?: string | null};
-async function decideTaskOpen(task: {id: string | number; turn?: DecWait | null; waits?: DecWait[] | null; status?: string | null}): Promise<boolean> {
+type DecTask = {id: string | number; turn?: DecWait | null; waits?: DecWait[] | null; status?: string | null; visit_id?: string | null};
+async function decideTaskOpen(task: DecTask): Promise<boolean> {
   const me = myActor(), id = String(task.id);
   if (decideNoFlow() || !me || ['done', 'closed'].includes(String(task.status || ''))) return false;
   // Any of the task's waits that is their own ask counts, not only the first (another person's OK may head the list).
@@ -362,7 +380,21 @@ async function decideTaskOpen(task: {id: string | number; turn?: DecWait | null;
   const rid = waits.find(w => w.ask && w.requirement_id && w.who === me)?.requirement_id
     // A list row carries only its first wait: an ask of theirs behind it is in the Needs you already read, oldest first.
     || decideHeldAsk(id);
-  return rid ? decideOpenAsk(id, rid, true) : false;
+  if (!rid) return false;
+  const held = decideAskHeld(id, rid);
+  if (held) return decideAskShow(held);
+  // Past the pages held: the task's window opens now, and its ask comes over it once read by its id.
+  void decideAskAttach(id, rid, task.visit_id || '');
+  return false;
+}
+/** The ask of a task whose window opened without it (decideTaskOpen), read by its id: it opens over that window while
+    the window is still on that task, nothing is typed in it, and no Flow screen is open. */
+async function decideAskAttach(taskId: string, rid: string, visit: string) {
+  const at = await decideAskRead(taskId, rid, visit);
+  const d = document.querySelector<HTMLDialogElement>('#task-modal'), el = document.activeElement;
+  if (!at || DEC || !d?.open || d.dataset.task !== taskId) return;
+  if (el && d.contains(el) && el.matches('input, textarea, select, [contenteditable="true"]')) return;
+  decideAskShow(at);
 }
 function decideHeldAsk(taskId: string): string {
   const it = [...decideSource(), ...needsHeld()].find(x => x.kind === 'ask' && decideTaskId(x) === taskId);
@@ -377,15 +409,14 @@ function decideWaiting(stage: string, pipeline: string): number | null {
 }
 /** Flow on a stage, or with `pipeline` and no stage on a pipeline. Its items can be past the pages held, and reading
     every page takes seconds, so the screen opens at once on what is held (or, with none of the walk held yet, waits
-    there with its mark moving) and the rest joins as decideRefresh adds a read list: the walk's order once all is read
-    is the one reading first gave. False when none wait: the server's count says so before any page is read. */
+    there with its mark moving) and the rest joins as it is read (decideFill). False when none wait: the server's count
+    says so before any page is read. */
 async function decideStageOpen(stage: string, pipeline: string = ''): Promise<boolean> {
   if (!stage && !pipeline || decideNoFlow()) return false;
   const walk = stage ? '' : pipeline;
   if (needsAll()) return decideOpen('', decideSource(), stage, walk);
   const waiting = decideWaiting(stage, walk);
   if (waiting === 0) return false;
-  const rest = needsReadAll();
   const fresh = !DEC;
   if (!DEC) DEC = {...decideBlank(decideFocused()), stage, pipeline: walk};
   const st = DEC;
@@ -394,15 +425,12 @@ async function decideStageOpen(stage: string, pipeline: string = ''): Promise<bo
     // None of it held and no count to go on (a server without stage counts): every page is read first.
     st.filling = false;
     if (fresh) DEC = null;
-    await rest;
+    await needsReadAll();
     return decideOpen('', decideSource(), stage, walk);
   }
   const shown = !!decideCurrent(st);
-  const filled = rest.catch(() => {}).then(() => {
-    if (DEC !== st) return true;
-    st.filling = false;
-    decideRefresh(st, decideSource());
-    if (decideCurrent(st)) return true;
+  const filled = decideFill(st).then(here => {
+    if (!here || decideCurrent(st)) return true;
     // Nothing more came: All done after items were shown; with none ever shown (a count the whole list did not bear
     // out), as if nothing had opened.
     if (shown || st.stage !== stage || st.pipeline !== walk) { decideRender(st); return true; }
@@ -413,6 +441,21 @@ async function decideStageOpen(stage: string, pipeline: string = ''): Promise<bo
   void filled;
   return true;
 }
+/** The rest of Needs you read behind the open walk `st`, its mark moving (st.filling) and, with nothing to show yet,
+    its end screen waiting: each read that comes joins the walk (decideRefresh). Resolves once all is read, true while
+    `st` is still the screen; the caller says All done then, or does what its walk does with none. */
+async function decideFill(st: DecState): Promise<boolean> {
+  st.filling = true;
+  await needsReadAll(() => { if (DEC === st) decideRefresh(st, decideSource()); }).catch(() => {});
+  if (DEC !== st) return false;
+  st.filling = false;
+  decideRefresh(st, decideSource());
+  return true;
+}
+/** Whether a walk (`st` as it will walk) has items past the pages held: fewer of its items are held than the server's
+    count over the whole list says wait (`waiting`; null when it gave none). */
+const decideMore = (st: DecState, waiting: number | null) =>
+  !needsAll() && (waiting === null || decideSource().filter(it => decideInWalk(st, it)).length < waiting);
 /** A deep link to a stage's review (#/decide?stage=<id>): its walk, or, with nothing there, its pipeline on that stage
     saying so. */
 async function decideStageWanted(stage: string) {
@@ -454,8 +497,8 @@ async function decideWanted(id: string) {
 /** The list was read again (hub-v2.ts): drop what left, add what came. The item on screen is drawn again only when it
     went; an OK's content is never read again here. */
 function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefined) {
-  const before = st.at;
-  decideSync(st, needsAsEntries(items));
+  const before = st.at, list = needsAsEntries(items), asked = st.asked;
+  decideSync(st, asked && !needsAll() && !list.some(it => it.id === asked.id) ? [...list, asked] : list);
   // On All done, what came in (a pinged bot's question) comes on screen.
   if (!st.at) { const first = decideLive(st)[0]; if (first) { decideGo(st, first); return void decideOpinions(st); } }
   if (st.at !== before) decideRender(st); else decidePaintHead(st);
@@ -534,13 +577,20 @@ function decideMenu(open: boolean): boolean {
   if (open) menu.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
   return open || was;
 }
-/** A row of the menu: that place's walk, every page of Needs you read first. */
+/** A row of the menu: that place's walk, at once on what is held, the rest joining as it is read (decideFill); with
+    none there once all is read, All mine. */
 async function decideWalkTo(stage: string, pipeline: string) {
   decideMenu(false);
-  if (!needsAll()) await needsReadAll();
-  if (!DEC) return;
-  Object.assign(DEC, {bots: [], botsName: '', ping: {scope: 'reports'}});
-  if (!decideOpen('', decideSource(), stage, pipeline)) decideOpen('', decideSource());
+  const st = DEC;
+  if (!st) return;
+  Object.assign(st, {bots: [], botsName: '', ping: {scope: 'reports'}});
+  // The server's count over the whole list says before any page whether a stage or a pipeline has any (Other and All
+  // mine have no count of their own).
+  const counted = stage !== DEC_OTHER && (stage || pipeline) ? decideWaiting(stage, stage ? '' : pipeline) : null;
+  st.filling = decideMore({...st, stage, pipeline}, counted);
+  if (!decideOpen('', decideSource(), stage, pipeline, st.filling)) decideOpen('', decideSource());
+  if (!st.filling || !await decideFill(st) || decideCurrent(st)) return;
+  if (st.stage !== stage || st.pipeline !== pipeline || !decideOpen('', decideSource())) decideRender(st);
 }
 /** Nothing left: All done, how many asks you snoozed for yourself are still snoozed, and Ping your bots. "N snoozed"
     opens their list: each by its task's title, with ↩ to bring it back now. */
@@ -569,15 +619,21 @@ async function decidePing(st: DecState) {
     toast(errorMessage(e, 'The bots were not asked'), true);
   }
 }
-/** A bot's or a team's Flow mark: Flow on those bots' items only, every page of Needs you read first; All done's ping
-    asks them, whoever manages them. `ask`: ping them now (a setup mark, ui/app/setup-gaps.ts), so their ❓ comes in. */
+/** A bot's or a team's Flow mark: Flow on those bots' items only; All done's ping asks them, whoever manages them.
+    `ask`: ping them now (a setup mark, ui/app/setup-gaps.ts), so their ❓ comes in. Their items can be past the pages
+    held: the screen opens at once on what is held (or waits with its mark moving) and the rest joins as it is read
+    (decideFill). The server's per-bot counts over the whole list say before any page whether any wait: none, All done
+    at once and nothing read. */
 async function decideBotsFlow(from: HTMLElement, bots: string[], name: string, ping: DecPing, ask = false) {
   if (decideNoFlow()) return;
-  if (!needsAll()) await needsReadAll();
   if (DEC) decideStop();
-  DEC = {...decideBlank(from), bots, botsName: name, ping};
+  const st: DecState = {...decideBlank(from), bots, botsName: name, ping};
+  DEC = st;
+  const whole = needsBotsWhole();
+  st.filling = decideMore(st, whole && bots.reduce((n, b) => n + (whole[b] || 0), 0));
   decideOpen('', decideSource(), '', '', true);
-  if (ask && DEC) void decidePing(DEC);
+  if (ask && DEC === st) void decidePing(st);
+  if (st.filling && await decideFill(st) && !decideCurrent(st)) decideRender(st);
 }
 let DEC_SNZ_READ = false;                    // the snoozed asks are being read
 let DEC_SNZ_GEN = 0;                         // bumped by a snooze or its undo: a read begun before it is stale

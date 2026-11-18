@@ -148,6 +148,7 @@ SCHEMAS.update(
                 "pushed_past": "b",
                 "stage_since": "n",
                 "on_person": "b",
+                "visit_id": {"type": "string", "description": "Its open visit, only when its turn is an ask"},
             },
             [
                 "id",

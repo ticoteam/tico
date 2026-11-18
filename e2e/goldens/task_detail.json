@@ -337,6 +337,7 @@
       "updated_at": "<time>",
       "version": 3,
       "visibility": "private",
+      "visit_id": null,
       "waits": []
     },
     "waiting_for": ""

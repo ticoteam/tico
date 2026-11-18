@@ -233,7 +233,8 @@ def brief(c, rows, visible_sql="1"):
     `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
     `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
     person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
-    entered its stage: its open visit, else when it was filed; a board card's age) and `on_person` (it waits only on a
+    entered its stage: its open visit, else when it was filed; a board card's age), `visit_id` (its open visit, only when
+    its turn is an ask: Needs you reads that one ask by id) and `on_person` (it waits only on a
     person's OK or answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one
     read of the open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is
     named by neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed
@@ -251,15 +252,15 @@ def brief(c, rows, visible_sql="1"):
     origins = came_from(c, ids)
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    marked, pushed, entered, stuck = {}, set(), {}, set()
+    marked, pushed, entered, stuck, visits = {}, set(), {}, set(), {}
     for r in c.execute(
-        "SELECT v.task_id, v.late_told_at, v.late_person_at, v.entered_how, v.entered_at, v.level, s.expected_minutes "
+        "SELECT v.task_id, v.late_told_at, v.late_person_at, v.entered_how, v.entered_at, v.level, s.expected_minutes, v.id "
         "FROM visits v LEFT JOIN stages s ON s.id=v.stage_id "
         "WHERE v.left_at IS NULL "
         "AND v.task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
-        entered[r[0]] = r[4]
+        entered[r[0]], visits[r[0]] = r[4], r[7]
         if r[5] == "person":
             stuck.add(r[0])
         if r[1]:
@@ -300,6 +301,8 @@ def brief(c, rows, visible_sql="1"):
             if turn["state"] == W.SNOOZED:
                 turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
+        if turn and turn["ask"] and visits.get(row["id"]):
+            row["visit_id"] = visits[row["id"]]  # only on an ask: with it the ask is read by id (waiting_on.ask_id)
         mark = marked.get(row["id"])
         row["late"] = late_rule.late_of(row, mark[0], mark[1], now) if mark else None
         if row["id"] in stuck:

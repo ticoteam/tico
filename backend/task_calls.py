@@ -1204,6 +1204,8 @@ def task_view(
         },
         "came_from": task_reads.came_from(conn, [task_id]).get(task_id) if stage.get("side") else None,
         "stage_since": visit.get("entered_at") if live else None,
+        # Its open visit: with a requirement it names one ask in Needs you (waiting_on.ask_id), read by id there.
+        "visit_id": visit.get("id") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
         "turn": waits[0] if waits else None,
