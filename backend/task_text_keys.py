@@ -5,7 +5,9 @@ Every task text write runs the key detector's certain-tier rules (backend/secret
 before anything is stored, from any client, person or bot:
 
 - Typed in Tico (web, CLI, MCP, API): the request guard (backend/app.py) calls `refusal` on the buffered body of every
-  task write route (`TASK_WRITES`) and of a message write into a task's conversation, before any route runs. A key
+  task write route (`TASK_WRITES`) and of a message write into a task's conversation, with files (multipart: its text
+  fields) or without, before any route runs. A name in front of a value counts only when the value looks generated
+  (`generated`), so `max_tokens: 4096` is ordinary text. A key
   is refused with 422 `looks_like_key` and one line a bot can act on; the value is never repeated and the task is left
   unchanged at the same version, a hand-off (done with a note, an answer) included. The server keeps no request body
   in its logs (uvicorn's access log is off), and this runs before any route reads one.
@@ -18,6 +20,9 @@ Suspect-tier matches are out (spec): they stay as typed.
 
 import json
 import re
+from email import policy as email_policy
+from email.message import EmailMessage
+from email.parser import BytesParser
 from typing import TYPE_CHECKING, Any, cast
 
 from . import secret_drop
@@ -35,21 +40,40 @@ OUTSIDE = ("slack", "email", "mail")
 METHODS = ("POST", "PATCH", "PUT")
 # Every write under /api/v2/tasks says something on a task, except a file's or a page's own bytes (a file is not task
 # text, spec Scope). Questions and messages carry a ❓'s line and its answer.
-TASK_WRITES = re.compile(r"/api/v2/(?:tasks(?:/.*)?|questions(?:/.*)?)")
+TASK_WRITES = re.compile(r"/api/v2/(?:tasks(?:/.*)?|questions(?:/.*)?|uploads/tasks)")
 NOT_TEXT = re.compile(r"/api/v2/tasks/[^/]+/(?:files|pages)(?:/.*)?")
 # A message write that is task text only when its thread is a task's conversation (`task_of_thread`).
-THREAD_WRITES = re.compile(r"/api/v2/threads/([^/]+)/messages")
+# A message or a new task sent with files goes to /api/v2/uploads/... as multipart: its text fields are checked too.
+THREAD_WRITES = re.compile(r"/api/v2/(?:uploads/)?threads/([^/]+)/messages")
 MESSAGE_EDITS = re.compile(r"/api/v2/messages/([^/]+)")
 TASK_ID = re.compile(r"/api/v2/tasks/([^/]+)")
 
 
+# Rules that find a value by the word in front of it (`max_tokens: 4096`, `auth: OAuth2`, `hotkey: Ctrl-K`), not by its
+# own shape. Task text is full of such pairs, so there the value must also look generated, unless the word names a
+# password, which can be any string. `env` (an UPPER_CASE= line) keeps the detector's own test.
+NAMED = ("key_value", "context_space", "bearer")
+RANDOM = re.compile(r"(?=[A-Za-z]*[0-9])(?=[0-9]*[A-Za-z])[A-Za-z0-9]{8,}|(?=[^0-9]*[0-9])[0-9a-fA-F-]{32,}")
+
+
+def generated(value: str) -> bool:
+    """A value that reads as made by a machine: 8+ letters and digits run together, a UUID or long hex, or the suspect
+    tier's own test (long, mixed characters). Words, numbers and dotted or dashed names (`--dur-fast`, `tasks:list:v2`)
+    are not."""
+    return bool(RANDOM.fullmatch(value)) or secret_drop._suspect(value)  # pyright: ignore[reportPrivateUsage]
+
+
+def _kept(item: dict[str, Any]) -> bool:
+    if item["tier"] != "certain":
+        return False
+    if item["rule"] not in NAMED or item.get("type") == "password":
+        return True
+    return generated(str(item.get("value") or ""))
+
+
 def found(text: str) -> list[dict[str, Any]]:
     """The certain-tier keys in `text`: rule, start and end (offsets in the normalized text). Never the value."""
-    return [
-        {"rule": i["rule"], "start": i["start"], "end": i["end"]}
-        for i in secret_drop.scan(text or "")
-        if i["tier"] == "certain"
-    ]
+    return [{"rule": i["rule"], "start": i["start"], "end": i["end"]} for i in secret_drop.scan(text or "") if _kept(i)]
 
 
 def _strings(value: Any, path: str = "") -> list[tuple[str, str]]:
@@ -84,12 +108,33 @@ def scope(method: str, path: str) -> str | None:
     return None
 
 
-def keys_in(raw: bytes) -> list[tuple[str, str]]:
-    """(field, rule) for each certain-tier key in a JSON body. A body that is not JSON is checked as one text."""
-    try:
-        body: Any = json.loads(raw or b"null")
-    except (ValueError, UnicodeDecodeError):
-        body = raw.decode("utf-8", "replace") if raw else None
+def _form_fields(raw: bytes, content_type: str) -> dict[str, list[str]]:
+    """A multipart body's text fields by name (`text`, `title`, `body`): the files in it are not task text."""
+    head = b"Content-Type: " + content_type.encode("latin-1", "replace") + b"\r\n\r\n"
+    message = BytesParser(policy=email_policy.HTTP).parsebytes(head + raw)
+    fields: dict[str, list[str]] = {}
+    parts = cast("list[EmailMessage]", list(message.iter_parts())) if message.is_multipart() else []
+    for part in parts:
+        if part.get_filename() is not None:
+            continue
+        data: object = part.get_payload(decode=True)
+        name = str(cast("object", part.get_param("name", header="content-disposition")) or "")
+        if isinstance(data, bytes):
+            fields.setdefault(name, []).append(data.decode("utf-8", "replace"))
+    return fields
+
+
+def keys_in(raw: bytes, content_type: str = "") -> list[tuple[str, str]]:
+    """(field, rule) for each certain-tier key in a JSON body or a multipart form's text fields. A body that is
+    neither is checked as one text."""
+    body: Any
+    if content_type.lower().startswith("multipart/"):
+        body = _form_fields(raw, content_type)
+    else:
+        try:
+            body = json.loads(raw or b"null")
+        except (ValueError, UnicodeDecodeError):
+            body = raw.decode("utf-8", "replace") if raw else None
     hits: list[tuple[str, str]] = []
     for field, text in _strings(body):
         hits.extend((field, f["rule"]) for f in found(text))
@@ -139,7 +184,7 @@ def audit(c: "sqlite3.Connection", author: str, task: str, rules: list[str], out
     H.event(c, author, ACTION, task, {"outcome": outcome, "rules": sorted(set(rules))})  # pyright: ignore[reportUnknownMemberType]
 
 
-def refusal(store: Any, author: str, method: str, path: str, raw: bytes) -> None:
+def refusal(store: Any, author: str, method: str, path: str, raw: bytes, content_type: str = "") -> None:
     """The request guard's check: raises 422 `looks_like_key` (and writes its audit row, in its own transaction) when
     a task text write holds a certain-tier key. Nothing else is read or written; the body is never echoed."""
     from .store import Problem
@@ -147,7 +192,7 @@ def refusal(store: Any, author: str, method: str, path: str, raw: bytes) -> None
     kind = scope(method, path)
     if not kind:
         return
-    hits = keys_in(raw)
+    hits = keys_in(raw, content_type)
     if not hits:
         return
     with store.transaction() as c:
