@@ -68,6 +68,8 @@ All existing routes keep working for `tico` calls. Changes:
   the call. A call the sweep ends (`meet_ended`, `no_answer`, `stale`) has its space locked the same way, on the poll
   pool.
 - `GET /api/v2/calls/ringing`: live calls ringing the viewer now (page load and reconnect): `{"calls": [view, ...]}`.
+- `GET /api/v2/calls/live`: live Tico Meet calls (not ending) in threads the viewer can read, newest first, at most 20:
+  `{"calls": [view, ...]}`. The Meetings page's Live reads it on load, on reconnect and on `call.*` changes.
 - Thread rows (rail, browse, a thread's own row) gain `live_call`: `{"id", "live_count"}` or null.
 - Change kinds on the `threads` topic: existing `call.*`, plus `call.updated` whenever `live_count`, `in_call`,
   `status_source` or `meet_seen_at` changes. The browser re-reads the call on any `call.*`.

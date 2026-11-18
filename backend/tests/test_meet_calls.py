@@ -229,6 +229,22 @@ def test_a_dm_rings_the_other_person_never_a_bot_and_a_big_thread_rings_nobody(g
     assert json.loads(row(meet, quiet["id"])["ring"]) == [] and len(rung) == 1
 
 
+def test_live_lists_the_live_tico_meet_calls_its_reader_can_read(google, meet):
+    tico = start(meet, thread(meet))
+    google_call = meet_start(meet, thread(meet, subject="Acme review"))
+    ending = start(meet, thread(meet, subject="Acme retro"))
+    with meet.app.state.store.transaction() as c:
+        c.execute("UPDATE calls SET ending_at=? WHERE id=?", (H.now(), ending["id"]))
+    for token in ("ana-test", "ben-test"):
+        listed = get(meet, "calls/live", token=token)["calls"]
+        assert [v["id"] for v in listed] == [tico["id"]], token  # not the Google Meet, not the ending one
+        assert listed[0]["state"] == "live" and listed[0]["started_at"]
+    assert get(meet, "calls/live", token="cara-test")["calls"] == []  # not a reader of the thread
+    post(meet, f"calls/{tico['id']}/end", {})
+    post(meet, f"calls/{google_call['id']}/end", {})
+    assert get(meet, "calls/live")["calls"] == []
+
+
 # ----------------------------------------------------------------------------- privacy
 
 

@@ -325,6 +325,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything; `next_scheduled` is the thread's soonest scheduled call (with `can_edit`), or `null` |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional; on for Tico Meet, off for Google Meet), `provider` (`auto`, `google_meet` or `tico`; default `auto`; bots or voice make it Tico Meet), `bots` (optional, up to 10 slugs attached at the start), `starts_at` and `ends_at` (optional, ISO 8601 with an offset: both schedule a Tico Meet call for then, up to 8 hours long; see Scheduled calls) |
 | `GET /api/v2/calls/ringing` | The live calls ringing the caller now |
+| `GET /api/v2/calls/live` | The live Tico Meet calls in threads the caller can read (the thread's own read rule), newest first, as call views; an ending call is left out. The Meetings page lists them under Live, above Upcoming, read again on the `threads` topic's `call.*` changes |
 | `GET /api/v2/calls/upcoming` | The scheduled calls the caller is in (booked by them, or with them among the thread's people), soonest first. Each row is compact: `id`, `title`, `thread_id`, `scheduled_start`, `scheduled_end`, `people` (up to 8, the booker first), and `can_edit` |
 | `GET /api/v2/calls/{call_id}` | One call: state (`scheduled`, `live`, `ending` or `ended`), `scheduled_start` and `scheduled_end`, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, and `voice` (see Voice; `null` without voice) |
 | `POST /api/v2/calls/{call_id}/join` | Join; the first join of a scheduled call starts it. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
@@ -343,7 +344,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 The same operations are `tico call list|start|show|join|token|leave|end|retry` and `tico call bot add|remove` in the
 `tico` CLI, and `tico_call_list`, `tico_call_show`, `tico_call_start`, `tico_call_join`, `tico_call_token`, `tico_call_leave`,
 `tico_call_end`, `tico_call_retry`, `tico_call_bot_add` and `tico_call_bot_remove` over MCP. The OpenAPI operations are
-`listCalls`, `startCall`, `listUpcomingCalls`, `getCall`, `changeCall`, `joinCall`, `refreshCallToken`, `leaveCall`,
+`listCalls`, `startCall`, `listUpcomingCalls`, `listLiveCalls`, `getCall`, `changeCall`, `joinCall`, `refreshCallToken`, `leaveCall`,
 `setCallStage`, `clearCallStage`, `endCall`, `retryCallActionItems`, `attachCallBots` and `detachCallBot`. The stage is
 set from the meeting window only: it shows what a person in the call shares.
 

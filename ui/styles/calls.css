@@ -13,6 +13,7 @@
 .thv-call-next:hover,.thv-call-next[aria-expanded=true]{background:var(--hover);color:var(--ink)}
 .thv-call-next:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 /* A scheduled call's ⋯ on Upcoming */
+.meet-upcoming-gap{flex:none;width:32px}
 .call-sched-more{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;padding:0;border:0;border-radius:var(--r-ctl);background:transparent;color:var(--muted);cursor:pointer}
 .call-sched-more:hover,.call-sched-more[aria-expanded=true]{background:var(--hover);color:var(--ink)}
 .call-sched-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
@@ -20,7 +21,7 @@
 /* its menu is a thread menu (threads.css .thv-pop), placed by its own left; the Meetings page's .p-menu sizes none of it */
 .thv-pop.call-sched-menu{right:auto;min-width:160px}
 .thv-pop.call-sched-menu [data-k=cancel]{color:var(--fail)}
-@media (max-width:760px){.call-sched-more{width:44px;height:44px}}
+@media (max-width:760px){.call-sched-more{width:44px;height:44px}.meet-upcoming-gap{width:44px}}
 
 /* the card a call posts in its thread */
 .call-card{display:flex;align-items:center;gap:10px;margin:4px 0 2px;min-height:44px;max-width:380px;box-sizing:border-box;padding:6px 10px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}

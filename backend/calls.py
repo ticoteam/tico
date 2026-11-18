@@ -105,6 +105,7 @@ POLL_WORKERS = 4
 POLL_BUDGET_SECONDS = 5
 POLL_SKIP_MAX = 16
 RINGING_LIMIT = 20  # the calls `GET /api/v2/calls/ringing` answers with at most
+LIVE_LIMIT = 20  # the calls `GET /api/v2/calls/live` answers with at most
 CHANGE_FIELDS = ("live_count", "status_source", "meet_seen_at")  # with in_call: call.updated
 # Scheduled calls (docs/meet.md, Scheduled calls). A start a little behind now is still taken: the dialog's "now" was
 # a moment ago. The invitation names at most INVITE_LIMIT people.
@@ -2276,6 +2277,23 @@ class Calls:
                 found.append(shown)
         return {"calls": found}
 
+    def live(self, c, who):
+        """The live Tico Meet calls in threads `who` can read (the thread's own read rule), newest first, as call views:
+        the Meetings page's Live. An ending call is left out; it is over for anyone looking."""
+        human_only(who)
+        self.auth.domain(who)
+        found = []
+        for r in c.execute(
+            "SELECT id,thread_id FROM calls WHERE state='live' AND provider='tico' AND ending_at IS NULL "
+            "ORDER BY started_at DESC LIMIT ?",
+            (LIVE_LIMIT * 5,),
+        ):
+            if len(found) >= LIVE_LIMIT:
+                break
+            if readable(c, who.actor, r["thread_id"]):
+                found.append(self.view(c, r["id"], who))
+        return {"calls": found}
+
     def end_conference(self, call_id):
         """Ask Google to end a Meet call's active conference, as its connector, then lock its space so the link is spent.
         Best effort: the call ends either way."""
@@ -2550,6 +2568,17 @@ def install_calls(app, store, auth, write):
         who = request.state.identity
         with store.read() as c:
             return calls.ringing(c, who)
+
+    @app.get(
+        "/api/v2/calls/live",
+        **api_v2(
+            "Calls", "listLiveCalls", "The live Tico Meet calls in threads you can read, newest first", "CallLive"
+        ),
+    )
+    def live_calls(request: Request):
+        who = request.state.identity
+        with store.read() as c:
+            return calls.live(c, who)
 
     @app.get(
         "/api/v2/calls/{call_id}",

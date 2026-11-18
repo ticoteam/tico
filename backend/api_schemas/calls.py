@@ -146,6 +146,7 @@ SCHEMAS.update(
             }
         ),
         "CallRinging": obj({"calls": items(ref("Call"))}),
+        "CallLive": obj({"calls": items(ref("Call"))}),
         "CallUpcoming": obj(
             {
                 "calls": items(
