@@ -215,8 +215,8 @@ starts a Tico Meet call with the bots in it: in the viewer's DM when one teammat
 else in a new thread with them all, named for the call's title or, without one, for who is in it. Its meeting window
 opens and joins it.
 
-**Bot notes.** Each bot has a brief for the call. If it joins without prep, Tico queues a background **Prepare for
-<title>** task immediately. The bot uses the built-in `meeting-prep` skill to add the latest figures, recent work
+**Bot notes.** Each bot has a brief for the call. If it joins without prep, Tico queues a background prep task
+immediately. The bot uses the built-in `meeting-prep` skill to add the latest figures, recent work
 and open tasks people are likely to ask it about. It can add useful facts as it finds them. In the meeting window,
 open **People** and use the notes icon beside a bot. Scheduled prep writes to the same brief and still posts its
 prep message in the thread.

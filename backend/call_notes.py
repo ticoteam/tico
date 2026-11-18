@@ -102,13 +102,14 @@ def _bot_for_notes(c: Any, auth: Any, who: Any, call_id: str, bot: str | None = 
     raise Problem("not_found", "Call or bot not found", 404)
 
 
-def private_write(c: Any, who: Any, call_id: str, meetings: set[str]) -> None:
+def private_write(c: Any, who: Any, call_id: str) -> None:
     """A private run may publish its own call's brief when the call is the destination of that run."""
     row: Row = C._call(c, call_id)
     prep = c.execute(
         "SELECT prep_task_id FROM call_bot_notes WHERE call_id=? AND bot_id=?",
         (call_id, H.actor_id(who.actor)),
     ).fetchone()
+    meetings = privacy.meeting_sources(c).attempt(who.attempt_id)
     tasks: set[str] = {tid for tid in privacy.carried_tasks(c, who.attempt_id) if H.task_private(c, H.task(c, tid))}
     if meetings == {row["live_meeting_id"]} and not tasks:
         return
