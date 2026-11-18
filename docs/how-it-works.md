@@ -620,12 +620,12 @@ status and reporting line are changed in **Settings → Bots**, not in the file.
 
 ### Profiles
 
-A bot's **profile** says what wakes it and which tasks it takes. It is a fixed set of wake rules for that bot, a batch
-window and a gap between sweeps, and it grants no right.
+A bot's **profile** says what wakes it and which tasks it takes. It is a fixed set of wake rules for that bot, and it
+grants no right.
 
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
-| **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
+| **Doer** (the default) | people, hand-offs, asks, awaited results, news about a task on its turn | a note for its next run | any task; pulls its open tasks by itself |
 | **Reviewer** | its review or QA request, a result it waits for, people | a note | review and QA requests only (a task labelled `review`, which a subtask filed with a title starting Review, Review 1, Review 2, QA or Security gets when it is created; a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a task it asked for finishing or closing, a blocker, OKs | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Manager** | people, a task given to it, its own clock | a note for its next run, its sub-tasks' results included | any task, started only when a person or a bot asks |
@@ -656,8 +656,9 @@ Starting the server gives each bot without a profile one by its name once: `*-mo
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
 another platform Responders; BotOps, the General Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The wake presets (Token saver, Performance) are gone, and
-profiles have no wake numbers: every bot's nonblocking notices wait 5 minutes, one wake per conversation (a Lead's wait
-for its digest hour), and a routine's next run starts at least 15 minutes after its last one. A scheduled routine can
+profiles have no wake numbers: news about a bot's own task (checks, reviews, a finished request) wakes it at once, on
+its turn; only a notice a rule batches waits 5 minutes, one wake per conversation (a Lead's waits for its digest
+hour), and a routine's next run starts at least 15 minutes after its last one. A scheduled routine can
 wait for a warm session: released when its bot has been idle 45 to 55 minutes, up to the hours its settings say, then
 run cold or skipped (`backend/wake_presets.py`). **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
 a Responder with tasks, and a Doer whose runs for a week all did nothing.
