@@ -1,0 +1,6 @@
+{
+  "ui/tests/visual-cards.cts": {
+    "no-fixed-wait-ui": 11,
+    "no-raised-timeout": 7
+  }
+}

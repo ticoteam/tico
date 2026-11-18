@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_org_rule_late.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

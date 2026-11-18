@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_company_page_core.py": {
+    "no-unittest-mock": 3
+  }
+}

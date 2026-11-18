@@ -1,0 +1,5 @@
+{
+  "runner_support/tests/test_op.py": {
+    "no-unittest-mock": 2
+  }
+}

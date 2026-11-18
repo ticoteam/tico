@@ -1,0 +1,5 @@
+{
+  "runner_support/tests/test_isolation_docker.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

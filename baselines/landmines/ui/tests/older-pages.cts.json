@@ -1,0 +1,6 @@
+{
+  "ui/tests/older-pages.cts": {
+    "no-fixed-wait-ui": 4,
+    "no-raised-timeout": 2
+  }
+}

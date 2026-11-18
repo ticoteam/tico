@@ -1,0 +1,5 @@
+{
+  "scripts/tests/test_remote.py": {
+    "no-global-sleep-patch": 2
+  }
+}

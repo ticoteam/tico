@@ -1,0 +1,5 @@
+{
+  "ui/tests/org-rules-counsel.cts": {
+    "no-fixed-wait-ui": 2
+  }
+}

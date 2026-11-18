@@ -1,0 +1,6 @@
+{
+  "ui/tests/thread-live-reply.cts": {
+    "no-fixed-wait-ui": 5,
+    "no-raised-timeout": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "ui/tests/live-events-load.cts": {
+    "no-fixed-wait-ui": 3
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "ui/tests/task-documents.cts": {
+    "no-fixed-wait-ui": 3,
+    "no-raised-timeout": 1
+  }
+}

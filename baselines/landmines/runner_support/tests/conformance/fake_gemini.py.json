@@ -1,0 +1,5 @@
+{
+  "runner_support/tests/conformance/fake_gemini.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

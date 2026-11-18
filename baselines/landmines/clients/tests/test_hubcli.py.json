@@ -1,0 +1,5 @@
+{
+  "clients/tests/test_hubcli.py": {
+    "no-unittest-mock": 14
+  }
+}

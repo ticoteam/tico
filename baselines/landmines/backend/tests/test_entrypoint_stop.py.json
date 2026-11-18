@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_entrypoint_stop.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

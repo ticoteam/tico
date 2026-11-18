@@ -1,0 +1,5 @@
+{
+  "backend/tests/helpers/finance_oks.py": {
+    "no-unittest-mock": 2
+  }
+}

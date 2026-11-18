@@ -1,0 +1,5 @@
+{
+  "ui/tests/e2e-files-pages.cts": {
+    "no-raised-timeout": 1
+  }
+}
