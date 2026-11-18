@@ -2328,6 +2328,8 @@ impl Runner {
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
+                output_style: hosts::output_style(&config),
+                verbosity: hosts::verbosity(&config),
             };
             let mut resumed = false;
             if side_run && previous.is_none() {
@@ -2901,6 +2903,8 @@ impl Runner {
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
+                    output_style: hosts::output_style(&config),
+                    verbosity: hosts::verbosity(&config),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;

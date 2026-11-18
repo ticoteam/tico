@@ -139,7 +139,7 @@ New tasks and DMs addressed to the original go to your active branch while branc
 People without an active branch reach the original. Selecting another person's branch addresses it directly, with the usual access checks.
 Existing task threads keep their participants and history.
 
-A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status and its **Profile**;
+A branch follows the original's model, harness, runtime, effort, Compact at, output style, verbosity, session mode and fallback. Its editor changes only its status and its **Profile**;
 change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`tico bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#sub-tasks)).
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
@@ -677,6 +677,12 @@ Levers set in **Settings → Bots**, not in the repository:
   compacts at about 184k, the Gateway's 200,000-token window less the 16,384 pi keeps. pi's other models keep pi's own
   compaction ([pi](harnesses.md#why-pi-is-the-catch-all)). Changing it keeps the session. A bot's tasks can use another
   length (**Task model**, **Task context length**).
+- **More** under the model picker holds **Compact** and, on Claude Code, **Output style** (Default, Concise,
+  Explanatory, Learning or Proactive: Claude Code's built-in `outputStyle`) or, on Codex, **Verbosity** (Default, low,
+  medium or high: Codex's `model_verbosity`). Each is kept on any harness and used on every turn of the bot on its own
+  harness, its tasks' included (there is no per-task one); changing one keeps the session. Agents set them with
+  `tico bot model <bot> --output-style <name>` and `--verbosity <level>` (`default` clears either;
+  `POST /api/v2/bots/{bot}/output-style` and `/verbosity`).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,
   **Responder**, **Monitor** or **Custom**; each choice has a line saying what it does ([Profiles](how-it-works.md#profiles)).
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and

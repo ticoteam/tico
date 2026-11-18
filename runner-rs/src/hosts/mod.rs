@@ -222,6 +222,32 @@ pub struct Settings {
     /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
     /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).
     pub memory_dir: Option<String>,
+    /// The bot's Claude Code output style (`output_style` in its config: Concise, Explanatory, Learning, Proactive),
+    /// given to Claude as `outputStyle` in the turn's one `--settings`. None is Claude Code's own Default; every other
+    /// harness ignores it.
+    pub output_style: Option<String>,
+    /// The bot's Codex verbosity (`verbosity`: low, medium, high), Codex's `model_verbosity`. None is the model's own;
+    /// every other harness ignores it.
+    pub verbosity: Option<String>,
+}
+
+/// The bot's `output_style` from its run config, or None for Default: nothing saved (an older server sends none), or
+/// "Default". Claude Code runs an unknown name at its default, so any other name is passed as it is.
+pub fn output_style(config: &Value) -> Option<String> {
+    config["output_style"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("default"))
+        .map(String::from)
+}
+
+/// The bot's `verbosity` from its run config: low, medium or high, else None. Codex refuses a thread with any other
+/// `model_verbosity`, so nothing else is passed.
+pub fn verbosity(config: &Value) -> Option<String> {
+    config["verbosity"]
+        .as_str()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| matches!(s.as_str(), "low" | "medium" | "high"))
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.
@@ -1351,6 +1377,40 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_style_and_verbosity_read_from_the_config_and_default_is_none() {
+        assert_eq!(
+            output_style(&json!({"output_style": "Concise"})).as_deref(),
+            Some("Concise")
+        );
+        assert_eq!(
+            verbosity(&json!({"verbosity": "low"})).as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            verbosity(&json!({"verbosity": "HIGH"})).as_deref(),
+            Some("high")
+        );
+        // An older server sends neither; Default, null, empty and anything Codex would refuse pass nothing.
+        for none in [
+            json!({}),
+            json!({"output_style": null}),
+            json!({"output_style": "Default"}),
+            json!({"output_style": " "}),
+            json!({"output_style": 3}),
+        ] {
+            assert_eq!(output_style(&none), None, "{none}");
+        }
+        for none in [
+            json!({}),
+            json!({"verbosity": null}),
+            json!({"verbosity": "loud"}),
+            json!({"verbosity": 1}),
+        ] {
+            assert_eq!(verbosity(&none), None, "{none}");
+        }
+    }
 
     #[test]
     fn a_shell_line_reads_only_when_every_run_of_it_reads() {

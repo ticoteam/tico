@@ -1135,7 +1135,9 @@ def parser():
     s.add_argument("--wait-ms", dest="wait_ms", type=int, default=argparse.SUPPRESS)
     s.add_argument("--full", action="store_true", default=argparse.SUPPRESS)
     s.set_defaults(fn="bot app-shot")
-    s = bot.add_parser("model", help="list the models, or change this bot's model or where it compacts (BotOps)")
+    s = bot.add_parser(
+        "model", help="list the models, or change this bot's model, where it compacts or its output style (BotOps)"
+    )
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
     s.add_argument("--effort")
@@ -1144,6 +1146,17 @@ def parser():
         type=_compact_at,
         help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
         "600000, 700000, 800000, 900000 or 1000000; default puts it back on its model's default",
+    )
+    s.add_argument(
+        "--output-style",
+        dest="output_style",
+        choices=("default", "Concise", "Explanatory", "Learning", "Proactive"),
+        help="Claude Code's output style for its turns; default is Claude Code's own",
+    )
+    s.add_argument(
+        "--verbosity",
+        choices=("default", "low", "medium", "high"),
+        help="Codex's verbosity for its turns; default is the model's own",
     )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
