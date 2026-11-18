@@ -6,7 +6,7 @@ the source's cursor, kept in its `snapshot` as JSON (`{"follow": "prs"|"releases
 
 - The first read, and the first after `follow` changed, only sets the cursor: as a Page source, a GitHub source starts
   from now on and makes no item of what was there before.
-- Releases are swept: see `_releases`.
+- Releases are listed whole at each read: see `_releases`.
 - Pull requests are listed most recently updated first. A merged PR's `updated_at` is never before its `merged_at`, so
   the listing stops at the first PR updated before the cursor: nothing past it can have been merged since.
 - A read GitHub refuses part way (a rate limit, an error) saves nothing and keeps the old cursor, so the next read
@@ -38,6 +38,7 @@ FOLLOWS = ("prs", "releases")
 REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.\.?$)[A-Za-z0-9._-]{1,100}")  # never `.` or `..`
 PER_PAGE = 100
 MAX_PAGES = 5  # pages a read lists; a longer listing carries on at the next read (`_listing`)
+RELEASES_LISTED = 1_000  # GitHub lists only a repository's first 1,000 releases ("Only the first 1000 results")
 MAX_SEGMENTS = 8  # unread stretches a cursor keeps (`_listing`)
 PR_BODY = 1_500
 RELEASE_NOTES = 4_000
@@ -62,6 +63,7 @@ class Listing(NamedTuple):
     items: list[Item]
     newest: str | None  # the newest merge or release seen
     carry: dict[str, Any]  # where an unfinished listing carries on at the next read; {} when it finished
+    refused: tuple[str, str] | None = None  # (status, error) when a read kept what it listed before GitHub refused
 
 
 class Minter(Protocol):
@@ -288,19 +290,17 @@ def _prs(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Lis
     return Listing(list(found.values()), newest, {**left, "newest": newest} if left else {})
 
 
-def _releases(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Listing:
+def _releases(repo: str, token: str, since: str | None) -> Listing:
     """Releases published after `since`, the time the source started (pre-releases too, drafts never).
 
     GitHub lists releases by the date of the commit each was made from, not by when it was published: a release
-    published today from an older commit (a backport, an old draft) lies anywhere in the list. So no row marks where
-    older publications start, and `since` never moves: each read lists page 1, where most new releases are, and the
-    next pages of a sweep through the whole list (`carry["sweep"]`, the page it carries on from), starting over at
-    page 2 at its end. A release published since the source started is found within one sweep; one read again is
-    saved once by its id."""
+    published today from an older commit (a backport, an old draft) lies anywhere in the list, and no row marks where
+    older publications start. So `since` never moves and each read lists the whole list, as far as GitHub lists it (its
+    first RELEASES_LISTED): a release published since the last read is found by this one, wherever it lies, and one
+    read again is saved once by its id. A release made from a commit older than the newest 1,000 releases' is past
+    what GitHub lists and is not seen. A read GitHub refuses part way keeps what it listed before the refusal and says
+    why (`Listing.refused`)."""
     found: dict[str, Item] = {}
-
-    def page_of(n: int) -> list[Any]:
-        return _list(_get(f"/repos/{repo}/releases?per_page={PER_PAGE}&page={n}", token, repo))
 
     def take(rows: list[Any]) -> None:
         for release in rows:
@@ -310,16 +310,22 @@ def _releases(repo: str, token: str, since: str | None, carry: dict[str, Any]) -
             item = _release_item(repo, release)
             found[str(item["native_id"])] = item
 
+    def page_of(n: int) -> list[Any]:
+        return _list(_get(f"/repos/{repo}/releases?per_page={PER_PAGE}&page={n}", token, repo))
+
     rows = page_of(1)  # the first read too: a repository Tico can't see is Blocked at once
     take(rows)
-    sweep = int(carry.get("sweep") or 2)
-    if not since or len(rows) < PER_PAGE:  # the first read, or the whole list is one page
-        return Listing(list(found.values()), None, {})
-    for _ in range(MAX_PAGES - 1):
-        rows = page_of(sweep)
-        take(rows)
-        sweep = 2 if len(rows) < PER_PAGE else sweep + 1
-    return Listing(list(found.values()), None, {"sweep": sweep})
+    if not since:  # the first read only sets the start
+        return Listing([], None, {})
+    page = 1
+    try:
+        while len(rows) >= PER_PAGE and page * PER_PAGE < RELEASES_LISTED:
+            page += 1
+            rows = page_of(page)
+            take(rows)
+    except Refused as refused:  # what was listed is kept: `since` stays, so the next read lists the rest again
+        return Listing(list(found.values()), None, {}, (refused.status, refused.error))
+    return Listing(list(found.values()), None, {})
 
 
 def read(target: str, follow: str, snapshot: str | None, now: str, token: str = "") -> Result:
@@ -337,7 +343,7 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
     since = (str(cursor.get("since") or "") or None) if same else None
     carry = _map(cursor.get("carry")) if same else {}
     try:
-        listing = (_prs if follow == "prs" else _releases)(repo, token, since, carry)
+        listing = _prs(repo, token, since, carry) if follow == "prs" else _releases(repo, token, since)
     except Refused as refused:
         return {"status": refused.status, "items": [], "snapshot": None, "error": refused.error}
     # GitHub can answer anything (a page that is not a list, a row missing a field): the source says so, the rest read.
@@ -350,13 +356,10 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
             "error": f"Could not read {repo}: {type(exc).__name__}",
         }
     if follow == "releases":  # `since` stays the time the source started (`_releases`)
-        keep: dict[str, Any] = {
-            "follow": follow,
-            "since": since or now,
-            **({"carry": listing.carry} if listing.carry else {}),
-        }
+        keep: dict[str, Any] = {"follow": follow, "since": since or now}
         items = [] if not since else sorted(listing.items, key=lambda item: item["posted_at"] or "")
-        return {"status": "ok", "items": items, "snapshot": json.dumps(keep), "error": ""}
+        status, error = listing.refused or ("ok", "")
+        return {"status": status, "items": items, "snapshot": json.dumps(keep), "error": error}
     if not since:  # the first read: where later ones start, and no items
         return {
             "status": "ok",

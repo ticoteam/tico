@@ -86,6 +86,8 @@ class FakeGitHub:
                 (p for p in self.prs if p["base"] == query["base"][0]), key=lambda p: p["updated_at"], reverse=True
             )
         else:
+            if (page - 1) * per >= LG.RELEASES_LISTED:  # "Only the first 1000 results are available."
+                return 422, {}, {"message": "Only the first 1000 results are available."}
             rows = sorted(self.releases, key=lambda r: r["created_at"], reverse=True)
         return 200, {}, rows[(page - 1) * per : page * per]
 
@@ -264,39 +266,58 @@ def test_a_listing_longer_than_a_read_carries_on_at_the_next_read_and_skips_noth
     assert items(api, aid)[-1]["native_id"] == "gh:acme/widgets#pr:21"
 
 
-def test_more_releases_than_a_read_lists_carry_on_and_ones_deleted_meanwhile_skip_none(api, github, monkeypatch):
+def test_releases_deleted_between_reads_skip_none_and_a_refused_read_keeps_what_it_listed(api, github, monkeypatch):
     monkeypatch.setattr(LG, "PER_PAGE", 2)
-    monkeypatch.setattr(LG, "MAX_PAGES", 3)
     aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
     run(api, START)
-    for n in range(1, 16):
+    for n in range(1, 16):  # eight pages
         github.release(n, f"v1.{n}.0", at(n))
+    github.refuse = {len(github.calls) + 4: 403}  # pages 1 to 3 listed, then the rate limit
     run(api, at(61))
-    assert len(items(api, aid)) == 6  # a read lists 6
-    # The six releases already read are deleted, three pages: the ones under them move up past the next read's start.
+    row = source(api, aid)
+    assert row["status"] == "rate_limited" and "rate limit" in row["last_error"]
+    assert len(items(api, aid)) == 6  # what was listed before the refusal is kept
+    # The six already saved are deleted: the ones under them move up, and the next read still lists them all.
     github.releases = [r for r in github.releases if r["id"] < 10]
+    github.release(20, "v2.0.0", at(70))
     run(api, at(130))
-    github.release(20, "v2.0.0", at(140))
-    for hour in range(3, 9):
-        run(api, at(hour * 65))
     ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
-    assert ids == [*range(1, 16), 20]  # 10 to 15 were saved before they were deleted
+    assert ids == [*range(1, 16), 20]
     assert source(api, aid)["status"] == "ok"
 
 
-def test_a_release_published_now_from_an_old_commit_deep_in_the_list_is_one_item(api, github, monkeypatch):
+def test_a_release_published_from_an_old_commit_deep_in_the_list_is_an_item_at_the_next_read(api, github, monkeypatch):
     monkeypatch.setattr(LG, "PER_PAGE", 2)
-    monkeypatch.setattr(LG, "MAX_PAGES", 2)
-    for n in range(1, 12):  # 11 releases from before the source started: six pages
+    for n in range(1, 40):  # 39 releases from before the source started: twenty pages
         github.release(n, f"v1.{n}.0", at(n - 600))
     aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
     run(api, START)
-    # A backport made from a commit older than all of them is published after the source started: it is listed last.
-    github.release(30, "v0.9.1", at(20), commit_at=at(-900))
-    for hour in range(1, 7):
-        run(api, at(hour * 65))
-    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#release:30"]
+    run(api, at(65))
+    # A backport made from a commit older than all of them is published: GitHub lists it last.
+    github.release(50, "v0.9.1", at(70), commit_at=at(-900))
+    # Another, from a commit in the middle of the list.
+    github.release(51, "v1.20.1", at(75), commit_at=at(20 - 600))
+    run(api, at(130))  # the next hourly read, inside the spec's two hours (AC-6)
+    assert sorted(i["native_id"] for i in items(api, aid)) == [
+        "gh:acme/widgets#release:50",
+        "gh:acme/widgets#release:51",
+    ]
     assert source(api, aid)["status"] == "ok"
+    run(api, at(195))  # read again: still one item each
+    assert len(items(api, aid)) == 2
+
+
+def test_a_read_stops_where_github_stops_listing_releases_and_is_ok(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "RELEASES_LISTED", 6)
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)
+    for n in range(1, 10):
+        github.release(n, f"v1.{n}.0", at(n))
+    run(api, at(61))
+    assert source(api, aid)["status"] == "ok"
+    assert len(items(api, aid)) == 6  # the six GitHub lists; it answers 422 past them
+    assert not any("page=4" in call for call in github.calls)
 
 
 def test_more_new_prs_between_two_reads_than_a_read_lists_lose_none(api, github, monkeypatch):
