@@ -15,9 +15,8 @@
 
 // A bot in the call as this view shows it: its slug, and (voice calls) what it is doing and its words now.
 interface CwBot { slug: string; state: string; caption: string }
-// The call view's voice part (null for a call without voice): each bot's state and words, and a passing note.
-interface CwVoice { bots?: CallBotRaw[] | null; note?: string | null }
-type CwCall = CallRecord & {voice?: CwVoice | null};
+// The call view, its `voice` (null without voice) each bot's state and words, and a passing note.
+type CwCall = CallRecord;
 // One face in the header.
 interface CwFace { actor: string; bot: boolean; on: boolean; speaking: boolean; muted: boolean; thinking: boolean }
 // A piece of the live transcript (GET /v2/live-meetings/{id} `chunks`, and each meeting.chunk event).

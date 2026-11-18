@@ -27,7 +27,6 @@ declare var callFaces: (c: unknown) => string[];
 declare var callDmBot: (t: unknown) => string;
 declare var callTicoMeet: (providers?: string[]) => boolean;
 declare var CALL_THREADS: Map<string, {providers?: string[]}>;
-declare var callVoiceDraw: (box: HTMLElement, voice: unknown) => void;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), at = (sec: number) => new Date(now - sec * 1000).toISOString();
@@ -406,20 +405,6 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(more, 0, 'no second window');
     assert.deepEqual(await order(), ['open /#/call/ct?join=1']);
     context.off('page', counted);
-    await tab.waitForFunction(() => typeof callVoiceDraw === 'function');
-    // The bots' voice in the thread's call bar (the window loads it too): dots while a bot thinks, its sentence while it
-    // speaks, a note when none answers.
-    assert.deepEqual(await tab.evaluate(() => {
-      const box = document.createElement('div');
-      const shown = (voice: unknown) => { callVoiceDraw(box, voice); return box.hidden ? null : [box.querySelector('.typing') ? 'dots' : '', box.querySelector('.call-caption')?.textContent ?? '']; };
-      return [
-        shown(null),
-        shown({bots: [{slug: 'ops', state: 'listening'}], note: null}),
-        shown({bots: [{slug: 'ops', state: 'thinking'}], note: null}),
-        shown({bots: [{slug: 'ops', state: 'waiting'}, {slug: 'finance', state: 'speaking', caption: 'It costs less.'}], note: null}),
-        shown({bots: [{slug: 'ops', state: 'listening'}], note: 'Please repeat that'}),
-      ];
-    }), [null, null, ['dots', ''], ['', 'finance It costs less.'], ['', 'Please repeat that']]);
     await tab.close();
     // Its header is the live call's pill now; a fresh read (the stand-in lists no such call) shows the phone again.
     await page.reload();

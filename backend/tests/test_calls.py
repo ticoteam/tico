@@ -320,10 +320,11 @@ def test_a_call_with_bots_or_voice_is_tico_meet_whatever_the_default_provider(me
     assert quiet["speak_replies"] is False and quiet["voice"] is None
     post(meet, f"calls/{quiet['id']}/end", {}, token="ana-test")
 
-    # Google Meet is the caller's default here, as `auto` would pick it.
+    # Google Meet is ready for the caller too: `auto` still picks Tico Meet first, and Google Meet asked for by name
+    # with a bot is refused.
     monkeypatch.setattr(google_workspace, "meet_ready", lambda c: True)
     monkeypatch.setattr(google_workspace, "workspace_mailbox", lambda c, actor: "ana@acme.example")
-    assert get(meet, f"threads/{cid}/calls")["providers"] == ["google_meet", "tico"]
+    assert get(meet, f"threads/{cid}/calls")["providers"] == ["tico", "google_meet"]
     refused = post(meet, f"threads/{cid}/calls", {"provider": "google_meet", "bots": ["ops"]}, expected=422)
     assert refused["error"]["code"] == "voice_needs_tico_meet"
     with_bot = start_call(meet, cid, bots=["ops"])

@@ -17,6 +17,7 @@ type Handler = (...a: unknown[]) => void;
 type FakeRoom = {handlers: Map<string, Handler[]>; remoteParticipants: Map<string, Record<string, unknown>>; emit(ev: string, ...a: unknown[]): void};
 declare const window: Window & typeof globalThis & {LivekitClient: unknown; __rooms: FakeRoom[]; __disconnects: number; __streams: EventSource[]};
 declare function callViewRead(id: string): Promise<unknown>;
+declare function callVoiceDraw(box: HTMLElement, voice: unknown): void;
 
 type Page = import('playwright').Page;
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -213,6 +214,19 @@ let browser: import('playwright').Browser | null = null;
     const tops = await page.locator('.cw-faces .cw-face').evaluateAll(els => new Set(els.map(e => Math.round(e.getBoundingClientRect().top))).size);
     assert.equal(tops, 1, 'one row of faces');
     assert.deepEqual(await page.locator('.cw-tab').allInnerTexts(), ['Chat', 'Transcript', 'People 5']);
+    // The bots' voice in the thread's call bar (thread-call-live, which the window loads too): dots while a bot thinks, its sentence while it
+    // speaks, a note when none answers.
+    assert.deepEqual(await page.evaluate(() => {
+      const box = document.createElement('div');
+      const shown = (voice: unknown) => { callVoiceDraw(box, voice); return box.hidden ? null : [box.querySelector('.typing') ? 'dots' : '', box.querySelector('.call-caption')?.textContent ?? '']; };
+      return [
+        shown(null),
+        shown({bots: [{slug: 'ops', state: 'listening'}], note: null}),
+        shown({bots: [{slug: 'ops', state: 'thinking'}], note: null}),
+        shown({bots: [{slug: 'ops', state: 'waiting'}, {slug: 'finance', state: 'speaking', caption: 'It costs less.'}], note: null}),
+        shown({bots: [{slug: 'ops', state: 'listening'}], note: 'Please repeat that'}),
+      ];
+    }), [null, null, ['dots', ''], ['', 'finance It costs less.'], ['', 'Please repeat that']]);
     const box = (await page.locator('#call-window').boundingBox())!;
     assert.ok(box.width <= 440, 'small: ' + box.width);
     assert.equal(await page.locator('#side').isVisible(), false, 'no sidebar in the window');
