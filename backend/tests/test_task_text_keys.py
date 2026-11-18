@@ -50,14 +50,22 @@ ORDINARY = [
     "token: unknown",
     "auth: authentication",
     "cache key: taskListByOwnerCache",
+    # Product names in camelCase after a key word (Review 1 on 38262e8: case changes must not hide a key, nor flag these).
+    "api key: GitHub, XMLHttpRequest, JavaScript and McDonald",
+    "auth: iPhone via PostgreSQL and SharePoint",
+    "token: getHTTPSUrlForAWSKeyID",
 ]
 LETTERS_12 = "qzhvkrtw" + "mxbn"  # 12 synthetic random letters (Review 1 on 8968b9f)
+ALTERNATING = "qZ" * 6  # alternating case splits into tiny camelCase humps (Review 1 on 38262e8)
+MIXED_12 = "kQwer" + "TyuIopz"  # random letters in mixed case
 # Synthetic keys a word in front of them names, which ordinary text never holds: letters only, short hex, mixed.
 # Built from pieces, so this file holds no key-shaped literal.
 NAMED_KEYS = [
     "api key: " + "qzhvkrtw" * 4 + "mxbn",  # 36 lowercase letters
     "token: " + "XKQWZPTRVB" * 2,  # 20 uppercase letters
     "token: " + LETTERS_12,
+    "token: " + ALTERNATING,
+    "api key: " + MIXED_12,
     "token=" + "a1b2" + "c3d4",
     "api_key=" + "Xk29fLq8" + "Zr7Tn3Wd",
     "secret: " + "dGhpcyBp" + "cyBhIGtleQ==",
@@ -197,6 +205,14 @@ def test_a_short_letters_only_key_from_slack_is_stored_as_a_mark(api):
     with api.app.state.store.transaction() as c:
         posted = threads.post(c, "human:ana", task["conversation_id"], "token: " + LETTERS_12, kind="say", via="slack")
     assert LETTERS_12 not in posted["body"] and K.MARK in posted["body"]
+
+
+def test_an_alternating_case_key_from_slack_is_stored_as_a_mark(api):
+    task = _task(api)
+    with api.app.state.store.transaction() as c:
+        for value in (ALTERNATING, MIXED_12):
+            posted = threads.post(c, "human:ana", task["conversation_id"], "token: " + value, kind="say", via="slack")
+            assert value not in posted["body"] and K.MARK in posted["body"]
 
 
 def test_this_team_s_own_ids_after_a_key_word_are_stored_unchanged(api):
