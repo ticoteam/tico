@@ -304,6 +304,10 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     assert jobs["gate"]["strategy"]["fail-fast"] is False
     # The measured timings run only in a full validation.
     assert jobs["test-timings"]["if"] == "inputs.anchor == ''"
+    # The daily advisory scan: full validations only, outside the verdict (release-check needs neither it nor the CLIs).
+    assert jobs["advisories"]["if"] == "inputs.anchor == ''" and jobs["advisories"]["continue-on-error"] is True
+    assert "scripts/osv_gate.py scan" in jobs["advisories"]["steps"][-1]["run"]
+    assert "advisories" not in jobs["release-check"]["needs"]
     steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 

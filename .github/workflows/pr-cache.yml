@@ -89,7 +89,8 @@ jobs:
         run: bash scripts/ci_install.sh browser-cache
 
   pinned-tools:
-    # shellcheck and actionlint (scripts/pinned_tool.sh): what the static checks job and a queue group's plan job restore.
+    # shellcheck, actionlint and OSV-Scanner (scripts/pinned_tool.sh): what the static checks, merge commit checks and
+    # advisories jobs restore.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -103,7 +104,9 @@ jobs:
           key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
           lookup-only: true
       - if: steps.cache.outputs.cache-hit != 'true'
-        run: bash scripts/pinned_tool.sh shellcheck --version && bash scripts/pinned_tool.sh actionlint -version
+        run: |
+          bash scripts/pinned_tool.sh shellcheck --version && bash scripts/pinned_tool.sh actionlint -version
+          bash scripts/pinned_tool.sh osv-scanner --version
 
   rust-lint:
     runs-on: ubuntu-24.04

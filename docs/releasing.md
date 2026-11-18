@@ -397,7 +397,8 @@ what a slow content sweep reads runs that sweep in the contracts job (rule 7, `C
 `clients/commands/`, `clients/cli_spec.py`, the CLI code or `e2e/cli/` run `test_e2e_cli.py` with every command
 (`TICO_E2E_CLI_ALL=1`, as the release gate runs it), and `templates/` or `clients/catalog.py` run `test_e2e_templates.py`.
 The Rust and desktop checks run on a ready pull request and in the queue when a
-crate or `app/` changed. A draft pull request runs no checks
+crate or `app/` changed, and the advisory scan when a dependency input changed (see
+[Advisory scan](../CONTRIBUTING.md#advisory-scan)). A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run

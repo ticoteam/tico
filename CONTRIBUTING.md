@@ -137,6 +137,22 @@ the development lock. Keep major migrations separate. After changing the browser
 `node scripts/ui-tests.cts telemetry`. The desktop GLib backport and its provenance checks are
 documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
+### Advisory scan
+
+`scripts/osv_gate.py` runs the pinned OSV-Scanner (`scripts/pinned_tool.sh`) over every `requirements*.txt`,
+`package-lock.json` and `Cargo.lock`, the libraries in `ui/vendor/` and `templates/employee-repo/ui/vendor/`, and the uv
+versions scripts pin. PR checks run it when one of those inputs changes, and the daily full release validation runs it
+too, so an advisory published against untouched inputs shows there as a red `advisories` job. It fails only on a known
+advisory, never on an older version, and prints RustSec maintenance notices without failing. It never changes a version.
+
+- Vendoring or updating a library: set its package, version and `sha256` in `scripts/advisories/vendored.json`.
+- Pinning uv in a script: list the file in `scripts/advisories/tools.json`.
+- An advisory you accept rather than fix: add an entry to `scripts/advisories/allowlist.json` with the advisory id, the
+  package, the lockfile or vendored file it was found in, a reason and an `expires` date no more than a year out.
+
+The drift gate (`scripts/gates/advisory_inputs.py`) fails a pull request whose vendored files or uv pins no longer match
+those two inventories. Run `python3 scripts/osv_gate.py scan` to check locally.
+
 ## Developer Certificate of Origin
 
 Every commit in an outside contributor's pull request must be signed off, which says you wrote it or have the right to

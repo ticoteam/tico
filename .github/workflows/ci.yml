@@ -638,6 +638,27 @@ jobs:
         if: steps.has.outputs.check == 'true'
         run: scripts/cli_contract.sh --latest
 
+  # Known advisories in the candidate's dependency inputs (scripts/osv_gate.py, the PR checks' advisories job): that job
+  # runs only when an input changes, so this catches an advisory published since against inputs nobody touched. Full
+  # validations only (one a day from the train, so this is also its schedule). Not part of the verdict, like the CLI
+  # contract: a red job to read before a release, answered by a fix or an allowlist entry with an expiry.
+  advisories:
+    needs: candidate
+    if: inputs.anchor == ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+      - name: Known advisories (pinned OSV-Scanner)
+        # A candidate frozen before the gate has nothing to run.
+        run: |
+          if [ -f scripts/osv_gate.py ]; then python3 scripts/osv_gate.py scan
+          else echo "::notice::this candidate predates scripts/osv_gate.py; advisories were not checked"; fi
+
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
     needs: [gate, images]

@@ -1,0 +1,19 @@
+{
+  "fail": {
+    ".github/workflows/ci.yml": ["GHSA-hq85-5cpj-mr62"],
+    ".github/workflows/pr-checks.yml": ["GHSA-hq85-5cpj-mr62"],
+    ".github/workflows/release-shots.yml": ["GHSA-hq85-5cpj-mr62"],
+    "Dockerfile": ["GHSA-hq85-5cpj-mr62"],
+    "scripts/ci/merge_commit_checks.sh": ["GHSA-hq85-5cpj-mr62"],
+    "runner-rs/Cargo.lock": ["RUSTSEC-2026-0382", "RUSTSEC-2026-0459"],
+    "tools/trust-list-check/Cargo.lock": ["RUSTSEC-2026-0486"],
+    "ui/vendor/js-yaml.min.js": ["GHSA-mh29-5h37-fv8m", "GHSA-2883-xcg3-v3hh", "GHSA-52cp-r559-cp3m", "GHSA-5p4m-2wfm-xmqj", "GHSA-h67p-54hq-rp68"],
+    "templates/employee-repo/ui/vendor/js-yaml.min.js": ["GHSA-mh29-5h37-fv8m", "GHSA-2883-xcg3-v3hh", "GHSA-52cp-r559-cp3m", "GHSA-5p4m-2wfm-xmqj", "GHSA-h67p-54hq-rp68"]
+  },
+  "notice": {
+    "app/Cargo.lock": ["RUSTSEC-2024-0370"]
+  },
+  "accepted": {
+    "app/Cargo.lock": ["RUSTSEC-2024-0429"]
+  }
+}

@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
-# The pinned shell and workflow linters, from their GitHub releases: shellcheck and actionlint. Each archive is checked
-# against the SHA-256 below before it runs, and the binary is cached under ${TICO_TOOLS_DIR:-$HOME/.cache/tico/tools},
-# so the versions never drift with whatever Homebrew or apt holds. Bump a version only after its release is two weeks old.
+# The pinned shell and workflow linters and the advisory scanner, from their GitHub releases: shellcheck, actionlint and
+# OSV-Scanner (scripts/osv_gate.py). Each download is checked against the SHA-256 below before it runs, and the binary
+# is cached under ${TICO_TOOLS_DIR:-$HOME/.cache/tico/tools}, so the versions never drift with whatever Homebrew or apt
+# holds. Bump a version only after its release is two weeks old.
 # When GitHub's release download fails (a run of 504s from Actions runners, Nov 9), the same version comes from a second
 # source: shellcheck from its PyPI wheel (SHA-256 pinned below), actionlint built by `go install` from the Go module proxy
-# (checked against sum.golang.org). Bump the wheel pins with the version.
+# (checked against sum.golang.org), and OSV-Scanner built the same way. Bump the wheel pins with the version.
 #   scripts/pinned_tool.sh shellcheck [args...]          shellcheck with the arguments given
 #   scripts/pinned_tool.sh actionlint [args...]          actionlint; with no arguments it checks .github/workflows
-#   scripts/pinned_tool.sh path shellcheck|actionlint    print the verified binary's path (downloads it once)
+#   scripts/pinned_tool.sh osv-scanner [args...]         OSV-Scanner with the arguments given
+#   scripts/pinned_tool.sh path TOOL                     print the verified binary's path (downloads it once)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SHELLCHECK_VERSION=0.11.0   # released 2025-08-04
 ACTIONLINT_VERSION=1.7.12   # released 2026-03-30
+OSV_SCANNER_VERSION=2.7.0   # released 2026-10-12
 
-# SHA-256 of each release archive, by tool and <os>-<arch> (x86_64 or aarch64 for both tools).
+# SHA-256 of each release download, by tool and <os>-<arch> (x86_64 or aarch64 for every tool). OSV-Scanner ships a bare
+# binary rather than an archive.
 sha_for() {
   case "$1-$2" in
     shellcheck-linux-x86_64) echo 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
@@ -25,6 +29,10 @@ sha_for() {
     actionlint-linux-aarch64) echo 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;;
     actionlint-darwin-x86_64) echo 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 ;;
     actionlint-darwin-aarch64) echo aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
+    osv-scanner-linux-x86_64) echo 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b ;;
+    osv-scanner-linux-aarch64) echo 4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7 ;;
+    osv-scanner-darwin-x86_64) echo e82c5df7ab0a42dff29a1cd0660711447b56b4c0483ff66ad8634df10fd81a45 ;;
+    osv-scanner-darwin-aarch64) echo d4926ef8da134332543be276dff157e4c170f99ad91fc48e89448a8816bdf70b ;;
     *) echo "pinned_tool: no pinned $1 for $2" >&2; return 1 ;;
   esac
 }
@@ -57,16 +65,19 @@ fallback() {  # <tool> <plat> <bin>: the same version from the second source, in
       python3 -m zipfile -e "$TMP/$wheel" "$TMP/wheel-shellcheck" >/dev/null
       chmod 755 "$TMP/wheel-shellcheck/shellcheck_py-$SHELLCHECK_VERSION.1.data/scripts/shellcheck"
       mv -f "$TMP/wheel-shellcheck/shellcheck_py-$SHELLCHECK_VERSION.1.data/scripts/shellcheck" "$bin" ;;
-    actionlint)
+    actionlint | osv-scanner)
       # GitHub's hosted images keep Go in the tool cache even when it is not on PATH. -modcacherw leaves the module
       # cache writable, so the exit trap can remove it (go marks it read-only by default).
-      local go
+      local go module
+      case $tool in
+        actionlint) module="github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION" ;;
+        osv-scanner) module="github.com/google/osv-scanner/v2/cmd/osv-scanner@v$OSV_SCANNER_VERSION" ;;
+      esac
       go="$(command -v go || find /opt/hostedtoolcache/go -path '*/x64/bin/go' 2>/dev/null | sort -V | tail -1 || true)"
       [ -n "$go" ] && [ -x "$go" ] || return 1
-      echo "pinned_tool: building actionlint $ACTIONLINT_VERSION with $go install" >&2
-      GOBIN="$TMP/gobin" GOFLAGS=-modcacherw GOPATH="$TMP/gopath" GOCACHE="$TMP/gocache" "$go" install \
-        "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION" || return 1
-      mv -f "$TMP/gobin/actionlint" "$bin" ;;
+      echo "pinned_tool: building $module with $go install" >&2
+      GOBIN="$TMP/gobin" GOFLAGS=-modcacherw GOPATH="$TMP/gopath" GOCACHE="$TMP/gocache" "$go" install "$module" || return 1
+      mv -f "$TMP/gobin/$tool" "$bin" ;;
   esac
 }
 
@@ -109,6 +120,12 @@ binary() {  # <tool>: the verified binary's path, downloaded and checked on firs
       archive="actionlint_${version}_${os}_$arch.tar.gz"
       url="https://github.com/rhysd/actionlint/releases/download/v$version/$archive"
       member="actionlint" ;;
+    osv-scanner)
+      version=$OSV_SCANNER_VERSION
+      case $arch in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+      archive="osv-scanner_${os}_$arch"
+      url="https://github.com/google/osv-scanner/releases/download/v$version/$archive"
+      member="" ;;
     *) echo "pinned_tool: unknown tool $tool" >&2; return 1 ;;
   esac
   dir="${TICO_TOOLS_DIR:-$HOME/.cache/tico/tools}/$tool-$version"
@@ -130,19 +147,26 @@ binary() {  # <tool>: the verified binary's path, downloaded and checked on firs
     echo "pinned_tool: $archive has SHA-256 $got, not the pinned $want" >&2
     return 1
   fi
-  mkdir -p "$TMP/unpacked-$tool" "$dir"
-  tar -xf "$TMP/$archive" -C "$TMP/unpacked-$tool" "$member"
-  chmod 755 "$TMP/unpacked-$tool/$member"
-  mv -f "$TMP/unpacked-$tool/$member" "$bin"
+  mkdir -p "$dir"
+  if [ -z "$member" ]; then  # a bare binary
+    chmod 755 "$TMP/$archive"
+    mv -f "$TMP/$archive" "$bin"
+  else
+    mkdir -p "$TMP/unpacked-$tool"
+    tar -xf "$TMP/$archive" -C "$TMP/unpacked-$tool" "$member"
+    chmod 755 "$TMP/unpacked-$tool/$member"
+    mv -f "$TMP/unpacked-$tool/$member" "$bin"
+  fi
   echo "$bin"
 }
 
 case ${1:-} in
   path)
-    binary "${2:?usage: pinned_tool.sh path shellcheck|actionlint}" ;;
-  shellcheck)
+    binary "${2:?usage: pinned_tool.sh path shellcheck|actionlint|osv-scanner}" ;;
+  shellcheck | osv-scanner)
+    tool=$1
     shift
-    bin="$(binary shellcheck)"
+    bin="$(binary "$tool")"
     "$bin" "$@" ;;
   actionlint)
     shift
@@ -154,6 +178,6 @@ case ${1:-} in
     export PATH
     "$bin" -pyflakes= "$@" ;;
   *)
-    echo "usage: scripts/pinned_tool.sh shellcheck|actionlint [args...] | path shellcheck|actionlint" >&2
+    echo "usage: scripts/pinned_tool.sh shellcheck|actionlint|osv-scanner [args...] | path TOOL" >&2
     exit 2 ;;
 esac
