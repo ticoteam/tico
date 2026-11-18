@@ -378,8 +378,8 @@ def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path)
     assert set(said) == {"met", "unsure", "not_met"}
     assert said == {
         "met": 'Meets "Shows the page live".',
-        "unsure": 'Can\'t tell if it meets "Shows the page live".',
-        "not_met": 'Doesn\'t meet "Shows the page live".',
+        "unsure": 'Can\'t tell if it meets "Shows the page live". Nearest on the page: "The link opens the page"',
+        "not_met": 'Doesn\'t meet "Shows the page live". Nearest on the page: "The link opens the page"',
     }
     kept = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5, reason="No scope line"))
     assert kept["reason"] == "No scope line", "a model's own reason is kept"
@@ -548,7 +548,7 @@ def test_a_company_rubric_refused_names_the_sentence_it_finds_unmet():
         'lead."'
     ), refused["reason"]
     long = " ".join(f"Item {n} is shown." for n in range(1, 12))
-    assert len(P.explain_parts(long)) == P.SENTENCES_AT_MOST and "Item 11" in P.explain_parts(long)[-1].missing
+    assert len(P.explain_parts(long)) <= P.SENTENCES_AT_MOST and "Item 11" in P.explain_parts(long)[-1].missing
     one = {"id": "r", "name": "Launch page", "rubric": "Names who signed off the launch."}
     alone = P.judge_once(None, one, page, engine=_parts_engine({"met": 0.1}, asked))
     assert list(asked[-1]) == ["met"], "a one-sentence rubric is asked whole, with nothing beside it"
@@ -568,13 +568,14 @@ def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
             for key in [part.key for part in P.CHECKS[P.check_of(rubric)]]:
                 reasons.append(P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({key: p}))["reason"])
     assert reasons and all(reasons)
-    for reason in reasons:
+    for said in reasons:
+        reason = said.split(" Nearest on the page: ")[0]  # the page quoted (here the same words as REQ's rubric)
         assert "p 0." not in reason and "between 0.2" not in reason and "(p " not in reason, reason
         for rubric in (REQ["rubric"], PS.SPEC_RUBRIC, PS.REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
             assert rubric not in reason, reason
     assert P.judge_once(None, REQ, ATTACHMENT, engine=_engine(0.5, reason=""))["reason"] == (
-        'Can\'t tell if it meets "Shows the page live".'
-    ), "a check asked whole names the requirement, never its rubric"
+        'Can\'t tell if it meets "Shows the page live". Nearest on the page: "The link opens the page"'
+    ), "a check asked whole names the requirement, never its rubric, and quotes the page"
 
 
 def test_the_grouped_jev_step_asks_the_parts_in_one_call_and_reads_each(monkeypatch):

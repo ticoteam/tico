@@ -1221,8 +1221,9 @@ def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, 
                 (row["id"],),
             )
         ]
-    assert line == f'{R.DECIDE} Decision model is unsure: Can\'t tell if it meets "Spec page".', line
-    assert notes == ['Can\'t tell if it meets "Spec page".'], notes
+    said = 'Can\'t tell if it meets "Spec page". Nothing on the page mentions it.'
+    assert line == f"{R.DECIDE} Decision model is unsure: {said}", line
+    assert notes == [said], notes
 
 
 def test_the_judge_is_told_the_one_linked_prs_repo_number_and_author(store, seeded, monkeypatch):
