@@ -3082,3 +3082,18 @@ def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_p
     timings.write_text(json.dumps({name: 1000.0 for name in checks.CONTRACT_TESTS}))  # 400 s a VM: past the target
     checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
     assert "::warning::A contracts VM is planned for 400s" in capsys.readouterr().out
+
+
+def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
+    # A stalled fetch at the queue head once held five green groups for its job's whole 25-minute timeout.
+    for name, job in workflow_jobs()["jobs"].items():
+        steps = job.get("steps", [])
+        at = [i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")]
+        if not at:
+            continue
+        assert len(at) == 2 and at[1] == at[0] + 1, name
+        first, retry = steps[at[0]], steps[at[1]]
+        assert first["id"] == "checkout_first" and first["continue-on-error"] is True, name
+        assert retry["if"] == "${{ steps.checkout_first.outcome == 'failure' }}", name
+        assert first["timeout-minutes"] == retry["timeout-minutes"] == 3, name
+        assert first["uses"] == retry["uses"] and first["with"] == retry["with"], name
