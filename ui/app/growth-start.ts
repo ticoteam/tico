@@ -3,7 +3,7 @@
    with the Growth Manager and, while Growth is not set up (GET /api/v2/growth/setup, backend/growth_setup.py), asks it
    to set Growth up; its growth-interview skill asks whoever knows (founder, sales, finance, marketing, support), one
    question at a time, and writes each answer as it comes. Call calls the Growth Manager by voice (callBot,
-   ui/app/thread-call.ts) once voice calls ship; until then it says they are coming. Set up, the row is just its marks.
+   ui/app/thread-call.ts). Set up, the row is just its marks.
    With no Growth Manager on the team there is no row. Empty Growth cards say what fills them, in plain words.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -68,11 +68,9 @@ async function grsChat() {
   location.hash = '#/bot/' + encodeURIComponent(bot.id);
 }
 
-// Call: a voice call with the Growth Manager once voice calls ship (callBot); until then, a placeholder.
+// Call: a voice call with the Growth Manager (callBot, ui/app/thread-call.ts).
 async function grsCall() {
-  const call = (globalThis as {callBot?: (slug: string) => Promise<void>}).callBot;
-  if (typeof call === 'function') { await call(GRS_BOT); return; }
-  toast('Calls with bots are coming soon. Chat works now.');
+  await callBot(GRS_BOT);
 }
 
 // ----------------------------------------------------------------- empty cards

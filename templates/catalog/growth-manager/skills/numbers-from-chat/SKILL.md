@@ -11,7 +11,7 @@ description: Turn what someone said (a chat reply, a pasted sheet, a screenshot,
 3. Write it:
    - A new channel: `tico growth channel add <slug> --name "<Name>"`. Slug = the name, lower-case,
      dashes. Unknown is not a channel.
-   - A month: `tico growth cohort set --channel <slug> --month YYYY-MM --spend N --new N`. Leave
+   - A month: `tico growth cohort set --channel <slug> --month <YYYY-MM> --spend <dollars> --new <count>`. Leave
      `--quality actual` off unless they read it from a system ("from the Stripe report": actual;
      "about 30": estimate).
    - Revenue per customer and margin: `tico growth settings --set revenue_month=N --set margin_pct=N`.

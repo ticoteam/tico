@@ -717,9 +717,7 @@ async function shot(page: Page, name: string) {
       assert.ok((await fills.allInnerTexts()).every(w => !/step \d/i.test(w)));
       assert.equal(await fills.nth(0).locator('a').getAttribute('href'), '#/strategy/goals', 'the Funnel opens Goals');
       await shot(page, 'desktop-growth-start');
-      // Call: a placeholder until voice calls ship; then it calls the Growth Manager (callBot, ui/app/thread-call.ts).
-      await row(page).locator('[data-grs-call]').click();
-      await page.locator('.toast', {hasText: 'Calls with bots are coming soon'}).waitFor();
+      // Call: a voice call with the Growth Manager (callBot, ui/app/thread-call.ts), stood in for here.
       await page.evaluate(() => { (window as unknown as {callBot: (s: string) => Promise<void>}).callBot = async s => { document.body.dataset.called = s; }; });
       await row(page).locator('[data-grs-call]').click();
       await page.waitForFunction(() => document.body.dataset.called === 'growth-manager');
