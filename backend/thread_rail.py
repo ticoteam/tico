@@ -79,12 +79,18 @@ PINNED_SQL = (
 )
 
 
-def root_open(c, v):
+DM_MATCH_AUDIENCES = f"{_audience()} IN ('company','team','members','personal','participants')"
+
+
+def root_open(c, v, within=None, args=None):
     """The roots the rail, Browse and Catch up list for this reader: not archived or closed, and not hidden for a
-    finished task (T.task_open_sql, which a post the reader reads brings back)."""
+    finished task (T.task_open_sql, which a post the reader reads brings back). `within` (SQL over `r`, with `args`) is
+    the rest of the caller's filter, or a looser one: only the finished-task roots it admits have their posts checked
+    (T.revived_within), so a query that can return no task thread checks none. Without it, every finished task's."""
+    revived = T.revived_roots(c, v) if within is None else T.revived_within(c, v, within, args)
     return (
         "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND "
-        f"{T.task_open_sql(c, v, 'r', T.revived_roots(c, v))}"
+        f"{T.task_open_sql(c, v, 'r', revived)}"
     )
 
 
@@ -313,7 +319,8 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
     kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
-    base = [root_open(c, v), kind, T.readable_sql(c, v, "r")]
+    readable = T.readable_sql(c, v, "r")
+    base = [root_open(c, v, f"{kind} AND {readable}"), kind, readable]
     v._members = {}
     try:
         pinned_rows, pinned_more = (
@@ -409,7 +416,8 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     after = _decode(cursor, 2)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    where = [root_open(c, v), f"{_audience()} IN ('company','team')", T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
+    company = f"{_audience()} IN ('company','team')"
+    where = [root_open(c, v, company), company, T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
     text = str(q or "").strip()
     if text:
         args["q"] = "%" + text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -841,8 +849,7 @@ def _walk(c, v, flags, after=None):
     is_flagged = "r.id IN (SELECT value FROM json_each(:flagged))"
     is_mention = "r.id IN (SELECT value FROM json_each(:mentions))"
     audience = _audience()
-    where = [
-        root_open(c, v),
+    rest = [
         T.readable_sql(c, v, "r"),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
@@ -851,6 +858,8 @@ def _walk(c, v, flags, after=None):
         f"({is_mention} OR NOT EXISTS (SELECT 1 FROM thread_followers mf WHERE mf.thread_id=r.id "
         "AND mf.actor=:me AND mf.notify='muted'))",
     ]
+    # Only the finished-task roots this walk could list have their posts checked: the reader's, with something new.
+    where = [root_open(c, v, " AND ".join(rest), args), *rest]
     scanned = int(after[3]) if after else 0
     left = [CATCH_UP_HIDDEN]
     for rank, phase in ((0, is_mention), (1, f"NOT {is_mention}")):

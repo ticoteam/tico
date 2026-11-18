@@ -396,9 +396,8 @@ def _match(c, v, actors):
     sql = (
         f"SELECT r.*, {thread_rail.ACTIVITY} AS activity FROM conversations r "
         "WHERE r.id IN (SELECT m.thread_id FROM thread_members m WHERE m.actor=:a0) "
-        f"AND {thread_rail.root_open(c, v)} AND r.deleted_at IS NULL "
-        f"AND COALESCE(r.audience,{threads._derived_audience('r')}) IN "
-        "('company','team','members','personal','participants') "
+        f"AND {thread_rail.root_open(c, v, thread_rail.DM_MATCH_AUDIENCES)} AND r.deleted_at IS NULL "
+        f"AND {thread_rail.DM_MATCH_AUDIENCES} "
         f"AND (SELECT COUNT(*) FROM thread_members m WHERE {others})=:n "
         f"AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE {others} AND m.actor NOT IN "
         f"({','.join(':' + k for k in names)})) "
