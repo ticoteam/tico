@@ -288,9 +288,9 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     rows.forEach(([name, shownRow, list, current]) => {
       const row = part(`[data-choice-${name}-row]`), select = part(`[data-choice-${name}]`) as HTMLSelectElement;
       row.hidden = !shownRow;
+      select.disabled = readonly || row.hidden;
       if (row.hidden) return;
       select.innerHTML = option('', 'Default', !current) + list.map(id => option(id, id, id === current)).join('');
-      select.disabled = readonly;
     });
     part('[data-choice-more]').hidden = ['compact', 'style', 'verbosity'].every(name => part(`[data-choice-${name}-row]`).hidden);
   };
