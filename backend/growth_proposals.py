@@ -119,7 +119,8 @@ def waiting(c: Any) -> list[tuple[Row, Row]]:
 
 
 def _slug(content: Row) -> str | None:
-    return (content.get("channel") or {}).get("slug") or content.get("for_channel")
+    channel: Row = content.get("channel") or {}
+    return str(channel.get("slug") or content.get("for_channel") or "") or None
 
 
 def _approver(c: Any, ask: str | None) -> str:
@@ -128,9 +129,10 @@ def _approver(c: Any, ask: str | None) -> str:
         if not person or not task_asks.owner_or_admin(c, person):
             raise Problem("validation", "A Growth proposal is asked of the owner or an admin", 422)
         return person
-    from .automations import top_person
+    from . import automations
 
-    pid = top_person(c)
+    found: Any = automations
+    pid = str(found.top_person(c) or "")
     if not pid:
         raise Problem("no_approver", "Nobody can approve this: the company has no owner on the team", 409)
     return "human:" + pid
@@ -151,7 +153,8 @@ def propose(c: Any, who: Any, body: Any, catalog: Any = None) -> Row:
         if found["asked_by_id"] == who.actor and other == content:
             return {"task_id": task_id, "requirement_id": found["requirement_id"], "status": "waiting"}
         if slug and _slug(other) == slug:
-            number = (H.task(c, task_id) or {}).get("number") if task_id else None
+            task: Row = (H.task(c, task_id) if task_id else None) or {}
+            number = task.get("number")
             raise Problem("conflict", f"A proposal for {slug} already waits for an OK on task #{number}", 409)
     line = _line(content)
     asked = task_asks.ask_ok(
