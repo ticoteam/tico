@@ -237,6 +237,48 @@ BARS: dict[str, tuple[float, float]] = {
     "qa": (0.75, NOT_MET_AT),
     "validate": (0.5, NOT_MET_AT),
 }
+# Rubrics asked whole whose parts are asked beside the whole question in the same call, only to say which part is
+# missing (task #614). The verdict stays the whole question's, read on the default bar as before: these parts never move
+# a page from met to not met. When the verdict is not met or unsure, the reason names the part the model scored lowest
+# and what it looked for on the page, instead of 'Doesn't meet "Review page".' with nothing to change (seen on #602,
+# #495, #520, #559 and #3857 on Nov 18, each refused two to four times). Each `missing` line is the rubric item and,
+# after the colon, what was read for it.
+EXPLAINED: dict[str, tuple[Part, ...]] = {
+    "two_reviews": (
+        Part(
+            "two",
+            "holds two reviews of the work, and each names the model that made it",
+            "No second review: the page should hold two reviews, each naming the model that made it.",
+            "Can't tell if there are two reviews: looked for two reviews, each naming the model that made it.",
+        ),
+        Part(
+            "models",
+            "names a different model for each of its two reviews, so a reader can see the two models differ",
+            "No second review from a different model: the two reviews name the same model, or one names none.",
+            "Can't tell if the two reviews are by different models: looked for each review's model name.",
+        ),
+        Part(
+            "commit",
+            "names, in each review, the commit it reviewed for every linked PR, and that commit is the PR's newest "
+            "(`work.context.heads`, in full or its first 7 or more characters)",
+            "A review doesn't name the newest commit: looked for the PR's newest commit in each review.",
+            "Can't tell if each review names the newest commit: looked for the PR's newest commit in each review.",
+        ),
+        Part(
+            "checked",
+            "says what each review checked: files read, tests or commands run",
+            "Doesn't say what each review checked: looked for the files read and tests or commands run in each.",
+            "Can't tell what each review checked: looked for the files read and tests or commands run in each.",
+        ),
+        Part(
+            "findings",
+            "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
+            "no findings",
+            "A finding has no file:line, severity or why it matters, or the page doesn't say there are no findings.",
+            "Can't tell if each finding has file:line, severity and why it matters, or that there are none.",
+        ),
+    ),
+}
 
 
 def _words(text: object) -> str:
@@ -263,6 +305,37 @@ def check_of(rubric: object) -> str | None:
         if any(_words(text) == said for text in texts):
             return check
     return None
+
+
+def explained_of(rubric: object) -> str | None:
+    """Which of EXPLAINED a rubric asked whole is (the preset's line, unedited), or None. A company's own rubric is
+    asked whole with no parts beside it."""
+    from . import pipeline_settings as PS
+
+    S: Any = PS
+    said = _words(rubric)
+    if not said or check_of(rubric) is not None:
+        return None
+    return "two_reviews" if said == _words(S.REVIEW_RUBRIC) else None
+
+
+def _explain_lines(key: str, parts: dict[str, float], verdict: str) -> str:
+    """The reason a not met or unsure verdict on a rubric asked whole gives from the parts asked beside it: the parts
+    that read no on the default bar, else the ones that can't be told, else the lowest part when it is under the met
+    bar. A not met names a part with its `missing` line, an unsure with its `unclear` line. Empty when no part stands
+    out (then the caller keeps today's line)."""
+    bar = (MET_AT, NOT_MET_AT)
+    known = [part for part in EXPLAINED[key] if part.key in parts]
+    if not known:
+        return ""
+    picked = [part for part in known if _band(parts[part.key], bar) == "no"]
+    if not picked:
+        picked = [part for part in known if _band(parts[part.key], bar) == "unsure"]
+        picked.sort(key=lambda part: parts[part.key])
+    if not picked:
+        return ""
+    lines = [part.missing if verdict == "not_met" else part.unclear for part in picked]
+    return " ".join(lines[:LINES_AT_MOST])
 
 
 def _band(p: float, bar: tuple[float, float]) -> str:
@@ -462,9 +535,10 @@ def _fit(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def _questions(check: str | None = None) -> dict[str, Any]:
+def _questions(check: str | None = None, explain: str | None = None) -> dict[str, Any]:
     """The question set's questions (questions/pipeline-requirement.json): its one `met` question, or for one of CHECKS a
-    yes/no question per part (`part_<key>`), each with the set's rules for reading the work and the attachment."""
+    yes/no question per part (`part_<key>`), each with the set's rules for reading the work and the attachment. A rubric
+    in EXPLAINED is asked `met` and its parts beside it."""
     asked: dict[str, Any] = J.load_set(QUESTION_SET)["questions"]
     met: dict[str, Any] = asked["met"]
     rules = str(met["instructions"])
@@ -473,6 +547,22 @@ def _questions(check: str | None = None) -> dict[str, Any]:
     start = rules.find("`work.title`")
     rules = rules[start:] if start >= 0 else rules
     if check is None or check not in CHECKS:
+        if explain in EXPLAINED:
+            # The whole question decides; each part beside it only says which one is missing (EXPLAINED).
+            return {
+                "met": met,
+                **{
+                    "part_" + part.key: {
+                        **met,
+                        "instructions": (
+                            f"This question is about one part of `requirement.rubric` alone: the `attachment` "
+                            f"{part.ask}, for the work as it is now. Answer high when it does, low when it does not. "
+                            f"{rules}"
+                        ),
+                    }
+                    for part in EXPLAINED[str(explain)]
+                },
+            }
         return asked
     return {
         **{
@@ -486,6 +576,12 @@ def _questions(check: str | None = None) -> dict[str, Any]:
             for part in CHECKS[check]
         },
     }
+
+
+def _asked(rubric: object) -> dict[str, Any]:
+    """The questions a requirement with this rubric is asked: its check's parts, its whole question with the parts that
+    explain it, or its whole question."""
+    return _questions(check_of(rubric), explained_of(rubric))
 
 
 def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None":
@@ -518,7 +614,8 @@ def _noul(answers: Any, qid: str) -> float | None:
 
 def _read(result: dict[str, Any], qid: str | list[str], model: str, cost: object = None) -> dict[str, Any]:
     """The engine's answer to `qid` as judge_once's engines give it: {p, reason, provider, model, cost_usd,
-    latency_ms}, and with a list of part question ids (`part_<key>`), `parts` (each part's probability) and p the lowest.
+    latency_ms}, and with a list of part question ids (`part_<key>`), `parts` (each part's probability) and p the lowest,
+    or `met`'s when it was asked beside them.
     Raises JudgeError("shape") when any asked question has no probability."""
     answers: Any = result.get("answers")
     asked = [qid] if isinstance(qid, str) else qid
@@ -528,7 +625,8 @@ def _read(result: dict[str, Any], qid: str | list[str], model: str, cost: object
     ps = cast("dict[str, float]", got)
     parts = {one.removeprefix("part_"): p for one, p in ps.items() if one.startswith("part_")}
     return {
-        "p": min(ps.values()),
+        # Asked whole with parts beside it (EXPLAINED), the whole question is the verdict; the parts only explain it.
+        "p": ps["met"] if "met" in ps else min(ps.values()),
         **({"parts": parts} if parts else {}),
         "reason": "",
         "provider": result.get("provider") or "",
@@ -633,7 +731,7 @@ def _ask(
         return _failed(base, "No judge is configured on this server")
     state = _state(requirement, attachment)
     try:
-        result = ask(chosen, state, _questions(check_of(requirement.get("rubric"))), QUESTION_SET)
+        result = ask(chosen, state, _asked(requirement.get("rubric")), QUESTION_SET)
     except Exception as exc:  # noqa: BLE001 - any error in the call is a judge failure, retried, never a verdict
         return _call_failed(base, exc)
     return _finish(base, requirement, attachment, state, result)
@@ -674,6 +772,12 @@ def _finish(
     else:
         verdict = verdict_of(p)
         reason = _words(result.get("reason")) or reason_for(verdict, str(requirement.get("name") or ""))
+        explain = explained_of(requirement.get("rubric"))
+        if explain is not None and parts and verdict != "met":
+            # Name the part that is missing and what was looked for (task #614). A met keeps its line.
+            named = _explain_lines(explain, parts, verdict)
+            if named:
+                reason = f"{reason_for(verdict, str(requirement.get('name') or ''))} {named}"
     reason = reason[:REASON_BYTES]
     if _cannot_see(attachment, state):
         # Enforced here, not only in the prompt: a model that says met on text it was not all shown is still unsure.
@@ -758,7 +862,7 @@ def judge_many(store: Any, pairs: "list[tuple[dict[str, Any], dict[str, Any]]]")
             holds.append([(n, qid) for n, qid in zip(members, merged[2], strict=True)])
             continue
         for n in members:
-            asked = _questions(check_of(pairs[n][0].get("rubric")))
+            asked = _asked(pairs[n][0].get("rubric"))
             items.append((states[n], asked))
             holds.append([(n, "met" if list(asked) == ["met"] else list(asked))])
     for k, run in enumerate(DG.packs(items, GROUP)):

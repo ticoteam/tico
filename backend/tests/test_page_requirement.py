@@ -1165,6 +1165,40 @@ def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monk
     assert len(bodies) == 1 and 'Decision model sent back "Spec page": No scope' in bodies[0]
 
 
+def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_the_send_back(
+    store, seeded, monkeypatch
+):
+    """Task #614: on the shipped Review rubric, the line the task shows to leave the stage and the message that sends
+    the page back both name the part Jev finds missing, not only 'Doesn't meet'."""
+    from backend import pipeline_settings as PS
+
+    def build(c):
+        _pipeline(c, page_settings={"rubric": PS.REVIEW_RUBRIC})
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        X.settled(c)
+        return row
+
+    def ask(model, state, questions, label):
+        answers = {q: {"noul": {"met": 0.05, "part_models": 0.05}.get(q, 0.95)} for q in questions}
+        return PJ._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", ask)
+    V.run(store, H.shift(H.now(), seconds=1))
+    item = "No second review from a different model: the two reviews name the same model, or one names none."
+    with store.read() as r:
+        bodies = [
+            m[0]
+            for m in r.execute(
+                "SELECT body FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (WRITER, row["id"] + ":%:jev:%")
+            )
+        ]
+        line = _standing(r, row).line
+    assert line.startswith("Decision model sent it back: ") and line.endswith(item), line
+    assert len(bodies) == 1 and item in bodies[0], bodies
+
+
 def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
     """Jev answers a probability and no prose (Acme, Nov 11: three Review pages "Jev is unsure" with nothing after it).
     The verdict, its history line and the standing the manager reads all name the requirement, never its rubric."""

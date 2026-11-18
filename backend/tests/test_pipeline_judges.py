@@ -488,6 +488,37 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     assert (result["verdict"], result["reason"]) == ("unsure", "Can't tell if the version production runs is named.")
 
 
+def test_a_review_page_refused_names_the_one_rubric_item_it_finds_unmet():
+    """Task #614: the shipped Review rubric is asked whole, as before, with its parts beside it in the same call. A
+    refusal names the part the model scored no and what it looked for; an unsure names the part it can't tell; an OK
+    keeps today's line. The parts never change the verdict."""
+    from backend import pipeline_settings as PS
+
+    req = {"id": "r", "name": "Review page", "rubric": PS.REVIEW_RUBRIC}
+    assert P.check_of(PS.REVIEW_RUBRIC) is None and P.explained_of(PS.REVIEW_RUBRIC) == "two_reviews"
+    assert P.explained_of(REQ["rubric"]) is None, "a company's own rubric is asked whole, with nothing beside it"
+    asked = []
+
+    refused = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "models": 0.05}, asked))
+    assert sorted(asked[-1]) == ["met"] + sorted(f"part_{part.key}" for part in P.EXPLAINED["two_reviews"])
+    assert refused["verdict"] == "not_met" and refused["p"] == 0.1, "the whole question is the verdict"
+    assert refused["reason"] == (
+        'Doesn\'t meet "Review page". No second review from a different model: the two reviews name the same model, '
+        "or one names none."
+    ), refused["reason"]
+    unsure = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.5, "commit": 0.5}))
+    assert unsure["verdict"] == "unsure"
+    assert unsure["reason"].endswith(
+        "Can't tell if each review names the newest commit: looked for the PR's newest commit in each review."
+    ), unsure["reason"]
+    passed = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.9, "models": 0.05}))
+    assert (passed["verdict"], passed["reason"]) == ("met", 'Meets "Review page".'), "an OK keeps today's wording"
+    low = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1}))
+    assert low["reason"] == 'Doesn\'t meet "Review page".', "no part stands out: today's line"
+    alone = P.judge_once(None, REQ, ATTACHMENT, engine=_parts_engine({"met": 0.1}, asked))
+    assert list(asked[-1]) == ["met"] and alone["reason"] == 'Doesn\'t meet "Shows the page live".'
+
+
 def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
     """Task #351: "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): <the whole rubric>"
     named nothing to fix. Whole or in parts, met, not met or unsure, the reason carries none of it."""
