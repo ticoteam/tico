@@ -424,3 +424,62 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
 .gsrc-sync{grid-column:1/-1;font-size:var(--t-xs);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
 .gsrc-map{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .gsrc-skip{margin:0;padding-left:18px;font-size:var(--t-sm)}
+
+/* The Growth line (ui/app/growth-line.ts): sources → channels → this month → unit economics → KPIs, one row per channel.
+   Gray at rest; a selection fades the other rows and draws gray links (dashed from a stale source). No motion. */
+.grl{position:relative;container-type:inline-size;margin:0 0 var(--s4);padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.grl-head{display:flex;align-items:baseline;gap:8px}
+.grl-title{margin:0;font-size:var(--t-card);font-weight:600;color:var(--ink)}
+.grl-headline{margin:6px 0 10px;font-size:14px;line-height:1.45;color:var(--ink)}
+.grl-frame{position:relative}
+.grl-label,.grl-cols span,.grl-k{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
+.grl-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 14px}
+.grl-cols,.grl-cells{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr) minmax(0,2fr) minmax(0,1.6fr) minmax(0,1.2fr);grid-template-areas:"src ch num eco kpi";gap:10px;align-items:start}
+.grl-c-src{grid-area:src;padding-left:14px}.grl-c-ch{grid-area:ch}.grl-c-num{grid-area:num}.grl-c-eco{grid-area:eco}.grl-c-kpi{grid-area:kpi;padding-right:14px}
+/* Narrower than the five columns need (the chat pane open, a small laptop): the channel over its sources, the unit
+   economics under the month numbers, KPIs on the right; sized by the line's own width, not the window's. */
+@container (max-width: 900px){
+  .grl-cols{display:none}
+  .grl-cells{grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr);grid-template-areas:"ch num kpi" "src eco kpi";row-gap:4px}
+  .grl-c-ch{padding-left:14px}
+}
+.grl-cols{padding:6px 0 4px;border-bottom:1px solid var(--line)}
+.grl-cols span:first-child{padding-left:14px}
+.grl-rows{list-style:none;margin:0;padding:0}
+.grl-row{padding:8px 0;border-bottom:1px solid var(--line)}
+.grl-row.grl-all{border-bottom:0;font-weight:600}
+.grl-c{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.grl-chip{max-width:100%;overflow-wrap:anywhere;display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface2);color:var(--ink);font-size:var(--t-xs);cursor:pointer;text-align:left}
+.grl-chip:hover{background:var(--hover)}
+.grl-chip[aria-pressed=true]{border-color:var(--ink)}
+.grl-chip.grl-bad{border-color:color-mix(in srgb,var(--wait) 55%,var(--line))}
+.grl-chip-h{font-size:var(--t-2xs);color:var(--wait)}
+.grl-name{background:none;border:0;padding:0;color:var(--ink);font:inherit;font-weight:600;cursor:pointer;text-align:left}
+.grl-name[aria-pressed=true]{text-decoration:underline}
+.grl-owner{font-size:var(--t-xs);width:100%}
+.grl-num{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:56px;padding:2px 4px;border:0;border-radius:var(--r-ctl);background:none;color:var(--ink);font:inherit;cursor:pointer;text-align:left}
+.grl-num:hover:not(:disabled),.grl-num[aria-expanded=true]{background:var(--surface2)}
+.grl-num:disabled{cursor:default}
+.grl-v{font-variant-numeric:tabular-nums;font-size:var(--t-sm)}
+.grl-mark{font-size:var(--t-2xs);color:var(--muted)}
+.grl-mark.grl-stale{color:var(--wait)}
+.grl-over{font-size:var(--t-2xs);color:var(--fail)}
+.grl-bar{position:relative;display:block;width:64px;height:4px;margin:2px 0;border-radius:2px;background:var(--surface2)}
+.grl-bar i{position:absolute;inset:0 auto 0 0;border-radius:2px;background:var(--muted)}
+.grl-bar b{position:absolute;top:-2px;width:1px;height:8px;background:var(--ink)}
+.grl-nolink{font-size:var(--t-xs)}
+.grl-trace{margin:8px 0 2px;padding:8px 10px;border-left:2px solid var(--line);background:var(--surface2);border-radius:var(--r-ctl);font-size:var(--t-sm)}
+.grl-trace p{margin:0 0 4px}
+.grl-said{font-variant-numeric:tabular-nums}
+.grl-spark{margin-top:4px;color:var(--muted)}
+.grl-phone{display:none;margin:4px 0 0;font-size:var(--t-xs)}
+.grl-picking .grl-row.grl-off{opacity:.35}
+.grl-links{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.grl-links path{fill:none;stroke:var(--muted);stroke-width:1.25}
+.grl-links path.grl-dash{stroke-dasharray:4 3;stroke:var(--wait)}
+@media (max-width:600px){
+  .grl-cols,.grl-links{display:none}
+  .grl-cells{grid-template-columns:minmax(0,1fr);grid-template-areas:"ch" "num" "eco" "kpi"}
+  .grl-c-src{display:none}
+  .grl-phone{display:block}
+}

@@ -114,14 +114,11 @@ DEFAULTS = {
         ("updates", "medium"),
         ("latest_pages", "medium"),
     ],
-    # A default pin's third item is its card's settings beyond the template's own defaults.
+    # A default pin's third item is its card's settings beyond the template's own defaults. Growth's month numbers
+    # and channels are the Growth line's, drawn above the cards (backend/growth_line.py), so no Number or Channels
+    # card by default; a team that pinned them keeps them.
     "growth": [
         ("growth_funnel", "large"),
-        *(
-            ("growth_number", "small", {"metric": m})
-            for m in ("new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30")
-        ),
-        ("growth_channels", "large"),
         ("growth_retention", "medium"),
         ("growth_board", "medium"),
     ],
@@ -902,6 +899,23 @@ def growth_number(ctx, s):
     }
 
 
+MONEY_UNITS = {"usd", "$", "eur", "€", "gbp", "£", "dollars"}
+
+
+def _unit_kind(unit):
+    """A KPI unit's kind, for the Funnel's share: money, a percent, a time or a ratio, else a count ("", "visits")."""
+    u = (unit or "").strip().lower()
+    if u in MONEY_UNITS:
+        return "money"
+    if u in ("%", "pct", "percent"):
+        return "percent"
+    if u in ("months", "mo", "days", "weeks", "hours"):
+        return "time"
+    if u in ("ratio", "x", "×"):
+        return "ratio"
+    return "count"
+
+
 def growth_funnel(ctx, s):
     """The five stages, each with the KPI the growth tree names for it (the first with that stage, the North Star
     included), its reading, and the share of the stage before; the North Star on its own."""
@@ -910,7 +924,9 @@ def growth_funnel(ctx, s):
     upto = (lambda v: kpi_upto(v, ctx.asked_month)) if ctx.asked_month else (lambda v: v)
     north = upto(kpis["north_star"]) if kpis["north_star"] else None
     views = ([north] if north else []) + [upto(v) for v in kpis["inputs"] + kpis["guardrails"] + kpis["other"]]
-    stages, last = [], None
+    # A share of the stage before only between two KPIs of the same kind of unit (_unit_kind): visits to bookings is a
+    # conversion, customers over dollars means nothing.
+    stages, last, last_unit = [], None, None
     for key, label in (
         ("reach", "Reach"),
         ("acquire", "Acquire"),
@@ -929,12 +945,14 @@ def growth_funnel(ctx, s):
                 "unit": view["unit"] if view else "",
                 "value": value,
                 "prev": prev,
-                "conv": round(value / last * 100, 1) if value is not None and last else None,
+                "conv": round(value / last * 100, 1)
+                if value is not None and last and view and _unit_kind(view["unit"]) == _unit_kind(last_unit)
+                else None,
                 "north_star": bool(view and north and view["id"] == north["id"]),
                 "series": [p["value"] for p in view["series"]] if view else [],
             }
         )
-        last = value
+        last, last_unit = value, (view["unit"] if view else None)
     star = None
     if north:
         value, prev = kpi_reading(north)
