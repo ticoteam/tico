@@ -2059,6 +2059,9 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         "smoke_unless_capped": extra,
         "left_transitive": left,
         "tier": tier,
+        # How far each kept file is from the change (0 changed or guard, 1 direct, 2 one more), for dropped_reasons:
+        # the tier also ranks by link kind, so it does not give the distance.
+        "level": {p: level[p] for p in python if p in level},
     }
     if event == "pull_request":
         direct = {Path(p).stem for p in level if is_browser(p)}
@@ -2095,23 +2098,26 @@ def cap_tests(files, tier, seconds, budget):
     return sorted(kept), left
 
 
-def dropped_reasons(record, tier, seconds):
+def dropped_reasons(record, levels, seconds):
     """One entry per Python test file a light plan left out, with why: `depth` (the change reaches it only past
     record["depth"] levels) or `budget` (it was within reach, but did not fit record["budget_seconds"]). `level` is how
-    far from the change a budget drop was (tier 2 is level 1); `seconds` is the estimate the cap used, or the committed
-    time for a depth drop (None when the file has none)."""
+    far from the change a budget drop was (`levels`, narrow's record["level"]; None when unknown); `seconds` is the
+    estimate the cap used, or the measured or committed time for a depth drop (None when the file has none)."""
     out = [
         {"file": name, "reason": "depth", "level": None, "seconds": seconds.get(name)}
         for name in record["left_transitive"]
     ]
     out += [
-        {"file": name, "reason": "budget", "level": max(tier.get(name, 2) - 1, 1), "seconds": seconds.get(name)}
+        {"file": name, "reason": "budget", "level": levels.get(name), "seconds": seconds.get(name)}
         for name in record.get("left_over_budget", ())
     ]
     for entry in out:
         took = entry["seconds"]
         entry["seconds"] = round(float(took), 1) if isinstance(took, (int, float)) and math.isfinite(took) else None
-    return sorted(out, key=lambda entry: (entry["reason"], entry["file"]))
+    # Nearest cut tests first: by reason, then level, then the longer file.
+    return sorted(
+        out, key=lambda e: (e["reason"], e["level"] if e["level"] is not None else 99, -(e["seconds"] or 0), e["file"])
+    )
 
 
 def dropped_line(entry, depth):
@@ -2119,7 +2125,8 @@ def dropped_line(entry, depth):
     took = "untimed" if entry["seconds"] is None else f"{entry['seconds']:.0f} s"
     if entry["reason"] == "depth":
         return f"- `{entry['file']}`: reached only past level {depth} ({took})"
-    return f"- `{entry['file']}`: level {entry['level']}, over the time budget ({took})"
+    where = "level ?" if entry["level"] is None else f"level {entry['level']}"
+    return f"- `{entry['file']}`: {where} ({took})"
 
 
 def committed_timings(root=ROOT):
@@ -2149,7 +2156,7 @@ def narrow_summary(record):
         "",
     ]
     over = record.get("left_over_budget", [])
-    dropped = record.get("dropped") or dropped_reasons(record, {}, {})
+    dropped = record["dropped"]
     lines.append(f"- {len(record['left_transitive'])} test files reached only through more levels")
     lines.append(f"- {len(over)} test files over the time budget" + (":" if over else ""))
     lines += ["  " + dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "budget"]
@@ -2211,8 +2218,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
         timings = {**committed_timings(), **timings}
         seconds = weights(counts, timings)
-        tier = record.pop("tier")
-        kept, record["left_over_budget"] = cap_tests(counts, tier, seconds, record["budget_seconds"])
+        levels = record.pop("level", {})
+        kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
         if record["left_over_budget"]:
             record["smoke"] = True
         else:
@@ -2224,7 +2231,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
         record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
         # Why each file did not run (the plan's `dropped`, and the job summary): depth or budget, its level and time.
-        record["dropped"] = dropped_reasons(record, tier, {**timings, **seconds})
+        record["dropped"] = dropped_reasons(record, levels, {**timings, **seconds})
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
