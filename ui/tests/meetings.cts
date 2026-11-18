@@ -317,8 +317,9 @@ async function shot(page: import('playwright').Page, name: string) {
       }
 
       // ---- the header at every width (Chris, Nov 18: "search should not be in the dropdown"): the search keeps the row,
-      // never ⋯; every control is in view and is what a click at its centre hits; the title is whole. On a phone the
-      // search is its magnifier: a tap opens it in the title's place, and leaving it gives the title back, its words kept.
+      // never ⋯; every control is in view and is what a click at its centre hits; the title is whole. On a phone, and on a
+      // computer too narrow for a box beside the tabs, the search is its magnifier: a tap opens it in the title's place,
+      // and leaving it gives the title back, its words kept.
       for (const [width, look] of [[1440, 'dark'], [1280, 'light'], [1024, 'dark'], [900, 'light'], [800, 'dark'], [390, 'dark'], [390, 'light']] as [number, string][]) {
         w = world({sources: SOME, meetings: MEETINGS});
         ({page, errors, context} = await open(browser, {width, height: 844}, w, {colorScheme: look}));
@@ -341,12 +342,13 @@ async function shot(page: import('playwright').Page, name: string) {
           const t = h.querySelector<HTMLElement>(':scope > .ph-t')!;
           if (t.scrollWidth > t.clientWidth + 1) bad.push('the title is cut');
           if (document.documentElement.scrollWidth > window.innerWidth) bad.push('the page scrolls sideways');
-          return {bad, box: Math.round(document.querySelector<HTMLElement>('.meet-q')!.getBoundingClientRect().width)};
+          return {bad, box: Math.round(document.querySelector<HTMLElement>('.meet-q')!.getBoundingClientRect().width), find: h.classList.contains('ph-find')};
         });
         assert.deepEqual(head.bad, [], `${width}px header`);
-        if (width > 760) assert.ok(head.box >= 120, `${width}px: the search is a box (${head.box}px)`);
+        if (width <= 760) assert.ok(head.find, 'phone: the search is its magnifier');
+        if (!head.find) assert.ok(head.box >= 120, `${width}px: the search is a box (${head.box}px)`);
         else {
-          assert.ok(head.box <= 48, `phone: the search is its magnifier (${head.box}px)`);
+          assert.ok(head.box <= 48, `${width}px: the search is its magnifier (${head.box}px)`);
           await shot(page, `header-${width}-${look}`);
           const line = () => page.evaluate(() => {
             const h = document.querySelector<HTMLElement>('header.notes-head')!, r = (sel: string) => h.querySelector<HTMLElement>(sel)!.getBoundingClientRect();
@@ -357,19 +359,19 @@ async function shot(page: import('playwright').Page, name: string) {
           });
           const before = await line();
           await page.locator('.meet-q').click();
-          assert.equal(await page.evaluate(() => document.activeElement?.id), 'notes-search', 'phone: a tap focuses the search');
+          assert.equal(await page.evaluate(() => document.activeElement?.id), 'notes-search', `${width}px: a tap focuses the search`);
           const opened = await line();
           // open, it covers the title line, edge to edge inside the gutter; nothing under it moves or wraps
-          assert.ok(opened.box >= 300 && opened.onTop && opened.top === before.top && opened.more === before.more, `phone: the open search covers the title line (${JSON.stringify({before, opened})})`);
-          await shot(page, 'header-search-open-phone-' + look);
+          assert.ok(opened.box >= 300 && opened.onTop && opened.top === before.top && opened.more === before.more, `${width}px: the open search covers the title line (${JSON.stringify({before, opened})})`);
+          await shot(page, `header-search-open-${width}-${look}`);
           await page.keyboard.type('Pricing');
           await page.locator('#notes-search').blur();   // a tap elsewhere
           const shut = await line();
-          assert.equal(shut.q, 'Pricing', 'phone: leaving the search keeps its words');
-          assert.ok(shut.box <= 48 && shut.more === before.more, `phone: a search holding words is its magnifier again (${JSON.stringify(shut)})`);
-          assert.equal(await page.locator('header.notes-head > .ph-t').evaluate(t => t.scrollWidth <= t.clientWidth + 1 && t.getBoundingClientRect().width > 0), true, 'phone: the title is back, whole');
+          assert.equal(shut.q, 'Pricing', `${width}px: leaving the search keeps its words`);
+          assert.ok(shut.box <= 48 && shut.more === before.more, `${width}px: a search holding words is its magnifier again (${JSON.stringify(shut)})`);
+          assert.equal(await page.locator('header.notes-head > .ph-t').evaluate(t => t.scrollWidth <= t.clientWidth + 1 && t.getBoundingClientRect().width > 0), true, `${width}px: the title is back, whole`);
         }
-        if (width > 760) await shot(page, `header-${width}-${look}`);
+        if (!head.find) await shot(page, `header-${width}-${look}`);
         assert.deepEqual(errors, []);
         await context.close();
       }

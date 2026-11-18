@@ -532,9 +532,10 @@ let browser: import('playwright').Browser | null = null;
     await dialog.locator('.who-pick-q').click();
     const ops = page.locator('.who-pick-list [role="option"][data-who="bot:ops"]');
     await ops.waitFor();
-    // The team first: its mark, its name, a few of its faces and how many.
+    // Teams first, by name (Field, inside Ops, has its own row): a team's mark, its name, a few of its faces and how many.
     const team = page.locator('.who-pick-list [role="option"][data-who="group:ops"]');
-    assert.equal(await page.locator('.who-pick-list [role="option"]').first().getAttribute('data-who'), 'group:ops');
+    assert.deepEqual(await page.locator('.who-pick-list [role="option"]').evaluateAll(os => os.slice(0, 2).map(o => o.getAttribute('data-who'))), ['group:field', 'group:ops']);
+    assert.equal(await page.locator('.who-pick-list [role="option"][data-who="group:field"] .meet-team-n .tnum').innerText(), '1');
     assert.equal(await team.locator('.settings-combo-n').innerText(), 'Ops team');
     assert.equal(await team.locator('.meet-stack .av, .meet-stack img, .meet-stack > *').count(), 3);
     assert.equal(await team.locator('.meet-team-n .tnum').innerText(), '3');

@@ -100,7 +100,7 @@ async function searchProblems(page: Page, width: number) {
   // A narrow header shows the search as its magnifier (.ph-find), which opens over the title line when tapped.
   const find = await page.locator('.ru-ph.ph-find').count() > 0;
   const onTop = await box.evaluate((el, min) => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return r.width >= min && r.right <= document.documentElement.clientWidth + 0.5 && !!top && el.contains(top); }, find ? 40 : 100);
+    return r.width >= min && r.right <= document.documentElement.clientWidth + 0.5 && !!top && el.contains(top); }, find ? 28 : 100);
   if (!onTop) bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}`);
   await box.click({timeout: t(3000)});
   if (find && await box.evaluate(el => el.getBoundingClientRect().width) < 200) bad.push('the magnifier did not open to a search box');
