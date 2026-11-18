@@ -4,8 +4,8 @@
 The status line under a chat (thread_bot_status._step) decides its one word from a running turn's newest STEP_EVENTS
 delta, message and tool events. A tool event can carry a large output and a message a long text, and decoding those
 in full to read a status and a label cost as much as the outputs weighed. So when an event's stored payload is longer
-than SMALL characters, `record` keeps its brief in `attempt_event_briefs` (its migration
-20261112081510_attempt_event_briefs): what the replay (turns.reply_parts) reads,
+than SMALL characters, `record` keeps its brief in `attempt_event_briefs` (backend/migrations/baseline.sql, from
+migration attempt_event_briefs): what the replay (turns.reply_parts) reads,
 with a text reduced to whether it is blank and a digest of its stripped words. The status line reads the brief instead
 of the payload; a smaller event is cheap to decode and gets none.
 

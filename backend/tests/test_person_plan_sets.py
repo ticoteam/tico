@@ -472,25 +472,6 @@ def test_a_reading_a_turn_reports_on_a_plan_in_a_persons_set_is_that_plans_usage
     assert (usage["window"], usage["used_pct"], usage["weekly_used_pct"]) == ("week", 30, 30)
 
 
-def test_the_person_migration_adds_the_column_and_skips_a_new_file():
-    import importlib
-    import sqlite3
-
-    step = importlib.import_module("backend.migrations.20261112190000_computer_subscription_person")
-    fresh = sqlite3.connect(":memory:")
-    step.up(fresh)  # no table yet: SCHEMA makes it with the column
-    assert not fresh.execute("SELECT 1 FROM sqlite_master WHERE name='computer_subscriptions'").fetchone()
-    old = sqlite3.connect(":memory:")
-    old.execute(
-        "CREATE TABLE computer_subscriptions(runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT "
-        "NOT NULL, set_by TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(runner_id, runtime))"
-    )
-    old.execute("INSERT INTO computer_subscriptions VALUES('r','claude','s','human:ana','2026-11-12')")
-    step.up(old)
-    step.up(old)  # a second start changes nothing
-    assert old.execute("SELECT subscription_id, person FROM computer_subscriptions").fetchall() == [("s", "")]
-
-
 def test_settings_search_finds_the_picker_by_the_name_of_a_person_who_owns_a_plan(api):
     setup(api)
     company(api)

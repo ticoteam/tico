@@ -231,7 +231,7 @@ What a server accepts is what the code enforces. This is the matrix the release 
 
 | Part | Accepted | Enforced by |
 |---|---|---|
-| Database | made or upgraded by v0.6.0-rc.1 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
+| Database | made or upgraded by v0.6.0 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
 | Runner | release `MIN_RUNNER_RELEASE` (0.6.0-rc.1) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
 | Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
 | Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
@@ -256,7 +256,7 @@ failure leaves neither. Never edit a file that has run: its checksum is recorded
 it changed. Make the change in a new file, never in the baseline. Temporary views and tables (`CREATE TEMP`,
 `backend/sql.py`) are per connection and stay in code.
 
-The compatibility floor is v0.6.0-rc.1. The migration files it shipped are gone: `backend/migrations/retired.txt` lists
+The compatibility floor is v0.6.0. The migration files it shipped are gone: `backend/migrations/retired.txt` lists
 them, a database at the floor recorded them and a new one has them in the baseline. When the floor moves:
 list the files the new floor release shipped in `retired.txt` and delete them, write the baseline again
 (`python3 scripts/schema_baseline.py`) and the floor's schema fixture (`python3 scripts/cleanup/gen_upgrade_fixture.py

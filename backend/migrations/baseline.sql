@@ -216,7 +216,7 @@ CREATE TABLE live_meetings (
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL,
  started_at TEXT NOT NULL,
- ended_at TEXT, reply_cap INTEGER NOT NULL DEFAULT 3 CHECK (reply_cap BETWEEN 1 AND 20), visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('private','team')), client TEXT CHECK (client IS NULL OR client = 'tico-recorder'), meeting_model TEXT, thread_id TEXT, discarded_at TEXT,
+ ended_at TEXT, reply_cap INTEGER NOT NULL DEFAULT 3 CHECK (reply_cap BETWEEN 1 AND 20), visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('private','team')), meeting_model TEXT, thread_id TEXT, discarded_at TEXT,
  UNIQUE(owner_actor,client_id)
 );
 CREATE TABLE live_meeting_humans (
@@ -332,11 +332,6 @@ CREATE TABLE task_check_models (
 CREATE TABLE goal_asks (
   kind TEXT NOT NULL, ref TEXT NOT NULL, owner TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL,
   PRIMARY KEY (kind, ref, owner));
-CREATE TABLE strategy_merges (
-  merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
-  how TEXT NOT NULL DEFAULT 'asked', ask_id TEXT,
-  state TEXT NOT NULL DEFAULT 'merged', created_at TEXT NOT NULL, settled_at TEXT, note TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (merged_into, original));
 CREATE TABLE live_meeting_access (
  meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
  actor TEXT NOT NULL,
@@ -484,7 +479,7 @@ CREATE TABLE growth_channels (
   track TEXT NOT NULL DEFAULT 'performance' CHECK(track IN ('performance','brand')),
   stage TEXT NOT NULL DEFAULT 'idea' CHECK(stage IN ('idea','testing','scaling','paused')),
   owner_ref TEXT, budget_month REAL, source_id TEXT, why TEXT NOT NULL DEFAULT '', guardrail_kpi_id TEXT,
-  guardrail_max REAL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, retired_at TEXT);
+  guardrail_max REAL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, retired_at TEXT, input_kpi_id TEXT);
 CREATE TABLE growth_cohorts (
   id TEXT PRIMARY KEY, channel_id TEXT, month TEXT NOT NULL, spend REAL, bot_cost REAL, new_customers INTEGER,
   kept_d30 REAL, kept_d90 REAL, kept_d180 REAL, revenue_month REAL, margin_pct REAL,
@@ -672,7 +667,7 @@ CREATE TABLE slack_thread_links (
   checked_at TEXT,
   activated_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
+  updated_at TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 0, read_ts TEXT NOT NULL DEFAULT '');
 CREATE TABLE slack_link_members (
   link_id TEXT NOT NULL REFERENCES slack_thread_links(id),
   slack_user_id TEXT NOT NULL,
@@ -876,7 +871,6 @@ CREATE TABLE attempts(
         AND state IS NOT NULL AND lease_until IS NOT NULL)));
 CREATE TABLE google_setup_codes(code_hash TEXT PRIMARY KEY, domain TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, generation INTEGER NOT NULL);
 CREATE TABLE google_oauth_clients(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), client_id TEXT NOT NULL, secret_sealed TEXT NOT NULL, revision INTEGER NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE connector_reports(service TEXT NOT NULL, runner_id TEXT NOT NULL, account TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', failing TEXT NOT NULL DEFAULT '[]', ok_accounts TEXT NOT NULL DEFAULT '[]', reported_at TEXT NOT NULL, PRIMARY KEY(service, runner_id, account));
 CREATE TABLE google_setup_generations(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), issued INTEGER NOT NULL);
 CREATE TABLE automation_runs(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, version INTEGER NOT NULL, trigger_ref TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, cost REAL NOT NULL DEFAULT 0, saved_state TEXT, claimed_at TEXT, wake_at TEXT, chain TEXT NOT NULL DEFAULT '[]', claim_token TEXT);
 CREATE TABLE maintenance_steps(
@@ -928,7 +922,7 @@ CREATE TABLE maintenance_requests(
  maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(id) ON DELETE CASCADE,
  created_at TEXT NOT NULL,
  PRIMARY KEY (actor, request_key));
-CREATE TABLE mailboxes(id TEXT PRIMARY KEY, address TEXT NOT NULL UNIQUE, provider TEXT NOT NULL DEFAULT 'google_workspace', person_id TEXT, kind TEXT NOT NULL DEFAULT 'personal' CHECK(kind IN ('personal','shared')), connection TEXT NOT NULL DEFAULT 'workspace' CHECK(connection IN ('workspace','personal')), status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stopped')), shared_by TEXT, shared_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, feeds_directory INTEGER NOT NULL DEFAULT 1 CHECK (feeds_directory IN (0, 1)), CHECK(address = lower(address)), CHECK(kind = 'personal' OR person_id IS NULL));
+CREATE TABLE mailboxes(id TEXT PRIMARY KEY, address TEXT NOT NULL UNIQUE, provider TEXT NOT NULL DEFAULT 'google_workspace', person_id TEXT, kind TEXT NOT NULL DEFAULT 'personal' CHECK(kind IN ('personal','shared')), connection TEXT NOT NULL DEFAULT 'workspace' CHECK(connection IN ('workspace','personal')), status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stopped')), shared_by TEXT, shared_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, feeds_directory INTEGER NOT NULL DEFAULT 1 CHECK (feeds_directory IN (0, 1)), history_id TEXT, checked_at TEXT, check_error TEXT, catch_up TEXT, watching_since_at TEXT, CHECK(address = lower(address)), CHECK(kind = 'personal' OR person_id IS NULL));
 CREATE TABLE mailbox_accesses(id TEXT PRIMARY KEY, mailbox_id TEXT NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE, grantee_type TEXT NOT NULL CHECK(grantee_type IN ('person','bot')), grantee_id TEXT NOT NULL, level TEXT NOT NULL CHECK(level IN ('read','read_write')), granted_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE meeting_task_links (
  id TEXT PRIMARY KEY,
@@ -939,11 +933,6 @@ CREATE TABLE meeting_task_links (
  created_at TEXT NOT NULL,
  UNIQUE(meeting_id,task_id)
 );
-CREATE TABLE quarantine_holds(
-        id INTEGER PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bots(id),
-        task_id TEXT REFERENCES tasks(id), conversation_id TEXT REFERENCES conversations(id),
-        reason TEXT NOT NULL, refusal TEXT NOT NULL, created_at TEXT NOT NULL, released_at TEXT,
-        CHECK ((task_id IS NOT NULL) <> (conversation_id IS NOT NULL)));
 CREATE TABLE presences (
  id TEXT PRIMARY KEY, place TEXT NOT NULL, actor TEXT NOT NULL, session_id TEXT NOT NULL,
  seen_at TEXT NOT NULL, UNIQUE(place, session_id)
@@ -1056,20 +1045,10 @@ CREATE TABLE letter_proofs (
 CREATE TABLE page_identities(identity TEXT NOT NULL,file_id TEXT NOT NULL REFERENCES pages(file_id),PRIMARY KEY(identity,file_id));
 CREATE TABLE email_send_previews(send_id TEXT NOT NULL, actor TEXT NOT NULL, content_sha256 TEXT NOT NULL, shown_at TEXT NOT NULL, PRIMARY KEY(send_id,actor));
 CREATE TABLE email_send_operations(actor TEXT NOT NULL, operation_key TEXT NOT NULL, send_id TEXT NOT NULL, PRIMARY KEY(actor,operation_key));
-CREATE TABLE mail_messages(mailbox TEXT NOT NULL, msg_id TEXT NOT NULL, thread_id TEXT NOT NULL DEFAULT '', epoch INTEGER NOT NULL, date TEXT NOT NULL, from_addr TEXT NOT NULL, from_header TEXT NOT NULL DEFAULT '', to_addresses TEXT NOT NULL, cc TEXT NOT NULL, subject TEXT NOT NULL, snippet TEXT NOT NULL, labels TEXT NOT NULL, body TEXT NOT NULL, body_truncated INTEGER NOT NULL DEFAULT 0, attachments TEXT NOT NULL, list_id TEXT NOT NULL DEFAULT '', is_internal INTEGER NOT NULL DEFAULT 0, has_unsubscribe INTEGER NOT NULL DEFAULT 0, rule_hits TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL, deleted_at TEXT, send_facts TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(mailbox,msg_id));
 CREATE TABLE letter_sources (letter_id TEXT NOT NULL REFERENCES letters(id) ON DELETE CASCADE, source_type TEXT NOT NULL CHECK(source_type IN ('task','thread')), source_id TEXT NOT NULL);
 CREATE TABLE cloud_machine_deletions(machine_id TEXT PRIMARY KEY, bot TEXT NOT NULL, runner_id TEXT, reason TEXT NOT NULL DEFAULT 'manual', next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0, created_at REAL);
 CREATE TABLE cloud_machine_enrollment_failures(machine_id TEXT PRIMARY KEY, bot TEXT NOT NULL);
-CREATE TABLE recorder_installs (
- person_id TEXT NOT NULL REFERENCES humans(id) ON DELETE CASCADE,
- install_id TEXT NOT NULL,
- version TEXT NOT NULL,
- last_seen_at TEXT NOT NULL,
- created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL,
- PRIMARY KEY(person_id, install_id)
-);
-CREATE TABLE tools( id TEXT PRIMARY KEY, name TEXT NOT NULL, service TEXT NOT NULL DEFAULT '', base_url TEXT NOT NULL DEFAULT '', auth_scheme TEXT NOT NULL DEFAULT 'bearer', check_path TEXT NOT NULL DEFAULT '', delivery TEXT NOT NULL DEFAULT 'proxy', created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, audience TEXT, kind TEXT NOT NULL DEFAULT 'api', sites TEXT, central_only INTEGER NOT NULL DEFAULT 0, mcp_url TEXT NOT NULL DEFAULT '', mcp_transport TEXT NOT NULL DEFAULT '', mcp_tools TEXT, mcp_oauth TEXT, mcp_client_secret TEXT);
+CREATE TABLE tools( id TEXT PRIMARY KEY, name TEXT NOT NULL, service TEXT NOT NULL DEFAULT '', base_url TEXT NOT NULL DEFAULT '', auth_scheme TEXT NOT NULL DEFAULT 'bearer', check_path TEXT NOT NULL DEFAULT '', delivery TEXT NOT NULL DEFAULT 'proxy', created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, audience TEXT, kind TEXT NOT NULL DEFAULT 'api', sites TEXT, central_only INTEGER NOT NULL DEFAULT 0, mcp_url TEXT NOT NULL DEFAULT '', mcp_transport TEXT NOT NULL DEFAULT '', mcp_tools TEXT, mcp_oauth TEXT, mcp_client_secret TEXT, everyone_reads INTEGER NOT NULL DEFAULT 1 CHECK (everyone_reads IN (0, 1)), auth_template TEXT NOT NULL DEFAULT '');
 CREATE TABLE tool_checks( id TEXT PRIMARY KEY, tool_id TEXT NOT NULL REFERENCES tools(id), credential_id TEXT, ok INTEGER NOT NULL, status_code INTEGER, detail TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL);
 CREATE TABLE tool_calls( id TEXT PRIMARY KEY, tool_id TEXT NOT NULL REFERENCES tools(id), credential_id TEXT, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', access_level TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status_code INTEGER, result TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', duration_ms INTEGER, created_at TEXT NOT NULL);
 CREATE TABLE skills (
@@ -1747,8 +1726,7 @@ CREATE TABLE fin_subscriptions (
 );
 CREATE TABLE assistant_actions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, conversation_id TEXT, summary TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, proposed_via TEXT, created_at TEXT NOT NULL, decided_at TEXT, result TEXT, confirm_hash TEXT, running_since TEXT, description TEXT, diff TEXT, proposer TEXT, ask TEXT);
 CREATE TABLE pipelines (id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE, goal TEXT NOT NULL DEFAULT '', prefix TEXT, manager_id TEXT, owner_id TEXT, private INTEGER NOT NULL DEFAULT 0 CHECK (private IN (0, 1)), factory_id TEXT, preset TEXT, settings_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, retired_at TEXT, keep_warm_hours INTEGER NOT NULL DEFAULT 8 CHECK (keep_warm_hours BETWEEN 0 AND 24));
-CREATE TABLE stages (id TEXT PRIMARY KEY, pipeline_id TEXT NOT NULL REFERENCES pipelines(id), position INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('work', 'done', 'closed')), name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '', owner TEXT, by_hand INTEGER NOT NULL DEFAULT 0 CHECK (by_hand IN (0, 1)), task_limit INTEGER CHECK (task_limit IS NULL OR task_limit > 0), expected_minutes INTEGER CHECK (expected_minutes IS NULL OR expected_minutes > 0), expected_bots_only INTEGER NOT NULL DEFAULT 0 CHECK (expected_bots_only IN (0, 1)), on_enter TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(on_enter)), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, retired_at TEXT, requests_move_on INTEGER NOT NULL DEFAULT 0 CHECK (requests_move_on IN (0, 1)), pick TEXT CHECK (pick IS NULL OR json_valid(pick)));
-CREATE TABLE visits (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, stage_id TEXT NOT NULL REFERENCES stages(id), entered_at TEXT NOT NULL, entered_how TEXT NOT NULL CHECK (entered_how IN ('new', 'met', 'pushed_past', 'back', 'closed', 'reopened')), left_at TEXT, how TEXT CHECK (how IS NULL OR how IN ('met', 'pushed_past', 'back', 'closed', 'reopened')), by_id TEXT, why TEXT, tries INTEGER NOT NULL DEFAULT 0, level TEXT NOT NULL DEFAULT 'owner' CHECK (level IN ('owner', 'manager', 'person')), person_id TEXT, next_try_at TEXT, progress_mark TEXT, last_change_at TEXT, late_told_at TEXT, late_person_at TEXT, bot_snoozes INTEGER NOT NULL DEFAULT 0, last_change_attempt INTEGER, last_change_message INTEGER, last_change_start INTEGER, holder_id TEXT, pick_state TEXT CHECK (pick_state IS NULL OR pick_state IN ('full', 'nobody')), pick_why TEXT, CHECK ((left_at IS NULL) = (how IS NULL)));
+CREATE TABLE stages (id TEXT PRIMARY KEY, pipeline_id TEXT NOT NULL REFERENCES pipelines(id), position INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('work', 'done', 'closed')), name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '', owner TEXT, by_hand INTEGER NOT NULL DEFAULT 0 CHECK (by_hand IN (0, 1)), task_limit INTEGER CHECK (task_limit IS NULL OR task_limit > 0), expected_minutes INTEGER CHECK (expected_minutes IS NULL OR expected_minutes > 0), expected_bots_only INTEGER NOT NULL DEFAULT 0 CHECK (expected_bots_only IN (0, 1)), on_enter TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(on_enter)), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, retired_at TEXT, requests_move_on INTEGER NOT NULL DEFAULT 0 CHECK (requests_move_on IN (0, 1)), pick TEXT CHECK (pick IS NULL OR json_valid(pick)), side INTEGER NOT NULL DEFAULT 0 CHECK (side IN (0,1)));
 CREATE TABLE answers (id TEXT PRIMARY KEY, visit_id TEXT NOT NULL REFERENCES visits(id), requirement_id TEXT NOT NULL REFERENCES requirements(id), by_id TEXT NOT NULL, answer TEXT NOT NULL, notes TEXT, page_version INTEGER, created_at TEXT NOT NULL, undone_at TEXT, name TEXT, value_type TEXT CHECK (value_type IS NULL OR value_type IN ('text', 'number', 'choice')), heads TEXT CHECK (heads IS NULL OR json_valid(heads)));
 CREATE TABLE snoozes (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, visit_id TEXT, by_id TEXT NOT NULL, why TEXT, until_at TEXT, created_at TEXT NOT NULL, ended_at TEXT, ended_by_id TEXT, filed INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE links (id TEXT PRIMARY KEY, from_task_id TEXT NOT NULL, to_task_id TEXT NOT NULL, visit_id TEXT, kind TEXT NOT NULL CHECK (kind IN ('sub_task', 'handoff')), created_at TEXT NOT NULL, CHECK (from_task_id <> to_task_id));
@@ -1784,7 +1762,7 @@ CREATE TABLE ok_shown (
   shown_at TEXT NOT NULL,
   PRIMARY KEY (requirement_id, person_id, content_hash)
 );
-CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, body TEXT, requester_id TEXT, owner_id TEXT, status TEXT NOT NULL DEFAULT 'open', due_at TEXT, conversation_id TEXT, created_at TEXT, updated_at TEXT, done_at TEXT, closed_at TEXT, closed_by_id TEXT, note TEXT, goal_id TEXT, labels TEXT NOT NULL DEFAULT '[]', number INTEGER, private INTEGER NOT NULL DEFAULT 1 CHECK (private IN (0,1)), live_meeting_id TEXT, readers TEXT, work_revision INTEGER NOT NULL DEFAULT 0, pipeline_id TEXT REFERENCES pipelines(id), stage_id TEXT REFERENCES stages(id), assignee_id TEXT, lane TEXT NOT NULL DEFAULT 'company', rank REAL, occurrence TEXT, occurrence_step TEXT, rule_due_id TEXT, checkpoint TEXT, checkpoint_at TEXT, checkpoint_by_id TEXT, checkpoint_state TEXT, checkpoint_blocked INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private')), public_title TEXT NOT NULL DEFAULT '', public_summary TEXT NOT NULL DEFAULT '', size REAL, request_id TEXT, version INTEGER NOT NULL DEFAULT 1, acceptance TEXT NOT NULL DEFAULT '[]', human_id TEXT);
+CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, body TEXT, requester_id TEXT, owner_id TEXT, status TEXT NOT NULL DEFAULT 'open', due_at TEXT, conversation_id TEXT, created_at TEXT, updated_at TEXT, done_at TEXT, closed_at TEXT, closed_by_id TEXT, note TEXT, goal_id TEXT, labels TEXT NOT NULL DEFAULT '[]', number INTEGER, private INTEGER NOT NULL DEFAULT 1 CHECK (private IN (0,1)), live_meeting_id TEXT, readers TEXT, work_revision INTEGER NOT NULL DEFAULT 0, pipeline_id TEXT REFERENCES pipelines(id), stage_id TEXT REFERENCES stages(id), assignee_id TEXT, lane TEXT NOT NULL DEFAULT 'company', rank REAL, occurrence TEXT, occurrence_step TEXT, rule_due_id TEXT, checkpoint TEXT, checkpoint_at TEXT, checkpoint_by_id TEXT, checkpoint_state TEXT, checkpoint_blocked INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private')), public_title TEXT NOT NULL DEFAULT '', public_summary TEXT NOT NULL DEFAULT '', size REAL, request_id TEXT, version INTEGER NOT NULL DEFAULT 1, acceptance TEXT NOT NULL DEFAULT '[]', human_id TEXT, prefix TEXT);
 CREATE TABLE push_subscriptions (id TEXT PRIMARY KEY, actor TEXT NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL, last_ok_at TEXT, failed_at TEXT, failures INTEGER NOT NULL DEFAULT 0, gone_at TEXT);
 CREATE TABLE run_starts(id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL UNIQUE);
 CREATE TABLE "github_releases" (id TEXT PRIMARY KEY, repo TEXT NOT NULL COLLATE NOCASE, tag TEXT NOT NULL, commit_sha TEXT, prerelease INTEGER NOT NULL DEFAULT 0 CHECK (prerelease IN (0, 1)), published_at TEXT NOT NULL, metadata_version INTEGER NOT NULL, read_at TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -1945,7 +1923,6 @@ CREATE TABLE stage_keep_warm (
  stage_id TEXT PRIMARY KEY REFERENCES stages(id),
  hours INTEGER NOT NULL CHECK (hours BETWEEN 0 AND 24));
 CREATE TABLE growth_computed_choices (cohort_id TEXT NOT NULL, field TEXT NOT NULL, typed REAL NOT NULL, keep TEXT CHECK (keep IN ('typed','computed')), asked_at TEXT, chosen_by TEXT, chosen_at TEXT, PRIMARY KEY (cohort_id, field));
-CREATE TABLE "requirements" (id TEXT PRIMARY KEY, stage_id TEXT REFERENCES stages(id), visit_id TEXT REFERENCES visits(id), kind TEXT NOT NULL CHECK (kind IN ('owner_done', 'ok', 'page', 'item', 'linked_done', 'answer', 'related_input')), source TEXT, condition TEXT, settings TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(settings)), can_push_past INTEGER NOT NULL DEFAULT 1 CHECK (can_push_past IN (0, 1)), who_oks TEXT NOT NULL DEFAULT 'none' CHECK (who_oks IN ('none', 'people_only', 'people_with_exceptions')), person_id TEXT, added_by_id TEXT, by_bot INTEGER NOT NULL DEFAULT 0 CHECK (by_bot IN (0, 1)), line TEXT NOT NULL DEFAULT '', shows TEXT CHECK (shows IS NULL OR json_valid(shows)), choices TEXT CHECK (choices IS NULL OR json_valid(choices)), position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, withdrawn_at TEXT, CHECK ((stage_id IS NULL) <> (visit_id IS NULL)), CHECK ((kind = 'item') = (source IS NOT NULL AND condition IS NOT NULL)), CHECK (person_id IS NULL OR kind IN ('ok', 'page', 'answer')));
 CREATE TABLE related_inputs (visit_id TEXT NOT NULL, requirement_id TEXT NOT NULL, task_id TEXT NOT NULL, owed_at TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 0, next_try_at TEXT, last_error TEXT, scored_at TEXT, outcome TEXT, scores TEXT CHECK (scores IS NULL OR json_valid(scores)), picks TEXT CHECK (picks IS NULL OR json_valid(picks)), asked_at TEXT, done_at TEXT, done_line TEXT, call_id TEXT, PRIMARY KEY (visit_id, requirement_id));
 CREATE TABLE ask_opinions (
   visit_id TEXT NOT NULL,
@@ -2079,12 +2056,6 @@ CREATE TABLE model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
  cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, clear_key INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(runner_id,runtime,profile));
-CREATE TABLE computer_keys(
- credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
- runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
-CREATE TABLE model_login_key_off(
- runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
- set_at TEXT NOT NULL, set_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
 CREATE TABLE runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
@@ -2127,7 +2098,7 @@ CREATE TABLE assignments(
 CREATE TABLE jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
  bot_id TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
- created_at TEXT NOT NULL, attempt_id TEXT, release TEXT, release_after TEXT, released TEXT, redirect INTEGER NOT NULL DEFAULT 0, wake_preset TEXT, wake_class TEXT, held INTEGER NOT NULL DEFAULT 0, hold_until TEXT, hold_reason TEXT, hold_task_id TEXT, hold_streak INTEGER NOT NULL DEFAULT 0, wake_carrier TEXT);
+ created_at TEXT NOT NULL, attempt_id TEXT, release TEXT, release_after TEXT, released TEXT, redirect INTEGER NOT NULL DEFAULT 0, wake_preset TEXT, wake_class TEXT, held INTEGER NOT NULL DEFAULT 0, hold_until TEXT, wake_carrier TEXT);
 CREATE TABLE job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
  decision TEXT NOT NULL, note TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -2166,29 +2137,19 @@ CREATE TABLE service_health(
 CREATE TABLE meeting_importers(
  source TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, runner_id TEXT,
  updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE connector_snapshots(
- kind TEXT NOT NULL, owner TEXT NOT NULL REFERENCES humans(id), version INTEGER NOT NULL DEFAULT 1,
- payload TEXT NOT NULL, updated_at TEXT NOT NULL, runner_id TEXT NOT NULL,
- PRIMARY KEY(kind,owner));
 CREATE TABLE calendar_actions(
  id TEXT PRIMARY KEY, requested_by TEXT NOT NULL, calendar_email TEXT NOT NULL,
  summary TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL,
  attendees TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT '',
  add_meet INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'pending',
  result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '',
- runner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, finished_at TEXT);
-CREATE TABLE mail_mailboxes(
- address TEXT PRIMARY KEY, person_id TEXT, runner_id TEXT, synced_at TEXT,
- message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT,
- watching_since_at TEXT);
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, finished_at TEXT);
 CREATE TABLE mail_agent_instructions(
  bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE bot_agent_instructions(
  bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE VIRTUAL TABLE mail_fts USING fts5(
- subject, body, from_addr, to_text, mailbox UNINDEXED, msg_id UNINDEXED, tokenize='porter unicode61');
 CREATE TABLE credential_keys(
  id TEXT PRIMARY KEY, kms_key TEXT NOT NULL, wrapped_key BLOB NOT NULL);
 CREATE TABLE credential_uses(
@@ -2202,7 +2163,7 @@ CREATE TABLE credentials(
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
  tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT,
- has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT, has_password INTEGER NOT NULL DEFAULT 1);
+ has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT, has_password INTEGER NOT NULL DEFAULT 1, former_tool_id TEXT);
 CREATE TABLE granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
  ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, metadata TEXT NOT NULL);
@@ -2250,9 +2211,6 @@ CREATE TABLE slack_events(
  state TEXT NOT NULL DEFAULT 'received', actor TEXT, reason TEXT, routing TEXT,
  processed_at TEXT, author TEXT NOT NULL DEFAULT 'human', author_name TEXT,
  edited_at TEXT, deleted_at TEXT, updated_at TEXT, UNIQUE(channel, ts));
-CREATE TABLE slack_reads(
- channel TEXT NOT NULL, reader TEXT NOT NULL, last_ts TEXT NOT NULL DEFAULT '',
- last_run_at TEXT, digests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(channel, reader));
 CREATE TABLE slack_digests(
  id TEXT PRIMARY KEY, reader TEXT NOT NULL, conversation_id TEXT NOT NULL REFERENCES conversations(id),
  message_id TEXT NOT NULL REFERENCES messages(id), channels TEXT NOT NULL,
@@ -2413,7 +2371,6 @@ CREATE TABLE pending_subscription_fallbacks(
 CREATE TABLE subscription_connects(
  login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', subscription_id TEXT NOT NULL DEFAULT '',
  owner_id TEXT NOT NULL DEFAULT '');
-CREATE TABLE google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
 CREATE TABLE support_tickets(
  id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
  message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
@@ -2525,8 +2482,8 @@ CREATE TABLE invariant_state(
  examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, started_firing_at TEXT, task_id TEXT);
 CREATE TABLE slack_channels(
  key TEXT PRIMARY KEY, channel_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
- readers TEXT NOT NULL DEFAULT '[]', post INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
- digest_hours REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '');
+ post INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '');
 CREATE TABLE flight_requests(created_at INTEGER NOT NULL, span INTEGER NOT NULL, route TEXT NOT NULL,
   caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
   p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, span, route, caller)) WITHOUT ROWID;
@@ -2885,8 +2842,6 @@ CREATE TABLE record_aliases (
   record_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (table_name, alias_id));
 CREATE TABLE roadmap_actions(day TEXT NOT NULL,ip_hash TEXT NOT NULL,actions INTEGER NOT NULL,PRIMARY KEY(day,ip_hash));
 CREATE TABLE worktree_waits(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, generation INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL, link_id TEXT, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT);
-CREATE TABLE run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, wait_until TEXT, error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, released_at TEXT, released_by TEXT);
-CREATE TABLE bot_budget(bot TEXT PRIMARY KEY, held_at TEXT, window TEXT, runs INTEGER, budget INTEGER, task_id TEXT, released_at TEXT, released_by TEXT);
 CREATE TABLE automations(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_id TEXT NOT NULL, group_id TEXT, trigger_type TEXT NOT NULL, enabled INTEGER NOT NULL, builtin INTEGER NOT NULL DEFAULT 0, flow TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, next_due_at TEXT, found_since TEXT);
 CREATE TABLE automation_daily(automation_id TEXT NOT NULL, day TEXT NOT NULL, runs INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(automation_id, day));
 CREATE TABLE automation_mail_actions(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT, mailbox TEXT NOT NULL, msg_id TEXT NOT NULL, action TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT, result TEXT, attempts INTEGER NOT NULL DEFAULT 0, step TEXT, "after" TEXT);
@@ -2894,7 +2849,6 @@ CREATE TABLE automation_inboxes(inbox TEXT PRIMARY KEY, send INTEGER NOT NULL, u
 CREATE TABLE automation_effects(key TEXT PRIMARY KEY, run_id TEXT NOT NULL, created_at TEXT NOT NULL, result TEXT NOT NULL);
 CREATE TABLE automation_turn_answers(run_id TEXT NOT NULL, ref TEXT NOT NULL, text TEXT NOT NULL, cost REAL NOT NULL, ok INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, ref));
 CREATE TABLE automation_holds(ref TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE automation_guard_holds(automation_id TEXT PRIMARY KEY, rule TEXT NOT NULL, held_at TEXT NOT NULL, arrivals INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, task_id TEXT, cleared_at TEXT);
 CREATE TABLE redesign_migrated(kind TEXT NOT NULL, id TEXT NOT NULL, migration TEXT NOT NULL, automation TEXT, outcome TEXT, why TEXT, title TEXT, migrated_at TEXT, told TEXT, PRIMARY KEY(kind, id));
 CREATE TABLE company_profile (id TEXT PRIMARY KEY CHECK (id = 'company'), vision TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', updated_at TEXT, updated_by TEXT);
 CREATE TABLE strategy_versions (id TEXT PRIMARY KEY, n INTEGER UNIQUE, status TEXT NOT NULL CHECK (status IN ('draft','published')), guide TEXT NOT NULL DEFAULT 'default', summary TEXT NOT NULL DEFAULT '', vision TEXT NOT NULL DEFAULT '', sections TEXT NOT NULL DEFAULT '{}', bets TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT, updated_by TEXT, published_at TEXT, published_by TEXT);
@@ -2958,14 +2912,8 @@ CREATE TABLE model_subscriptions (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT NOT NULL,
  preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'new',
  status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', credential_at TEXT,
+ updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', credential_at TEXT, credential_id TEXT REFERENCES credentials(id),
  CONSTRAINT status_values_status CHECK (status IN ('new', 'working', 'needs_reconnect'))
-);
-CREATE TABLE google_connects (
- person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, client_id TEXT, started_at REAL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, operation_id TEXT, answered TEXT, pending_hash TEXT, grant_hash TEXT, pending_scopes TEXT, grant_scopes TEXT,
- CONSTRAINT status_values_status CHECK (status IN ('signing_in', 'ready', 'finishing', 'revoking', 'disconnecting', 'connected', 'disconnected', 'failed'))
 );
 CREATE TABLE google_workspaces (id TEXT PRIMARY KEY, domain TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', client_email TEXT NOT NULL, client_id TEXT NOT NULL, key_id TEXT NOT NULL, key_sealed TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL, checked_at TEXT, connected_at TEXT, last_error TEXT, probe_mailbox TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, replaces_id TEXT, generation INTEGER NOT NULL DEFAULT 0, mint_failing_since TEXT, authorized_scopes TEXT,
  CONSTRAINT status_values_status CHECK (status IN ('pending', 'connected', 'failing'))
@@ -3009,6 +2957,194 @@ CREATE TABLE fin_transfers (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
   CHECK (from_money_account_id <> to_money_account_id),
  CONSTRAINT status_values_status CHECK (status IN ('queued', 'submitted', 'unknown', 'failed', 'posted', 'canceled'))
+);
+CREATE TABLE growth_line_uses (day TEXT NOT NULL, actor TEXT NOT NULL, use TEXT NOT NULL CHECK(use IN ('trace','source')), PRIMARY KEY (day, actor, use));
+CREATE TABLE growth_alert_state (channel_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (channel_id, kind));
+CREATE TABLE growth_crossings (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, value REAL, line TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '', task_id TEXT, told TEXT NOT NULL CHECK (told IN ('task','comment','none')), actor TEXT, at TEXT NOT NULL);
+CREATE TABLE growth_view_reads (day TEXT NOT NULL, actor TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '', view TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, actor, run_id, view));
+CREATE TABLE tool_settings (
+  id TEXT PRIMARY KEY,
+  tool_id TEXT NOT NULL REFERENCES tools(id),
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE calendar_watches (
+  calendar_id TEXT PRIMARY KEY,
+  mailbox TEXT NOT NULL,
+  sync_token TEXT,
+  page_token TEXT,
+  list_mode TEXT,
+  list_run TEXT,
+  checked_at TEXT,
+  check_error TEXT,
+  watching_since_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE calendar_watch_events (
+  id INTEGER PRIMARY KEY,
+  calendar_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  series_id TEXT,
+  sequence INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'cancelled')),
+  repeats INTEGER NOT NULL DEFAULT 0,
+  ends_at TEXT,
+  listed_in TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE mail_unsubscribes (
+  key TEXT PRIMARY KEY,
+  mailbox TEXT NOT NULL,
+  host TEXT NOT NULL,
+  status TEXT NOT NULL,
+  http_status INTEGER,
+  actor TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE TABLE mail_drafts (
+  message_id TEXT PRIMARY KEY,
+  mailbox TEXT NOT NULL,
+  draft_id TEXT,
+  message TEXT,
+  thread TEXT,
+  claimed_at TEXT NOT NULL
+);
+CREATE TABLE access_requests (
+  id TEXT PRIMARY KEY,
+  subject TEXT NOT NULL,
+  resource_type TEXT NOT NULL CHECK (resource_type IN ('tool','repository')),
+  resource_id TEXT NOT NULL,
+  resource_name TEXT NOT NULL DEFAULT '',
+  level TEXT NOT NULL CHECK (level IN ('read','read_write')),
+  kind TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  requested_by TEXT NOT NULL,
+  task_id TEXT,
+  state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','granted','declined','withdrawn','revoked')),
+  auto_approved INTEGER NOT NULL DEFAULT 0 CHECK (auto_approved IN (0, 1)),
+  approvers TEXT NOT NULL DEFAULT '[]',
+  cards TEXT NOT NULL DEFAULT '{}',
+  repeats INTEGER NOT NULL DEFAULT 0,
+  resolved_by TEXT,
+  resolved_via TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+CREATE TABLE question_marks (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  room_id TEXT NOT NULL,
+  task_id TEXT NOT NULL DEFAULT '',
+  bot_id TEXT NOT NULL,
+  person_id TEXT NOT NULL,
+  line TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  given_by_id TEXT,
+  given_at TEXT,
+  cleared_at TEXT,
+  cleared_by_id TEXT,
+  cleared_reason TEXT,
+  cleared_message_id TEXT,
+  cleared_via TEXT
+);
+CREATE TABLE task_documents (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  file_id TEXT NOT NULL REFERENCES bot_files(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(task_id, name)
+);
+CREATE TABLE oauth_refresh_claims(
+ sign_in TEXT PRIMARY KEY, holder TEXT NOT NULL, claimed_until TEXT NOT NULL);
+CREATE TABLE holds (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('paused','failing','runaway','claim_error','cant_start','quarantine','usage_limit')),
+  holdable_type TEXT NOT NULL CHECK (holdable_type IN ('company','login','bot','task','conversation','job','automation')),
+  holdable_id TEXT NOT NULL,
+  bot_id TEXT REFERENCES bots(id),
+  reason TEXT NOT NULL DEFAULT '',
+  details TEXT NOT NULL DEFAULT '{}',
+  streak INTEGER NOT NULL DEFAULT 0,
+  until_at TEXT,
+  probe_at TEXT, probe_job_id TEXT,
+  upkeep_task_id TEXT,
+  created_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  released_at TEXT, released_by_id TEXT,
+  released_how TEXT CHECK (released_how IN ('expired','probe_passed','person','botops','raised','moot','superseded'))
+);
+CREATE TABLE slack_requests (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('history','file')),
+  bot TEXT NOT NULL,
+  params TEXT NOT NULL DEFAULT '{}',
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','done','failed')),
+  result TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE old_questions (
+    id TEXT PRIMARY KEY,
+    visit_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    added_by_id TEXT,
+    line TEXT NOT NULL DEFAULT '',
+    choices TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE "requirements" (id TEXT PRIMARY KEY, stage_id TEXT REFERENCES stages(id), visit_id TEXT REFERENCES visits(id), kind TEXT NOT NULL CHECK (kind IN ('owner_done', 'ok', 'page', 'item', 'linked_done', 'related_input')), source TEXT, condition TEXT, settings TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(settings)), can_push_past INTEGER NOT NULL DEFAULT 1 CHECK (can_push_past IN (0, 1)), who_oks TEXT NOT NULL DEFAULT 'none' CHECK (who_oks IN ('none', 'people_only', 'people_with_exceptions')), person_id TEXT, added_by_id TEXT, by_bot INTEGER NOT NULL DEFAULT 0 CHECK (by_bot IN (0, 1)), line TEXT NOT NULL DEFAULT '', shows TEXT CHECK (shows IS NULL OR json_valid(shows)), position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, withdrawn_at TEXT, CHECK ((stage_id IS NULL) <> (visit_id IS NULL)), CHECK ((kind = 'item') = (source IS NOT NULL AND condition IS NOT NULL)), CHECK (person_id IS NULL OR kind IN ('ok', 'page')));
+CREATE TABLE page_links (
+      id TEXT PRIMARY KEY,
+      page_id TEXT NOT NULL REFERENCES bot_files(id) ON DELETE CASCADE,
+      target TEXT NOT NULL,
+      role TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(page_id, target, role)
+    );
+CREATE TABLE claude_logins(
+  subscription_id TEXT PRIMARY KEY,
+  account TEXT NOT NULL DEFAULT '',
+  access_expires_at TEXT,
+  login_expires_at TEXT,
+  refreshed_at TEXT,
+  lease_id TEXT NOT NULL DEFAULT '',
+  lease_runner TEXT NOT NULL DEFAULT '',
+  lease_revision INTEGER NOT NULL DEFAULT 0,
+  lease_until TEXT,
+  failures INTEGER NOT NULL DEFAULT 0,
+  retry_at TEXT,
+  done_lease TEXT NOT NULL DEFAULT '',
+  done_revision INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE claude_login_leases(
+  id TEXT PRIMARY KEY,
+  subscription_id TEXT NOT NULL,
+  runner_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  issued_at TEXT NOT NULL
+);
+CREATE TABLE claude_login_parks(
+  job_id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  until TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE "visits" (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, stage_id TEXT NOT NULL REFERENCES stages(id), entered_at TEXT NOT NULL, entered_how TEXT NOT NULL CHECK (entered_how IN ('new', 'met', 'pushed_past', 'back', 'closed', 'reopened', 'moved', 'side')), left_at TEXT, how TEXT CHECK (how IS NULL OR how IN ('met', 'pushed_past', 'back', 'closed', 'reopened', 'moved', 'side')), by_id TEXT, why TEXT, tries INTEGER NOT NULL DEFAULT 0, level TEXT NOT NULL DEFAULT 'owner' CHECK (level IN ('owner', 'manager', 'person')), person_id TEXT, next_try_at TEXT, progress_mark TEXT, last_change_at TEXT, late_told_at TEXT, late_person_at TEXT, bot_snoozes INTEGER NOT NULL DEFAULT 0, last_change_attempt INTEGER, last_change_message INTEGER, last_change_start INTEGER, holder_id TEXT, pick_state TEXT CHECK (pick_state IS NULL OR pick_state IN ('full', 'nobody')), pick_why TEXT, CHECK ((left_at IS NULL) = (how IS NULL)));
+CREATE TABLE google_connects (person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, kind TEXT, message TEXT, hint TEXT, can TEXT, client_id TEXT, started_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, operation_id TEXT, answered TEXT, grant_scopes TEXT, grant_sealed TEXT, grant_operation_id TEXT,
+ CONSTRAINT status_values_status CHECK (status IN ('signing_in', 'finishing', 'connected', 'disconnected', 'failed'))
 );
 INSERT INTO "registry_metadata"("key","value") VALUES('message_links.ready','true');
 INSERT INTO "fin_view_versions"("id","version","reason","updated_at") VALUES(1,0,'','2000-01-01T00:00:00.000000Z');
@@ -3113,8 +3249,6 @@ CREATE INDEX task_relations_from ON task_relations(from_task, kind);
 CREATE UNIQUE INDEX task_relations_one_parent ON task_relations(from_task) WHERE kind='parent';
 CREATE INDEX trigger_deliveries_at ON trigger_deliveries(trigger_id, received_at);
 CREATE INDEX goal_asks_task ON goal_asks(task_id);
-CREATE INDEX strategy_merges_original ON strategy_merges(original, state);
-CREATE INDEX strategy_merges_person ON strategy_merges(person, created_at);
 CREATE INDEX market_sizes_segment ON market_sizes(segment_id, dimension, year, status);
 CREATE INDEX market_figures_segment ON market_figures(segment_id, entity_id);
 CREATE INDEX rule_events_seen_at ON rule_events_seen(seen_at);
@@ -3234,9 +3368,6 @@ CREATE UNIQUE INDEX mailbox_accesses_grantee ON mailbox_accesses(mailbox_id, gra
 CREATE INDEX mailbox_accesses_of ON mailbox_accesses(grantee_type, grantee_id);
 CREATE INDEX meeting_task_links_task ON meeting_task_links(task_id,created_at);
 CREATE INDEX runners_device_id ON runners(device_id,owner_id,created_at) WHERE device_id IS NOT NULL AND revoked_at IS NULL;
-CREATE UNIQUE INDEX quarantine_holds_task ON quarantine_holds(bot_id,task_id) WHERE released_at IS NULL AND task_id IS NOT NULL;
-CREATE UNIQUE INDEX quarantine_holds_chat ON quarantine_holds(bot_id,conversation_id) WHERE released_at IS NULL AND conversation_id IS NOT NULL;
-CREATE INDEX quarantine_holds_released ON quarantine_holds(bot_id,released_at) WHERE released_at IS NOT NULL;
 CREATE INDEX presences_place_seen ON presences(place, seen_at);
 CREATE INDEX presences_expiry ON presences(seen_at);
 CREATE INDEX meeting_items_sent_ref ON meeting_items(result_ref,meeting_id) WHERE status='pushed';
@@ -3263,7 +3394,6 @@ CREATE INDEX letters_source ON letters(source_blob_id);
 CREATE INDEX letter_proofs_blob ON letter_proofs(blob_id);
 CREATE UNIQUE INDEX email_sends_operation ON email_sends(actor,operation_key) WHERE operation_key!='';
 CREATE INDEX email_sends_waiting ON email_sends(mailbox,state,checked_at);
-CREATE INDEX mail_messages_rfc_id ON mail_messages(mailbox,json_extract(send_facts,'$.message-id'));
 CREATE UNIQUE INDEX letter_sources_source ON letter_sources(source_type,source_id,letter_id);
 CREATE INDEX letter_sources_letter ON letter_sources(letter_id);
 CREATE INDEX tool_checks_by_tool ON tool_checks(tool_id, checked_at DESC);
@@ -3342,9 +3472,6 @@ CREATE UNIQUE INDEX pipelines_name ON pipelines(name) WHERE retired_at IS NULL;
 CREATE UNIQUE INDEX pipelines_prefix ON pipelines(prefix) WHERE prefix IS NOT NULL AND retired_at IS NULL;
 CREATE UNIQUE INDEX stages_name ON stages(pipeline_id, name COLLATE NOCASE) WHERE retired_at IS NULL;
 CREATE INDEX stages_pipeline ON stages(pipeline_id, position);
-CREATE UNIQUE INDEX visits_open ON visits(task_id) WHERE left_at IS NULL;
-CREATE INDEX visits_task ON visits(task_id, entered_at);
-CREATE INDEX visits_stage_open ON visits(stage_id) WHERE left_at IS NULL;
 CREATE INDEX answers_visit ON answers(visit_id, requirement_id, created_at);
 CREATE UNIQUE INDEX snoozes_open ON snoozes(task_id) WHERE ended_at IS NULL;
 CREATE INDEX snoozes_task ON snoozes(task_id, created_at);
@@ -3363,7 +3490,6 @@ CREATE INDEX tasks_stage ON tasks(stage_id, status);
 CREATE INDEX calls_live_provider ON calls(state, provider);
 CREATE INDEX push_subscriptions_actor ON push_subscriptions(actor, created_at);
 CREATE INDEX github_deliveries_received ON github_deliveries(received_at);
-CREATE UNIQUE INDEX requirement_pages_current ON requirement_pages(visit_id, requirement_id) WHERE replaced_at IS NULL;
 CREATE INDEX requirement_pages_file ON requirement_pages(file_id, version);
 CREATE UNIQUE INDEX page_verdicts_key ON page_verdicts(file_id, version, rubric_hash);
 CREATE INDEX page_verdicts_owed ON page_verdicts(next_try_at) WHERE verdict IS NULL;
@@ -3396,7 +3522,6 @@ CREATE INDEX bot_file_versions_source_digest ON bot_file_versions(source_digest)
 CREATE INDEX bot_file_versions_poster ON bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL;
 CREATE INDEX bot_file_versions_thumb ON bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL;
 CREATE INDEX tasks_open_pipeline ON tasks(id, owner_id, requester_id, private, readers, pipeline_id, stage_id) WHERE pipeline_id IS NOT NULL AND status='open';
-CREATE INDEX visits_open_person ON visits(person_id) WHERE left_at IS NULL AND person_id IS NOT NULL;
 CREATE INDEX answers_give ON answers(notes) WHERE answer='give';
 CREATE INDEX meetings_newest ON meetings(created_at DESC, id);
 CREATE INDEX meetings_recorded_day ON meetings((CASE WHEN json_type(metadata,'$.started')='text' AND json_extract(metadata,'$.started')<>'' THEN substr(json_extract(metadata,'$.started'),1,10) WHEN (json_type(metadata,'$.started') IS NULL OR json_type(metadata,'$.started') IN ('null','false') OR json_type(metadata,'$.started')='text') AND typeof(created_at)='text' THEN substr(created_at,1,10) END));
@@ -3406,7 +3531,6 @@ CREATE INDEX stage_rules_on ON stage_rules(pipeline_id, status, retired_at);
 CREATE INDEX stage_rule_marks_pending ON stage_rule_marks(outcome, manager_id) WHERE outcome = 'pending';
 CREATE INDEX stage_rule_marks_told ON stage_rule_marks(manager_id, told_at) WHERE told_at IS NOT NULL;
 CREATE INDEX github_release_commits_sha ON github_release_commits(commit_sha, release_id, included);
-CREATE INDEX visits_holder ON visits(task_id, stage_id) WHERE holder_id IS NOT NULL;
 CREATE INDEX growth_sync_runs_source ON growth_sync_runs(source_id, started_at);
 CREATE INDEX growth_origins_source ON growth_origins(source_id);
 CREATE INDEX assistant_shares_bot ON assistant_shares(bot);
@@ -3414,10 +3538,6 @@ CREATE INDEX growth_customers_became ON growth_customers(became);
 CREATE INDEX growth_customer_loads_at ON growth_customer_loads(loaded_at);
 CREATE INDEX org_rule_late_created ON org_rule_late(created_at);
 CREATE INDEX tasks_human ON tasks(human_id) WHERE human_id IS NOT NULL;
-CREATE INDEX requirements_stage ON requirements(stage_id, position) WHERE stage_id IS NOT NULL;
-CREATE INDEX requirements_visit ON requirements(visit_id) WHERE visit_id IS NOT NULL;
-CREATE INDEX requirements_person ON requirements(person_id) WHERE person_id IS NOT NULL AND withdrawn_at IS NULL;
-CREATE UNIQUE INDEX requirements_one_per_bot ON requirements(visit_id, added_by_id) WHERE visit_id IS NOT NULL AND by_bot = 1 AND withdrawn_at IS NULL;
 CREATE INDEX related_inputs_open ON related_inputs(owed_at) WHERE done_at IS NULL;
 CREATE INDEX related_inputs_task ON related_inputs(task_id);
 CREATE INDEX ask_opinions_task ON ask_opinions(task_id);
@@ -3476,7 +3596,6 @@ CREATE INDEX settings_changes_created_id ON settings_changes(created_at,id);
 CREATE INDEX settings_changes_bot_id ON settings_changes(bot,created_at,id);
 CREATE INDEX agent_pairings_client ON agent_pairings(client_hash, created_at);
 CREATE INDEX model_logins_by_runner ON model_logins(runner_id,state);
-CREATE INDEX computer_keys_by_runner ON computer_keys(runner_id,runtime,state);
 CREATE INDEX runner_harness_actions_by_runner ON runner_harness_actions(runner_id,state);
 CREATE INDEX oidc_sessions_human ON oidc_sessions(human);
 CREATE INDEX jobs_queue ON jobs(bot_id,state,created_at);
@@ -3488,8 +3607,6 @@ CREATE INDEX attempt_inputs_attempt ON attempt_inputs(attempt_id);
 CREATE INDEX attempt_captures_created ON attempt_captures(created_at);
 CREATE INDEX batches_open ON batches(person, state);
 CREATE INDEX calendar_actions_queue ON calendar_actions(status,created_at);
-CREATE INDEX mail_messages_thread ON mail_messages(mailbox,thread_id,epoch);
-CREATE INDEX mail_messages_epoch ON mail_messages(mailbox,epoch DESC);
 CREATE INDEX credential_uses_at ON credential_uses(credential_id, used_at);
 CREATE UNIQUE INDEX credential_grant_active ON credential_grants(credential_id,subject) WHERE revoked_at IS NULL;
 CREATE INDEX blobs_by_digest ON blobs(digest,size);
@@ -3668,7 +3785,6 @@ CREATE INDEX assistant_actions_owner ON assistant_actions(owner, status);
 CREATE INDEX read_deps_key ON read_deps(key);
 CREATE INDEX bot_files_recent ON bot_files(bot_id, archived, last_activity_at, id);
 CREATE INDEX bot_files_task ON bot_files(task_id, archived, locator);
-CREATE UNIQUE INDEX google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE UNIQUE INDEX google_workspaces_pending ON google_workspaces(status) WHERE status='pending';
 CREATE INDEX fin_cards_holder ON fin_cards(holder, status);
 CREATE INDEX fin_cards_budget ON fin_cards(budget_id);
@@ -3677,6 +3793,49 @@ CREATE INDEX fin_payments_status ON fin_payments(status, next_try_at);
 CREATE INDEX fin_payments_obligation ON fin_payments(obligation, created_at);
 CREATE UNIQUE INDEX fin_payments_live ON fin_payments(obligation) WHERE obligation <> '' AND
   status IN ('queued','sending','awaiting_bank_approval','submitted','unknown');
+CREATE INDEX growth_crossings_channel ON growth_crossings(channel_id, kind, at);
+CREATE UNIQUE INDEX tool_settings_tool_name ON tool_settings(tool_id, name);
+CREATE INDEX calendar_watches_checked ON calendar_watches(checked_at);
+CREATE UNIQUE INDEX calendar_watch_events_event ON calendar_watch_events(calendar_id, event_id);
+CREATE UNIQUE INDEX index_access_requests_on_open
+  ON access_requests(subject, resource_type, resource_id, level) WHERE state = 'open';
+CREATE INDEX index_access_requests_on_created_at ON access_requests(created_at);
+CREATE UNIQUE INDEX question_marks_one_open ON question_marks(room_id, bot_id) WHERE cleared_at IS NULL;
+CREATE INDEX question_marks_open_person ON question_marks(person_id, room_id) WHERE cleared_at IS NULL;
+CREATE INDEX question_marks_open_task ON question_marks(task_id) WHERE cleared_at IS NULL;
+CREATE INDEX question_marks_open_bot ON question_marks(bot_id) WHERE cleared_at IS NULL;
+CREATE INDEX question_marks_message ON question_marks(message_id);
+CREATE INDEX question_marks_replied_task ON question_marks(task_id) WHERE cleared_message_id IS NOT NULL;
+CREATE INDEX task_documents_file_id ON task_documents(file_id);
+CREATE INDEX model_subscriptions_credential ON model_subscriptions(credential_id) WHERE credential_id IS NOT NULL;
+CREATE INDEX credential_grants_subject ON credential_grants(subject) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX holds_open ON holds(kind, holdable_type, holdable_id, coalesce(bot_id,''))
+  WHERE released_at IS NULL;
+CREATE INDEX holds_bot ON holds(bot_id) WHERE released_at IS NULL;
+CREATE INDEX holds_released ON holds(holdable_type, holdable_id, kind, released_at)
+  WHERE released_at IS NOT NULL;
+CREATE INDEX holds_bot_kind ON holds(bot_id, kind, released_at);
+CREATE INDEX slack_requests_pending ON slack_requests(created_at) WHERE state='pending';
+CREATE INDEX requirements_stage ON requirements(stage_id, position) WHERE stage_id IS NOT NULL;
+CREATE INDEX requirements_visit ON requirements(visit_id) WHERE visit_id IS NOT NULL;
+CREATE INDEX requirements_person ON requirements(person_id) WHERE person_id IS NOT NULL AND withdrawn_at IS NULL;
+CREATE UNIQUE INDEX requirements_one_per_bot ON requirements(visit_id, added_by_id) WHERE visit_id IS NOT NULL AND by_bot = 1 AND withdrawn_at IS NULL;
+CREATE INDEX slack_thread_links_ref ON slack_thread_links(channel_ref, state);
+CREATE INDEX slack_thread_links_read_only ON slack_thread_links(state) WHERE read_only=1;
+CREATE INDEX page_links_target ON page_links(target, role);
+CREATE INDEX page_links_page ON page_links(page_id);
+CREATE INDEX page_links_role ON page_links(role, page_id);
+CREATE UNIQUE INDEX requirement_pages_current ON requirement_pages(visit_id, requirement_id, file_id) WHERE replaced_at IS NULL;
+CREATE INDEX requirement_pages_history ON requirement_pages(visit_id, requirement_id, created_at);
+CREATE UNIQUE INDEX claude_logins_account ON claude_logins(account) WHERE account<>'';
+CREATE INDEX claude_login_leases_issued ON claude_login_leases(issued_at);
+CREATE UNIQUE INDEX visits_open ON visits(task_id) WHERE left_at IS NULL;
+CREATE INDEX visits_task ON visits(task_id, entered_at);
+CREATE INDEX visits_stage_open ON visits(stage_id) WHERE left_at IS NULL;
+CREATE INDEX visits_open_person ON visits(person_id) WHERE left_at IS NULL AND person_id IS NOT NULL;
+CREATE INDEX visits_holder ON visits(task_id, stage_id) WHERE holder_id IS NOT NULL;
+CREATE INDEX visits_entered ON visits(entered_at, stage_id, entered_how, task_id);
+CREATE UNIQUE INDEX google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE VIEW message_refs AS SELECT messages.*,
  CASE WHEN json_valid(refs,6) THEN CASE WHEN json_type(refs,'$.task')='array' THEN json_extract(refs,'$.task[0]')
   ELSE json_extract(refs,'$.task') END END AS ref_task_id,
@@ -3737,7 +3896,6 @@ CREATE TRIGGER principals_bot_insert AFTER INSERT ON bots BEGIN
 CREATE TRIGGER principals_bot_delete AFTER DELETE ON bots BEGIN
   UPDATE principals SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id='bot:' || OLD.id; END;
 CREATE TRIGGER threads_conversations_stamp AFTER INSERT ON conversations WHEN NEW.root_id IS NULL BEGIN UPDATE conversations SET root_id=NEW.id, path='/'||NEW.id||'/', updated_at=COALESCE(NEW.updated_at,NEW.created_at) WHERE id=NEW.id; END;
-CREATE TRIGGER threads_messages_stamp AFTER INSERT ON messages WHEN NOT COALESCE(json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.carries'),'')<>'' BEGIN INSERT OR IGNORE INTO sequences(name,value) VALUES('messages',0);UPDATE sequences SET value=value+1 WHERE name='messages';UPDATE messages SET seq=(SELECT value FROM sequences WHERE name='messages'), origin_id=CASE WHEN (NEW.origin_id IS NULL OR EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=NEW.origin_id AND o.id<>NEW.id)) THEN lower(hex(randomblob(16)))||'@'||COALESCE((SELECT json_extract(value,'$.install_id') FROM registry_metadata WHERE key='usage-count'),'local') ELSE NEW.origin_id END, restricted=CASE WHEN (NEW.origin_id IS NULL OR EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=NEW.origin_id AND o.id<>NEW.id)) THEN 1 ELSE NEW.restricted END WHERE id=NEW.id;UPDATE conversations SET last_seq=(SELECT value FROM sequences WHERE name='messages'), last_unread_seq=CASE WHEN (NEW.sender_id LIKE 'human:%' OR COALESCE(NEW.recipient_id,'')<>'') AND NOT (json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.import') IS NOT NULL OR json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.replay') IS NOT NULL) THEN (SELECT value FROM sequences WHERE name='messages') ELSE last_unread_seq END WHERE id=NEW.conversation_id; END;
 CREATE TRIGGER threads_delivery_receipts AFTER UPDATE OF delivered_at, read_at ON messages BEGIN UPDATE message_deliveries SET delivered_at=NEW.delivered_at, read_at=NEW.read_at, state=CASE WHEN state IN ('capped','held','failed','moot') THEN state ELSE CASE WHEN NEW.delivered_at IS NOT NULL AND NEW.read_at IS NOT NULL THEN 'read' WHEN NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE 'pending' END END, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE message_id=NEW.id AND recipient=NEW.recipient_id;UPDATE message_deliveries SET delivered_at=NEW.delivered_at, state=CASE WHEN state='pending' AND NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE state END, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE carrier_id=NEW.id; END;
 CREATE TRIGGER threads_revisions_deleted AFTER UPDATE OF deleted_at ON messages WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL BEGIN UPDATE message_revisions SET body='' WHERE message_id=NEW.id; END;
 CREATE TRIGGER message_search_insert AFTER INSERT ON messages BEGIN INSERT OR IGNORE INTO message_search_keys(message_id) SELECT NEW.id WHERE NEW.body IS NOT NULL AND NEW.body<>'' AND NEW.deleted_at IS NULL AND (CASE WHEN json_valid(NEW.refs) THEN json_extract(NEW.refs,'$.carries') END) IS NULL; INSERT INTO message_search(rowid, body, message_id) SELECT k.id, substr(NEW.body,1,20000), NEW.id FROM message_search_keys k WHERE k.message_id=NEW.id AND NEW.body IS NOT NULL AND NEW.body<>'' AND NEW.deleted_at IS NULL AND (CASE WHEN json_valid(NEW.refs) THEN json_extract(NEW.refs,'$.carries') END) IS NULL; END;
@@ -3976,7 +4134,6 @@ CREATE TRIGGER changes_visits_update AFTER UPDATE ON visits WHEN OLD.level IS NO
 CREATE TRIGGER changes_answers_insert AFTER INSERT ON answers BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','answer',(SELECT task_id FROM visits WHERE id=NEW.visit_id),NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','ask',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT person_id FROM requirements WHERE id=NEW.requirement_id) AS who) WHERE who LIKE 'human:%'; END;
 CREATE TRIGGER changes_answers_update AFTER UPDATE ON answers WHEN OLD.answer IS NOT NEW.answer OR OLD.by_id IS NOT NEW.by_id OR OLD.created_at IS NOT NEW.created_at OR OLD.heads IS NOT NEW.heads OR OLD.id IS NOT NEW.id OR OLD.name IS NOT NEW.name OR OLD.notes IS NOT NEW.notes OR OLD.page_version IS NOT NEW.page_version OR OLD.requirement_id IS NOT NEW.requirement_id OR OLD.undone_at IS NOT NEW.undone_at OR OLD.value_type IS NOT NEW.value_type OR OLD.visit_id IS NOT NEW.visit_id BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','answer',(SELECT task_id FROM visits WHERE id=NEW.visit_id),NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','ask',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT person_id FROM requirements WHERE id=NEW.requirement_id) AS who) WHERE who LIKE 'human:%'; END;
 CREATE TRIGGER changes_requirements_insert AFTER INSERT ON requirements WHEN NEW.visit_id IS NOT NULL BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','ask',(SELECT task_id FROM visits WHERE id=NEW.visit_id),NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','ask',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT NEW.person_id AS who) WHERE who LIKE 'human:%'; END;
-CREATE TRIGGER changes_requirements_update AFTER UPDATE ON requirements WHEN NEW.visit_id IS NOT NULL AND (OLD.added_by_id IS NOT NEW.added_by_id OR OLD.by_bot IS NOT NEW.by_bot OR OLD.can_push_past IS NOT NEW.can_push_past OR OLD.choices IS NOT NEW.choices OR OLD.condition IS NOT NEW.condition OR OLD.created_at IS NOT NEW.created_at OR OLD.id IS NOT NEW.id OR OLD.kind IS NOT NEW.kind OR OLD.line IS NOT NEW.line OR OLD.person_id IS NOT NEW.person_id OR OLD.position IS NOT NEW.position OR OLD.settings IS NOT NEW.settings OR OLD.shows IS NOT NEW.shows OR OLD.source IS NOT NEW.source OR OLD.stage_id IS NOT NEW.stage_id OR OLD.visit_id IS NOT NEW.visit_id OR OLD.who_oks IS NOT NEW.who_oks OR OLD.withdrawn_at IS NOT NEW.withdrawn_at) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','ask',(SELECT task_id FROM visits WHERE id=NEW.visit_id),NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','ask',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT OLD.person_id AS who UNION SELECT NEW.person_id AS who) WHERE who LIKE 'human:%'; END;
 CREATE TRIGGER changes_snoozes_insert AFTER INSERT ON snoozes BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','snooze',NEW.task_id,NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','task',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=NEW.task_id) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=NEW.task_id) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=NEW.task_id) AS who) WHERE who LIKE 'human:%'; END;
 CREATE TRIGGER changes_snoozes_update AFTER UPDATE ON snoozes WHEN OLD.by_id IS NOT NEW.by_id OR OLD.created_at IS NOT NEW.created_at OR OLD.ended_at IS NOT NEW.ended_at OR OLD.ended_by_id IS NOT NEW.ended_by_id OR OLD.filed IS NOT NEW.filed OR OLD.id IS NOT NEW.id OR OLD.task_id IS NOT NEW.task_id OR OLD.until_at IS NOT NEW.until_at OR OLD.visit_id IS NOT NEW.visit_id OR OLD.why IS NOT NEW.why BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','snooze',NEW.task_id,NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','task',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=NEW.task_id) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=NEW.task_id) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=NEW.task_id) AS who) WHERE who LIKE 'human:%'; END;
 CREATE TRIGGER changes_ask_snoozes_insert AFTER INSERT ON ask_snoozes BEGIN INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','snooze',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT NEW.person_id AS who) WHERE who LIKE 'human:%'; END;
@@ -4026,9 +4183,6 @@ CREATE TRIGGER changes_runner_subscription_delete AFTER DELETE ON subscription_a
 CREATE TRIGGER changes_runner_credential_grants_insert AFTER INSERT ON credential_grants BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
 CREATE TRIGGER changes_runner_credential_grants_update AFTER UPDATE ON credential_grants WHEN OLD.revoked_at IS NOT NEW.revoked_at OR OLD.subject IS NOT NEW.subject BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
 CREATE TRIGGER changes_runner_credential_grants_delete AFTER DELETE ON credential_grants BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
-CREATE TRIGGER changes_runner_credentials_insert AFTER INSERT ON credentials BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
-CREATE TRIGGER changes_runner_credentials_update AFTER UPDATE ON credentials WHEN OLD.env IS NOT NEW.env OR OLD.ciphertext IS NOT NEW.ciphertext BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
-CREATE TRIGGER changes_runner_credentials_delete AFTER DELETE ON credentials BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
 CREATE TRIGGER changes_runner_providers_insert AFTER INSERT ON registry_metadata WHEN NEW.key='providers' BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','config',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
 CREATE TRIGGER changes_runner_providers_update AFTER UPDATE ON registry_metadata WHEN NEW.key='providers' BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','config',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
 CREATE TRIGGER changes_runner_migration_insert AFTER INSERT ON registry_metadata WHEN NEW.key IN ('credential-file-migration-v1','credential-file-migration-v2-hub') BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
@@ -4059,7 +4213,6 @@ CREATE TRIGGER changes_threads_bot_status_posts AFTER INSERT ON messages WHEN NE
 CREATE TRIGGER changes_threads_bot_status_attempts_insert AFTER INSERT ON attempts BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id=NEW.id) AS r) WHERE r IS NOT NULL; END;
 CREATE TRIGGER changes_threads_bot_status_attempts_update AFTER UPDATE ON attempts WHEN OLD.state IS NOT NEW.state BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id=NEW.id) AS r) WHERE r IS NOT NULL; END;
 CREATE TRIGGER changes_threads_bot_status_jobs AFTER UPDATE ON jobs WHEN OLD.state IS NOT NEW.state BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT COALESCE(t.root_id,t.id) FROM messages m JOIN conversations t ON t.id=m.conversation_id WHERE m.id=NEW.message_id) AS r) WHERE r IS NOT NULL; END;
-CREATE TRIGGER changes_threads_bot_status_steps AFTER INSERT ON attempt_events WHEN NEW.kind IN ('tool','message') OR (NEW.kind='delta' AND json_extract(NEW.payload,'$.delta_kind')='thought') BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id=NEW.attempt_id) AS r) WHERE r IS NOT NULL AND NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds')); END;
 CREATE TRIGGER changes_threads_bot_status_refusals_insert AFTER INSERT ON registry_metadata WHEN NEW.key LIKE 'queue-refusal:%' BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',root_id,root_id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT DISTINCT root_id FROM message_deliveries WHERE recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') AND cause='human' AND recipient='bot:'||substr(NEW.key,15) AND root_id IS NOT NULL LIMIT 50); END;
 CREATE TRIGGER changes_threads_bot_status_refusals_update AFTER UPDATE ON registry_metadata WHEN NEW.key LIKE 'queue-refusal:%' AND json_extract(CASE WHEN json_valid(OLD.value) THEN OLD.value END,'$.reason') IS NOT json_extract(CASE WHEN json_valid(NEW.value) THEN NEW.value END,'$.reason') BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',root_id,root_id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT DISTINCT root_id FROM message_deliveries WHERE recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') AND cause='human' AND recipient='bot:'||substr(NEW.key,15) AND root_id IS NOT NULL LIMIT 50); END;
 CREATE TRIGGER changes_threads_bot_status_refusals_delete AFTER DELETE ON registry_metadata WHEN OLD.key LIKE 'queue-refusal:%' BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',root_id,root_id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT DISTINCT root_id FROM message_deliveries WHERE recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') AND cause='human' AND recipient='bot:'||substr(OLD.key,15) AND root_id IS NOT NULL LIMIT 50); END;
@@ -4171,6 +4324,88 @@ CREATE TRIGGER roster_clock_bot_config_update AFTER UPDATE ON bot_config BEGIN U
 CREATE TRIGGER roster_clock_bot_config_delete AFTER DELETE ON bot_config BEGIN UPDATE roster_clock SET value=value+1 WHERE id=1; END;
 CREATE TRIGGER changes_bot_files_insert AFTER INSERT ON bot_files WHEN NEW.task_id IS NOT NULL BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','files',NEW.task_id,NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
 CREATE TRIGGER changes_bot_files_update AFTER UPDATE ON bot_files WHEN (NEW.task_id IS NOT NULL OR OLD.task_id IS NOT NULL) AND (OLD.task_id IS NOT NEW.task_id OR OLD.archived IS NOT NEW.archived OR OLD.current_version IS NOT NEW.current_version OR OLD.mime IS NOT NEW.mime OR OLD.locator IS NOT NEW.locator) BEGIN INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'tasks','files',id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id FROM (SELECT NEW.task_id AS id UNION SELECT OLD.task_id) WHERE id IS NOT NULL) WHERE NOT (SELECT count(*) FROM (SELECT 1 FROM (SELECT id FROM (SELECT NEW.task_id AS id UNION SELECT OLD.task_id) WHERE id IS NOT NULL) LIMIT 101))>100;INSERT INTO changes(topic,kind,created_at) SELECT 'tasks','bulk',strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE (SELECT count(*) FROM (SELECT 1 FROM (SELECT id FROM (SELECT NEW.task_id AS id UNION SELECT OLD.task_id) WHERE id IS NOT NULL) LIMIT 101))>100; END;
+CREATE TRIGGER automation_runs_forget_body AFTER UPDATE ON automation_runs WHEN NEW.finished_at IS NOT NULL AND CASE WHEN json_valid(NEW.saved_state) THEN coalesce(json_type(NEW.saved_state, '$.payload.message.body'), json_type(NEW.saved_state, '$.payload.message.snippet')) END IS NOT NULL BEGIN UPDATE automation_runs SET saved_state=json_remove(saved_state, '$.payload.message.body', '$.payload.message.snippet') WHERE id=NEW.id; END;
+CREATE TRIGGER threads_messages_stamp AFTER INSERT ON messages WHEN NOT COALESCE(json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.carries'),'')<>'' AND NOT (NEW.sender_id='keeper' AND COALESCE(NEW.recipient_id,'') LIKE 'bot:%') BEGIN INSERT OR IGNORE INTO sequences(name,value) VALUES('messages',0);UPDATE sequences SET value=value+1 WHERE name='messages';UPDATE messages SET seq=(SELECT value FROM sequences WHERE name='messages'), origin_id=CASE WHEN (NEW.origin_id IS NULL OR EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=NEW.origin_id AND o.id<>NEW.id)) THEN lower(hex(randomblob(16)))||'@'||COALESCE((SELECT json_extract(value,'$.install_id') FROM registry_metadata WHERE key='usage-count'),'local') ELSE NEW.origin_id END, restricted=CASE WHEN (NEW.origin_id IS NULL OR EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=NEW.origin_id AND o.id<>NEW.id)) THEN 1 ELSE NEW.restricted END WHERE id=NEW.id;UPDATE conversations SET last_seq=(SELECT value FROM sequences WHERE name='messages'), last_unread_seq=CASE WHEN (NEW.sender_id LIKE 'human:%' OR COALESCE(NEW.recipient_id,'')<>'') AND NOT (json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.import') IS NOT NULL OR json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.replay') IS NOT NULL) THEN (SELECT value FROM sequences WHERE name='messages') ELSE last_unread_seq END WHERE id=NEW.conversation_id; END;
+CREATE TRIGGER question_marks_task_ends AFTER UPDATE OF status ON tasks
+WHEN NEW.status <> 'open' AND OLD.status = 'open'
+BEGIN
+  UPDATE question_marks SET cleared_at = coalesce(CASE WHEN NEW.status = 'done' THEN NEW.done_at ELSE NEW.closed_at END,
+    strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    cleared_reason = NEW.status,
+    cleared_by_id = NEW.closed_by_id
+  WHERE task_id = NEW.id AND cleared_at IS NULL;
+END;
+CREATE TRIGGER question_marks_task_deleted AFTER DELETE ON tasks
+BEGIN
+  UPDATE question_marks SET cleared_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), cleared_reason = 'deleted'
+  WHERE task_id = OLD.id AND cleared_at IS NULL;
+END;
+CREATE TRIGGER question_marks_message_deleted AFTER UPDATE OF deleted_at ON messages
+WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL
+BEGIN
+  UPDATE question_marks SET cleared_at = NEW.deleted_at, cleared_reason = 'deleted'
+  WHERE message_id = NEW.id AND cleared_at IS NULL;
+END;
+CREATE TRIGGER question_marks_message_removed AFTER DELETE ON messages
+BEGIN
+  UPDATE question_marks SET cleared_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), cleared_reason = 'deleted'
+  WHERE message_id = OLD.id AND cleared_at IS NULL;
+END;
+CREATE TRIGGER question_marks_refs_open AFTER INSERT ON question_marks
+WHEN NEW.cleared_at IS NULL
+BEGIN
+  UPDATE messages SET refs = json_set(CASE WHEN json_valid(refs) THEN refs ELSE '{}' END, '$.question',
+    json_object('id', NEW.id, 'to', NEW.person_id))
+  WHERE id = NEW.message_id;
+END;
+CREATE TRIGGER question_marks_refs_given AFTER UPDATE OF person_id ON question_marks
+WHEN NEW.cleared_at IS NULL AND NEW.person_id IS NOT OLD.person_id
+BEGIN
+  UPDATE messages SET refs = json_set(CASE WHEN json_valid(refs) THEN refs ELSE '{}' END, '$.question',
+    json_object('id', NEW.id, 'to', NEW.person_id))
+  WHERE id = NEW.message_id;
+END;
+CREATE TRIGGER question_marks_refs_cleared AFTER UPDATE OF cleared_at ON question_marks
+WHEN NEW.cleared_at IS NOT NULL AND OLD.cleared_at IS NULL
+BEGIN
+  UPDATE messages SET refs = json_remove(refs, '$.question')
+  WHERE id = NEW.message_id AND json_valid(refs) AND json_extract(refs, '$.question.id') = NEW.id;
+END;
+CREATE TRIGGER holds_job_ends AFTER UPDATE OF state ON jobs WHEN NEW.state IN ('completed','failed','canceled') AND OLD.state NOT IN ('completed','failed','canceled') BEGIN UPDATE holds SET released_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),released_by_id='keeper',released_how='moot',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE kind IN ('claim_error','cant_start') AND holdable_type='job' AND holdable_id=NEW.id AND released_at IS NULL; END;
+CREATE TRIGGER holds_cant_start_closes AFTER UPDATE OF status ON tasks WHEN OLD.status='open' AND NEW.status IS NOT 'open' BEGIN UPDATE holds SET released_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),released_by_id='keeper',released_how=CASE WHEN upkeep_task_id=NEW.id THEN 'botops' ELSE 'moot' END,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE kind='cant_start' AND holdable_type='task' AND released_at IS NULL AND (upkeep_task_id=NEW.id OR holdable_id=NEW.id); END;
+CREATE TRIGGER changes_page_links_insert AFTER INSERT ON page_links WHEN NEW.target LIKE 'task:%' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','files',substr(NEW.target,6),NEW.page_id,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_page_links_delete AFTER DELETE ON page_links WHEN OLD.target LIKE 'task:%' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','files',substr(OLD.target,6),OLD.page_id,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_requirements_update AFTER UPDATE ON requirements WHEN NEW.visit_id IS NOT NULL AND (OLD.added_by_id IS NOT NEW.added_by_id OR OLD.by_bot IS NOT NEW.by_bot OR OLD.can_push_past IS NOT NEW.can_push_past OR OLD.condition IS NOT NEW.condition OR OLD.created_at IS NOT NEW.created_at OR OLD.id IS NOT NEW.id OR OLD.kind IS NOT NEW.kind OR OLD.line IS NOT NEW.line OR OLD.person_id IS NOT NEW.person_id OR OLD.position IS NOT NEW.position OR OLD.settings IS NOT NEW.settings OR OLD.shows IS NOT NEW.shows OR OLD.source IS NOT NEW.source OR OLD.stage_id IS NOT NEW.stage_id OR OLD.visit_id IS NOT NEW.visit_id OR OLD.who_oks IS NOT NEW.who_oks OR OLD.withdrawn_at IS NOT NEW.withdrawn_at) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','ask',(SELECT task_id FROM visits WHERE id=NEW.visit_id),NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now');INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','ask',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT owner_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT assignee_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT (SELECT requester_id FROM tasks WHERE id=(SELECT task_id FROM visits WHERE id=NEW.visit_id)) AS who UNION SELECT OLD.person_id AS who UNION SELECT NEW.person_id AS who) WHERE who LIKE 'human:%'; END;
+CREATE TRIGGER changes_question_marks_insert AFTER INSERT ON question_marks BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','question',NEW.task_id,NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE NEW.task_id <> '';INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','question',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT NEW.person_id AS who) WHERE who LIKE 'human:%'; END;
+CREATE TRIGGER changes_question_marks_update AFTER UPDATE ON question_marks WHEN OLD.bot_id IS NOT NEW.bot_id OR OLD.cleared_at IS NOT NEW.cleared_at OR OLD.cleared_by_id IS NOT NEW.cleared_by_id OR OLD.cleared_message_id IS NOT NEW.cleared_message_id OR OLD.cleared_reason IS NOT NEW.cleared_reason OR OLD.cleared_via IS NOT NEW.cleared_via OR OLD.conversation_id IS NOT NEW.conversation_id OR OLD.created_at IS NOT NEW.created_at OR OLD.given_at IS NOT NEW.given_at OR OLD.given_by_id IS NOT NEW.given_by_id OR OLD.id IS NOT NEW.id OR OLD.line IS NOT NEW.line OR OLD.message_id IS NOT NEW.message_id OR OLD.person_id IS NOT NEW.person_id OR OLD.room_id IS NOT NEW.room_id OR OLD.task_id IS NOT NEW.task_id BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'tasks','question',NEW.task_id,NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE NEW.task_id <> '';INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','question',who,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT OLD.person_id AS who UNION SELECT NEW.person_id AS who) WHERE who LIKE 'human:%'; END;
+CREATE TRIGGER changes_runner_credentials_insert AFTER INSERT ON credentials WHEN NEW.kind<>'service' BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
+CREATE TRIGGER changes_runner_credentials_update AFTER UPDATE ON credentials WHEN NEW.kind<>'service' AND (OLD.env IS NOT NEW.env OR OLD.ciphertext IS NOT NEW.ciphertext) BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
+CREATE TRIGGER changes_runner_credentials_delete AFTER DELETE ON credentials WHEN OLD.kind<>'service' BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','credentials',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT id AS rid FROM runners WHERE revoked_at IS NULL) WHERE rid IS NOT NULL AND rid<>''; END;
+CREATE TRIGGER changes_runner_plan_read_insert AFTER INSERT ON registry_metadata WHEN NEW.key LIKE 'subscription-usage:%' AND json_valid(NEW.value) BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','subscription_refresh',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT json_extract(NEW.value,'$.request.runner_id') AS rid WHERE json_extract(NEW.value,'$.request.state')='requested') WHERE rid IS NOT NULL AND rid<>''; END;
+CREATE TRIGGER changes_runner_plan_read_update AFTER UPDATE ON registry_metadata WHEN NEW.key LIKE 'subscription-usage:%' AND json_valid(NEW.value) BEGIN INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','subscription_refresh',rid,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT json_extract(NEW.value,'$.request.runner_id') AS rid WHERE json_extract(NEW.value,'$.request.state')='requested') WHERE rid IS NOT NULL AND rid<>''; END;
+CREATE TRIGGER changes_threads_bot_status_steps AFTER INSERT ON attempt_events WHEN NEW.kind IN ('tool','message') OR (NEW.kind='delta' AND json_extract(NEW.payload,'$.delta_kind')='thought') BEGIN INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM (SELECT (SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id=NEW.attempt_id) AS r) WHERE r IS NOT NULL AND NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')); END;
+CREATE TRIGGER changes_setup_entities_insert AFTER INSERT ON entities WHEN NEW.status='active' AND NOT EXISTS (SELECT 1 FROM entities WHERE status='active' AND id<>NEW.id) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_entities_update AFTER UPDATE ON entities WHEN OLD.status IS NOT NEW.status AND 'active' IN (OLD.status, NEW.status) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_entities_delete AFTER DELETE ON entities WHEN OLD.status='active' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_market_pages_insert AFTER INSERT ON market_pages WHEN NEW.seeded=0 BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_market_pages_update AFTER UPDATE ON market_pages WHEN OLD.seeded IS NOT NEW.seeded BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_market_pages_delete AFTER DELETE ON market_pages WHEN OLD.seeded=0 BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_market_task_insert AFTER INSERT ON tasks WHEN NEW.owner_id='bot:librarian' AND NEW.title LIKE 'Set up the market map%' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_market_task_update AFTER UPDATE ON tasks WHEN OLD.status IS NOT NEW.status AND NEW.owner_id='bot:librarian' AND NEW.title LIKE 'Set up the market map%' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','market','market',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_strategy_insert AFTER INSERT ON strategy_versions BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','strategy','strategy',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_strategy_update AFTER UPDATE ON strategy_versions WHEN (OLD.summary='') IS NOT (NEW.summary='') BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','strategy','strategy',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_brand_draft_insert AFTER INSERT ON brand_drafts BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','strategy','strategy',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_brand_draft_update AFTER UPDATE ON brand_drafts WHEN OLD.body IS NOT NEW.body BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','strategy','strategy',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_brand_versions_insert AFTER INSERT ON brand_versions BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','strategy','strategy',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_goals_insert AFTER INSERT ON goals WHEN NOT EXISTS (SELECT 1 FROM goals WHERE id<>NEW.id) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','goals','goals',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_goals_delete AFTER DELETE ON goals WHEN NOT EXISTS (SELECT 1 FROM goals) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','goals','goals',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_bots_insert AFTER INSERT ON bots BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','org','org',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_bots_update AFTER UPDATE ON bots WHEN (OLD.state IN ('archived','planned')) IS NOT (NEW.state IN ('archived','planned')) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','org','org',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_bots_delete AFTER DELETE ON bots BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','org','org',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_tools_insert AFTER INSERT ON tools WHEN NOT EXISTS (SELECT 1 FROM tools WHERE id<>NEW.id) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','tools','tools',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_tools_delete AFTER DELETE ON tools WHEN NOT EXISTS (SELECT 1 FROM tools) BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','tools','tools',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_budget_insert AFTER INSERT ON budget_nodes WHEN NEW.scope='company' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','budget','budget',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
+CREATE TRIGGER changes_setup_budget_delete AFTER DELETE ON budget_nodes WHEN OLD.scope='company' BEGIN INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) SELECT 'setup','budget','budget',NULL,NULL,NULL,strftime('%Y-%m-%dT%H:%M:%fZ','now'); END;
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('0001_audit_log','d79511ba829a383f81db5682918cedf165580472f4e2d2e9e0b3d0ba50d435d8','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('0002_status_values','909bb1fdba87dd144e834855611440a1c87b0aee500cb2d11d525a148445e4e0','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('0003_google_connects_oauth_state','bbd8bd47797df4d5dd3345487e89ec82e0eb3e271f64fc24e8543506d2eccec8','baseline');
@@ -4412,12 +4647,54 @@ INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('2026111404000
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261114075516_related_input','5580187f8f7652aa8199bf8b4c65779fe6573f3ee74bbd854e62cab990460ddb','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115060929_ask_opinions','ac4bf5a3a7e9ee02f95c3e646994e2431214f9e170f0259c11fa4ad82caa2483','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115152859_flow_suggestions','4dc922639b5109ca2b521f3531b40576ecfa79a356bd25d04dcaacb636639fc8','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115173216_growth_line','a766b07b33c77267746e337801427b96bdbff0884c813d5fede47ef1fbf6a3df','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115175013_flight_web','1f8baa529eccb0685a568943d89e577085404192791dad307a0b885f84edaf67','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115190757_ask_snoozes','934ed5e64e97d2e62d0ff8e91cbfc7778280df2acaa21bcf38c6c03c8763ea6b','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115192933_spec_ok_once','6c9a261c20a77e499f1c3c805baa8bfb4c6e0d7d817a57cd770425b818d99932','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261115215128_ask_opinion_prompt_version','292438d514dadfe6309164557ba6809a037cf08fe22d3a5145c1446abecd4b3c','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116060000_growth_channel_brief','38c7512149224d913ecddb893abce2f43a4640c18a72d0f0ae9c94e5cb93eef1','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116124618_keep_warm_removed','51867a396abbb7d09ee187b55d731256dcf849ee8d9f46cd4045ecab19ab8e21','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116133039_tool_settings','a1a6dfc4e427ca3779758da3b5bece40b1b2105b4860d6338e23bac9953f4d30','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116133301_mcp_tools','da8112b6ab8d74c3d0dc77c38a3163ec9f18d56657fe7660d3d7ddb850b54ae9','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116145101_mailbox_watch','c7428604cb4225112e9f39e9ae2a741c68491335cecd4b27454a08f4f0214fd6','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116145651_calendar_watches','ddf6095b729d03913347b9650786330a4ab0b9e14f9021253a2c475de704e3ea','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116145802_google_grants_on_server','c0e4951184304fb488dd686b44417474ea592ac4518e9869c8bf2fb8973009e1','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116160154_drop_dead_tables','ac989d5b58ec6d71e7305afbd09ada78055c5a8770d8a205f6de7886026ab5e2','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116172132_threads_legacy_out','64529faa0119bc0900cde55a110ea5f8c1619e521143c2b94e72c154166bfa43','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116172345_messages_refs_update_index','0b3eadb93c88edf9938c2641487d836be968efae34e850d4b932425de74172cd','baseline');
 INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116182727_drop_retired_tables','cc90d15026a84b43c2f1db7a132ed5eeebc47626cc1879f3a8b4c7743eb4aad9','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116232820_mail_server_actions','1b8c2a9640b72c0709c1d976dc2db56b733897a8bb2ee91fdea015b97c68622b','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116234252_asks_to_a_person_choices_optional','9b6f27e8c151e5d42ad88a6094d22db38051f469fe6db13df86dd8c7d880ecdb','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116234549_run_notices_out_of_chats','4e4693e26ca8a033c10efd2a7788469f947479194549d46723d6e840d98f3596','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261116235608_visits_entered','658e0694f6703ba32e64e1fa2115d47d828d798f3acde0e2fc9dd0050c327802','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117000837_add_everyone_reads_to_tools','1e7b0683ddc686da23dbbde5eebc90d5feb285ef8ddc231923c9daf4bac519bc','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117012337_tool_auth_templates','6f8ab1451f8abc9e72e217e0ce8dcd45598a8924969b0ec0eeac591a0a250017','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117012717_create_access_requests','ca65888bbb66dd11c3ff488f637250045aefec26b45f099707cca67677e96e78','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117015544_task_prefix_and_moved_visits','9b7ff3b4c61b0c8678c4f503ce4e7a05a39130097313a4657f12d1df24613d61','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117015737_gateway_waits_to_login_hold','66d278d3f63489da9ce7adad5f399a70301c8f037c9710ea30c0508bccd02d93','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117023225_company_floor_widget','15da65be6e32859bde32c70e247b73147abb2fac503a8d586098c86b50cb9280','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117033356_question_marks','0156396be5321f1eee0ecb162a4efc1807f38f65b019ae94bc0ec9dd747c8e46','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117033956_task_documents','540412af68d516f6a6caf1d3bbb7db97387f239b99eff25451edb649f2e92889','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117060817_oauth_refresh_claims','2fdc846a26aa014bfa50caebbc43840a0650a67665261ef22603c3cfd9c7a2e7','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117061243_computer_keys_to_subscriptions','c4514bb965720809ec5d329a36127e65646dfd5f02e374e51c569edc3a9fc836','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117061626_stage_approvals_documents','1c380e4f5c9b71097ce25d17ede2b1c89ca2b01935a9583d2235a858133344f3','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117061834_holds_runaway','efccfdec015bf488f0c13238367a52cce0dd4ffcd27008959a2854f6fe5a91a6','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117062123_drop_mail_copies','e4c49a4250c644d8be38f3ef415a26f57afff93465cfb95d1547b671cfa81726','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117062614_task_descriptions_to_first_messages','e35616d23561d7efbf57a4b0a4c15384273be5c57a427065b5f021c540ae4181','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117071838_holds_usage_limit','abdad62ff0141085cbd225b8aaa63090bc04d8dc91c00936d0b09bebae0110aa','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117072000_holds_failing','a2ec41242cb7b6af58dcd325d2eb99cdab1ab25f07d37417102f2ec3684ffe59','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117072054_holds_quarantine','56fa66545e6209f271775fdc91b9c4150fa1b1558ce701fa02c99ea0f2706c98','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117073216_holds_paused','efdd7d1cf46a250a3cf392b1ad493764dea5ae8e992a376836d12c1393343a14','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117075941_slack_tokens_into_vault','03b82339dd05eb1f709154e0672b1d0ff4c07bc9336d6eba0f897dac5d5ea444','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117085930_drop_computer_keys','3b6949bc8497d5cceb99e0f618e76c9f464a76e8ca45e5c6fb2758553c28b973','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117091600_slack_requests','3ba0da2b1ddad8b7360b318750b73a1c624a69e3f5bb58abc7e0e44b905f64c7','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117094959_no_structured_questions','f89d2cba7646cf4418b49899e6e2d01c34da679222d818791631da9db4f81e42','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117103033_one_encrypted_store','c1aca441ef97d3188c94ccfe3d48b093452b23beab5cf2422aa376871b9d2303','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117104315_slack_readers_to_links','0a5795d74922422ffb64cfb011b4f8dde677f113bb4bc1dae8cc34de9f77df0c','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117104652_holds_start_failures','613f1052e1185b467949e11799446419ae488081f23a96778277a2c8f0e9a764','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117112358_holds_automation_guard','221c90de846337da1905791cd18cda0fe2fac91efbeb35930b560837d97c9989','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117195614_page_links','44cd046adbcff96ab0eac6cf308b3ef06066af4426122923ef339657a105c2e9','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117200750_claude_logins','7461f77a24e805cc639010dbe0cb28864d9d81547667e443062ef080d934ff7d','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117205926_side_stages','a2ab48679ae2c32f4f2f209718cf42ba7160419262d6a53eda221d14cfc08af3','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261117210532_named_bot_repositories_chosen','e1812ccafcfd1ff26ca36f7e10ffa8fa9d93b1afb52054c452575d1ff94b449e','baseline');
+INSERT INTO schema_migrations(version,checksum,applied_at) VALUES('20261118043659_drop_recorder','53564a5df23ee7229b1a825b42f71bdf2982815c52e8dc026971ee567511a33c','baseline');

@@ -1,6 +1,7 @@
 {
   "needs_you": [
-    "Let the Finance Owner see the books",
+    "Dark mode for the dashboard",
+    "Fix the login redirect",
     "Ship the pricing page",
     "paused: Connect GitHub"
   ]

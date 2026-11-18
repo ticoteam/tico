@@ -3,17 +3,27 @@ status line as it was made before step briefs (backend/step_briefs.py)."""
 
 import json
 import sqlite3
-from importlib import import_module
 
 from backend import step_briefs, thread_bot_status
 from backend.turns import reply_parts
 
-MIGRATION = import_module("backend.migrations.20261112081510_attempt_event_briefs")
+# The briefs table and its triggers as backend/migrations/baseline.sql has them (migration attempt_event_briefs, retired
+# with the v0.6.0 floor).
+BRIEFS = (
+    "CREATE TABLE IF NOT EXISTS attempt_event_briefs("
+    "attempt_id TEXT NOT NULL, seq INTEGER NOT NULL, brief TEXT NOT NULL, "
+    "PRIMARY KEY(attempt_id,seq)) WITHOUT ROWID",
+    "CREATE TRIGGER IF NOT EXISTS attempt_event_briefs_rewritten AFTER UPDATE OF payload ON attempt_events BEGIN "
+    "DELETE FROM attempt_event_briefs WHERE attempt_id=OLD.attempt_id AND seq=OLD.seq; END",
+    "CREATE TRIGGER IF NOT EXISTS attempt_event_briefs_deleted AFTER DELETE ON attempt_events BEGIN "
+    "DELETE FROM attempt_event_briefs WHERE attempt_id=OLD.attempt_id AND seq=OLD.seq; END",
+)
 
 
 def briefs_schema(c):
-    """The briefs table and its triggers, as the migration makes them (over a bare `attempt_events`, if one is there)."""
-    MIGRATION.up(c)
+    """The briefs table and its triggers, over the caller's bare `attempt_events`."""
+    for sql in BRIEFS:
+        c.execute(sql)
 
 
 def replayed(c, attempt_id):
