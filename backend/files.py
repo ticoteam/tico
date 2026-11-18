@@ -2685,23 +2685,30 @@ class Files:
             rows = [r for r in rows if not r["task_id"] or privacy.task_readable(c, who, H.task(c, r["task_id"]))]
             return {"file": fid, "activity": rows}
 
+    def readable_version(self, c, who, fid, version=None):
+        """The stored version (`stored_version`) `who` may read the bytes of: version `version` of the file, else its
+        current one. Refused as its download is (version_refusal), each refusal logged (refuse_serve). For every caller
+        that serves or hands on those bytes: the download, an email draft's attachment."""
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not row:
+            refuse_serve(c, who, fid, version, "no_row")
+        # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
+        number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
+        v = stored_version(c, fid, number)
+        refused = version_refusal(c, self.auth, who, row, number, v)
+        if refused == "audience":
+            refuse_serve(c, who, fid, version, refused)
+        elif refused == "no_version":
+            message = "This file has no stored copy to open" if not v else "File not found"
+            refuse_serve(c, who, fid, number, refused, message=message)
+        elif refused:
+            refuse_serve(c, who, fid, number, refused, v if refused in ("blob_fence", "file_fence") else None)
+        return v
+
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
         """The bytes of one version through Tico, never a storage address. Each refusal logs its check (refuse_serve)."""
         with self.store.read() as c:
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row:
-                refuse_serve(c, who, fid, version, "no_row")
-            # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
-            number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
-            v = stored_version(c, fid, number)
-            refused = version_refusal(c, self.auth, who, row, number, v)
-            if refused == "audience":
-                refuse_serve(c, who, fid, version, refused)
-            elif refused == "no_version":
-                message = "This file has no stored copy to open" if not v else "File not found"
-                refuse_serve(c, who, fid, number, refused, message=message)
-            elif refused:
-                refuse_serve(c, who, fid, number, refused, v if refused in ("blob_fence", "file_fence") else None)
+            v = self.readable_version(c, who, fid, version)
             if meta:
                 return {
                     "id": fid,

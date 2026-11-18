@@ -19,6 +19,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from . import google_tokens
+from .email_content import MAX_RAW
 from .mail_lib.gmail import normalize
 from .store import Problem
 
@@ -43,7 +44,7 @@ PROTECTED_LABELS = frozenset(("TRASH", "SPAM", "SENT", "DRAFT", "DRAFTS"))
 ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024  # one attachment read through Tico; a bigger one is opened in Gmail
 
 
-def gmail_call(url, *, token, data=None):
+def gmail_call(url, *, token, data=None, max_bytes=HTTP_MAX_BYTES):
     """(status, JSON object), or status 0 when Gmail cannot answer. Tests replace this function."""
     request = urllib.request.Request(url, headers={"Accept": "application/json", "Authorization": "Bearer " + token})
     if data is not None:
@@ -51,14 +52,14 @@ def gmail_call(url, *, token, data=None):
         request.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(request, timeout=SECONDS) as answer:
-            status, raw = answer.status, answer.read(HTTP_MAX_BYTES + 1)
+            status, raw = answer.status, answer.read(max_bytes + 1)
     except urllib.error.HTTPError as refused:
         with refused:
             refused.close()
             return refused.code, {}
     except (OSError, ValueError):
         return 0, {}
-    if len(raw) > HTTP_MAX_BYTES:
+    if len(raw) > max_bytes:
         raise Problem("gmail_size", "This Gmail response is too large; open it in Gmail", 502)
     if not raw and data is not None and status in (200, 204):
         return status, {}
@@ -83,11 +84,16 @@ def gmail_delete_call(url, *, token):
         return 0
 
 
-def _call(mailbox, path, token, *, data=None, **query):
+def _call(mailbox, path, token, *, data=None, max_bytes=None, **query):
     url = BASE + urllib.parse.quote(mailbox, safe="") + "/" + path
     if query:
         url += "?" + urllib.parse.urlencode(query, doseq=True)
-    status, body = gmail_call(url, token=token, **({"data": data} if data is not None else {}))
+    status, body = gmail_call(
+        url,
+        token=token,
+        **({"data": data} if data is not None else {}),
+        **({"max_bytes": max_bytes} if max_bytes else {}),
+    )
     if status in (200, 201, 204) and isinstance(body, dict) and "error" not in body:
         return body
     if status == 400:
@@ -364,7 +370,8 @@ def organize(c, mailbox, ids, add=(), remove=()):
 
 
 def send_call(url, *, token, body, content_type):
-    """(status, JSON object) for one messages.send, or status 0 when Gmail did not answer. Tests replace this."""
+    """(status, JSON object) for one messages.send or large drafts.create, or status 0 when Gmail did not answer.
+    Tests replace this."""
     request = urllib.request.Request(
         url,
         data=body,
@@ -386,6 +393,27 @@ def send_call(url, *, token, body, content_type):
     return status, found if isinstance(found, dict) else {}
 
 
+def _upload_body(raw, meta):
+    """(body, content type) of a Gmail multipart upload: the `meta` JSON, then the MIME of `raw` (base64url)."""
+    padded = raw.replace("-", "+").replace("_", "/")
+    mime = base64.b64decode(padded + "=" * (-len(padded) % 4))
+    boundary = "tico-" + uuid.uuid4().hex
+    body = (
+        b"--"
+        + boundary.encode()
+        + b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+        + json.dumps(meta).encode()
+        + b"\r\n--"
+        + boundary.encode()
+        + b"\r\nContent-Type: message/rfc822\r\n\r\n"
+        + mime
+        + b"\r\n--"
+        + boundary.encode()
+        + b"--"
+    )
+    return body, "multipart/related; boundary=" + boundary
+
+
 def send(mailbox, token, raw, thread_id=""):
     """Send exactly this frozen MIME once: (state, Gmail message id, detail). Gmail refusing it is `failed` (nothing
     left); no answer, a server error or an answer without an id is `unknown`, never retried into a second copy."""
@@ -396,28 +424,9 @@ def send(mailbox, token, raw, thread_id=""):
             BASE + path, token=token, body=json.dumps(body).encode(), content_type="application/json"
         )
     else:
-        padded = raw.replace("-", "+").replace("_", "/")
-        mime = base64.b64decode(padded + "=" * (-len(padded) % 4))
-        boundary = "tico-" + uuid.uuid4().hex
-        meta = json.dumps({"threadId": thread_id} if thread_id else {}).encode()
-        body = (
-            b"--"
-            + boundary.encode()
-            + b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
-            + meta
-            + b"\r\n--"
-            + boundary.encode()
-            + b"\r\nContent-Type: message/rfc822\r\n\r\n"
-            + mime
-            + b"\r\n--"
-            + boundary.encode()
-            + b"--"
-        )
+        body, content_type = _upload_body(raw, {"threadId": thread_id} if thread_id else {})
         status, found = send_call(
-            UPLOAD + path + "?uploadType=multipart",
-            token=token,
-            body=body,
-            content_type="multipart/related; boundary=" + boundary,
+            UPLOAD + path + "?uploadType=multipart", token=token, body=body, content_type=content_type
         )
     if status in (200, 201) and found.get("id"):
         return "sent", str(found["id"])[:200], "sent"
@@ -491,16 +500,39 @@ def draft_get(c, mailbox, draft_id):
 
 
 def draft_create(c, mailbox, raw, thread_id=""):
-    """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}."""
-    if len(raw) > INLINE_RAW_MAX:
-        raise Problem("gmail_size", "This draft is too large to write through Tico; write it in Gmail", 413)
-    message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
-    return _draft(_call(mailbox, "drafts", _token(c, mailbox, write=True), data={"message": message}))
+    """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}. A draft
+    over INLINE_RAW_MAX (an email with files) goes up as a multipart upload, as a large send does."""
+    token = _token(c, mailbox, write=True)
+    if len(raw) <= INLINE_RAW_MAX:
+        message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+        return _draft(_call(mailbox, "drafts", token, data={"message": message}))
+    body, content_type = _upload_body(raw, {"message": {"threadId": thread_id}} if thread_id else {})
+    path = urllib.parse.quote(mailbox, safe="") + "/drafts?uploadType=multipart"
+    status, found = send_call(UPLOAD + path, token=token, body=body, content_type=content_type)
+    if status in (200, 201) and found.get("id"):
+        return _draft(found)
+    if status in (401, 403):
+        raise Problem(
+            "gmail_refused", "Gmail refused this change; check the Whole Workspace connection and Gmail access", 403
+        )
+    if status in (400, 413):
+        raise Problem("gmail_size", "Gmail refused this draft (HTTP " + str(status) + "); it may be too large", 413)
+    raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
+
+
+# A draft's format=raw answer: the whole email base64url-encoded, up to the send gate's limit, with room for the JSON.
+DRAFT_RAW_MAX_BYTES = MAX_RAW * 4 // 3 + 1024 * 1024
 
 
 def draft_raw(c, mailbox, draft_id):
     """A draft's MIME (base64url) and thread, as Gmail holds it now: what a send of the draft freezes."""
-    found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="raw")
+    found = _call(
+        mailbox,
+        "drafts/" + urllib.parse.quote(draft_id, safe=""),
+        _token(c, mailbox),
+        max_bytes=DRAFT_RAW_MAX_BYTES,
+        format="raw",
+    )
     message = found.get("message") if isinstance(found, dict) else None
     if not isinstance(message, dict) or not isinstance(message.get("raw"), str) or not message["raw"]:
         raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)

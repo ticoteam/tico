@@ -4,7 +4,7 @@
 reaches Google or needs a key. `put_mail` (backend/tests/helpers/mail_api.py) puts a message here. A search understands
 the terms Tico writes: words, `from:`, `to:`, `cc:`, `in:sent`, `label:`, `after:`, `before:`, `rfc822msgid:` and one
 `{a b}` group of alternatives. Drafts (`drafts`, found by `rfc822msgid:`), a message's raw bytes (`raws`), its
-attachments and `messages/send` (`sent`) are kept here too.
+attachments and `messages/send` (`sent`) are kept here too; a large draft or send arrives as a multipart upload.
 """
 
 import base64
@@ -197,15 +197,31 @@ class FakeGmail:
         return 204 if self.box(mailbox)["drafts"].pop(tail.split("/", 1)[1], None) else 404
 
     def send(self, url, *, token, body, content_type):
-        mailbox = unquote(urlsplit(url).path).split("/gmail/v1/users/", 1)[1].partition("/")[0].lower()
-        found = json.loads(body)
+        mailbox, _, tail = unquote(urlsplit(url).path).split("/gmail/v1/users/", 1)[1].partition("/")
+        mailbox = mailbox.lower()
+        if "uploadType=multipart" in url:  # the metadata JSON, then the MIME (gmail_live._upload_body)
+            boundary = b"--" + content_type.split("boundary=", 1)[1].encode()
+            meta, mime = (part.split(b"\r\n\r\n", 1)[1].removesuffix(b"\r\n") for part in body.split(boundary)[1:3])
+            found = json.loads(meta)
+            raw = base64.urlsafe_b64encode(mime).decode().rstrip("=")
+            if tail == "drafts":
+                return self._draft_call(
+                    mailbox,
+                    self.box(mailbox),
+                    "drafts",
+                    {},
+                    {**found, "message": {**found.get("message", {}), "raw": raw}},
+                )
+            found = {**found, "raw": raw}
+        else:
+            found = json.loads(body)
         self.sent.append((mailbox, _decoded(found["raw"]), found.get("threadId", "")))
         if self.send_answer is not None:
             return self.send_answer
         return 200, {"id": f"sent-{len(self.sent)}"}
 
     # ------------------------------------------------------------------------------------------------- HTTP
-    def __call__(self, url, *, token, data=None):
+    def __call__(self, url, *, token, data=None, max_bytes=None):
         parsed = urlsplit(url)
         path, query = unquote(parsed.path), parse_qs(parsed.query)
         self.calls.append((path, query, data))
