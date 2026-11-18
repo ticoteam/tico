@@ -2354,6 +2354,16 @@ def branch(tmp_path, monkeypatch):
         return dict(seen.get("plan", LOCAL_PLAN))
 
     monkeypatch.setattr(checks, "selection", select)
+
+    def narrow(picked, changed, event, **kwargs):
+        seen.update(narrowed=event)
+        return seen["narrow"](picked) if "narrow" in seen else picked
+
+    monkeypatch.setattr(checks, "narrow", narrow)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.setattr(
+        checks, "collected", lambda files, root=None: seen.get("counts", Counter(dict.fromkeys(files, 1)))
+    )
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: list(args))
     monkeypatch.delenv("TICO_HEAVY_REMOTE", raising=False)
     commands = []
@@ -2383,6 +2393,51 @@ def branch(tmp_path, monkeypatch):
         envs=envs,
         run=lambda **kw: checks.local(base="main", root=tmp_path, execute=execute, **kw),
     )
+
+
+def test_a_local_run_picks_what_the_light_pull_request_run_picks(branch, capsys, monkeypatch):
+    # Nov 17: the whole pull_request selection picked 988 test files for a CLAUDE.md-only change and ran past 15 minutes
+    # on a builder's computer, while the pull request run (plan --light) is capped at ten VMs. Local runs the light plan.
+    (branch.root / "tests" / "test_far.py").write_text("def test_y(): pass\n")
+    (branch.root / "tests" / "test_slow_only.py").write_text("def test_z(): pass\n")
+    local_git(branch.root, "add", "-A")
+    local_git(branch.root, "commit", "-qm", "More tests")
+    branch.seen["plan"] = {
+        **LOCAL_PLAN,
+        "python": ["tests/test_app.py", "tests/test_far.py", "tests/test_slow_only.py"],
+    }
+    monkeypatch.setattr(
+        checks, "committed_timings", lambda root=None: {"tests/test_app.py": 5, "tests/test_far.py": 50}
+    )
+
+    def narrow(picked):
+        record = {"budget_seconds": 10, "smoke": False, "smoke_unless_capped": [], "left_transitive": []}
+        record["tier"] = {"tests/test_app.py": 0, "tests/test_far.py": 2, "tests/test_slow_only.py": 2}
+        return {**picked, "narrow": record}
+
+    branch.seen["narrow"] = narrow
+    # test_slow_only holds no default test, so the plan drops it, as prepare does from collect()'s counts.
+    branch.seen["counts"] = Counter({"tests/test_app.py": 1, "tests/test_far.py": 3})
+    assert branch.run() == 0
+    assert branch.seen["narrowed"] == "pull_request"
+    test, _ = pytest_leg(branch.commands[0])
+    assert test[-1] == "tests/test_app.py" and "tests/test_far.py" not in test  # over the light run's time budget
+    assert "light pull request plan" in capsys.readouterr().out
+    # When collection cannot say what a file holds, nothing is capped: when unsure, run more.
+    branch.commands.clear()
+    branch.seen["counts"] = None
+    assert branch.run() == 0
+    assert pytest_leg(branch.commands[0])[0][-3:] == [
+        "tests/test_app.py",
+        "tests/test_far.py",
+        "tests/test_slow_only.py",
+    ]
+    # --full keeps the old, whole selection, without narrowing.
+    branch.commands.clear()
+    del branch.seen["narrowed"]
+    assert branch.run(full=True) == 0
+    assert "narrowed" not in branch.seen
+    assert "tests/test_far.py" in pytest_leg(branch.commands[0])[0]
 
 
 def pytest_leg(command):
@@ -2629,7 +2684,7 @@ def test_the_command_line_runs_local_without_the_ci_only_plan_guard(monkeypatch)
     monkeypatch.setattr(checks, "local", lambda **kwargs: calls.append(kwargs) or 0)
     monkeypatch.setattr("sys.argv", ["pr_checks.py", "local", "--base", "origin/main", "--jobs", "3", "--ready"])
     assert checks.main() == 0
-    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True}]
+    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True, "full": False}]
 
 
 def junit(*skips):
