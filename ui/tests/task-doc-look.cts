@@ -96,7 +96,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       // The three documents have their tabs, in order (Chat, Files and any other fixed tab are not this test's).
       const docs = ['Light spec', 'Token spec', 'Dark spec'];
       assert.deepEqual((await texts(page)).filter(t => docs.includes(t)), docs);
-      // A document's frame once its tab is shown and its page drawn. Past two documents the rest are behind ⋯.
+      // A document's frame once its tab is shown and its page drawn. Past two documents the rest are behind +N.
       const show = async (name: string): Promise<FrameLocator> => {
         const tab = win.getByRole('tab', {name});
         if (await tab.isVisible()) await tab.click();

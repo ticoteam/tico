@@ -1449,7 +1449,8 @@ function taskTabsBind(d: ModalDialog) {
   if (details) details.onclick = () => taskTabShow(d, d.taskTab === 'details' ? d.taskTabBack || 'chat' : 'details');
 }
 // Spec pages have cards under the title. Every other document gets a tab after Files.
-const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => (docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown');
+// The documents with a tab (a Spec page is a card instead), in the order they first appeared (docsInPlace).
+const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => docsInPlace((docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown'));
 const taskDocOf = (d: ModalDialog, key: string | null | undefined): TaskDoc | null => docOf(taskTabDocs(d.taskDocs), key);
 /** A page open in the window (`page:<id>`): one of the task's Spec pages, else a page row of its Files tab. */
 function taskPageDocOf(d: ModalDialog, key: string | null | undefined): TaskDoc | null {
@@ -1458,19 +1459,19 @@ function taskPageDocOf(d: ModalDialog, key: string | null | undefined): TaskDoc 
   return (d.taskDocs || []).find(x => x.name === 'Spec' && x.kind !== 'markdown' && (x.page_id || x.file_id) === id) || TFT_PAGES.get(id) || null;
 }
 /** The tabs on the title row, and the change of a document as the task is read again: a new tab, a new version, one gone. */
-function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined) {
+function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined, place = '') {
   const on = tab === 'details' || !tab ? 'chat' : tab, shown = taskTabDocs(docs);
   const tabs: DocTab[] = [{key: 'chat', label: 'Chat', dot: taskYours(t)}, {key: TASK_FILES_TAB, label: taskFilesLabel(TFT_COUNT.get(String(t.id)))},
     ...shown.map(x => docTab(x, shown))];
   const valid = tabs.some(x => x.key === on);
-  return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
+  return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task', place).replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
 }
 function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   if (!t || String(t.id) !== String(d.dataset.task) || !Array.isArray(t.documents) || d.classList.contains('thread')) return;
   const was = JSON.stringify(d.taskDocs || []);
   d.taskDocs = t.documents;
   if (JSON.stringify(t.documents) === was) return;
-  const row = taskTabRow(d), html = taskDocTabsHTML(t, t.documents, d.taskTab);
+  const row = taskTabRow(d), html = taskDocTabsHTML(t, t.documents, d.taskTab, docTabsPlace(row, b => b.dataset.taskTab));
   if (row) row.outerHTML = html;
   else $('.tw-head .tmodal-title', d)?.insertAdjacentHTML('afterend', html);
   // the Spec cards under the title
