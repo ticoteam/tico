@@ -193,4 +193,102 @@ def test_a_closed_task_earns_a_goal_no_credit_only_a_done_one_does(company):
         scores = {g["title"]: GL.score(c, GL.goal(c, g["id"])) for g in (dropped, mixed, shipped)}
     assert scores["Open a second city"]["basis"] != "tasks" and scores["Open a second city"]["status"] != "green"
     assert scores["Win back lapsed customers"]["status"] != "green", scores
-    assert scores["Ship the booking page"] == {"status": "green", "basis": "tasks", "reason": "All 1 tasks done"}
+    assert scores["Ship the booking page"] == {
+        "status": "gray",
+        "basis": "tasks",
+        "reason": "No measure yet: all 1 tasks done",
+    }
+
+
+def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_does(company):
+    """Done tasks show effort, not that a goal is being met: a goal with only finished work shows "No measure yet",
+    stored so the page, the CLI and the API all say it. A KPI on target or an on-track check-in still makes it green."""
+    from backend import goals as GL, kpis as K
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+
+        def goal_with(title, done, open_=0):
+            g = GL.create(c, "human:ana", title, "human:ana")
+            for n in range(done):
+                tid = H.task_create(c, "human:ana", f"{title} {n}", "Work it.", "bot:ops", goal_id=g["id"], lint=False)
+                H.task_done(c, "human:ana", tid["id"], "Done")
+            for n in range(open_):
+                H.task_create(c, "human:ana", f"{title} open {n}", "Work it.", "bot:ops", goal_id=g["id"], lint=False)
+            return g
+
+        setup_only = goal_with("Make Finance useful", 1)
+        half = goal_with("Make Growth useful", 2, open_=2)
+        checked_in = goal_with("Make Threads useful", 1)
+        measured = goal_with("Make Company useful", 1)
+        by_hand = goal_with("Make Automations useful", 1)
+
+        c.execute(
+            "INSERT INTO goal_checkins(id, goal_id, created_at, author, sender_id, body, signal) VALUES(?,?,?,?,?,?,?)",
+            (H.new_id(), checked_in["id"], H.now(), "human:ana", "human:ana", "Customers use it daily.", "on_track"),
+        )
+        kpi = K.create(c, "human:ana", "human:ana", {"name": "Weekly teams", "unit": "teams", "cadence": "weekly"})
+        target, error = K.validate_target(kpi, {"kind": "maintain", "min": 10, "max": 100})
+        assert error is None
+        K.set_link(c, "human:ana", measured["id"], kpi["id"], target)
+        K.add_reading(c, "human:ana", kpi, 40)
+        GL.set_status(c, "human:ana", by_hand["id"], "green", "I know it is fine.")
+        # A goal coloured green from its tasks before this change: the next pass takes the green away, quietly.
+        c.execute(
+            "UPDATE goals SET status='green', status_note='All 1 tasks done', status_source='auto', status_by_id=? "
+            "WHERE id=?",
+            (GL.AUTO_ACTOR, setup_only["id"]),
+        )
+        tasks_before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+        messages_before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+        GL.refresh(c)
+        rows = {g["title"]: GL.goal(c, g["id"]) for g in (setup_only, half, checked_in, measured, by_hand)}
+        events = [e for e in GL.history(c, setup_only["id"]) if e["field"] == "status"]
+        tasks_after = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+        messages_after = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+
+    def seen(title):
+        r = rows[title]
+        return r["status"], r["status_note"], r["status_source"]
+
+    assert seen("Make Finance useful") == ("gray", "No measure yet: all 1 tasks done", "auto")
+    assert seen("Make Growth useful") == ("gray", "No measure yet: 2 of 4 tasks done, latest today", "auto")
+    assert seen("Make Threads useful") == ("green", "Check-in today: on track", "auto")
+    assert rows["Make Company useful"]["status"] == "green"
+    assert not rows["Make Company useful"]["status_note"].startswith("No measure yet")
+    assert seen("Make Automations useful")[0::2] == ("green", "person")
+    assert rows["Make Automations useful"]["suggest_status"] is None
+    assert [e["new"] for e in events][-1] == "gray" and len([e for e in events if e["new"] == "gray"]) == 1
+    # No ask, Needs-you item or notice is filed for the change.
+    assert (tasks_after, messages_after) == (tasks_before, messages_before)
+
+
+def test_stalled_tasks_still_warn_and_a_measure_with_no_reading_says_so(company, monkeypatch):
+    """Tasks can still warn: nothing done in two weeks is yellow, nothing moved in thirty days is red. A goal with a
+    KPI that has no reading yet keeps the KPI's own reason, not "No measure yet", even when its tasks are all done."""
+    from datetime import timedelta
+
+    from backend import goals as GL, kpis as K
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        stalled = GL.create(c, "human:ana", "Open a second city", "human:ana")
+        H.task_create(c, "human:ana", "Scout Denver", "Work it.", "bot:ops", goal_id=stalled["id"], lint=False)
+        waiting = GL.create(c, "human:ana", "Grow weekly teams", "human:ana")
+        done = H.task_create(
+            c, "human:ana", "Ship onboarding", "Work it.", "bot:ops", goal_id=waiting["id"], lint=False
+        )
+        H.task_done(c, "human:ana", done["id"], "Live")
+        kpi = K.create(c, "human:ana", "human:ana", {"name": "Weekly teams", "unit": "teams", "cadence": "weekly"})
+        target, error = K.validate_target(kpi, {"kind": "maintain", "min": 10, "max": 100})
+        assert error is None
+        K.set_link(c, "human:ana", waiting["id"], kpi["id"], target)
+        now = K.now()
+        later = {d: GL.score(c, GL.goal(c, stalled["id"]), now + timedelta(days=d)) for d in (20, 40)}
+        unread = GL.score(c, GL.goal(c, waiting["id"]))
+    assert later[20]["status"] == "yellow" and later[40]["status"] == "red", later
+    assert unread["status"] == "gray" and not unread["reason"].startswith("No measure yet"), unread
