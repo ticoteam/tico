@@ -115,10 +115,17 @@ Usage > Limits; the hub decides who may change which, and a row it says is not y
 
 ## API
 
-`GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
+`GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|hour|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
 `totals` with `runs`, `input_tokens`, `cached_tokens`, `cache_write_tokens` (NULL runs sum as 0), `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
 model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `bots` (slugs, comma separated) narrows to those bots; `group` selects how rows are aggregated (`task`: the top 25 tasks by spend, a private one named only as one, one the reader cannot open only as that, runs with no task together). A group lead also sees the bots in the groups they lead, as `/usage/limits` lists them. See `GET /api/v2/openapi.json`.
+
+`from` and `to` also take exact UTC times (ISO-8601, `2026-11-18T17:00:00Z`; one with no offset is read as UTC): the window then runs
+from `from` (included) up to `to` (excluded), and every group sums only the runs that started in it. A date keeps meaning the whole
+day, so `from=2026-11-18T17:00:00Z&to=2026-11-18` is 17:00 to midnight. `group=hour` gives one row per UTC hour, `hour` its start
+(`2026-11-18T17:00:00Z`), in order, every hour of the window up to now with empty ones as zeros; its window is at most 7 days
+(a longer one is a 422). The last three hours of spend, by model (`est_cost_usd` is what API-billed runs spent):
+`GET /api/v2/usage?group=model&from=2026-11-18T15:00:00Z` (or `tico usage show --group hour --from 2026-11-18T15:00:00Z`).
 
 ## Filter by the settings used for a run
 
