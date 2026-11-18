@@ -83,7 +83,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.deepEqual(await secs.locator('.au-lb').allInnerTexts().then(t => t.map(x => x.toLowerCase())), ['sources', 'rules', 'rate limits']);
       assert.equal(await secs.nth(0).locator('.lst-r').count(), 5);
       assert.equal(await secs.nth(0).locator('.au-dot.ok').count(), 4, tag + ': four sources read well');
-      assert.equal(await secs.nth(0).locator('.au-dot.lst-no').getAttribute('title'), 'Blocked', tag + ': and one is blocked');
+      assert.equal(await secs.nth(0).locator('.au-dot.lst-no').getAttribute('title'), 'Blocked: Sign-in wall', tag + ': and one is blocked, with why');
       assert.match(await secs.nth(1).locator('.lst-r').first().innerText(), /Remove duplicates/, tag + ': Remove duplicates is first');
       assert.equal(await secs.nth(1).locator('.lst-r').count(), 6);
       assert.deepEqual(await secs.nth(2).locator('.lst-r').allInnerTexts().then(t => t.map(x => x.trim())), ['Up to 3 every hour', 'Up to 10 every day']);

@@ -17,7 +17,7 @@ from backend.tests.helpers.automation_runs import sql
 from backend.tests.helpers.listening import NOTE, FakeJudge, listening, source_id
 
 START = datetime(2026, 11, 2, 7, 0, tzinfo=timezone.utc)
-ORCA = {"id": "g1", "kind": "github", "target": "acme/widgets"}
+WIDGETS = {"id": "g1", "kind": "github", "target": "acme/widgets"}
 
 
 def at(minutes):
@@ -74,7 +74,7 @@ class FakeGitHub:
             return status, headers, {"message": "API rate limit exceeded" if status in (403, 429) else "Not Found"}
         parts = urlsplit(path)
         bits, query = parts.path.strip("/").split("/"), parse_qs(parts.query)
-        repo = "/".join(bits[1:3])
+        repo = "/".join(bits[1:3]).lower()  # GitHub's names are not case-sensitive
         if repo not in self.repos:
             return 404, {}, {"message": "Not Found"}
         if len(bits) == 3:
@@ -96,7 +96,7 @@ def github(monkeypatch):
     return fake
 
 
-def made(api, sources=(ORCA,), rules=()):
+def made(api, sources=(WIDGETS,), rules=()):
     with time_machine.travel(START, tick=False):
         return listening(api, sources=sources, rules=rules, steps=[NOTE])["id"]
 
@@ -151,13 +151,14 @@ def test_a_source_is_not_read_again_within_the_hour(api, github):
     run(api, at(30))
     assert len(github.calls) == calls
     run(api, at(61))
-    assert len(github.calls) > calls
+    assert len(github.calls) == calls + 2  # a quiet hour: the repository and one page
     assert source(api, aid)["status"] == "ok"
 
 
 def test_a_pr_read_twice_or_by_two_sources_on_one_repo_is_one_item(api, github):
     twin = {"id": "g2", "kind": "github", "target": "https://github.com/acme/widgets"}
-    aid = made(api, sources=(ORCA, twin))
+    shouting = {"id": "g3", "kind": "github", "target": "Acme/Widgets"}
+    aid = made(api, sources=(WIDGETS, twin, shouting))
     run(api, START)
     github.merge(7, "feat: worktree switcher", at(20))
     run(api, at(61))
@@ -195,7 +196,7 @@ def test_a_pr_merged_into_another_branch_makes_no_item(api, github):
 
 
 def test_releases_make_one_item_each_pre_releases_too_drafts_never(api, github):
-    aid = made(api, sources=({**ORCA, "follow": "releases"},))
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
     github.release(1, "v1.0.0", at(-600), name="First")
     run(api, START)
     assert items(api, aid) == []
@@ -211,7 +212,7 @@ def test_releases_make_one_item_each_pre_releases_too_drafts_never(api, github):
 
 def test_a_repo_tico_cannot_see_is_blocked_and_the_other_sources_still_read(api, github):
     hidden = {"id": "g2", "kind": "github", "target": "acme/secret"}
-    aid = made(api, sources=(ORCA, hidden))
+    aid = made(api, sources=(WIDGETS, hidden))
     run(api, START)
     blocked = source(api, aid, "g2")
     assert blocked["status"] == "blocked"
@@ -239,13 +240,53 @@ def test_a_rate_limit_mid_read_loses_no_pr_the_next_read_saves_them_all(api, git
     assert source(api, aid)["status"] == "ok"
 
 
+def test_a_listing_longer_than_a_read_carries_on_at_the_next_read_and_skips_nothing(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    aid = made(api)
+    run(api, START)
+    for n in range(1, 10):  # 9 PRs: a read lists 4
+        github.merge(n, f"feat: change {n}", at(n))
+    run(api, at(61))
+    assert [i["native_id"] for i in items(api, aid)] == [f"gh:acme/widgets#pr:{n}" for n in range(6, 10)]
+    assert source(api, aid)["status"] == "ok"
+    # Between reads a new PR is merged, and PR 1, not read yet, is edited: it jumps to the head of the listing.
+    github.merge(20, "feat: change 20", at(100))
+    github.prs[0]["updated_at"] = gh(at(101))
+    for hour in range(2, 7):  # the head pushes what is left down the listing: some rows are read twice, none skipped
+        run(api, at(hour * 65))
+    ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
+    assert ids == [*range(1, 10), 20]
+    assert "carry" not in json.loads(source(api, aid)["snapshot"])  # read to its end: the cursor moved on
+    github.merge(21, "feat: change 21", at(450))
+    run(api, at(520))
+    assert items(api, aid)[-1]["native_id"] == "gh:acme/widgets#pr:21"
+
+
+def test_more_releases_than_a_read_lists_are_saved_as_far_as_listed_and_the_gap_is_shown(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)
+    for n in range(1, 7):
+        github.release(n, f"v1.{n}.0", at(n))
+    run(api, at(61))
+    assert len(items(api, aid)) == 4
+    row = source(api, aid)
+    assert row["status"] == "error" and row["last_error"].startswith("More than 4 changes in acme/widgets since")
+    github.release(7, "v1.7.0", at(70))
+    run(api, at(125))
+    assert items(api, aid)[-1]["native_id"] == "gh:acme/widgets#release:7"  # moved on, not stuck at the gap
+    assert source(api, aid)["status"] == "ok"
+
+
 def test_changing_what_a_source_follows_starts_it_again_from_now(api, github):
     aid = made(api)
     run(api, START)
     github.release(1, "v1.0.0", at(10))
     with time_machine.travel(at(20), tick=False):
         flow = get(api, f"automations/{aid}")
-        trigger = {**flow["trigger"], "sources": [{**ORCA, "follow": "releases"}]}
+        trigger = {**flow["trigger"], "sources": [{**WIDGETS, "follow": "releases"}]}
         patch(api, aid, {"trigger": trigger})
     run(api, at(61))
     assert items(api, aid) == []  # v1.0.0 was there before it followed releases
@@ -280,6 +321,8 @@ def test_repo_of_reads_names_and_github_addresses():
     assert LG.repo_of(" https://www.github.com/acme/widgets.git ") == "acme/widgets"
     assert LG.repo_of("github.com/acme/widgets/pull/3?x=1") == "acme/widgets"
     assert LG.repo_of("widgets") is None
+    assert LG.repo_of("acme/..") is None and LG.repo_of("acme/.") is None
+    assert LG.repo_of("acme/.github") == "acme/.github"
     assert LG.repo_of("https://gitlab.com/acme/widgets") is None
 
 

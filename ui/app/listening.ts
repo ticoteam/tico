@@ -88,7 +88,10 @@ function lstRowOk(r: LstSourceRow | undefined): boolean {
 function lstRowWords(r: LstSourceRow | undefined): string {
   if (lstRowOk(r)) return 'Read';
   if (r?.status === 'ok') return 'Not read for two days';
-  return (r?.status === 'error' && r.last_error) || LST_STATUS[r?.status || 'never'] || 'Not read yet';
+  if (r?.status === 'error' && r.last_error) return r.last_error;
+  const word = LST_STATUS[r?.status || 'never'] || 'Not read yet';
+  // Blocked and Rate limited say why and when: "Blocked: Tico can't see acme/widgets ...".
+  return (r?.status === 'blocked' || r?.status === 'rate_limited') && r.last_error ? `${word}: ${r.last_error}` : word;
 }
 const lstDot = (ok: boolean, words: string): string => `<span class="au-dot ${ok ? 'ok' : 'lst-no'}" role="img" aria-label="${esc(words)}" title="${esc(words)}"></span>`;
 /** A listening's one dot, as the server gives it: hollow when a source did not read well, when posts wait unscored,
