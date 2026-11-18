@@ -395,6 +395,10 @@ def main(argv=None):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         parser.error('a command is required, after --')
+    # argparse checks --cpus against its choices but not a default taken from TICO_REMOTE_CPUS; a 16 there would reach
+    # the workflow, fail its input check and exit 75 ("try again later") for a run that can never start.
+    if args.cpus not in ('4', '8'):
+        parser.error(f'TICO_REMOTE_CPUS must be 4 or 8, not {args.cpus!r}')
     if git('status', '--porcelain', '--untracked-files=no'):
         print('remote: uncommitted changes are not included; running the pushed commit', file=sys.stderr)
     code, _ = run(command, setup=args.setup, cpus=args.cpus, minutes=args.minutes, ref=args.ref)

@@ -399,6 +399,14 @@ def test_a_permit_with_no_live_turn_token_refuses_without_asking(monkeypatch, tm
     assert 'no active Tico turn' in remote.permit('0123456789ab', '4', 50, environ)
 
 
+def test_a_default_above_8_vcpus_from_the_environment_is_refused_too(monkeypatch):
+    monkeypatch.setenv('TICO_REMOTE_CPUS', '16')
+    monkeypatch.setattr(remote, 'run', lambda *a, **k: pytest.fail('a 16-vCPU run was dispatched'))
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--', 'true'])
+    assert exit.value.code == 2
+
+
 def test_the_workflow_runs_only_spot_vms_of_8_vcpus_at_most_and_no_c_family():
     """Remote runs stay Large (8 vCPUs at most), on Spot, off the c-family pools that fell back to on-demand."""
     import yaml
