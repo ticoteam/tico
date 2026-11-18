@@ -352,6 +352,13 @@ def test_a_bad_command_line_exits_2():
     assert exit.value.code == 2
 
 
+def test_a_run_above_8_vcpus_is_refused_before_anything_is_sent(monkeypatch):
+    monkeypatch.setattr(remote, 'run', lambda *a, **k: pytest.fail('a 16-vCPU run was dispatched'))
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--cpus', '16', '--', 'true'])
+    assert exit.value.code == 2
+
+
 class _Answer:
     def __init__(self, body):
         self.body = body
@@ -390,3 +397,23 @@ def test_a_permit_with_no_live_turn_token_refuses_without_asking(monkeypatch, tm
     monkeypatch.setattr(remote.urllib.request, 'urlopen', lambda *a, **k: pytest.fail('asked Tico'))
     environ = {'HUB_API_URL': 'http://hub', 'HUB_TOKEN': f'tico-file:{tmp_path / "gone"}', 'HUB_TASK_ID': 't1'}
     assert 'no active Tico turn' in remote.permit('0123456789ab', '4', 50, environ)
+
+
+def test_a_default_above_8_vcpus_from_the_environment_is_refused_too(monkeypatch):
+    monkeypatch.setenv('TICO_REMOTE_CPUS', '16')
+    monkeypatch.setattr(remote, 'run', lambda *a, **k: pytest.fail('a 16-vCPU run was dispatched'))
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--', 'true'])
+    assert exit.value.code == 2
+
+
+def test_the_workflow_runs_only_spot_vms_of_8_vcpus_at_most_and_no_c_family():
+    """Remote runs stay Large (8 vCPUs at most), on Spot, off the c-family pools that fell back to on-demand."""
+    import yaml
+
+    doc = yaml.safe_load((ROOT / '.github' / 'workflows' / 'remote-run.yml').read_text())
+    assert doc[True]['workflow_dispatch']['inputs']['cpus']['options'] == ['4', '8']
+    label = doc['jobs']['run']['runs-on']
+    families = label.split('/family=')[1].split('/')[0].split('+')
+    assert families and not [f for f in families if f.startswith('c')], families
+    assert 'spot=false' not in label and 'retry=false' not in label

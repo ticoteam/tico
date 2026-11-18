@@ -26,9 +26,9 @@ on:
         options: [python, browser, rust, all]
         default: python
       cpus:
-        description: vCPUs of the VM
+        description: vCPUs of the VM (8 at most; a whole suite runs as two 8-vCPU shards)
         type: choice
-        options: ['4', '8', '16']
+        options: ['4', '8']
         default: '4'
       minutes:
         description: Time limit for the command
@@ -40,9 +40,10 @@ permissions:
 
 jobs:
   run:
-    # Spot: an interruption reruns the job automatically, and a test run can always be repeated. The family list gives
-    # Spot more pools: with none, a 16-vCPU VM came almost only from c8i-flex/c8id, and ~1 in 4 was reclaimed (Nov 11).
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}cpu-linux-x64/family=m8+c8+r8+m7+c7+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, inputs.cpus) }}
+    # Spot, 8 vCPUs at most, no c-family: the same families as every other RunsOn job. An interruption reruns the job
+    # automatically, and a test run can always be repeated. 16-vCPU runs drew on c8i-flex/c7i-flex pools and were the
+    # ones that fell back to on-demand (Nov 10-17: 11 of the 12 on-demand jobs), so remote-run no longer offers them.
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}cpu-linux-x64/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, inputs.cpus) }}
     timeout-minutes: 75
     env:
       ID: ${{ inputs.id }}
@@ -61,6 +62,7 @@ jobs:
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full commit SHA"; exit 1; }
           [[ "$MINUTES" =~ ^[0-9]+$ ]] && [ "$MINUTES" -ge 1 ] && [ "$MINUTES" -le 60 ] \
             || { echo "::error::minutes must be 1 to 60"; exit 1; }
+          [ "$CPUS" = 4 ] || [ "$CPUS" = 8 ] || { echo "::error::cpus must be 4 or 8"; exit 1; }
           # GitHub-hosted runners have 4 vCPUs; a larger VM needs RunsOn.
           if [ "$HOSTED" = true ] && [ "$CPUS" != 4 ]; then echo "::error::cpus must be 4 while TICO_CI_HOSTED is true"; exit 1; fi
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
