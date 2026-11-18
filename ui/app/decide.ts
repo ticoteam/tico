@@ -846,6 +846,10 @@ function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
 const DEC_BROWSED = new Set<string>();
 const decideBtn = (dc: string, label: string, main = false, extra = '') =>
   `<button type="button" class="${main ? 'primary' : 'ghost'}" data-dc="${dc}"${extra}>${esc(label)}</button>`;
+/** An OK's chat-row button that takes the box's words along: a comment icon before its label, shown only while the box
+    has words (decideChatTyped). `only` hides the button itself until then (Send back, Close). */
+const decideNoteBtn = (dc: string, label: string, aria: string, main: boolean, extra = '', only = false) =>
+  `<button type="button" class="${main ? 'primary' : 'ghost'} dc-note-btn${only ? ' dc-note-only' : ''}" data-dc="${dc}" aria-label="${esc(aria)}" title="${esc(aria)}"${extra}><span class="nav-icon dc-note-ic" aria-hidden="true">chat_bubble</span>${esc(label)}</button>`;
 /** The right side: the sentence, who asks, and the buttons for this kind. */
 function decidePaintSide(st: DecState) {
   const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-side');
@@ -880,17 +884,27 @@ function decidePaintSide(st: DecState) {
   const busy = st.busy ? ' disabled' : '';
   let body = '';
   if (chat) {
-    // The task's chat answers it (decideChatMount): under the composer only Approve on an OK, then Snooze and ⋯.
+    // The task's chat answers it (decideChatMount): under the composer an OK has Approve, and once the box has words Send
+    // back, Close and Approve, each with a comment icon (decideChatTyped); then Snooze and ⋯ (appended by the caller).
     const v = st.ok.get(decideOkKey(it)), ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
     // The forward button says what it does: Pay $1,240.00, Send email, OK (a Validate page), else Approve.
-    const label = decideCheckedOk(it) ? 'OK' : decideAction(v)?.verb || 'Approve', words = DEC_CHAT?.item === it.id && DEC_CHAT.typed.trim();
-    // An OK approved whose comment did not go has no Approve left: the arrow sends the comment.
+    const checked = decideCheckedOk(it), label = checked ? 'OK' : decideAction(v)?.verb || 'Approve', words = !!(DEC_CHAT?.item === it.id && DEC_CHAT.typed.trim());
     // A browser ask on a phone: Open browser is the forward action, Done once the person is back from it (on a bot's ❓,
     // where "Done" is the reply).
     const browse = decidePhone() && (it.ask?.shows || it.shows || []).some(r => r.startsWith('browser:'))
       ? DEC_BROWSED.has(it.id) && it.kind === 'question' ? decideBtn('browse-done', 'Done', true, busy) : decideBtn('browse', 'Open browser', true, busy) : '';
-    body = `<div class="dc-acts dc-acts-row">${kind === 'ok' && !DEC_APPROVED.has(it.id) ? decideBtn('approve', words ? `${label} with comments` : label, true,
-      ` data-dc-label="${label}"` + (!ready || !(it.ask?.may || []).includes('ok') || st.busy ? ' disabled' : '')) : browse}</div>${decideMoreHTML(st, it)}`;
+    if (kind === 'ok' && !DEC_APPROVED.has(it.id)) {
+      // An OK approved whose comment did not go has no Approve left: the arrow sends the comment.
+      const may = it.ask?.may || [];
+      // Send back is a "no" the person may give, its words the note; Close is for whoever may close the task. Both show
+      // only with words in the box (the row's dc-with-words), and Approve's comment icon with them.
+      const back = may.includes('no') ? decideNoteBtn('chat-back', checked ? 'Not validated' : 'Send back', `${checked ? 'Not validated' : 'Send back'} with your comment`, false, busy, true) : '';
+      const shut = decideMayClose(it) ? decideNoteBtn('close-task', 'Close', 'Close with your comment', false, busy, true) : '';
+      const approve = decideNoteBtn('approve', label, words ? `${label} with your comment` : label, true,
+        ` data-dc-label="${esc(label)}"` + (!ready || !may.includes('ok') || st.busy ? ' disabled' : ''));
+      body = `<div class="dc-acts dc-acts-row${words ? ' dc-with-words' : ''}">${back}${shut}${approve}<span class="dc-break" aria-hidden="true"></span></div>`;
+    } else body = `<div class="dc-acts dc-acts-row">${browse}</div>`;
+    body += decideMoreHTML(st, it);
   } else if (kind === 'ok') {
     const v = st.ok.get(decideOkKey(it)), may = it.ask?.may || [];
     const ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
@@ -1556,8 +1570,8 @@ function decideMayClose(it: NeedsEntry): boolean {
 }
 // ---- the task's chat: an ask on a task is answered in the task's own thread, drawn by the chat every thread uses
 // (thread-view.ts threadMount): its messages, the ask as the asker's last message (`tail`), and the composer, whose
-// arrow sends a reply (decideChatSend). Under it only Approve on an OK, Snooze and ⋯. Underneath an ask stays an ask:
-// an OK's reply is its send back.
+// arrow sends a reply (decideChatSend). Under it an OK has Approve, and with words in the box Send back, Close and Approve
+// (each with a comment icon); then Snooze and ⋯. Underneath an ask stays an ask: an OK's reply is its send back.
 let DEC_CHAT: {item: string; cid: string; view: ThvView | null; typed: string} | null = null;
 /** The chat a message item sits in: a bot's ❓'s (its task's, or a direct chat with the bot), an @'s own conversation. */
 const decideMarkRoom = (it: NeedsEntry): string => it.kind === 'question' ? it.root_id || it.conversation_id || ''
@@ -1782,14 +1796,19 @@ function decideReceiptHTML(v: AskOkView | undefined): string {
   if (!a) return '';
   return `<div class="dc-receipt">${a.amount ? `<p class="dc-amt">${esc(a.amount)}</p>` : ''}<p class="dc-act-line">${esc(a.line)}</p>${a.facts}</div>`;
 }
-/** The words in the chat's box, as they change: Approve says "Approve with comments" while there are some. */
+/** The words in the chat's box, as they change. With words on an OK, its row shows Send back, Close and Approve with their
+    comment icon (decideChatMount painted them, hidden); the arrow (a comment alone) goes quiet. Only the row's own parts
+    change here: nothing is painted again, so the caret stays and Snooze and ⋯ stay at the end of the row. */
 function decideChatTyped(text: string) {
   if (DEC_CHAT) DEC_CHAT.typed = text;
-  // An OK with words typed: "Approve with comments" is the one filled control, the arrow (a comment alone) goes quiet.
-  const it = DEC && decideCurrent(DEC);
-  $('.decide')?.classList.toggle('dc-typed-ok', !!text.trim() && !!it && decideKind(it) === 'ok');
-  const b = $('.decide [data-dc="approve"]') as HTMLButtonElement | null;
-  if (b?.dataset.dcLabel) b.textContent = text.trim() ? `${b.dataset.dcLabel} with comments` : b.dataset.dcLabel;
+  const it = DEC && decideCurrent(DEC), words = !!text.trim();
+  $('.decide')?.classList.toggle('dc-typed-ok', words && !!it && decideKind(it) === 'ok');
+  const row = $('.decide .dc-side > [data-key] > .dc-acts-row') as HTMLElement | null, approve = row?.querySelector<HTMLButtonElement>('[data-dc="approve"]');
+  if (!row || !approve) return;
+  row.classList.toggle('dc-with-words', words);
+  const label = approve.dataset.dcLabel || 'Approve', aria = words ? `${label} with your comment` : label;
+  approve.setAttribute('aria-label', aria);
+  approve.title = aria;
 }
 /** What the chat's box holds now, read from the box itself (a draft put back counts): its view, words and files, for one
     submission that keeps them whatever is on screen when it ends. Null when the item has no chat. */
@@ -1802,6 +1821,14 @@ function decideChatTake(): DecChatTake | null {
 function decideChatGone(take: DecChatTake) {
   take.view.composer.files.splice(0); thvChips(take.view); thvComposerClear(take.view);
   if (DEC_CHAT?.view === take.view) decideChatTyped('');
+}
+/** The chat's words go with an answer or a close (Send back, Close): the box is locked while they go, and clears once
+    `go` says they went. Nothing typed meanwhile is cleared with them. */
+async function decideChatWords(take: DecChatTake, go: () => Promise<boolean>) {
+  take.box.readOnly = true;
+  let went = false;
+  try { went = await go(); } finally { take.box.readOnly = false; }
+  if (went) decideChatGone(take);
 }
 /** The composer's files, up to the task's Files one by one; null (and the error on the item) when one fails. */
 async function decideChatUpload(st: DecState, itemId: string, taskId: string, files: File[]): Promise<DecFile[] | null> {
@@ -1894,7 +1921,7 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
     const ups = await decideChatUpload(st, it.id, taskId, take?.files || []);
     if (!ups) { st.busy = false; decidePaintSide(st); return; }
     const r = await okGive(taskId, rid, hash);
-    // "Approve with comments" on an OK bound to what it shows: the OK carries nothing else, so the words follow it on
+    // Approve with words in the box, on an OK bound to what it shows: the OK carries nothing else, so the words follow it on
     // the task's thread, where everyone sees them. One that does not go stays in the box, with why.
     const said = take ? decideWithFiles(take.text, ups) : '';
     let left = '';
@@ -2033,12 +2060,22 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'browse': ($('.decide .dc-thing [data-bv-launch], .decide .dc-thing [data-dc-browser-open]') as HTMLElement | null)?.click(); return;
     case 'browse-done': if (it.kind === 'question') await decideChatSend(st, 'Done', []); return;
+    case 'chat-back': {
+      // Send back with the chat's words, as the arrow sends them (decideChatSend: the words are the note). The box clears once
+      // they went.
+      const take = decideChatTake();
+      if (take?.text) await decideChatWords(take, () => decideChatSend(st, take.text, take.files));
+      return;
+    }
     case 'close-task': {
       // Close (a stuck item's) and Close task (⋯): what is typed in the item's box is the reason, kept on the close (its
       // history, and the news a bot that asked for the task gets: task_effects._tell_requester). No confirm: ↶ reopens it.
+      // A chat item's reason is its chat box's words; a stuck item's is its Notes box.
       st.more = '';
-      const why = [...document.querySelectorAll<HTMLTextAreaElement>('.decide .dc-side textarea')].map(b => b.value.trim()).find(Boolean);
-      await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver, why), decideUndoReopen(taskId));
+      const take = decideChatTake();
+      const why = take ? take.text : [...document.querySelectorAll<HTMLTextAreaElement>('.decide .dc-side textarea')].map(b => b.value.trim()).find(Boolean);
+      const close = async () => { await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver, why), decideUndoReopen(taskId)); return !st.error; };
+      if (take) await decideChatWords(take, close); else await close();
       return;
     }
     case 'snooze':
