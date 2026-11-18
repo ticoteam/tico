@@ -4,7 +4,8 @@ approves that it could not place became the QA report, and bot-checked pages kep
 
 - A live page approval on a stage named Proposal that approves the QA report approves the Proposal, and its line is
   Proposal. An open task in that stage whose document (a page linked to it with that role) is named QA report has it
-  renamed Proposal, unless that page is already its Proposal.
+  renamed Proposal, unless the task already has a Proposal (on any page): then both records keep its QA report, so a
+  task never ends up with two Proposals and the page links and the older task_documents rows agree.
 
 Results page and Checked in production stay plain pages the decision model checks: they are held by bots, and a
 document approval there cannot yet be decided by the pipeline's manager bot when the decision model is unsure (it is
@@ -61,8 +62,7 @@ def up(conn):
     if _table(conn, "page_links"):  # a task's document is a page linked to it with the document's name as role
         conn.execute(
             f"UPDATE page_links SET role='Proposal' WHERE role='QA report' AND target IN ({open_there}) "
-            "AND NOT EXISTS (SELECT 1 FROM page_links o WHERE o.page_id = page_links.page_id "
-            "AND o.target = page_links.target AND o.role = 'Proposal')",
+            "AND NOT EXISTS (SELECT 1 FROM page_links o WHERE o.target = page_links.target AND o.role = 'Proposal')",
             stages,
         )
     if _table(conn, "task_documents"):  # the older record of the same, while it is still kept

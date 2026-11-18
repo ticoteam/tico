@@ -562,3 +562,39 @@ def test_the_names_migration_gives_proposal_results_and_checked_in_production_th
             ("task:" + row["id"],),
         ).fetchall()
         assert [tuple(d) for d in docs] == [("Proposal", file_id)]
+
+
+def test_the_names_migration_never_gives_a_task_two_proposals_and_leaves_finished_tasks(api):
+    """A task in Proposal that already has a Proposal on another page keeps its QA report, in the page links and in
+    the older task_documents rows alike; a done task in Proposal is not touched."""
+    migration = importlib.import_module(NAMES_MIGRATION)
+    qa = {"kind": "page", "line": "QA report", "person": ANA, "settings": {"document": "QA report", "rubric": "R"}}
+    with api.app.state.store.transaction() as c:
+        X.pipeline(c, "sales", "Sales", ({"name": "Proposal", "owner": OPS, "requirements": [qa]},))
+        both = X.new_task(c, ANA, "Acme lights", "sales", assignee=OPS)
+        done = X.new_task(c, ANA, "Bolt doors", "sales", assignee=OPS)
+    _, attempt = turn(api)
+    report = _write(api, both["id"], SPEC, attempt["token"], "QA report")["file_id"]
+    proposal = _write(api, both["id"], SPEC + " Priced.", attempt["token"], "Proposal")["file_id"]
+    assert report != proposal
+    finished = _write(api, done["id"], SPEC, attempt["token"], "QA report")["file_id"]
+    with api.app.state.store.transaction() as c:
+        E.move(c, done["id"], E.DONE, ANA, "Sent the proposal by hand")
+        migration.up(c)
+
+        def roles(task_id):
+            return sorted(
+                tuple(d)
+                for d in c.execute(
+                    "SELECT role, page_id FROM page_links WHERE target=? AND role NOT IN ('writer', 'related')",
+                    ("task:" + task_id,),
+                ).fetchall()
+            )
+
+        assert roles(both["id"]) == sorted([("QA report", report), ("Proposal", proposal)])
+        assert roles(done["id"]) == [("QA report", finished)]
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_documents'").fetchone():
+            names = [
+                r[0] for r in c.execute("SELECT name FROM task_documents WHERE task_id=?", (both["id"],)).fetchall()
+            ]
+            assert names.count("Proposal") <= 1
