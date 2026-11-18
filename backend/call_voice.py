@@ -578,10 +578,12 @@ class Voice:
                 turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=?", (current["turn"],)).fetchone()
                 status = turn["status"] if turn else "skipped"
                 ended = ("skipped", None)
-                if status in ("pending", "claimed") and now - current["asked"] >= ANSWER_SECONDS:
+                past_due = status in ("pending", "claimed") and now - current["asked"] >= ANSWER_SECONDS
+                if past_due:
                     live_meetings._finish_pass(c, rid, turn, "voice_deadline")
-                    self._note(voice, f"{_name(c, current['bot'])} couldn't answer in time")
                     status = "skipped"
+                if past_due or turn and turn["skip_reason"] == "voice_deadline":
+                    self._note(voice, f"{_name(c, current['bot'])} couldn't answer in time")
                 if status == "replied":
                     with voice.lock:
                         replied_at = voice.open.get("replied_at") if voice.open else None
@@ -723,7 +725,10 @@ class Voice:
         timing: dict[str, Any],
     ) -> None:
         report: Any = _report()
-        voice = self._call(call_id)
+        voice = self._found(call_id)
+        if voice is None:
+            self._log_turn(None, call_id, timing, "skipped", "canceled")
+            return
         media = self.calls.media
         played = 0
         why = "not_spoken"

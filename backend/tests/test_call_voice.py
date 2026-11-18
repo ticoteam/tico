@@ -14,7 +14,7 @@ import pytest
 
 from backend import call_media, call_voice, calls, diagnostics, live_meetings, threads
 from backend.store import H
-from backend.tests.helpers.api import assign, get, headers, post, runner
+from backend.tests.helpers.api import assign, get, headers, post, put, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
 from backend.tests.helpers.calls import (
     PCM_EIGHT_SECONDS,
@@ -384,6 +384,30 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
         token,
     )
     assert len(media.said) == 2 and "Too late." not in thread_texts(meet, cid)
+
+
+def test_voice_uses_the_company_subscription_meeting_model_at_low_effort(meet):
+    credential_setup(meet)
+    company(meet)
+    on(meet, "ops", "claude", "claude-sonnet-5-5")
+    settings = get(meet, "providers")
+    put(
+        meet,
+        "providers",
+        {
+            "enabled": settings["enabled"],
+            "meeting_model": "claude-haiku-5-5",
+            "expected_revision": settings["revision"],
+        },
+    )
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    cid = _dm(meet)
+    post(meet, f"threads/{cid}/calls", {"model": "unknown-model"}, expected=422)
+    start_call(meet, cid, bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    assert (attempt["config"]["model"], attempt["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
+    assert post(meet, f"attempts/{attempt['id']}/inputs", {}, worker["token"])["call_voice"] == {"closed": False}
 
 
 def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypatch):

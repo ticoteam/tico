@@ -2112,8 +2112,7 @@ impl Runner {
         // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
-        let voice_ref = &attempt["message"]["refs"]["live_meeting"];
-        let voice_call = voice_ref["voice_call"].is_string();
+        let voice_call = attempt["message"]["refs"]["live_meeting"]["voice_call"].is_string();
         let fresh_chat = voice_call || stateless_chat(&attempt);
         let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
@@ -2657,13 +2656,13 @@ impl Runner {
                 return Err(Fail::runtime(CONTINUE_LOST));
             }
             if voice_call {
-                let Host::Claude(claude) = h else {
+                let Host::Claude(claude) = &*h else {
                     return Err(Fail::runtime("The voice session host is unavailable"));
                 };
                 let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
                 let mut resident = claude.start_voice(&th, effort.as_deref(), &aid)?;
                 let primer = text_of(&attempt["message"]["body"]);
-                let stamp = text_of(&voice_ref["notes_stamp"]);
+                let stamp = text_of(&attempt["message"]["refs"]["live_meeting"]["notes_stamp"]);
                 self.during_drain(&aid, self.voice_session(&d, &mut resident, &primer, stamp)).await?;
                 drove.outcome = "completed".into();
                 return Ok(());
