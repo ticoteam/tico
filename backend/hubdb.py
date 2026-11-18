@@ -4747,6 +4747,7 @@ def task_create(
     from . import task_trigger_rules
 
     # One step: if anything below is refused, the task's thread, its row and the triggers it queued go with it.
+    told_readers: str | None = None
     with ExitStack() as undo:
         if conn.in_transaction:
             undo.enter_context(task_trigger_rules.savepoint(conn))
@@ -4928,6 +4929,10 @@ def task_create(
             start=stage,
         )
         _next_number(conn, actor, row["id"], pipeline_id)
+        # A private task's filer is told who else reads it as it moves (Product #449); never a refusal.
+        from . import private_readers
+
+        told_readers = private_readers.told(conn, row["id"], actor)
         event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
         _building(conn, None)
         if dedicated:
@@ -4963,7 +4968,8 @@ def task_create(
             task_followers.follow_on_create(conn, made, actor)
         recount(conn, [target, actor, made.get("owner_id")])
     made = task(conn, row["id"])
-    return {**made, "warnings": plain} if plain else made
+    extra = {**({"warnings": plain} if plain else {}), **({"private_readers": told_readers} if told_readers else {})}
+    return {**made, **extra} if extra else made
 
 
 def title_key(title):

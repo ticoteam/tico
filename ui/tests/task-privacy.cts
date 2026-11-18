@@ -72,6 +72,15 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
         const mine = t.followers.find(f => f.actor === 'human:ana');
         return route.fulfill({contentType: 'application/json', body: JSON.stringify({task_id: t.id, following: !!mine, notify: mine?.notify ?? null, followers: t.followers})});
       });
+      // Who else reads a private task in its pipeline (Product #449): the new-task window asks before Create.
+      await page.route(url => /^\/api\/v2\/pipelines\/[^/]+\/private-readers$/.test(url.pathname), route => {
+        const u = new URL(route.request().url()), q = u.searchParams;
+        posted.push({p: u.pathname, body: Object.fromEntries(q)});
+        // Product names a stage bot; Operations names none.
+        const named = u.pathname.split('/')[4] === 'product' && (q.get('parent') || q.get('task'));
+        const line = named ? 'Private, but these can read it as it moves through Product: Reviewer.' : null;
+        return route.fulfill({contentType: 'application/json', body: JSON.stringify({private: !!line, line})});
+      });
       await page.route(url => /^\/api\/v2\/bots\/[^/]+\/definition$/.test(url.pathname), route => {
         if (route.request().method() !== 'POST') return route.fallback();
         posted.push({p: new URL(route.request().url()).pathname, body: route.request().postDataJSON()});
@@ -134,6 +143,12 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await openDetails(page, 't-12');
     await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="visible"]', {hasText: 'Team'}).waitFor();
     assert.equal(await win.locator('[data-prop-row="visible"] [data-prop="readers"]').count(), 0);
+    // In a pipeline, Visible to › Private says who still reads it as it moves (Product #449).
+    await win.locator('[data-prop-row="visible"] [data-prop="visible"]').click();
+    const note = page.locator('#task-modal .prop-pop [data-prop-pick="private"] .prop-vis-note');
+    await note.waitFor();
+    assert.match(await note.innerText(), /moves through Product: Reviewer/);
+    await page.keyboard.press('Escape');
     // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
     assert.equal(await win.locator('[data-prop-row="parent"]').count(), 0, 'no parent: no Part of row, nothing to add');
 
@@ -181,6 +196,15 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     const create = page.locator('#task-create[open]');
     await create.locator('[name=title]').fill('Pick the font');
     await create.locator('[name=message]').fill('For the newsletter.');
+    const told = create.locator('#task-create-readers');
+    await told.waitFor({state: 'visible'});
+    assert.match(await told.innerText(), /can read it as it moves through Product: Reviewer/);
+    assert.equal(posted.filter(x => x.p.endsWith('/private-readers')).at(-1)!.body['parent'], 't-11');
+    // Another pipeline that names nobody: the line goes; back to Product: it comes back.
+    await create.locator('[name=pipeline]').selectOption('ops');
+    await told.waitFor({state: 'hidden'});
+    await create.locator('[name=pipeline]').selectOption('product');
+    await told.waitFor({state: 'visible'});
     await create.locator('[type=submit]').click();
     await page.waitForFunction(() => !(document.querySelector('#task-create') as HTMLDialogElement).open);
     const made = posts.find(x => x.p === '/api/v2/tasks')!.body;
@@ -202,6 +226,6 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.deepEqual(posted.find(x => x.p === '/api/v2/bots/pm/definition')!.body['update_subscriptions'], ['templates', 'tico']);
     assert.deepEqual(errors, []);
-    console.log('task privacy: Visible to (Private · names, Team), Followers, a hidden parent named only "a private task", private under a private parent, bot defaults: ok');
+    console.log('task privacy: Visible to (Private · names, Team), Followers, a hidden parent named only "a private task", private under a private parent and told who reads it, bot defaults: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
