@@ -150,6 +150,13 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     )
 
 
+def bot_id(c: sqlite3.Connection, ref: str) -> str:
+    """The id of the bot `ref` names by its id or by its slug ("" when none). A slug may differ from its id (a custom
+    bot, a renamed one); no slug can name another bot's id, so at most one bot matches."""
+    row = c.execute("SELECT id FROM bots WHERE id=? OR slug=? LIMIT 1", (ref, ref)).fetchone()
+    return str(row[0]) if row is not None else ""
+
+
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:
     """The `events` row every Finance write leaves, in the same transaction."""
     _H.event(c, actor, action, target, dict(detail))

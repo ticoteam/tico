@@ -341,7 +341,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
             "debits positive, credits negative; they sum to zero",
         ),
         ("basis?", "both|accrual", "accrual: left out of the cash P&L (depreciation, accruals)"),
-        ("source?", "str", ""),
+        ("source?", "manual|import", "default manual"),
         ("source_id?", "str", ""),
         ("reverses?", "str", "instead of lines: the entry id to reverse (with date? and memo?)"),
     ),
