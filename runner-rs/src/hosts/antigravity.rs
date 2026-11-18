@@ -104,6 +104,11 @@ struct Inner {
     new_message: bool,
     tx: Events,
     reader: Option<tokio::task::JoinHandle<()>>,
+    /// Counts the processes started: one replaced (`retire`) says nothing more to the turns after it.
+    generation: u64,
+    /// The thread and folder the process was started for: a turn on another one gets a new process (a kept host
+    /// serves the next attempt, crate::warm).
+    spawned_for: Option<(String, String)>,
 }
 
 struct Shared {
@@ -134,6 +139,8 @@ impl AntigravityHost {
                 new_message: false,
                 tx,
                 reader: None,
+                generation: 0,
+                spawned_for: None,
             }),
         }))
     }
@@ -198,6 +205,7 @@ impl AntigravityHost {
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
         if self.inner().thread.as_deref() == Some(thread_id) && self.alive() {
+            self.inner().settings = Some(settings.clone());
             return Ok(thread_id.into());
         }
         let unavailable = || failed("Antigravity conversation is unavailable");
@@ -279,6 +287,7 @@ impl AntigravityHost {
         settings: &Settings,
         effort: Option<&str>,
         provider: Option<&str>,
+        generation: u64,
     ) -> Result<(Proc, tokio::process::ChildStdout), HostError> {
         let mut command = self.command(settings, effort, provider)?;
         let mut child = command
@@ -290,7 +299,7 @@ impl AntigravityHost {
             &mut child,
             move |value| {
                 let inner = host.inner();
-                if inner.turn.is_some() {
+                if inner.turn.is_some() && inner.generation == generation {
                     let _ = inner.tx.send(value);
                 }
             },
@@ -324,6 +333,9 @@ impl AntigravityHost {
                     status = child.wait() => {
                         let code = super::return_code(&status);
                         let inner = host.inner();
+                        if inner.generation != generation {
+                            break; // replaced (`retire`): the turns after it are not its
+                        }
                         let _ = inner.tx.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
                         break;
                     },
@@ -362,12 +374,27 @@ impl AntigravityHost {
                 "Antigravity is unavailable or already running a turn",
             ));
         }
+        let settings = inner.settings.clone().unwrap_or_default();
+        let place = (thread_id.to_string(), settings.cwd.clone());
+        if inner.proc.is_some() && inner.spawned_for.as_ref() != Some(&place) {
+            // A new thread (a fresh session, a resume that failed) or another folder on a kept process: agy holds
+            // one conversation in one folder, so it is replaced, never handed this turn's prompt.
+            Self::retire(&mut inner);
+        }
         if inner.proc.is_none() {
-            let settings = inner.settings.clone().unwrap_or_default();
-            let (proc, stdout) = self.spawn(&settings, effort, inner.provider.as_deref())?;
+            inner.generation += 1;
+            let (proc, stdout) = self.spawn(
+                &settings,
+                effort,
+                inner.provider.as_deref(),
+                inner.generation,
+            )?;
             inner.proc = Some(proc);
-            let host = self.clone();
-            inner.reader = Some(tokio::spawn(async move { host.read(stdout).await }));
+            inner.spawned_for = Some(place);
+            let (host, generation) = (self.clone(), inner.generation);
+            inner.reader = Some(tokio::spawn(
+                async move { host.read(stdout, generation).await },
+            ));
         }
         let line = py_dumps(&json!({"event": "user", "message": {"content": text}})) + "\n";
         if inner
@@ -390,7 +417,7 @@ impl AntigravityHost {
         Ok(turn)
     }
 
-    async fn read(&self, stdout: tokio::process::ChildStdout) {
+    async fn read(&self, stdout: tokio::process::ChildStdout, generation: u64) {
         let mut lines = BufReader::new(stdout).lines();
         let why = loop {
             let line = match lines.next_line().await {
@@ -406,6 +433,9 @@ impl AntigravityHost {
                 Err(_) => break Some("JSONDecodeError".into()),
             };
             let mut inner = self.inner();
+            if inner.generation != generation {
+                return; // replaced (`retire`)
+            }
             if !inner.up {
                 break None;
             }
@@ -418,6 +448,9 @@ impl AntigravityHost {
             log(&format!("Antigravity stream failed: {why}"));
         }
         let mut inner = self.inner();
+        if inner.generation != generation {
+            return;
+        }
         if inner.up {
             if let Some(turn) = inner.turn.take() {
                 let ev = event(
@@ -565,6 +598,28 @@ impl AntigravityHost {
     /// Interrupting a turn stops the process: the next turn starts a new one on the saved conversation.
     pub async fn interrupt(&self) {
         self.stop().await;
+    }
+
+    /// Stop the process without a word to the turns after it: its reader ends now, its exit is not reported, and its
+    /// group gets SIGTERM, then SIGKILL after STOP_GRACE.
+    fn retire(inner: &mut Inner) {
+        if let Some(reader) = inner.reader.take() {
+            reader.abort();
+        }
+        inner.spawned_for = None;
+        let Some(old) = inner.proc.take() else { return };
+        inner.generation += 1;
+        let (kill, mut exited) = (old.kill.clone(), old.exited.clone());
+        drop(old);
+        let _ = kill.send(libc::SIGTERM);
+        tokio::spawn(async move {
+            if tokio::time::timeout(STOP_GRACE, exited.wait_for(|e| *e))
+                .await
+                .is_err()
+            {
+                let _ = kill.send(libc::SIGKILL);
+            }
+        });
     }
 
     /// SIGTERM to the group, SIGKILL after 5 s, then up to 5 s more for it to go.
