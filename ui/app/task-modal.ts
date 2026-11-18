@@ -696,6 +696,10 @@ function taskChatFollowsItself(state: TaskChatState): boolean {
   const live = state.dialog.taskLive;
   return state.dialog.open && !!live?.shared && String(live.id) === String(state.id);
 }
+// A change of the open task from the page's own stream (refresh.ts): read once, unless the task's stream reads it.
+function taskChatOthersChange(state: TaskChatState): void {
+  if (!taskChatFollowsItself(state)) taskChatLive(state);
+}
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 function taskChatStop() {
   if (TASK_CHAT) TASK_CHAT.liveOff?.();
@@ -1369,7 +1373,7 @@ document.addEventListener('visibilitychange', () => {
   const state = TASK_CHAT;
   if (document.hidden || !state?.hiddenChange) return;
   state.hiddenChange = false;
-  if (!taskChatFollowsItself(state)) taskChatLive(state);
+  taskChatOthersChange(state);
 });
 async function taskChatLoad(id: string | number, dialog: ModalDialog, data: ModalDetail | null = null) {
   const state: TaskChatState = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
