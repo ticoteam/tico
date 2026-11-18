@@ -1,7 +1,7 @@
 // Scheduled calls (docs/meet.md, Scheduled calls): the Meetings page's Call dialog books a call with Schedule (once a
 // time is picked: then Schedule is the filled button; at Now, Start is; no window opens, the dialog closes and focus goes
 // back to Call now), the call shows in Upcoming at the top of the page with when, who, Join and, for who may change it,
-// its ⋯, and in its thread's header as the phone and when (Join, or a menu with Join, Change time and Cancel call). Change
+// its ⋯ (a live call shows above it, under Live, with how long it has gone and Join), and in its thread's header as the phone and when (Join, or a menu with Join, Change time and Cancel call). Change
 // time reopens the dialog filled in and sends the new time; Cancel call, once confirmed, ends the booking. Desktop and a 390px phone; every name is synthetic (Acme, acme.example).
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots, in both themes: scheduled-calls-<name>-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -43,7 +43,7 @@ let browser: import('playwright').Browser | null = null;
     // 9:10 in the morning in Los Angeles: the next half hour is 9:30.
     await page.clock.setFixedTime(new Date('2026-11-18T17:10:00Z'));
     const errors: string[] = [], booked: Record<string, unknown>[] = [], changed: Record<string, unknown>[] = [], ended: string[] = [], asked: string[] = [];
-    let upcoming: Record<string, unknown>[] = [];
+    let upcoming: Record<string, unknown>[] = [], live: Record<string, unknown>[] = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', d => { asked.push(d.message()); return d.accept(); });
     await page.route('**/*', async route => {
@@ -65,6 +65,7 @@ let browser: import('playwright').Browser | null = null;
       if (p === '/api/meetings/sources') return json({sources: []});
       if (p === '/api/v2/threads/dm') return json(dm);
       if (p === '/api/v2/calls/upcoming') return json({calls: upcoming});
+      if (p === '/api/v2/calls/live') return json({calls: live});
       if (p === '/api/v2/threads/t-dm/calls' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}') as Record<string, unknown>;
         booked.push(body);
@@ -162,6 +163,25 @@ let browser: import('playwright').Browser | null = null;
     upcoming = upcoming.map(v => ({...v, can_edit: true}));
     await page.evaluate('meetUpcoming(MEET)');
     await more.waitFor();
+    // Live: none, no section; a live call shows above Upcoming as the same row, with how long it has gone, who is in it
+    // and Join, and no ⋯ (the threads topic's call.* change reads it again; called here as that change would).
+    assert.ok(await page.locator('#meet-live-calls').isHidden(), 'no Live with no live call');
+    live = [{id: 'cl', thread_id: 't-dm', title: 'Acme standup', state: 'live', provider: 'tico', connector: 'human:ana', started_at: '2026-11-18T16:57:26Z',
+      participants: [{actor: 'human:ana', joined_at: '2026-11-18T16:57:26Z'}, {actor: 'human:ben', joined_at: '2026-11-18T16:58:00Z'}], bots: ['ops'], ring: false}];
+    await page.evaluate('meetLiveCalls(MEET)');
+    const liveRow = page.locator('#meet-live-calls .meet-upcoming-row[data-live-call="cl"]');
+    await liveRow.waitFor();
+    assert.deepEqual([await liveRow.locator('.meet-upcoming-t').innerText(), await liveRow.locator('.meet-upcoming-when').innerText(),
+      await liveRow.locator('.meet-upcoming-ppl > span').count(), await liveRow.locator('[data-call-join="cl"]').isVisible(),
+      await liveRow.locator('.call-sched-more').count()], ['Acme standup', 'Live · 12:34', 2, true, 0]);
+    assert.ok(await page.evaluate(() => { const a = document.getElementById('meet-live-calls'), b = document.getElementById('meet-upcoming');
+      return !!a && !!b && !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); }), 'Live above Upcoming');
+    assert.equal(await wide(page), phone ? 390 : 1280, 'nothing sideways');
+    await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });   // Time changed's, for the screenshot
+    await shot(page, 'live', phone, theme);
+    live = [];
+    await page.evaluate('meetLiveCalls(MEET)');
+    await page.locator('#meet-live-calls').waitFor({state: 'hidden'});
     // The thread's header: the phone and when, which joins, with its own ⋯.
     if (!phone) {
       await page.goto('https://tico-ui.test/#/thread/t-dm');

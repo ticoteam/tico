@@ -102,6 +102,7 @@ async function pageNotes(): Promise<void> {
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
+    <section class="meet-upcoming" id="meet-live-calls" aria-label="Live calls" hidden></section>
     <section class="meet-upcoming" id="meet-upcoming" aria-label="Upcoming calls" hidden></section>
     <div class="notes" id="notes">
       <div class="meet-syncing" id="meet-syncing" role="status" hidden>${meetLogo('granola', 30)}<div class="meet-main"><b>Checking Granola</b><div class="meet-meta"><span>New notes arrive once Granola has a summary</span></div></div><div class="meet-side"><span class="meet-state"><i class="mg-spin" aria-hidden="true"></i>Syncing</span></div></div>
@@ -148,6 +149,7 @@ async function pageNotes(): Promise<void> {
   };
   meetSources(state);
   meetReviewTabs(state);
+  void meetLiveCalls(state);
   void meetUpcoming(state);
   granolaInit(state);   // the viewer's own Granola account: status, then one sync (ui/app/meetings-granola.ts)
   await meetLoad(state, true);
@@ -163,6 +165,35 @@ async function pageNotes(): Promise<void> {
   state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) { meetSources(state); void meetUpcoming(state); } }, 60000);
 }
+
+// Live: the Tico Meet calls going on now in threads the viewer can read (GET /v2/calls/live), each as an Upcoming row
+// with how long it has been going (thread-call.ts callTick moves the clock), who is in it and Join. It is read again on
+// the threads topic's call.* changes (below), never on a timer.
+async function meetLiveCalls(state: MeetState): Promise<void> {
+  const box = document.getElementById('meet-live-calls');
+  if (!box || !callTicoMeet()) return;
+  let calls: CallRecord[] = [];
+  try { calls = (await get<CallListReply>('/v2/calls/live', {fresh: true})).calls || []; } catch { return; }
+  if (MEET !== state) return;
+  for (const v of calls) CALL_VIEWS.set(v.id, v);
+  box.hidden = !calls.length;
+  patchHTML(box, calls.length ? `<h3 class="meet-upcoming-h">Live</h3>${calls.map(v => {
+    const since = v.started_at || '';
+    return `<div class="meet-upcoming-row" data-live-call="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
+      <span class="meet-upcoming-when muted tnum">Live · <span data-call-since="${esc(since)}">${esc(callClock(since))}</span></span>
+      <span class="meet-upcoming-ppl">${callFaces(v).slice(0, 8).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 18)}</span>`).join('')}</span>
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button></div>`;
+  }).join('')}` : '');
+  if (calls.length) callTick();
+}
+// A call starting, ending or changing who is in it: Live is read again (once per burst), and Upcoming too when one
+// started, since a scheduled call's first join moves it from Upcoming to Live.
+liveOn('threads', (d: ThreadsEvent & {call_id?: string}) => {
+  const state = MEET, kind = String(d?.kind || '');
+  if (!state || !kind.startsWith('call.')) return;
+  liveSoon('meet-live-calls', () => { if (MEET === state) void meetLiveCalls(state); }, 300);
+  if (kind === 'call.started') liveSoon('meet-upcoming', () => { if (MEET === state) void meetUpcoming(state); }, 300);
+});
 
 // Upcoming: the scheduled calls the viewer is in, soonest first (GET /v2/calls/upcoming), each with when, who, Join and
 // its ⋯ for who may change it (thread-call.ts callScheduledMenu). Join (thread-call.ts, data-call-join) opens the meeting window, and the first
@@ -1352,6 +1383,7 @@ liveOn('tasks', (event: MeetTaskEvent) => {
   meetLinkedTasksRender(state, id);
 });
 liveOn('reset', () => {
+  if (MEET) void meetLiveCalls(MEET);
   if (!MEET?.open || !MEET.selected) return;
   MEET.linkedTaskChanges = {};
   meetLinkedTasksLoad(MEET, MEET.selected);
