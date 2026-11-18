@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_live_meetings.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

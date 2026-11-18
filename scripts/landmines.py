@@ -438,7 +438,7 @@ def main(argv=None):
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:
-        print(f"landmines: {len(problems)} problems (skills/honest-code/SKILL.md)", file=sys.stderr)
+        print(f"landmines: {len(problems)} problems; skills/honest-code/SKILL.md says how to fix each", file=sys.stderr)
         return 1
     print("landmines: ok")
     return 0
