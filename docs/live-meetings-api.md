@@ -27,11 +27,8 @@ shapes below are part of the contract; change them only with a reviewed contract
 - Meeting-derived threads, messages and run artifacts retain the meeting's current access
   restriction, including on retries and after a bot is removed. Company-owner inspection does not
   override private meeting membership. An already downloaded copy cannot be retracted.
-- Private meeting executions can publish their scoped reply and retain files tied to that run.
-  File writes are limited to uploads/imports in the turn's own thread, with no task/bot scope
-  override, link registration or metadata edits. They cannot publish ordinary messages, tasks,
-  comments or company status from that context.
-  This server-side restriction does not change ordinary team-meeting executions.
+- Bots use their normal permissions in private and team meetings. They can create tasks, write
+  messages and docs, and update their memory and repository as they do in other turns.
 - Authorized meeting members can read a generated bot thread's meeting-scoped prompt and reply
   without broader bot Read access. This grants no posting or goal-setting authority in that thread:
   people use live meeting Chat, and bots name their claimed turn when replying there.
@@ -67,7 +64,7 @@ fields are listed below.
 | `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. Empty `text` clears a chunk the final transcript has no words for; cleared chunks leave the transcript, bot context and finalization. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
 | `POST /api/v2/live-meetings/{id}/join` | Human who can see it | Join the connected meeting. Joined people can chat. |
 | `POST /api/v2/live-meetings/{id}/access` | Participant to add; connector to change visibility or remove others; anyone to leave | `{visibility?,add?:[person],remove?:[person]}` with person ids or `human:` actors. Adding lets a person see and join a private meeting; removing also takes them out of the joined list. Returns the meeting view, whose `visibility` and `access:[{actor,name}]` show the result, or `{"id":"<live-id>","left":true}` on self-removal. |
-| `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
+| `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a job in their meeting conversation; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
 | `POST /api/v2/live-meetings/{id}/bots` | Participant with See and Write access to each bot | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
 | `DELETE /api/v2/live-meetings/{id}/bots/{bot}` | Connector or the person who attached the bot | Send `{}` with an `Idempotency-Key` to remove one attached bot. HTTP 200 is `{"id":"<live-id>","bot":"<slug>","removed":<bool>,"canceled_turns":[<turn-id>,...],"event_id":<meeting-event-id>}`. Repeating the same key/body returns the saved result. Unclaimed/claimed turns are marked skipped as `bot_detached`; queued jobs are canceled; late replies cannot post. Removal is meeting-local and idempotent when the bot is already absent. |
 | `POST /api/v2/live-meetings/{id}/control` | Connector | `{action:"pause"|"disconnect"|"resume"|"end"}`. Pause and disconnect are server-side live-sharing controls: both set Tico state to `paused`, preserve text/chat, suppress new routing, and reject new chunk writes. The client must stop uploading chunks while paused/disconnected. Reconnect with the same `client_id`; only an explicit `resume` re-enables live chunk writes. End is terminal. |
@@ -137,11 +134,11 @@ schemas; nullable values are present as JSON `null` where noted:
 | `meeting.chat` | `{id:<chat-id>,actor:<actor>,role:"human",text:<string>,at_ms:<integer|null>,transcript_seq:<integer|null>}` |
 | `meeting.bot_turn` | `{turns:[{id:<turn-id>,bot:<slug>,window_index:<integer|null>,transcript_seq:<integer|null>},...],source_key:<string>}` |
 | `meeting.bot_turn_claimed` | `{turn_id:<turn-id>,bot:<slug>}` |
-| `meeting.bot_turn_failed` | `{turn_id:<turn-id>,bot:<slug>,reason:"private_checkout",detail:<string>}`: once per private meeting and bot, when the bot's computer could make no private copy of its repository; that turn and later ones that fail alike end without an answer (also `meeting.bot_turn_skipped`, reason `bot_execution_private_checkout`) instead of being retried. |
+| `meeting.bot_turn_failed` | `{turn_id:<turn-id>,bot:<slug>,reason:"private_checkout",detail:<string>}` for an attempt still on the retired private lane after a hub upgrade. That attempt also emits `meeting.bot_turn_skipped` with reason `bot_execution_private_checkout`. |
 | `meeting.bot_turn_skipped` | `{turn_id:<turn-id>,bot:<slug>,reason:<string>}`; `steered_into_turn` means the bot took the turn in as a follow-up to the reply it was giving, which answers it; `claim_abandoned` means a turn claimed through the API got no reply within 5 minutes. |
-| `meeting.bot_turn_waiting` | Retired: no longer sent. Every computer the server accepts takes a private meeting's turn. |
+| `meeting.bot_turn_waiting` | Retired. |
 | `meeting.bot_turn_deferred` | `{turn_id:<turn-id>,bot:<slug>,reason:"replying_in_meeting"|"busy",behind:<turn-id|null>,source_key:<string>}`: a bot named while busy keeps its turn; it runs after the current work (see Router timing). |
-| `meeting.bot_turn_retried` | `{turn_id:<turn-id>,bot:<slug>,reason:"empty_bot_reply",retry:1|2,model:<meeting model|null>}`: an empty reply is asked again in the same conversation as a fresh run: once on the model that gave it (`model`), and, when that was a meeting model, once more on the bot's own (`model:null`). After that an empty reply is a hidden PASS (`empty_bot_reply`). |
+| `meeting.bot_turn_retried` | `{turn_id:<turn-id>,bot:<slug>,reason:"empty_bot_reply",retry:1|2,model:<meeting model|null>}`: the hub asks again in the same conversation after an empty reply when the run shows no evidence of acting. It tries once on the model that gave it (`model`) and, if that was a meeting model, once more on the bot's own (`model:null`). An empty reply from a run that may have acted or used its last retry is a hidden PASS (`empty_bot_reply`). |
 | `meeting.model` | `{model:<first choice>,bot:<slug>,turn_id:<turn-id|null>,fallback:"openrouter"|"bot_model",ran:<model>,reason:<first reason>,steps:[{model,reason},...]}`: the meeting model could not run on the bot's computer and the reply ran on `ran`; `steps` lists each model tried that could not. Said once per turn: a claim of the same turn that falls back the same way adds none. |
 | `meeting.router` named bypass | `{bypass:"named",source_key:<string>,targets:[<slug>,...],skipped:[{bot:<slug>,reason:<string>},...],trace:{decision:"bypassed",reason:"named mention"}}` |
 | `meeting.router` chat route | `{source_kind:"chat",source_key:"chat:<chat-id>",chat_id:<chat-id>,outcome:"route|pass",decision_ms:<integer|null>,trace:<router trace object>}` |
@@ -227,40 +224,19 @@ every turn runs on that thread's own harness thread whatever the bot's session s
 one meeting continue each other, and nothing said in a meeting (private or team) reaches the bot's other
 meetings or its ordinary threads through the harness thread. Removing and re-adding a bot starts a new one.
 
-A private meeting's bot turns change nothing shared; they read as any turn does (memory, instructions,
-knowledge, docs, hub reads). The meeting's owner shares its notes and action items after the meeting, by
-review. Enforced, not left to the bot, on any harness:
+Both private and team meeting turns use the bot's normal checkout, memory and tool permissions.
+The meeting audience controls who can read its transcript, chat, run and content that explicitly
+references them. A bot can create new work under its usual permissions. A reply that quotes a
+private meeting message still requires the destination to be able to read the quoted content.
 
-- **Hub writes.** Every write a private meeting's turn makes through the hub API or `/api/v2/mcp` is refused
-  with HTTP 403 `privacy`, detail "This is a private meeting: nothing from it is saved or shared until its
-  owner reviews it." (docs, pages, tasks, messages to other threads, mail, status, OKs, settings). What it
-  may still write is one list, `task_privacy.PRIVATE_MEETING_WRITES`: reads over POST (`sql`,
-  `tasks/dry-run`), the MCP door, run files (they keep the run's provenance, so only the meeting's readers see
-  them), a GitHub token (read-only for it), and its own meeting's `chat` and `turns/{turn_id}/claim`. The
-  runner's own lease, event and result calls are not affected.
-- **The bot's repository.** Its turns run in their own lane, `private:<conversation id>`, which the runner
-  gives a worktree of the bot's repository kept for that meeting alone (`sessions/bot-<slug>/private-<id>`,
-  branch `tico-session/private-<id>` with no upstream). The bot keeps what it changed there for the rest of
-  the meeting; nothing in it is committed for the bot, pushed, published or reported, and the bot's checkout
-  is never used. Its GitHub tokens are asked for with the turn's own token, so they are read-only. The
-  runner deletes the worktree and its branch, unsaved work and all, within ten minutes of the meeting
-  ending (`POST /api/v2/runners/me/session-tasks` answers `done` for `private-<id>`). A checkout with no
-  upstream (a repository made on that computer, no remote yet) is fine: the copy starts from its `HEAD`. If
-  the worktree cannot be made (the bot has no checkout, git refuses), the turn never runs in the bot's
-  checkout: the runner tags the failure `private_checkout`, the server ends the turn rather than hand it
-  back or resume it, and the meeting gets one `meeting.bot_turn_failed` notice.
-- **Older runners.** A computer below the minimum release (0.6.0-rc.1) is paused and takes no work, so a private meeting's turn only goes to a runner that runs it in a private copy of the bot's checkout.
-- **The prompt** says so: the bot cannot save or share anything from the meeting, and when asked to, it says
-  the owner can share the meeting's notes and action items after the meeting. Team meetings get no such line.
-
-Team meetings are unchanged.
+Older hubs can still send the retired `private:<conversation id>` lane. Runners keep those
+worktrees isolated, and the hub reports them finished after their meeting ends so they can be removed.
 
 Each selected bot gets a durable normal Tico runner job containing only that meeting's title,
 transcript (up to 20 latest chunks through the routed sequence), and recent chat (up to 12 messages);
 source texts are clipped to 800 characters per entry. The runner lease claims the meeting turn and
 its completed response settles that same turn. Automated turns may run concurrently, but each reply
-is attached to the originating meeting and transcript position. Router execution never creates
-external posts or action items. People review any future action-item proposal separately. In Tico
+is attached to the originating meeting and transcript position. In Tico
 rehearsal mode, routing records a hidden PASS without calling a decision provider.
 
 ## Replay and lifecycle

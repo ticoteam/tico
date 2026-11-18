@@ -160,8 +160,7 @@ A Google Meet call still opens Meet in a tab of its own.
    the ones already in it; more is `422 bot_limit`, through the call's route and the live meeting's alike). A bot must
    be one
    that person can write to. Attached bots get turns on the call's speech and reply in the thread, as they do in a
-   live meeting. A reply is a run of the bot's own runner job, so the bot needs a runner that takes private meeting
-   turns (`private_lanes_v1`), and it is posted in the thread only through that run. A bot stays attached only while the
+   live meeting. The bot's runner posts its final reply in the call's thread. A bot stays attached only while the
    person who attached it can still read the thread and write to the bot. When that ends, the bot stops hearing the call
    and its replies are refused at once. The sweep then detaches it and cancels its open turns.
 5. **Access.** When someone loses read access to the thread, the server removes them from the media session through
@@ -225,8 +224,9 @@ own transcript and chat routes ask through the same queue, so they never open a 
 seconds or more before it was transcribed (a slow Gateway) is not asked; a 1:1 call shows `Please repeat that`.
 
 **The answer.** The bot answers on its own model (a voice call's meeting model is the bot's own), with an instruction to
-speak: at most about 80 words, no markdown, lists, links, code or emoji. The no-actions rule of a live meeting holds. A
-turn is dead 30 seconds after its question was heard: a bot that has not answered by then is cut off (`skip_reason:
+speak in plain sentences, at most about 80 words. During the turn the bot can use its usual tools and permissions
+to create tasks, update memory or send messages. People read the call transcript and chat through the call thread's
+access rules. A turn is dead 30 seconds after its question was heard: a bot that has not answered by then is cut off (`skip_reason:
 voice_deadline`, note `<bot> couldn't answer in time`), and its late answer is neither posted nor heard. A reply stored
 after that time, or whose first sentence would start playing after it, is posted as text and not heard.
 
@@ -418,5 +418,4 @@ on every company host to LiveKit. The design, the production steps in order and 
 - **Live LiveKit beyond one dev server.** The live tests cover one speaker and Tico voice on one `--dev` server, run by
   hand (`TICO_LIVE_LIVEKIT`). Not run yet: browsers
   through TURN and TLS, several calls at once, a LiveKit restart in the middle of a call, and the real Gateway.
-- **Bot replies need a runner.** A reply is a run of the bot's runner job. A bot whose runner does not take private
-  meeting turns waits, and the meeting says so, until that runner is updated.
+- **Bot replies need a runner.** The bot's runner claims the call turn and posts its final reply.

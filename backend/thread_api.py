@@ -1540,6 +1540,14 @@ def register_messages(
         body = routed_message(c, who, body)
         body.conversation_id = named_destination(c, who, body)
         audience = rule_message_audience(c, who, body) if rc is not None else None
+        if (
+            who.role == "bot"
+            and ("turn_id" in body.refs or body.in_reply_to)
+            and rc
+            and "outcome" in rc
+            and org_rule_check.holds(rc)
+        ):
+            recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
         rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
         if rule and rule.get("moved"):

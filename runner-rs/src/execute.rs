@@ -2118,8 +2118,8 @@ impl Runner {
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
             }
-            // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
-            let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
+            // A hub that sends the retired meeting lane still scopes GitHub tokens to that turn.
+            let own = if p.disposable { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             let own_tokens = crate::gitcred::TokenCache::new();
             let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
             let separation = crate::gateway_relay::separation();
@@ -2404,7 +2404,7 @@ impl Runner {
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
-                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
+                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.disposable),
                 output_style: hosts::output_style(&config),
                 verbosity: hosts::verbosity(&config),
             };
@@ -2779,7 +2779,7 @@ impl Runner {
                     &token,
                     "execution interrupted",
                 );
-                // No fallback for a private meeting with no copy of its own: it would have none either.
+                // On an older hub, a fallback cannot run without the same isolated checkout.
                 unavailable = !OWN_INTERRUPT.iter().any(|p| e.text.contains(p))
                     && !e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED);
             }
@@ -2983,7 +2983,7 @@ impl Runner {
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
-                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
+                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.disposable)),
                     output_style: hosts::output_style(&config),
                     verbosity: hosts::verbosity(&config),
                 };
@@ -3667,8 +3667,7 @@ impl Runner {
                     }
                     let id = aid.clone();
                     self.state.off(move |s| s.phase(&id, "synced")).await?;
-                    // A private meeting's copy is never committed, pushed, published or reported (sessions.rs).
-                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && !p.private) {
+                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && !p.disposable) {
                         if !committed_secret && p.session_path.is_none() && !crate::continuity::memory_pass(&attempt["config"]) {
                             self.publish(&bot, &execution_path, &env).await;
                         }
@@ -3967,7 +3966,7 @@ impl Runner {
         };
         let mut said = json!({"runner_error": cause, "error_type": e.kind});
         if e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED) {
-            said["code"] = json!("private_checkout"); // the server ends the meeting turn: retrying fails the same way
+            said["code"] = json!("private_checkout"); // older hubs recognize the terminal placement failure
         }
         let _ = self.state.append(aid, "diagnostic", &said);
         self.diagnose(
@@ -8213,7 +8212,7 @@ for line in sys.stdin:
             let scratch = place.execution_path.clone();
             assert_ne!(scratch, main);
             assert_eq!(place.main_path, scratch);
-            assert!(!place.has_checkout() && place.private && place.add_dirs.is_empty());
+            assert!(!place.has_checkout() && place.disposable && place.add_dirs.is_empty());
             assert!(!scratch.join("private.txt").exists());
             std::fs::create_dir(scratch.join("reports")).unwrap();
             std::fs::write(scratch.join("reports/page.html"), "PRIVATE-PAGE-OUTPUT").unwrap();
@@ -8365,6 +8364,58 @@ for line in sys.stdin:
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_call_turn_on_the_main_lane_pushes_and_reports_memory() {
+        let (_threads, _prompts, completions, _injected, seen, dir) = claude_rig_kept(
+            &[json!({"session": "task"})],
+            &[],
+            &[],
+            &[],
+            json!({
+                "lane": "main",
+                "conversation": {"id": "c-call", "kind": "chat", "room_key": "live-meeting:call"},
+                "message": {"id": "request", "body": "Remember to check the runbook.", "refs": {
+                    "live_meeting": {"meeting_id": "call", "turn_id": "turn"}
+                }}
+            }),
+            |projects| {
+                let root = projects.parent().unwrap();
+                let checkout = projects.join("bot-ops");
+                let remote = root.join("remote.git");
+                repo_git(root, &["init", "--bare", "-q", remote.to_str().unwrap()]);
+                repo_git(&checkout, &["init", "-q"]);
+                repo_git(&checkout, &["add", "AGENT.md"]);
+                repo_git(&checkout, &["commit", "-qm", "start"]);
+                repo_git(
+                    &checkout,
+                    &["remote", "add", "origin", remote.to_str().unwrap()],
+                );
+                repo_git(&checkout, &["push", "-qu", "origin", "main"]);
+                std::fs::write(root.join("edits-0"), "").unwrap();
+            },
+        )
+        .await;
+        assert_eq!(completions[0]["outcome"], "completed");
+        assert_eq!(
+            repo_git(
+                &dir.join("remote.git"),
+                &["show", "main:memory/learnings.md"]
+            ),
+            "rewritten"
+        );
+        let (_, _, report) = seen
+            .iter()
+            .find(|(_, path, _)| path.ends_with("/bots/ops/memory/report"))
+            .expect("the call turn must report its memory update");
+        assert_eq!(report["commits"][0]["attempt"], "a-claude-0");
+        assert_eq!(report["commits"][0]["shared"], true);
+        assert_eq!(
+            report["commits"][0]["files"],
+            json!(["memory/learnings.md"])
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

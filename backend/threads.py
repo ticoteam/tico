@@ -1141,6 +1141,20 @@ def stamp(c, row, conv, refs):
     row["origin_id"] = str(origin.get("origin_id") or "") or mint_origin(c)
     row["revision"] = int(origin.get("revision") or 0)
     row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"), c)
+    if row["restricted"] and row.get("in_reply_to"):
+        from .live_privacy import sources
+
+        # A reply can outlive the source's refs after the thread's retention sweep.
+        meetings = sources(c)
+        try:
+            inherited = meetings.message(H.message(c, row["in_reply_to"], include_deleted=True))
+        except Problem:
+            # The read gate refuses ancestry that exceeds its depth limit or cannot be resolved.
+            inherited = set()
+        if inherited:
+            stored = _refs_of(row)
+            stored["live_meetings"] = sorted(inherited | meetings.references(stored))
+            row["refs"] = H._dump(stored)
     row["legacy_audience"] = None
     return row
 
@@ -4036,13 +4050,14 @@ def _revived_roots(c, v, roots):
 
 def prime_checks(c, rows):
     """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
-    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
+    to, the tasks and pages their refs name, and runs named by either together, so a reader
     with hundreds of bot replies to check costs a fixed number of statements, not several per reply."""
     if not rows:
         return
     from . import provenance_clock, task_privacy
 
-    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
+    ancestry = H.prime_message_rows(c, rows) or rows
+    runs, every = set(), [H._json(r["refs"], {}) or {} for r in ancestry]
     for refs in every:
         run = refs.get("run") if isinstance(refs, dict) else None
         aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
@@ -4050,7 +4065,6 @@ def prime_checks(c, rows):
         )
         if isinstance(aid, str) and aid:
             runs.add(aid)
-    H.prime_message_rows(c, rows)
     task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
     # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
     # new message, so most loads) get their whole provenance read together.

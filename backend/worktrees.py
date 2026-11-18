@@ -1608,12 +1608,12 @@ def install(app, store, auth, mutate):
                 raise Problem('forbidden', 'A registered computer is required', 403)
             out = []
             for item in body.sessions:
-                if item.task.startswith(sessions.PRIVATE_FOLDER):
-                    # A private meeting's own checkout (clients/sessions.py PRIVATE_LANE): done once the meeting ends.
-                    conv = item.task[len(sessions.PRIVATE_FOLDER) :]
+                if item.task.startswith(sessions.LEGACY_MEETING_FOLDER):
+                    # Older runners still need to clean up worktrees made before the hub upgrade.
+                    conv = item.task[len(sessions.LEGACY_MEETING_FOLDER) :]
                     if c.execute(
                         "SELECT 1 FROM attempts WHERE runner_id=? AND bot_id=? AND lane=?",
-                        (who.runner_id, item.bot, sessions.private_lane(conv)),
+                        (who.runner_id, item.bot, sessions.LEGACY_MEETING_LANE + conv),
                     ).fetchone():
                         room = c.execute("SELECT room_key FROM conversations WHERE id=?", (conv,)).fetchone()
                         key = (room["room_key"] if room else "") or ""

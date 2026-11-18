@@ -348,23 +348,12 @@ def job_lane(c, bot, config, message, conversation):
     """The lane a queued message would run in (clients/sessions.py). `config` is the bot's followed config, the one
     its runner keys sessions on. A subtask's turn runs in its session root's lane, so it and its parent's turns take
     turns in one session."""
-    if private := private_lane(c, conversation):
-        return private
     return sessions.lane(
         config,
         bot,
         session_task_id(c, bot, config, work_task_id(message, conversation)),
         conversation["id"] if conversation else None,
     )
-
-
-def private_lane(c, conversation):
-    """A private live meeting's room runs in its own lane (clients/sessions.py PRIVATE_LANE), else None."""
-    from .live_privacy import private_room
-
-    if conversation and private_room(c, conversation.get("room_key")):
-        return sessions.private_lane(conversation["id"])
-    return None
 
 
 def bump_bot_session_epoch(c, bot):
@@ -538,8 +527,6 @@ def lane_history(c, bot, config, history, conversation, lane):
     lane, so the main session never reads task traffic and a task's session never reads the main chat or
     another task. The main chat's quiet task lines (`refs.task_started`, `refs.task_report`) are the main
     session's: how it hears that a task started and where it got to."""
-    if private := private_lane(c, conversation):
-        return list(history) if lane == private else []
     memo = {}
 
     def lane_of(message):
@@ -1715,8 +1702,7 @@ def limit_streak(c, bot):
     return streak
 
 
-# What runner-rs report_failure tags a private meeting's turn with when no copy of the bot's repository could be made
-# for it (sessions::PRIVATE_COPY_FAILED): no retry can help.
+# An older runner can still report this for a private-lane attempt leased before the hub upgraded.
 PRIVATE_COPY_FAILURE = "private_checkout"
 
 
@@ -2845,8 +2831,10 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None,
     ):
         return "cooling_off"  # a check on a Tico model waits on the Gateway's hold and its one probe
     config = check_models.apply(followed, wanted)
+    # A hub upgrade leaves active meeting attempts on the lane they were leased with.
     if (
         (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
+        or (job["bot_id"], sessions.LEGACY_MEETING_LANE + message["conversation_id"]) in busy
         or (job["bot_id"], task_id) in live
         or filer_live(c, message)
     ):
@@ -6796,10 +6784,12 @@ class Execution:
         # And a turn stopped while it waited before it started, failed or interrupted: either settles the Stop.
         # A task done or closed meanwhile (`skipped`) also ends its waiting turn.
         skipped = body.outcome == "interrupted" and not row["stop_requested_at"] and held_before_start(c, row)
-        # A private meeting's turn its computer could make no copy of the repository for (runner-rs
-        # sessions::PRIVATE_COPY_FAILED) never started, and would fail alike on every retry: it ends here, and the
-        # meeting says why (live_meetings `meeting.bot_turn_failed`), never handed back to run again.
-        no_copy = body.outcome != "completed" and not row["stop_requested_at"] and private_copy_failed(c, aid)
+        no_copy = (
+            (row["lane"] or "").startswith(sessions.LEGACY_MEETING_LANE)
+            and body.outcome != "completed"
+            and not row["stop_requested_at"]
+            and private_copy_failed(c, aid)
+        )
         unstarted = (
             row["state"] == "leased"
             and no_copy
@@ -7396,6 +7386,14 @@ class Execution:
                 body.outcome,
                 requeued=requeue,
                 attempt_id=aid,
+                may_have_acted=(
+                    body.outcome == "completed"
+                    and not (body.text or "").strip()
+                    and (
+                        positive_effect(c, aid, body)
+                        or any(call["tool"] not in READ_ONLY_TOOLS for call in recorded_tools(c, aid))
+                    )
+                ),
                 failure=PRIVATE_COPY_FAILURE if no_copy else None,
                 runner_id=row["runner_id"],
             )

@@ -200,12 +200,19 @@ class Sources:
         ids = self.references(refs)
         if message.get("conversation_id"):
             ids.update(self.conversation(message["conversation_id"]))
-        parents = [message.get("in_reply_to")]
+        reply = message.get("in_reply_to")
+        parents = [reply]
         for key in ("answers", "inputs"):
             if isinstance(refs.get(key), list):
                 parents.extend(v for v in refs[key] if isinstance(v, str))
         for parent in filter(None, parents):
-            ids.update(self.message(H.message(self.c, parent, include_deleted=True), include_run=False, seen=seen))
+            ids.update(
+                self.message(
+                    H.message(self.c, parent, include_deleted=True),
+                    include_run=include_run and parent == reply,
+                    seen=seen,
+                )
+            )
         run = refs.get("run")
         aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if aid and include_run:
@@ -307,13 +314,3 @@ def require_conversation(c, actor, cid):
         raise Problem("not_found", "Conversation not found", 404)
     # Client-supplied message references can narrow access, never grant room membership.
     return index.bound_conversation(cid)
-
-
-def private_room(c, room_key):
-    """The meeting a conversation's room is, unless that meeting is open to the team, else None."""
-    if not (room_key or "").startswith(ROOM_PREFIX):
-        return None
-    row = c.execute(
-        "SELECT id FROM live_meetings WHERE id=? AND visibility<>'team'", (room_key[len(ROOM_PREFIX) :],)
-    ).fetchone()
-    return row["id"] if row else None

@@ -81,7 +81,7 @@ The Rust runner releases its Git gate and task lock directly when the operation 
 
 On a Computer that does not run bots as a separate user, such as a Mac, a folder already at `<workspace>/repos/<owner>__<repo>` is taken over when it is a Git checkout of that repository: its `origin` is GitHub's HTTPS or SSH address for it, it belongs to the user the runner runs as, and it does not share objects with another repository or keep its work tree elsewhere. Tico adds the `tico-mirror` remote and updates the tracking refs. It leaves `origin`, branch settings, files and local work as they are. When no bot needs the repository any more, Tico stops managing the folder but never deletes it. Any other folder is left alone, and the error says why.
 
-A bot's repo, shared or named checkout, task and private meeting worktrees, managed bases, and scratch folders
+A bot's repo, shared or named checkout, task worktrees, managed bases, and scratch folders
 must stay outside the Tico installation running the Computer. Both runners check the final path before making
 a folder, reusing it, or running Git there. Tico follows links in the path, including linked parent folders. If a missing
 folder leaves a `..` part unresolved, Tico refuses the path rather than risk hiding a later link. A refused path

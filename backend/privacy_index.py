@@ -431,14 +431,15 @@ class ReadIndex:
 
     def _direct_parent(self, mid):
         # A single non-inherited parent has at most two visited messages. Longer
-        # chains keep the existing cycle/depth-aware traversal. Parent run refs
-        # are not inherited (the recursive path uses include_run=False too).
+        # chains keep the existing cycle/depth-aware traversal. A reply inherits
+        # the parent's meeting audience, even when it comes from a run reference.
         msg = self.target_message(mid)
         if not msg:
             return True
         if msg.get("in_reply_to"):
             return None
-        return self._direct_message(msg.get("conversation_id"), msg.get("refs"), include_run=False)
+        direct = self._direct_message(msg.get("conversation_id"), msg.get("refs"), include_run=False)
+        return self.meetings.message_readable(self.principals, msg) if direct else direct
 
     def _plain_room(self, cid):
         tid = H._task_ref(self.conversation_tasks.get(cid))

@@ -2047,6 +2047,24 @@ def _reader(who, hold, c=None, auth=None):
     return "represented" if _is_represented(who, hold, c) else None
 
 
+def require_hold_meeting(c, principal, hold, stored=None):
+    """A hold's reviewer reads explicit meeting references under the same current membership as the message."""
+    operation = hold["operation"]
+    if operation not in ("message", "chat_question", "chat_upload", "threads", "threads_edit"):
+        return
+    from . import live_privacy
+
+    replay = (stored if stored is not None else json.loads(hold["payload"] or "{}")).get("replay") or {}
+    if operation == "threads_edit":
+        message = H.message(c, replay.get("message_id"), include_deleted=True)
+    elif operation == "threads":
+        message = {**replay, "conversation_id": replay.get("thread_id")}
+    else:
+        message = replay.get("body")
+    if not live_privacy.sources(c).message_readable(principal, message):
+        raise Problem("not_found", "There is no hold " + hold["id"], 404)
+
+
 def view_hold(c, who, hold, role=None, summary=False, auth=None):
     """One hold as its reader sees it. `summary` leaves out the held text, the appeal and the nonce (a list's row:
     the reader opens each hold for those)."""
@@ -2065,7 +2083,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     stored = {} if summary else stored
     if not summary:
         from .files import readable_page_refs
+        from .task_privacy import actor
 
+        require_hold_meeting(c, actor(who), hold, stored)
         stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
@@ -2575,6 +2595,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     hold = _hold(c, hold_id)
     if not _is_reviewer(who, hold, c, auth):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
+    require_hold_meeting(c, who.actor, hold)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
     if not nonce or not secrets.compare_digest(str(nonce), hold["nonce"]):
@@ -3162,6 +3183,8 @@ def install(app, store, auth, mutate):
                 and hold["state"] == "held"
                 and not store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
             )
+            if ready:
+                require_hold_meeting(c, who.actor, hold)
             if ready and hold["operation"] in prepare:
                 ident = replay_identity(c, hold, auth)
         if ready:

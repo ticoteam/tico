@@ -960,6 +960,10 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
         raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
+        if {"can_send", "can_withdraw", "text"} <= payload.keys() and isinstance(payload.get("id"), str):
+            from .org_rule_check import _hold, require_hold_meeting
+
+            require_hold_meeting(c, principal, _hold(c, payload["id"]))
         if isinstance(payload.get("letter_id"), str) and "approval_hash" in payload:
             letter = (
                 c.execute("SELECT * FROM letters WHERE id=?", (payload["letter_id"],)).fetchone()
@@ -1157,13 +1161,7 @@ def private_meetings(c, ids):
 
 
 def private_execution(c, who):
-    return bool(
-        who.attempt_id
-        and (
-            private_meetings(c, meeting_sources(c).attempt(who.attempt_id))
-            or any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))
-        )
-    )
+    return bool(who.attempt_id and any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id)))
 
 
 def _reads(c, actor, row, reach=None):
@@ -1384,8 +1382,6 @@ def from_private(c, who, owner, parent):
         and private_execution(c, who)
     ):
         raise Problem("privacy", "Only a bot's own run on private work files a task from it", 403)
-    if private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
-        raise Problem("privacy", "Private meeting work cannot create company-visible tasks", 403)
     if not H.is_bot(owner or ""):
         raise Problem("privacy", "A task from private work is for a bot: ask a person with `tico task ask`", 403)
     if parent and not H.task_private(c, parent):
@@ -1653,33 +1649,6 @@ def content_readable_rows(c, actor, rows):
     return [row for row in rows if content_readable(c, actor, row)]
 
 
-# What a private meeting's bot turn may write besides its own meeting's chat (guard_write): reads that go over POST, the
-# hub's MCP door (each tool call it makes is a request of its own, gated here), its run files, which keep the run's
-# provenance and so the meeting's readers, and a GitHub token, which is read-only for it (github_app.py token). Its
-# repository stays out of the bot's checkout too (runner-rs/src/sessions.rs, private lanes). The meeting's owner shares
-# its notes and action items after it, by review.
-PRIVATE_MEETING_WRITES = (
-    "/api/v2/sql",
-    "/api/v2/mcp",
-    "/api/v2/tasks/dry-run",
-    "/api/v2/files/uploads",
-    "/api/v2/files/imports",
-    "/api/v2/files/dates",
-    "/api/v2/github/token",
-)
-PRIVATE_MEETING_REFUSAL = "This is a private meeting: nothing from it is saved or shared until its owner reviews it."
-
-
-def private_meeting_run(c, attempt_id):
-    """Whether a run carries a private meeting (guard_write's test): a source that cannot be read counts as one."""
-    if not attempt_id:
-        return False
-    try:
-        return bool(private_meetings(c, meeting_sources(c).attempt(attempt_id)))
-    except Problem:
-        return True
-
-
 def guard_write(c, who, path, auth):
     """A private execution has no automatic company-publication capability."""
     # These controls already enforce their own run ownership and never publish company content.
@@ -1687,19 +1656,6 @@ def guard_write(c, who, path, auth):
         return
     if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
         return
-    meetings = meeting_sources(c).attempt(who.attempt_id)
-    if private_meetings(c, meetings):
-        # A meeting turn is one scoped reply, not an ordinary task or company publisher.
-        if path in PRIVATE_MEETING_WRITES:
-            return
-        scoped = re.fullmatch(r"/api/v2/live-meetings/([^/]+)/(chat|turns/[^/]+/claim)", path)
-        if (
-            scoped
-            and meetings == {scoped[1]}
-            and not any(H.task_private(c, H.task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))
-        ):
-            return
-        raise Problem("privacy", PRIVATE_MEETING_REFUSAL, 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
     native = re.fullmatch(r"/api/v2/(?:uploads/)?threads/([^/]+)/messages", path)
@@ -1745,7 +1701,7 @@ PRIVATE_THREAD_REFUSAL = "Private task work posts only in its own private task's
 
 def private_thread_destination(c, who, thread):
     """A private run's write into a thread (a post or an edit) stays in its own private task's thread: the root's task
-    is the one private task the run carries, and no private meeting. Thread readers of a task thread are the readers of
+    is the one private task the run carries. Thread readers of a task thread are the readers of
     its task, so nothing reaches anyone who cannot read the run's work. Refused otherwise. One check for the native
     message route (guard_write) and for an edit (threads.edit_message). A run that is not private, or no run, passes."""
     if who is None or not getattr(who, "attempt_id", None) or not private_execution(c, who):
@@ -1753,7 +1709,7 @@ def private_thread_destination(c, who, thread):
     root = H.conversation(c, thread.get("root_id") or thread["id"]) or thread
     own = root.get("task_id")
     carried = {tid for tid in attempt_tasks(c, who.attempt_id) if H.task_private(c, _task(c, tid))}
-    if not own or carried != {own} or private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
+    if not own or carried != {own}:
         raise Problem("privacy", PRIVATE_THREAD_REFUSAL, 403)
 
 
@@ -1852,12 +1808,11 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
         ids.update(attempt_tasks(c, who.attempt_id))
+    # An explicit meeting reference or quote still has an audience, even when the bot can send ordinary messages.
     meetings = meeting_sources(c)
-    meeting_ids = meetings.references(refs)
+    meeting_ids = meetings.message({"refs": refs}) if refs else set()
     if reply:
         meeting_ids.update(meetings.message(reply))
-    if who.attempt_id:
-        meeting_ids.update(meetings.attempt(who.attempt_id))
     restricted_meetings = private_meetings(c, meeting_ids)
     private = [_task(c, tid) for tid in ids if H.task_private(c, _task(c, tid))]
     if not private and not restricted_meetings:
