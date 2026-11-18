@@ -1374,7 +1374,9 @@ class Store:
                         task_ids.update(task["id"] for task in rows)
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
-                privacy.require_payload(c, replay_principal, result)
+                # A replayed claim is checked as the first answer was (task_privacy.require_payload): a person's own
+                # Assistant room turn as that person.
+                privacy.require_payload(c, replay_principal, result, privacy.attempt_reader(c, replay_principal, aid))
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
 

@@ -491,6 +491,30 @@ def readable(c, actor, ids, who=None):
 
 def make_page_actor(c, actor, message):
     """The Assistant reads its person's own Make page request with that person's rights."""
+    refs = H._json(dict(message or {}).get("refs"), {}) or {}
+    if not isinstance(refs, dict) or not isinstance(refs.get("make_page"), dict):
+        return actor
+    return assistant_room_actor(c, actor, message)
+
+
+def attempt_reader(c, who, aid):
+    """The person a bot run's saved payload is read as when the run is that person's own Assistant room turn, else None
+    (require_payload then reads it as `who`)."""
+    if not aid or getattr(who, "role", "") != "bot" or not str(getattr(who, "actor", "")).startswith("bot:"):
+        return None
+    origin = read_cache.one(
+        c,
+        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        (aid,),
+    )
+    person = assistant_room_actor(c, who.actor, origin)
+    return person if person != who.actor else None
+
+
+def assistant_room_actor(c, actor, message):
+    """The person a run for their own message in their Assistant room is read as, else `actor`. The Assistant works
+    with that person's rights, so its replies there can link tasks only the person reads; its next run's claim names
+    them in the room's history and must not be refused for it (a refused claim stops the chat answering)."""
     message = dict(message or {})
     refs = H._json(message.get("refs"), {}) or {}
     if (
@@ -498,7 +522,6 @@ def make_page_actor(c, actor, message):
         or not isinstance(actor, str)
         or not actor.startswith("bot:")
         or actor != message.get("recipient_id")
-        or not isinstance(refs.get("make_page"), dict)
         or refs.get("assistant") is not True
         or refs.get("via")
         or message.get("deleted_at")
@@ -753,7 +776,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
                 "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
                 (aid,),
             )
-            principal = make_page_actor(c, principal, origin)
+            principal = assistant_room_actor(c, principal, origin)
         if isinstance(attempt, dict) and attempt.get("bot_id"):
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
