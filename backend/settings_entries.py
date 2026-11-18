@@ -84,7 +84,7 @@ _RULE_NAMES = {
     "members_store_credentials": ("Members store credentials for their bots", "confirm", ""),
     "admin_sql": ("Admins see SQL", "confirm", ""),
     "member_tokens": ("Members make personal tokens", "confirm", ""),
-    "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
+    "bots_go_ahead": ("Bots decide when nobody replies", "confirm", ""),
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
     "bot_reports_direct": ("Bots send reports to Tico support without asking", "confirm", ""),

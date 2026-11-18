@@ -88,7 +88,7 @@ def requirement_line(req):
     said = req.get("line") or {
         "owner_done": "its owner says the work is done",
         "linked_done": "the tasks it filed are done",
-        "related_input": "the bots Jev picks have commented, or its wait ran out",
+        "related_input": "the bots the decision model picks have commented, or its wait ran out",
         "item": " ".join(str(x) for x in (req.get("source"), req.get("condition")) if x).replace("_", " ")
         or "a linked item is ready",
     }.get(kind, kind or "")
@@ -775,7 +775,7 @@ REQUIREMENT_FIELDS = {
     "who_oks": WHO_OKS,
     "person": _s("Who gives the OK (an OK or a page): human:<id>, a bot slug, or `me`"),
     "can_push_past": {"type": "boolean", "description": "Whether a task may be moved on without it"},
-    "rubric": _s("A page: what Jev checks it against"),
+    "rubric": _s("A page: what the decision model checks it against"),
 }
 
 
@@ -818,7 +818,7 @@ def requirement_list(api, args):
 @tool(
     "tico_requirement_add",
     "Add a requirement to a stage. Kinds: page (a page someone OKs), ok (an OK from a named person), owner_done (its "
-    "holder says done), linked_done (the tasks it filed are done), related_input (Jev picks 1-2 related bots to comment "
+    "holder says done), linked_done (the tasks it filed are done), related_input (the decision model picks 1-2 related bots to comment "
     "once; settings bar, most, wait_hours), item (a linked item's condition, with source and condition, e.g. github "
     "pr_merged). `who_oks people_only` keeps the OK for people. Who may change the pipeline. "
     'Example: tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me',

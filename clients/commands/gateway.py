@@ -18,7 +18,7 @@ from clients.tico import APIError
 
 @tool(
     "tico_decision_ask",
-    "Ask the decision model (optionally TypeSafe's Jev; the question format matches OpenRouter's Decisions API) typed questions about a JSON state and get a "
+    "Ask the decision model (optionally TypeSafe's decision model; the question format matches OpenRouter's Decisions API) typed questions about a JSON state and get a "
     "calibrated answer per question, in one round trip, with no prose: `choice` picks one of named "
     "options (criteria: {name: description}) and answers {choice, confidence, probabilities}; `score` "
     "places the state on ordered levels (criteria: [level, ...]) and answers {score, confidence}; "
@@ -75,10 +75,9 @@ def decision_outcome(api, args):
 
 @tool(
     "tico_decision_readout",
-    "The Decide readout for the team: per question set, the last days' calls, cost, how many Jev "
-    "answered and how many fell back or failed, and the spread of answers; plus the month's spend "
-    "against the cap. Built from the audit by code, no model. `text` is the same readout in plain "
-    "words.",
+    "The Decide readout for the team: per question set, the last days' calls, cost, how many the decision model "
+    "answered and how many fell back or failed, and the spread of answers; plus the month's spend against the cap. "
+    "Built from the audit by code, no model. `text` is the same readout in plain words, ready to pass on.",
     {
         "days": {
             "type": "integer",
