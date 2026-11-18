@@ -2187,6 +2187,11 @@ impl Runner {
                 drove.retryable = !why.contains("(not_isolated)");
                 return Err(Fail::runtime(why));
             }
+            if crate::turn_limits::active() {
+                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
+                // Before base_env: a fallback hop's harness is this attempt's too.
+                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
+            }
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -2356,10 +2361,6 @@ impl Runner {
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
-            if crate::turn_limits::active() {
-                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
-                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
-            }
             let made = if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
@@ -2367,9 +2368,6 @@ impl Runner {
                     self.warm.discard(&attempt).await;
                 }
                 let (warm, turn_env) = self.warm.acquire(&attempt, &env, make).await.map_err(Fail::runtime)?;
-                if warm.started() {
-                    mark("harness_reused", &aid);
-                }
                 warm.attach(tx);
                 env = turn_env;
                 Host::Antigravity(warm)

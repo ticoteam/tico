@@ -1135,11 +1135,12 @@ impl Host {
 
     /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
     /// The run this host's turn belongs to: a Claude host marks its own process spawn, `system/init` and `result`,
-    /// a pi host `harness_reused` when it takes a kept process.
+    /// a pi or Antigravity host `harness_reused` when its turn runs on a process an earlier attempt started.
     pub fn set_attempt(&self, aid: &str) {
         match self {
             Host::Claude(h) => h.set_attempt(aid),
             Host::Pi(h) => h.set_attempt(aid),
+            Host::Antigravity(h) => h.set_attempt(aid),
             _ => {}
         }
     }
