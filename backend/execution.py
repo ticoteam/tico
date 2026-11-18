@@ -5221,7 +5221,11 @@ class Execution:
         plans_out = models_preset.plans_out(c, runner["id"], config)
         if voice_reply:
             # Voice uses the computer's model credentials without a Gateway fallback.
-            config = {k: v for k, v in config.items() if k not in ("fallback", "automatic_fallbacks", "primary_held")}
+            config = {
+                k: v
+                for k, v in config.items()
+                if k not in ("fallback", "gateway_fallback", "automatic_fallbacks", "primary_held")
+            }
         if voice_call:
             subscribed = [
                 entry

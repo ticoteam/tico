@@ -310,7 +310,7 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     attempt = _claim(meet, worker, "ops")
     path = f"attempts/{attempt['id']}"
     assert [attempt["config"][k] for k in ("model", "reasoning_effort")] == ["claude-opus-5-5", "medium"]
-    assert len(attempt["subscriptions"]) == 1
+    assert len(attempt["subscriptions"]) == 1 and attempt["gateway"] is False
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
     heard = threading.Event()
     media = meet.app.state.call_media
