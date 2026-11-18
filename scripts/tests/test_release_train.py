@@ -582,6 +582,10 @@ def test_a_cut_short_run_names_the_parts_that_failed_not_the_ones_fail_fast_canc
     # A red run that ran every part is complete.
     jobs[0]["conclusion"], jobs[1]["conclusion"] = "failure", "success"
     assert gh.failed_tokens(11) == {"backend/tests/test_a.py"} and not gh.cut_short(11)
+    # A part that ran into its 45-minute timeout is cancelled too, but it hung: a failure nobody can name, whatever
+    # failed beside it, and the run is not cut short by it.
+    jobs[1].update(conclusion="cancelled", started_at="2026-11-18T08:00:00Z", completed_at="2026-11-18T08:45:03Z")
+    assert gh.failed_tokens(12) is None and not gh.cut_short(12)
 
 
 def test_a_stale_anchor_runs_the_full_validation_once_a_day():

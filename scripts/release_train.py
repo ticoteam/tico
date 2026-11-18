@@ -131,6 +131,8 @@ def _load(name, path):
 
 INCREMENT_PATH = ROOT / "scripts/release_increment.py"
 RED_JOB = re.compile(r"(python|browser)-\d+")  # the jobs whose logs name the tests that failed (release_increment)
+# A cancelled gate part that ran this long ran into its own timeout (ci.yml gate: timeout-minutes 45), not fail fast.
+FAIL_FAST_UNDER = timedelta(minutes=40)
 
 rollout = _load("tico_rollout", ROLLOUT_PATH)
 release_notes = _load("tico_release_notes", NOTES_PATH)
@@ -245,6 +247,15 @@ def reason_ok(reason):
 
 
 # ---- GitHub ----
+
+
+def fail_fast_cancelled(job):
+    """Whether a cancelled gate part was cut short by fail fast rather than stopped by its own 45-minute timeout, which
+    GitHub also reports as cancelled: a part that ran out its time hung, a failure nobody can name, and stays one."""
+    if job.get("conclusion") != "cancelled":
+        return False
+    started, completed = parse_time(job.get("started_at")), parse_time(job.get("completed_at"))
+    return started is None or completed is None or completed - started < FAIL_FAST_UNDER
 
 
 def validation_record(run):
@@ -407,7 +418,7 @@ class GitHub:
         # An incremental validation stops at its first failed part (ci.yml's gate: fail-fast), cancelling the others:
         # those failed nothing, so the run's failures are the parts that did fail (and cut_short keeps it from anchoring).
         if any(entry.get("conclusion") != "cancelled" for entry in failed):
-            failed = [entry for entry in failed if entry.get("conclusion") != "cancelled"]
+            failed = [entry for entry in failed if not fail_fast_cancelled(entry)]
         pairs = []
         for entry in failed:
             name = entry.get("name") or ""
@@ -416,8 +427,10 @@ class GitHub:
 
     def cut_short(self, run_id):
         """Whether fail fast cancelled parts of this red run beside a part that failed: it ran only part of its suite."""
-        conclusions = {entry.get("conclusion") for entry in self.failed_parts(run_id)}
-        return "cancelled" in conclusions and len(conclusions) > 1
+        failed = self.failed_parts(run_id)
+        return any(fail_fast_cancelled(entry) for entry in failed) and any(
+            entry.get("conclusion") != "cancelled" for entry in failed
+        )
 
     def failed_parts(self, run_id):
         """A validation run's jobs that did not pass, other than its consequences (IGNORED_JOBS); read once per run."""
