@@ -195,6 +195,55 @@ def measure(api, path, token):
     }
 
 
+def explain(api, ids):
+    """EXPLAIN QUERY PLAN and median time (RUNS runs) of the statements this branch changed, old and new shapes, as
+    the reader cara (a person with rules) asks them."""
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read_transaction() as c:
+        visible = auth.task_sql(c, Identity("human:cara", "human", "cara@acme.example"))
+        stage_ids = sorted({r[0] for r in c.execute("SELECT stage_id FROM tasks WHERE stage_id IS NOT NULL")})
+        pipeline_ids = sorted({r[0] for r in c.execute("SELECT pipeline_id FROM tasks WHERE pipeline_id IS NOT NULL")})
+        named = json.dumps(ids)
+        cases = {
+            "hidden refs, old (two statements)": [
+                ("SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (named,)),
+                ("SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND (" + visible + ")", (named,)),
+            ],
+            "hidden refs, new (one statement)": [
+                (
+                    "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
+                    + visible
+                    + "),0)",
+                    (named,),
+                )
+            ],
+            "stages, old (one per stage)": [("SELECT * FROM stages WHERE id=?", (i,)) for i in stage_ids],
+            "stages, new (one)": [
+                ("SELECT * FROM stages WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(stage_ids),))
+            ],
+            "pipelines, old (one per pipeline)": [("SELECT * FROM pipelines WHERE id=?", (i,)) for i in pipeline_ids],
+            "pipelines, new (one)": [
+                ("SELECT * FROM pipelines WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(pipeline_ids),))
+            ],
+        }
+        old = [{r[0] for r in c.execute(sql, args)} for sql, args in cases["hidden refs, old (two statements)"]]
+        new = {r[0] for r in c.execute(*cases["hidden refs, new (one statement)"][0])}
+        print(f"hidden refs: old {len(old[0] - old[1])}, new {len(new)}, same {old[0] - old[1] == new}")
+        for name, statements in cases.items():
+            times = []
+            for _ in range(RUNS):
+                t = time.perf_counter()
+                for sql, args in statements:
+                    c.execute(sql, args).fetchall()
+                times.append((time.perf_counter() - t) * 1e6)
+            print(f"EXPLAIN {name}: {len(statements)} statements, median {statistics.median(times):.0f} us")
+            for sql, args in statements[:2]:
+                for row in c.execute("EXPLAIN QUERY PLAN " + sql, args):
+                    print("      ", row[3])
+
+
 def main(out=None):
     import tempfile
 
@@ -229,6 +278,13 @@ def main(out=None):
                 if os.environ.get("SITES"):
                     for n, (sql, where) in enumerate(sites(api.app.state.store, path, token, api)):
                         print(f"   {n:3d} {shape(sql)[:110]}\n         {where}")
+            some_ids = [
+                t["id"]
+                for t in api.get("/api/v2/tasks?brief=1&status=all&limit=40", headers=headers("ana-test")).json()[
+                    "tasks"
+                ]
+            ]
+            explain(api, some_ids)
             if out:
                 Path(out).write_text(json.dumps(results, indent=1))
         finally:
