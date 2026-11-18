@@ -269,8 +269,11 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         const {page, seen} = await start(browser, '#/library/skills/proposals/p-refund', {width, ready: '[data-sk-rescreen]', stayPending: true, clock: '2026-11-18T09:00:00Z'});
         await page.locator('[data-sk-rescreen]').click();
         await page.locator('#proposal-screening [data-sk-screen="pending"]').waitFor();
+        // The poll that comes due inside those 2 minutes answers pending: wait for its answer, not for a fixed time.
+        const polled = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/skills/proposals/p-refund' && r.request().method() === 'GET');
         await page.clock.fastForward(120e3);
-        await page.waitForTimeout(300);
+        await polled;
+        await page.locator('#proposal-screening [data-sk-screen="pending"]').waitFor();
         assert.equal(await page.locator('.toast').filter({hasText: 'Still screening'}).count(), 0, `${tag}: no verdict before the window ends`);
         await page.clock.fastForward(300e3);
         await page.locator('.toast').filter({hasText: 'Still screening; this page shows the result when you open it again'}).waitFor();
