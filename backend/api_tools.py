@@ -94,6 +94,8 @@ LEVEL_NAMES = {"read": "Read", "read_write": "Read and write"}
 DELIVERIES = ("proxy", "computer")
 CHECK_EVERY = timedelta(minutes=30)
 CHECK_TIMEOUT = 10.0  # seconds for one check, connect to last byte
+# Tests set this to an httpx transport: every check then goes through it, its address still checked and pinned.
+TRANSPORT = None
 CHECKS_SHOWN = 24  # the 24 squares on a tool's Check card
 RECENT = 5  # calls on a tool's Overview
 EXPIRING_DAYS = 14  # a key this close to its end date is under Needs you
@@ -947,7 +949,7 @@ def send_check(url, headers, params):
     address = egress.address_for(parts, budget=CHECK_TIMEOUT)
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = parts.hostname + (f":{parts.port}" if parts.port else "")
-    with httpx.Client(timeout=CHECK_TIMEOUT, follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(timeout=CHECK_TIMEOUT, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
         with client.stream(
             "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
         ) as response:

@@ -4,7 +4,6 @@ import copy
 import json
 import re
 from pathlib import Path
-from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -298,6 +297,14 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
         starter.load(C.to_yaml(loose))
 
 
+def roster(api):
+    """The people and the seats as the database holds them: a write to either changes this."""
+    return (
+        rows(api, "SELECT id,name,email FROM humans ORDER BY id"),
+        rows(api, "SELECT id,reports_to,updated_at FROM seats ORDER BY id"),
+    )
+
+
 def invited_from_setup(api, finance):
     """The owner gives Ana's email and clicks Invite: she is on the roster and the seat that waited with the owner
     reports to her. This install signs in another way, so no invite email can go: the owner is told so, plainly."""
@@ -358,8 +365,9 @@ def invited_from_setup(api, finance):
             invites.record = record
         assert keyed("k-2").status_code == 200 and len(Issuer.calls) == 2
         # A repeat answers from its binding: the roster is not written again.
-        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
-            assert keyed("k-1").status_code == 200 and len(Issuer.calls) == 2
+        roster_before = roster(api)
+        assert keyed("k-1").status_code == 200 and len(Issuer.calls) == 2
+        assert roster(api) == roster_before
         # A send the issuer refuses is bound too, and its refusal names the address: removal must scrub that.
         Issuer.answer = (202, {"error": "not_sent"})
         try:
@@ -395,15 +403,16 @@ def invited_from_setup(api, finance):
         assert all(row["request_hash"] == "" for row in bound)
         assert not [row for row in bound if "acme.example" in (row["error_detail"] or "")]
         (refused_key,) = [row["key"] for row in bound if row["state"] == "refused"]
-        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
-            replayed = api.post(
-                "/api/v2/setup/company/people/ana/invite",
-                json={"email": "ana@acme.example"},
-                headers={**signed_in(), "Idempotency-Key": refused_key},
-            )
-            assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
-            assert replayed.json()["error"]["detail"] == invites.REMOVED
-            assert keyed("k-1").status_code == 200 and Issuer.calls == sends
+        roster_before = roster(api)
+        replayed = api.post(
+            "/api/v2/setup/company/people/ana/invite",
+            json={"email": "ana@acme.example"},
+            headers={**signed_in(), "Idempotency-Key": refused_key},
+        )
+        assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
+        assert replayed.json()["error"]["detail"] == invites.REMOVED
+        assert keyed("k-1").status_code == 200 and Issuer.calls == sends
+        assert roster(api) == roster_before
         assert ana["id"] not in [p["id"] for p in api.get("/api/humans", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None

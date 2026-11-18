@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_tico_storage.py": {
+    "timing-assert": 3
+  }
+}

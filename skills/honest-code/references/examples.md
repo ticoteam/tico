@@ -128,6 +128,16 @@ pass done" event in the worker), `conftest.py:285-294` (`inside_one_half_hour` s
 
 Good: a port from the OS, not a retry on collision: bind port 0 and read the port back.
 
+Good: order between two Rust tasks is a `Notify` the first side sets (`hold_first` in
+`runner-rs/src/upload_pace/streamed.rs`), not a sleep.
+
+Keep a pause the code under test needs, with its reason: the stall test in `backend/tests/test_flight.py` sleeps
+0.1 s because the classifier names lock time only after some has passed. Delete a pause that hopes.
+
+"Nothing happened" is read from the decision the action writes as it runs, not waited for. Check that the product
+writes that record before you wait on it: `runner_support/tests/test_threads_e2e_turns.py` first waited for a delivery
+row the server never writes for a bot that does not follow the thread.
+
 ## Waiting in the browser
 
 Bad: a fixed wait, then a check that is also true while the page is still loading.
@@ -198,9 +208,12 @@ def _sleep(seconds):
 
 Bad: the same seam as an assignment, `_sleep = time.sleep`. It binds the real function at import, so a test that swaps
 the module's `time` for a fake clock (`wait_clock` in `backend/tests/test_updater_safety.py`) never reaches it and the
-test hangs (L31). Seven module seams still have this shape (`_sleep` in `backend/store.py`, `CLOCK` in
-`backend/company_billing.py`, `now` in `backend/inbound.py`, ...). They work only while no test swaps their `time`;
-turn one into a `def` when you touch it.
+test hangs (L31). `no-assigned-clock-seam` bans the shape.
+
+Good: a seam for anything else the process shares. `_run`, `_which` and `_platform` in `clients/hermes_agent.py` wrap
+`subprocess.run`, `shutil.which` and `sys.platform`; `_open` in `clients/judge.py` wraps `os.open`, so a test can swap a
+file between its check and its open (`test_registry_file_swap_to_an_outside_symlink_is_refused`); `_free_bytes` in
+`backend/operations.py` wraps `shutil.disk_usage`.
 
 Good: pass the function in. `resolve_op_refs(env, run=None)` (`runner_support/op.py:24`) takes the runner, so the
 test hands it a fake `op` with no patch at all.
@@ -209,16 +222,36 @@ Allowed with a reason on the line: forcing a failure in our own code that cannot
 `backend/tests/test_automation_due.py:250` does this (`monkeypatch.setattr(hubdb, "task_create", broken)`) and has no
 reason yet.
 
+A patch that is never reached checks nothing. Two `advance` patches in
+`backend/tests/test_automation_reclaimed_worker.py` never ran: `go()` returned before it reached `advance`. Break the
+patched path once and watch the test fail through it.
+
+Bad: a fake shaped like the code under test instead of the contract. The fake judge answered `value`, as
+`backend/email_sending.py` `classify` read it; the judge answers `choice` (`clients/judge.py` `_project`). The test
+passed while every real email was held for a person (L07).
+
 Allowed: a spy that wraps the real function and still calls it (`backend/tests/test_billing_check.py:174`).
+
+Good: fake HTTP at the transport, so the real client builds every request. A module that sends with httpx has a
+`TRANSPORT = None` that it passes to `httpx.Client`; a test sets an `httpx.MockTransport` (`backend/mcp_connect.py`,
+`backend/api_tools.py`). A test of what `clients/tico.Client` sends uses `Wire` or `cli_wire`
+(`clients/tests/helpers/wire.py`): it records each request and refuses a route it has no answer for.
+
+Bad: a hand-written class with our client's method names (`Api`, `FakeClient` in `clients/tests/test_hubcli.py`, set as
+`remotecli.Client`). It is not `unittest.mock`, but it is still a double of our code: the request the client builds is
+never made. A new test uses `cli_wire`; convert an old one when you touch it.
 
 Good: only what is outside Tico is a double. `backend/tests/helpers/ticket_journey.py:6-8` says so, and uses
 `backend/tests/helpers/fake_github.py`.
+
+Before you write a fake, check that the code calls the service. `connectors/slack.py` calls only Tico, so its tests
+need `Wire`, not a Slack fake.
 
 Fakes that exist: GitHub `backend/tests/helpers/fake_github.py`; Stripe `scripts/fake_stripe.py`; QuickBooks, Xero,
 Mercury `scripts/fake_quickbooks.py`, `scripts/fake_xero.py`, `scripts/fake_mercury.py`; S3
 `backend/tests/helpers/backup_bundle.py:ObjectStore`; a model `backend/tests/helpers/judge.py:FakeJudge`; HQ
 `backend/tests/helpers/cloud_machines.py:FakeHQ` (five more copies live in single test files; use this one). None yet:
-Slack, CloudWatch, `launchctl`/`systemctl`. For a CLI, put a fake executable on PATH
+Slack, CloudWatch. For a CLI, put a fake executable on PATH
 (`runner_support/tests/isolation/fake_cli.py`) or pass the runner in.
 
 A fake that lacks a failure gets it, one `_check("list")` call, instead of a `Mock(side_effect=...)` on its method.
@@ -234,6 +267,13 @@ the test asserts. A fake for a Tico route returns what the route returns, and a 
 (`Problem` in `backend/store.py`), not `{}`. A catch-all answers unknown paths with `route.abort()` so the test fails
 on the URL; `ui/tests/web-timings.cts:42` (`401 {}`) and `ui/tests/sign-in-redirect.cts:23` (`200 {}`) do not. A save
 fake returns the saved value, and the test asserts the page shows it, not only the posted body.
+
+Good: a check that a file is never read makes the read fail. `path.chmod(0)` before the call
+(`clients/tests/test_task_attach_stream.py`), not a patch of `Path.read_bytes` that raises. CI runs as a user that is
+not root, so the mode holds there.
+
+Put a `# double:` reason on its own line above a `with mock.patch...(` that spans lines. `ruff format` moves a reason at
+the end of the first line onto the closing parenthesis.
 
 Fake drift to watch: the `EMPTY` table in `ui/tests/support/mailboxes-fake.cts` copies the response shapes of
 `backend/postal_mail.py` by hand. No check compares them (L07).
@@ -269,6 +309,13 @@ Review proof (L10): remove the guarded line and say what happened. "With the mem
 Bad: an `or` in the assertion passes on either of two outcomes, so it cannot tell which one the code took.
 Bad: `assert "saved" in message` passes on "not saved". Bad: comparing the response's `at` with the response's own
 `at`. Bad: a test called `test_..._refuses_every_writer` that sends one request.
+
+Good: read a signal the way its reader does. What a computer is told comes from `runner_read`, the function behind
+`GET /api/v2/runners/me/events`, not from a count of `changes` rows (`backend/tests/test_heartbeat_reply.py`). When
+only a table shows a signal and nothing reads it, delete the check and record it as unchecked.
+
+Before you delete a test as a duplicate, list its cases and find each one in the test that stays. The "duplicate" in
+`backend/tests/test_model_key_store.py` had one case, a key nobody took, that the other test lacked; it moved there.
 
 Bad: `assert took < 2.0`. A generous bound is still a timing assertion: it flips on a loaded runner and never catches
 a 10% regression. Keep the statement count next to it and delete the bound.
@@ -348,5 +395,9 @@ test checked and what still checks it.
   module-level cache, a background thread, or ids that every test reuses (`wsk-1` in #3851).
 - **L06.** #3060: a demo seed called the real model gateway. It got `auth` on CI and `unavailable` on a laptop, so two
   builds for one date differed.
+- Re-read each audit row at HEAD before you act on it. Pass-3 rows went stale (`FIRST_PASS` in finance sync was already
+  fixed), and one called an in-process read "outside".
+- Before you change a test helper, find its callers. Delete an uncalled one in the same change, with a record
+  (`restart_rust`, `standard_startup`).
 - **L29.** #3891: two starts on a new database both loaded the baseline (`table humans already exists`). The test was
   right. The fix was a write lock in the product.

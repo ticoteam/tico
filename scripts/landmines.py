@@ -37,12 +37,18 @@ LESSONS = "skills/honest-code/LESSONS.md"
 # This script's own test holds every bad pattern as a fixture.
 SELF = {"scripts/landmines.py", "scripts/tests/test_landmines.py"}
 
+# The one deadline poll a test may use when the product exposes no event; its pause is the one allowed sleep.
+WAIT_HELPER = "backend/tests/helpers/wait.py"
 PY_TEST = re.compile(r"(^|/)(tests/.*\.py|test_[^/]*\.py|conftest\.py)$")
 UI_TEST = re.compile(r"^ui/tests/.*\.(cts|ts|cjs|js|mjs)$")
 
 
 def py_test(path):
     return bool(PY_TEST.search(path))
+
+
+def py_any(path):
+    return path.endswith(".py")
 
 
 def ui_test(path):
@@ -99,7 +105,7 @@ RULES = [
     Rule(
         "no-fixed-sleep-py",
         "ratchet",
-        py_test,
+        lambda path: py_test(path) and path != WAIT_HELPER,
         [re.compile(r"\b(time|asyncio)\.sleep\(\s*(?!0\s*\)|0\.0\s*\))")],
         "Fixed sleep in a test. Wait on the event the fake emits (threading.Event, Stream.until), or move the clock "
         "with H.now or time_machine.travel(..., tick=False). A sleep guesses how long real work takes and fails on a "
@@ -153,6 +159,29 @@ RULES = [
         "as in clients/tico.py and docker/updater.py, and patch that, or use time_machine for the wall clock.",
         "L31",
         view="raw",
+    ),
+    Rule(
+        "timing-assert",
+        "ratchet",
+        lambda path: py_test(path) or ui_test(path),
+        [
+            re.compile(r"^\s*assert\b.*(?:monotonic\(\)|perf_counter\(\)|time\.time\(\)|\btook\b|\belapsed\b).*[<>]"),
+            re.compile(r"\b(?:assert(?:\.\w+)?|expect)\(.*(?:Date\.now\(\)|performance\.now\(\)).*[<>]"),
+        ],
+        "An assertion on elapsed time flips on a loaded runner and misses a small regression. Assert the work done, "
+        "as a count; prove 'it does not wait on X' by holding X on an Event and getting the answer while X is held.",
+        "L03",
+        skip=[re.compile(r"^\s*assert\s+time\.monotonic\(\)\s*<\s*deadline\b")],  # a wait's own deadline
+    ),
+    Rule(
+        "no-assigned-clock-seam",
+        "ban",
+        py_any,
+        [re.compile(r"^\w+\s*=\s*time\.(?:sleep|time|monotonic)\s*$")],
+        "A module seam assigned at import (_sleep = time.sleep) keeps the real function, so a test that swaps the "
+        "module's time for a fake clock never reaches it. Make it a def that calls time at each call: "
+        "def _sleep(seconds): time.sleep(seconds).",
+        "L31",
     ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}

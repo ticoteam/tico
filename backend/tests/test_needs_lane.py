@@ -3,7 +3,6 @@ run fifty builds at once, each waiting on the others for the interpreter, and th
 a second it serves to one reader. A request waiting its turn holds none of the shared pool's threads."""
 
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 from backend import needs_lane
@@ -12,10 +11,12 @@ from backend.tests.helpers.api import headers
 
 
 def _counting(monkeypatch, name):
-    """Wrap views.<name> so it records how many builds ran at once (each takes 50 ms) and on which threads."""
+    """Wrap views.<name> so it records how many builds ran at once and on which threads. Each build waits at a barrier
+    the size of the lane, so the builds that do run together are held until a full lane is in them."""
     real = getattr(V, name)
     state = {"now": 0, "most": 0, "threads": set()}
     lock = threading.Lock()
+    together = threading.Barrier(needs_lane.LANES, timeout=10)
 
     def counted(*args, **kwargs):
         with lock:
@@ -23,7 +24,7 @@ def _counting(monkeypatch, name):
             state["most"] = max(state["most"], state["now"])
             state["threads"].add(threading.current_thread().name)
         try:
-            time.sleep(0.05)
+            together.wait()
             return real(*args, **kwargs)
         finally:
             with lock:

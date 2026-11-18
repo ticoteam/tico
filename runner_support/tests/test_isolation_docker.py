@@ -531,10 +531,13 @@ class Stack:
         deadline = time.monotonic() + WAIT_SECONDS
         while True:
             listed = docker("exec", self.hub, "ls", "/work/done").stdout.split()
-            if all(f"{aid}.json" in listed for aid in ids) or time.monotonic() > deadline:
+            if all(f"{aid}.json" in listed for aid in ids):
                 break
+            if time.monotonic() > deadline:
+                pending = [aid for aid in ids if f"{aid}.json" not in listed]
+                raise AssertionError(f"turns {pending} did not finish in {WAIT_SECONDS} s\n{self.logs()}")
             if docker("inspect", "-f", "{{.State.Running}}", self.runner).stdout.strip() != "true":
-                break  # the runner stopped: nothing more will finish
+                break  # the runner stopped: nothing more will finish, and the caller reports the turns missing
             time.sleep(2)
         return {
             aid: json.loads(self.must("exec", self.hub, "cat", f"/work/done/{aid}.json") or "null") or {}

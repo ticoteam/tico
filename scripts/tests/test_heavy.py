@@ -61,11 +61,12 @@ def in_session(sid):
     ]
 
 
-def gone(test, seconds=5):
-    deadline = time.time() + seconds
-    while test() and time.time() < deadline:
-        time.sleep(0.1)
-    return not test()
+def wait_for(check, what, seconds=10.0):
+    deadline = time.monotonic() + seconds
+    while not check():
+        if time.monotonic() > deadline:
+            raise AssertionError('never happened: ' + what)
+        time.sleep(0.05)
 
 
 def stop(*jobs):
@@ -79,14 +80,14 @@ def test_a_stopped_job_ends_its_workers_before_its_slot_goes(tmp_path):
     workers = tmp_path / 'workers'
     coordinator = f'sleep 60 & echo $! >> {workers}; sleep 60 & echo $! >> {workers}; wait'
     held = subprocess.Popen([HEAVY, 'bash', '-c', coordinator], env=env(tmp_path, TICO_HEAVY_SLOTS='1'))
-    assert gone(lambda: len(workers.read_text().split()) < 2 if workers.exists() else True)
+    wait_for(lambda: workers.exists() and len(workers.read_text().split()) == 2, 'the held job started its two workers')
     waiting = job(tmp_path, 'w', 0, TICO_HEAVY_SLOTS='1')
-    time.sleep(1)
-    assert waiting.poll() is None
+    terminated = time.time()
     held.terminate()
     assert held.wait(timeout=15) == 128 + signal.SIGTERM
     assert not any(alive(int(pid)) for pid in workers.read_text().split())  # the workers, not just the coordinator
     assert waiting.wait(timeout=10) == 0
+    assert span(tmp_path, 'w')[0] >= terminated, 'the waiting job started before the held job was stopped'
 
 
 def test_the_command_runs_at_niceness_ten(tmp_path):

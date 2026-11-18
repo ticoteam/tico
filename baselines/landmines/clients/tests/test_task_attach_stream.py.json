@@ -1,5 +1,0 @@
-{
-  "clients/tests/test_task_attach_stream.py": {
-    "no-unittest-mock": 1
-  }
-}

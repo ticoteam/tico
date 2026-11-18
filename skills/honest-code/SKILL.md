@@ -9,9 +9,8 @@ A check that stays green on broken code is worse than no check: people and agent
 pressure to get green will sleep until a race usually wins, retry, raise a timeout, mock the code under test or silence
 the lint. Each of those passes CI and none of them is true. This skill says what to do instead.
 
-Three places hold the rules. `scripts/landmines.py` and ruff hold every rule a script can decide; their failure
-messages say what to do. This file holds the judgment calls. `LESSONS.md` (beside this file, with `references/`) holds
-what Tico learned the hard way; a lesson seen twice becomes a script rule.
+`scripts/landmines.py` and ruff hold every rule a script can decide, and their messages say what to do. This file
+holds the judgment calls. `LESSONS.md` holds what Tico learned the hard way; a lesson seen twice becomes a script rule.
 
 ## The rules
 
@@ -66,8 +65,7 @@ Loose shapes to catch: an `or` in an assertion, a substring of a longer message,
 response, a name or docstring that claims more than the body checks, a second test that checks the same thing.
 
 Keep a test that fails on the first edit and passes on the second. Rewrite or delete the rest: a deleted low-value
-test is named in the commit body with why it went. Expected values are
-literals you worked out by hand. For a bug fix, the test fails on the old commit with the failure the bug caused, and
+test is named in the commit body with why it went. Expected values are literals you worked out by hand. For a bug fix, the test fails on the old commit with the failure the bug caused, and
 the pull request names that SHA. The 80% diff-coverage gate shows that lines ran, not that anything checks them.
 
 ### Doubles
@@ -78,8 +76,9 @@ the pull request names that SHA. The 80% diff-coverage gate shows that lines ran
   as `gh` or `op`. Use a fake that exists (listed in `references/examples.md`); when it lacks a failure, add the failure
   to the fake. A client package tests against a live hub, or a recording transport with its reason.
   `block_outside_network(monkeypatch, reason)` refuses every other host.
-- A fake answers the way the real thing does: same shape, same refusals (`{error: {code, detail}}`), same order. A
-  `page.route` handler returns a body the real route returns; a catch-all calls `route.abort()`, never answers `{}`.
+- A fake answers the way the real thing does: same shape, same refusals (`{error: {code, detail}}`), same order. Take
+  the shape from the contract, not from the code under test (L35). A `page.route` handler returns a body the real
+  route returns; a catch-all calls `route.abort()`, never answers `{}`.
 - Never `monkeypatch.setattr` or `mock.patch` a function of ours, or a stdlib function for the whole process
   (`time.sleep`, `subprocess.run`, `os.open`). Patch the module's own seam, or pass the function in (`run=` in
   `runner_support/op.py`). To force a failure our code cannot get from outside, say why on the line.
@@ -96,15 +95,17 @@ fails with a message naming what never arrived; a loop that stops quietly at its
 | A call to reach a fake | A `threading.Event` the fake sets: `assert model.asked.wait(10), "..."` (`backend/tests/test_topic_change.py`) |
 | N calls to arrive, or a fake that holds | A counter that sets an `Event` at N; a held fake blocks on an `Event` the test sets. A fake never sleeps. |
 | Background work to finish | A helper that waits for the pending set to empty: `media_settled(api)` (`backend/tests/helpers/visuals.py`) |
+| A state with no event | `wait_for(check, what)` in `backend/tests/helpers/wait.py`. Its poll is the one allowed sleep; it raises naming `what`. |
 | A later or fixed time | Find the clock the code reads. `H.now()`: `monkeypatch.setattr(H, "now", lambda: at)`. `time.time`, `datetime.now`: `time_machine.travel(..., tick=False)`. Freeze the clock, not the function that reads it. |
-| A product pause skipped | The module's `def _sleep(seconds)` seam (`clients/tico.py`). A `def`, not `_sleep = time.sleep`: tests that swap the module's `time` must still reach it. |
+| A product pause skipped, a budget run out | The module's `def _sleep(seconds)` or `def _monotonic()` seam; the test's steps advance a fake clock (`backend/tests/test_drains.py`). A `def`, never `_sleep = time.sleep` (L31). |
 | Drawn or written browser state | `until(check, what)` and `drawn(...)` in `ui/tests/support/e2e.cts`, or one `page.waitForFunction` that returns the value |
 | A request the page sends | `page.waitForResponse(...)` registered before the action, awaited after it (`ui/tests/changelog.cts:110-112`) |
 | A cost or speed promise | A count: draws, reads, SQL statements (`statement_scope.recorder`). Print milliseconds; never assert them. |
-| Order between two Rust tasks | A `Notify` the first side sets (`hold_first` in `runner-rs/src/upload_pace/streamed.rs`) |
 
 - Wait and read in one call. A wait followed by a separate read still races.
 - "Nothing else happens" is not proved by sleeping. Drive each step from the test and assert the count.
+- "It does not wait on X" is proved by holding X on an `Event` and getting the answer while X is held. A time bound
+  adds nothing: a call stuck behind X hangs, it does not run slow.
 
 ### Guards and suppressions
 
@@ -156,7 +157,6 @@ test id and run ids to the Release Manager bot, which fixes or deletes it the sa
 | "It failed on a pull request that does not touch it. Rerun." | It flipped on one commit, so it is flaky. HC-1 starts now, in the pull request that saw it. |
 | "CI passed on the retry." | A pass on retry is a failure. The `Flaky (...)` line names the test you now fix or delete. |
 | "The runner was slow. Give it more time." | A loaded runner is normal. Wait for the event, or count the work. |
-| "Mocking that function is simpler." | Then the test checks the caller against your guess of the callee. |
 | "The skip is temporary." | Nothing removes it. Fix the test or delete it with its reason. |
 | "Deleting a test loses coverage." | A flaky test covers nothing: its red is ignored and its green is luck. Record what is unchecked and delete it. |
 

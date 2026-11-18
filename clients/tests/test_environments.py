@@ -1,7 +1,7 @@
 """Creating and removing a company environment (clients/environments.py).
 
-Everything runs against a temporary environments root and a temporary HOME, and the database
-seed is replaced: no backend process starts and nothing touches the operator's own setup.
+Everything runs against a temporary environments root and a temporary HOME. The database seed is skipped (the
+module's own `skip_seed`): it starts a backend process, and nothing these tests read depends on the seed.
 """
 
 import os
@@ -20,24 +20,16 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        patch = mock.patch.dict(
+        patch = mock.patch.dict(  # double: the OS environment; the module finds its roots through it
             os.environ, {"TICO_ENVIRONMENTS_DIR": str(self.root / "environments"), "HOME": str(self.root / "home")}
         )
         patch.start()
         self.addCleanup(patch.stop)
         (self.root / "home").mkdir()
-        self.seeded = []
-        self.real_seed = ENV.seed_database
-        seed = mock.patch.object(
-            ENV,
-            "seed_database",
-            lambda directory, workspace, values, **kw: self.seeded.append(values) or ["assistant", "sales"],
-        )
-        seed.start()
-        self.addCleanup(seed.stop)
 
     def create(self, slug="acme", **kwargs):
         kwargs.setdefault("providers", "anthropic")
+        kwargs.setdefault("skip_seed", True)
         return ENV.create(slug, company=kwargs.pop("company", "Acme"), **OWNER, **kwargs)
 
 

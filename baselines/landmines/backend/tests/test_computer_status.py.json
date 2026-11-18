@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_computer_status.py": {
-    "no-unittest-mock": 1
-  }
-}

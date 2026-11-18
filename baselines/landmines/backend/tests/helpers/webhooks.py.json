@@ -1,0 +1,5 @@
+{
+  "backend/tests/helpers/webhooks.py": {
+    "timing-assert": 1
+  }
+}

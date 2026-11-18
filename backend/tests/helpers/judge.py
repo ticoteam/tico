@@ -16,29 +16,41 @@ QUESTIONS = {
 class FakeJudge:
     def __init__(self):
         self.calls, self.fail = [], None
+        self.choices = {}  # question name -> the option answered when a call asks that question
 
     def __call__(self, state, questions, label=None):
         self.calls.append({"state": state, "questions": questions, "label": label})
         if self.fail:
             raise self.fail
+        answers = {
+            "bucket": {
+                "type": "choice",
+                "choice": "reply",
+                "confidence": 0.8,
+                "probabilities": {"archive": 0.2, "reply": 0.8},
+            },
+            "is_ask": {"type": "noul", "noul": 0.9},
+        }
+        for name, option in self.choices.items():
+            if name in questions:
+                answers[name] = {
+                    "type": "choice",
+                    "choice": option,
+                    "confidence": 0.9,
+                    "probabilities": {key: float(key == option) for key in questions[name]["criteria"]},
+                }
         return {
             "model": "judge-1.13.0",
             "usage": {"input_tokens": 90, "output_tokens": 0},
             "ms": 180,
-            "answers": {
-                "bucket": {
-                    "type": "choice",
-                    "choice": "reply",
-                    "confidence": 0.8,
-                    "probabilities": {"archive": 0.2, "reply": 0.8},
-                },
-                "is_ask": {"type": "noul", "noul": 0.9},
-            },
+            "answers": answers,
         }
 
 
-def fake(api):
+def fake(api, **choices):
+    """The fake decision model as the server's; each keyword is a question and the option it answers with."""
     engine = FakeJudge()
+    engine.choices = choices
     api.app.state.judge = engine
     return engine
 

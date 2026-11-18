@@ -1,5 +1,0 @@
-{
-  "clients/tests/test_preflight.py": {
-    "no-unittest-mock": 1
-  }
-}

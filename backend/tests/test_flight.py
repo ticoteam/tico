@@ -147,6 +147,7 @@ def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, c
             time.sleep(0.01)
         assert store.recorder.waiting, "the writer never reached the write lock"
         sampler.step()
+        # The waiting writer needs some time on the lock before the window shows lock time to classify.
         time.sleep(0.1)
         store.recorder.beat = time.monotonic() - 1
         stall = sampler.step()
@@ -632,7 +633,6 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     """A sync handler's write held across a recorder flush on another thread: the open hold names the route template
     (from the middleware's context, through the threadpool) and the handler's line before it ends, and the event the
     busy lock kept out lands once it does."""
-    monkeypatch.setattr(flight, "LONG_HOLD_MS", 30)
     registry = tmp_path / "registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
@@ -662,6 +662,8 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     sampler.file.start()
     client = TestClient(app)  # no lifespan: the server's own recorder thread never flushes here
     answers = []
+    # Every hold counts as long from here on, so the open one is named as soon as it is taken, with no wait for age.
+    monkeypatch.setattr(flight, "LONG_HOLD_MS", 0)
     request = threading.Thread(
         target=lambda: answers.append(client.post("/api/v2/test-hold/x", headers={"Authorization": "Bearer ana-test"})),
         daemon=True,
@@ -669,7 +671,6 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     request.start()
     try:
         assert entered.wait(10), [(a.status_code, a.text[:200]) for a in answers]
-        time.sleep(0.06)
         rec.drain(MINUTE)
         with caplog.at_level(logging.WARNING, logger="tico.flight"):
             sampler.flush(MINUTE)

@@ -1201,9 +1201,6 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
     from backend.sql import Audit
 
     store = Store(Settings(db_path=tmp_path / 'synthetic.sqlite'))
-    # Keep this fixture independent of a full API boot.
-    with store.transaction() as c:
-        c.execute('CREATE TABLE receipts(actor TEXT, detail TEXT)')
     started, release = threading.Event(), threading.Event()
     original = store.transaction
     commits = []
@@ -1219,10 +1216,6 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 
     store.transaction = held
     audit = Audit(store)
-    from unittest.mock import patch
-
-    def event(c, actor, action, target, detail):
-        c.execute('INSERT INTO receipts VALUES(?,?)', (actor, json.dumps({**detail, 'via': H.VIA.get()})))
 
     def record(i):
         token = H.VIA.set(f'assistant-{i}')
@@ -1231,7 +1224,7 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
         finally:
             H.VIA.reset(token)
 
-    with patch('backend.sql.H.event', event), ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(record, 0)]
         assert started.wait(30)
         futures.extend(pool.submit(record, i) for i in range(1, 8))
@@ -1244,8 +1237,10 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
             f.result(timeout=30)
     assert len(commits) == 2
     with store.read() as c:
-        receipts = {r[0]: json.loads(r[1]) for r in c.execute('SELECT * FROM receipts')}
-    assert receipts == {f'human:fixture-{i}': {'i': i, 'via': f'assistant-{i}'} for i in range(8)}
+        audited = {
+            r[0]: json.loads(r[1]) for r in c.execute("SELECT actor, detail FROM events WHERE action='sql.query'")
+        }
+    assert audited == {f'human:fixture-{i}': {'i': i, 'via': f'assistant-{i}'} for i in range(8)}
 
     @contextmanager
     def failed():
@@ -1253,11 +1248,11 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
             yield c
             raise RuntimeError('synthetic commit failure')
 
-    store.transaction = failed
-    with patch('backend.sql.H.event', event), pytest.raises(RuntimeError, match='synthetic commit failure'):
+    store.transaction = failed  # double: a commit that fails is not reachable from outside on this store
+    with pytest.raises(RuntimeError, match='synthetic commit failure'):
         record(9)
     with store.read() as c:
-        assert c.execute('SELECT count(*) FROM receipts').fetchone()[0] == 8
+        assert c.execute("SELECT count(*) FROM events WHERE action='sql.query'").fetchone()[0] == 8
 
 
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):

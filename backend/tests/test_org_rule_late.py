@@ -20,6 +20,8 @@ from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     task_for_ops,
 )
 from backend.tests.helpers.org_rules import rule
+from backend.tests.helpers.wait import wait_for
+
 
 EVERYONE = {"everyone": True}
 SAFE = "Draft is in progress."
@@ -262,7 +264,4 @@ def test_a_late_check_starts_on_its_own_once_the_write_commits(ruled):
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     mid = comment(api, task, BROKEN)["comment"]["id"]
-    deadline = time.monotonic() + 10
-    while not body_of(api, mid).startswith("Warning:") and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert body_of(api, mid).startswith("Warning:")
+    wait_for(lambda: body_of(api, mid).startswith("Warning:"), "the late check wrote its warning within 10 s")

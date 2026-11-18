@@ -168,7 +168,10 @@ def test_the_loop_reports_the_key_copy_keeps_it_out_of_logs_and_the_status_file(
     os.utime(key, (1, 1))
     from unittest import mock
 
-    with mock.patch.object(replication, "mirror_from_env", lambda env: Broken(tmp_path / "x")):
+    def quoting_location(env):
+        return Broken(tmp_path / "x")  # double: its failure message quotes the key; no real location does that
+
+    with mock.patch.object(replication, "mirror_from_env", quoting_location):
         replication.loop(env, sleep=lambda s: None, rounds=1)
     out = capsys.readouterr()
     assert "RuntimeError" in out.out and KEY.hex() not in out.out + out.err

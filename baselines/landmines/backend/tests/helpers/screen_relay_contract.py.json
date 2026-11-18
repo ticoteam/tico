@@ -1,5 +1,5 @@
 {
   "backend/tests/helpers/screen_relay_contract.py": {
-    "no-fixed-sleep-py": 3
+    "no-fixed-sleep-py": 1
   }
 }

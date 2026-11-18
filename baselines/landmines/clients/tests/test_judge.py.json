@@ -1,5 +1,5 @@
 {
   "clients/tests/test_judge.py": {
-    "no-unittest-mock": 5
+    "no-unittest-mock": 3
   }
 }

@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_skill_screening.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

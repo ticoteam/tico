@@ -1,5 +1,5 @@
 {
   "backend/tests/test_scheduler.py": {
-    "no-unittest-mock": 1
+    "timing-assert": 1
   }
 }

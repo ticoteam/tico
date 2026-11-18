@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_app_teardown.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

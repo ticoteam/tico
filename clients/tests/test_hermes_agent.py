@@ -285,10 +285,10 @@ class Base(unittest.TestCase):
                 "TICO_AGENT_CONFIG_DIR": str(self.config_dir),
                 "PATH": "/usr/bin:/bin",
             },
-        )  # no real `hermes` for the child to run
+        )  # no real `hermes` for the child to run; double: the OS environment, which the connector reads per call
         env.start()
         self.addCleanup(env.stop)
-        patch = mock.patch.object(H, "CONFIG_DIR", self.config_dir)
+        patch = mock.patch.object(H, "CONFIG_DIR", self.config_dir)  # double: computed at import; a temp folder instead
         patch.start()
         self.addCleanup(patch.stop)
         self.hub = Hub()
@@ -298,10 +298,10 @@ class Base(unittest.TestCase):
 
     def platform(self, name):
         for target in (
-            mock.patch.object(H.sys, "platform", name),
-            mock.patch.object(H.subprocess, "run", self.fake.run),
-            mock.patch.object(
-                H.shutil, "which", lambda n: "/usr/bin/" + n if n in ("systemctl", "hermes", "openclaw") else None
+            mock.patch.object(H, "_platform", lambda: name),  # double: the operating system the connector runs on
+            mock.patch.object(H, "_run", self.fake.run),  # double: launchctl, systemctl and the agent CLIs (see Fake)
+            mock.patch.object(  # double: the PATH lookup, so only the CLIs the Fake plays are found
+                H, "_which", lambda n: "/usr/bin/" + n if n in ("systemctl", "hermes", "openclaw") else None
             ),
         ):
             target.start()
@@ -329,7 +329,9 @@ class Pair(Base):
     def test_missing_yaml_reports_incomplete_tools_and_preserves_other_servers(self):
         config = self.profile / "config.yaml"
         config.write_text("mcp_servers:\n  other:\n    url: https://example.com/mcp\n")
-        with mock.patch.dict("sys.modules", {"yaml": None}):
+        with mock.patch.dict(
+            "sys.modules", {"yaml": None}
+        ):  # double: forces the missing-yaml branch; yaml is installed
             out = self.install("--no-timer", "--sync", "off")
         self.assertIn("Paired, finish connecting tools:", out)
         self.assertIn("-m pip install PyYAML", out)
@@ -344,7 +346,9 @@ class Pair(Base):
             {"state": "pending"},
             {"state": "approved", "bot": "scout", "token": TOKEN},
         ]
-        with mock.patch.object(H, "_sleep", lambda s: None):
+        with mock.patch.object(
+            H, "_sleep", lambda s: None
+        ):  # double: the pause between polls; the fake hub answers now
             code, out, err = self.run_cli("pair", "--profile", "scout", "--url", self.hub.url)
         self.assertEqual(code, 0, err)
         self.assertIn("Tell BotOps", out)
@@ -372,7 +376,9 @@ class Pair(Base):
 
     def test_an_expired_code_stops_cleanly_and_changes_nothing(self):
         self.hub.pair_states = [{"state": "pending"}, {"state": "expired"}]
-        with mock.patch.object(H, "_sleep", lambda s: None):
+        with mock.patch.object(
+            H, "_sleep", lambda s: None
+        ):  # double: the pause between polls; the fake hub answers now
             code, out, err = self.run_cli("pair", "--profile", "scout", "--url", self.hub.url)
         self.assertEqual(code, 1)
         self.assertIn("expired", err)
@@ -517,18 +523,18 @@ class Backoff(Base):
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 1)
         # The next minute is skipped without calling the hub.
         now = H._now()
-        with mock.patch.object(H, "_now", lambda: now + 60):
+        with mock.patch.object(H, "_now", lambda: now + 60):  # double: the clock; the backoff lasts an hour
             self.assertEqual(self.beat()[0], 0)
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 1)
         self.assertIn("backoff", self.credential())
         # After an hour it tries once more, still archived, and waits another hour.
-        with mock.patch.object(H, "_now", lambda: now + 3601):
+        with mock.patch.object(H, "_now", lambda: now + 3601):  # double: the clock; the backoff lasts an hour
             code, out, err = self.beat()
         self.assertEqual(code, 1)
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 2)
         # Restored: the next attempt after the wait succeeds and normal service resumes.
         self.hub.heartbeat = (200, {"server_time": "t", "bot": "scout", "waiting": {"messages": 0, "tasks": 0}})
-        with mock.patch.object(H, "_now", lambda: now + 3601 + 3601):
+        with mock.patch.object(H, "_now", lambda: now + 3601 + 3601):  # double: the clock; the backoff lasts an hour
             code, out, err = self.beat()
         self.assertEqual(code, 0, err)
         self.assertIn("answers again", out)
@@ -989,19 +995,21 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
-def test_openclaw_error_keeps_gateway_cause_and_target_without_credentials():
+def test_openclaw_error_keeps_gateway_cause_and_target_without_credentials(monkeypatch):
     stderr = (
         'Error: gateway closed (1006): token="test-secret"\n'
         'Gateway target: ws://sam:private@127.0.0.1:18789/?token=test-secret\n'
         'Source: local loopback\nConfig: /tmp/profile.json\nBind: loopback\n'
     )
-    with mock.patch.object(H.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", stderr)):
-        try:
-            H.run_tool(["openclaw", "cron", "add"], "schedule")
-        except H.Failure as exc:
-            detail = str(exc)
-        else:
-            raise AssertionError("failed command must report an error")
+    monkeypatch.setattr(  # double: the openclaw CLI, which fails as its Gateway is closed
+        H, "_run", lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", stderr)
+    )
+    try:
+        H.run_tool(["openclaw", "cron", "add"], "schedule")
+    except H.Failure as exc:
+        detail = str(exc)
+    else:
+        raise AssertionError("failed command must report an error")
     assert "gateway closed (1006)" in detail and "127.0.0.1:18789" in detail and "Source: local loopback" in detail
     assert "start this profile's Gateway" in detail and "reinstall" in detail
     assert "test-secret" not in detail and "private" not in detail

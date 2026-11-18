@@ -31,6 +31,8 @@ from backend.tests.helpers.finance_fixtures import (
 from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
 from backend.tests.helpers.finance_ap import LATER, _balance, _bill, _events, _ingest, _pnl, _txn, _vendor
 from backend.tests.helpers.finance_oks import give, send_back, withdraw
+from backend.tests.helpers.wait import wait_for
+
 
 PLAIN = "human:eve"  # a web teammate with no grants or rights
 
@@ -172,17 +174,15 @@ def test_a_scheduled_bills_payment_reaches_mercury_on_commit_without_waiting_for
             FA.watch_documents(c, AT)
             assert sync.BELL.rung == rung  # not before the commit
         assert sync.BELL.rung > rung
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and not fake.sent("request_send_money"):
-            time.sleep(0.05)
+        wait_for(lambda: fake.sent("request_send_money"), "Mercury got request_send_money", seconds=15)
         assert len(fake.sent("create_recipient")) == 1 and len(fake.sent("request_send_money")) == 1
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
+
+        def awaiting():
             with books.read() as c:
                 bill = FR.bill(c, OWNER, bid)
-            if bill["payment"]["status"] == "awaiting_bank_approval":
-                break
-            time.sleep(0.05)
+            return bill if bill["payment"]["status"] == "awaiting_bank_approval" else None
+
+        bill = wait_for(awaiting, "the bill shows its payment awaiting bank approval", seconds=5)
         assert (bill["status"], bill["pay_on"], bill["payment"]["status"]) == (
             "scheduled",
             AT[:10],

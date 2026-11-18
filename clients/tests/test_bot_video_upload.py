@@ -3,13 +3,11 @@
 The large files are sparse (an MP4 or WAV header, then a truncate), so nothing big is written or committed.
 """
 
-import os
-from unittest.mock import Mock
-
 import pytest
 
 from clients import bot_files as BF
 from clients import hubtools
+from clients.tests.helpers.wire import Wire
 
 MB = 1024 * 1024
 MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
@@ -23,72 +21,60 @@ def sparse(path, head, size):
     return path
 
 
-def client(features, reply=None):
-    made = Mock()
-    made.features.return_value = features
-    made.request.return_value = reply or {"file": {"id": "f1"}}
-    return made
+def wire(features):
+    """A hub that says what its features are and takes an upload."""
+    return Wire({"GET config": {"features": features}, "POST files/uploads": {"file": {"id": "f1"}}})
 
 
 @pytest.fixture
 def checkout(tmp_path, monkeypatch):
     root = tmp_path / "checkout"
     (root / "reports").mkdir(parents=True)
-    monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: root)
-    monkeypatch.setattr(BF, "pushed_commit", lambda root, rel: "")
+    monkeypatch.chdir(root)  # not a git checkout, so the command's checkout is this folder
     return root
 
 
-def test_a_100_mb_video_is_sent_from_the_file_not_read_whole(checkout, monkeypatch):
+def test_a_100_mb_video_is_sent_from_the_file_not_read_whole(checkout):
     sparse(checkout / "reports" / "cut.mp4", MP4, 100 * MB)
-    monkeypatch.setattr(BF, "read_local", lambda *a: pytest.fail("the whole file was read"))
-    seen = {}
-    made = client({"file_media_stream": True})
-
-    def request(method, path, raw=None, key=None):
-        seen.update(method=method, path=path, size=os.fstat(raw.fileno()).st_size, head=raw.read(16))
-        return {"file": {"id": "f1"}}
-
-    made.request.side_effect = request
-    assert hubtools.files_publish_path(made, {"path": "reports/cut.mp4"}) == {"file": {"id": "f1"}}
-    assert (
-        seen["method"] == "POST"
-        and seen["path"].startswith("/api/v2/files/uploads?")
-        and "name=cut.mp4" in seen["path"]
-    )
-    assert seen["size"] == 100 * MB and seen["head"] == MP4[:16]
+    hub = wire({"file_media_stream": True})
+    assert hubtools.files_publish_path(hub.client(), {"path": "reports/cut.mp4"}) == {"file": {"id": "f1"}}
+    (sent,) = hub.writes()
+    assert sent.method == "POST" and sent.path.startswith("/api/v2/files/uploads?") and "name=cut.mp4" in sent.path
+    assert sent.headers["content-length"] == str(100 * MB)
+    assert sent.body == {"head": MP4[:16]}  # a stream of the file: its bytes were never a bytes object
 
 
-def test_an_older_server_refuses_a_large_video_before_reading_it(checkout, monkeypatch):
-    sparse(checkout / "reports" / "cut.mp4", MP4, 30 * MB)
-    monkeypatch.setattr(BF, "read_local", lambda *a: pytest.fail("the whole file was read"))
-    made = client({})
-    result = hubtools.files_publish_path(made, {"path": "reports/cut.mp4"})
+def test_an_older_server_refuses_a_large_video_before_reading_it(checkout):
+    path = sparse(checkout / "reports" / "cut.mp4", MP4, 30 * MB)
+    path.chmod(0)  # unreadable: a read would fail, so the refusal must come before any read
+    hub = wire({})
+    result = hubtools.files_publish_path(hub.client(), {"path": "reports/cut.mp4"})
     assert result["refused"] == "file" and "25 MB" in result["detail"]
-    made.request.assert_not_called()
+    assert hub.writes() == []
 
 
 def test_an_older_server_still_gets_a_small_video_as_bytes(checkout):
     sparse(checkout / "reports" / "clip.mp4", MP4, 1 * MB)
-    made = client({})
-    hubtools.files_publish_path(made, {"path": "reports/clip.mp4"})
-    assert isinstance(made.request.call_args.kwargs["raw"], bytes)
+    hub = wire({})
+    hubtools.files_publish_path(hub.client(), {"path": "reports/clip.mp4"})
+    (sent,) = hub.writes()
+    assert isinstance(sent.body, bytes) and len(sent.body) == 1 * MB
 
 
 def test_a_renamed_video_is_refused_before_any_bytes_are_sent(checkout):
     sparse(checkout / "reports" / "cut.mp4", WAV, 30 * MB)
-    made = client({"file_media_stream": True})
-    result = hubtools.files_publish_path(made, {"path": "reports/cut.mp4"})
+    hub = wire({"file_media_stream": True})
+    result = hubtools.files_publish_path(hub.client(), {"path": "reports/cut.mp4"})
     assert result["refused"] == "file" and "first bytes" in result["detail"]
-    made.request.assert_not_called()
+    assert hub.writes() == []
 
 
 def test_other_kinds_keep_the_25_mb_cap(checkout):
     sparse(checkout / "reports" / "big.csv", b"a,b\n", 25 * MB + 1)
-    made = client({"file_media_stream": True})
-    result = hubtools.files_publish_path(made, {"path": "reports/big.csv"})
+    hub = wire({"file_media_stream": True})
+    result = hubtools.files_publish_path(hub.client(), {"path": "reports/big.csv"})
     assert result["refused"] == "file"
-    made.request.assert_not_called()
+    assert hub.writes() == []
 
 
 @pytest.mark.parametrize(

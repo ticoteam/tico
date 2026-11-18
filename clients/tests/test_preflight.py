@@ -5,7 +5,6 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from clients import preflight as PF
 

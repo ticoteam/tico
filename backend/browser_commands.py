@@ -278,6 +278,7 @@ class Mailbox:
         self.holds: dict[str, Hold] = {}
         self.sessions: dict[str, SessionFacts] = {}
         self.frames: dict[str, Frame] = {}
+        self.watchers: dict[str, int] = {}  # per account, the people waiting on its next picture now
         self.recent: dict[tuple[str, str], tuple[float, "asyncio.Future[Outcome | dict[str, Any]]"]] = {}
         self.sent: dict[str, list[tuple[float, str]]] = {}
 
@@ -462,6 +463,15 @@ class Mailbox:
     def queued(self, runner_id: str) -> list[Command]:
         with self.lock:
             return list(self.queues.get(runner_id, ()))
+
+    def watch(self, account_id: str, delta: int) -> None:
+        """Counts the people waiting on the account's next picture: one more when one starts to wait, one less after."""
+        with self.lock:
+            left = self.watchers.get(account_id, 0) + delta
+            if left:
+                self.watchers[account_id] = left
+            else:
+                self.watchers.pop(account_id, None)
 
     def hand_out(self, runner_id: str, ids: set[str]) -> list[Command]:
         with self.lock:
@@ -1658,6 +1668,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 raise
         if pending is not None:
             began = time.perf_counter()
+            mailbox.watch(account_id, 1)
             try:
                 outcome = await asyncio.wait_for(asyncio.shield(pending.reply), FRAME_WAIT)
                 if isinstance(outcome, Problem):
@@ -1665,6 +1676,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             except TimeoutError:
                 pass
             finally:
+                mailbox.watch(account_id, -1)
                 _idle(request, began)
         with mailbox.lock:
             data, url, width, height = frame.data, frame.url, frame.width, frame.height

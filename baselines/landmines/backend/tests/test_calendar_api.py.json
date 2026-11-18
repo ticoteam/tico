@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_calendar_api.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

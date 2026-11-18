@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_heartbeat.py": {
-    "no-fixed-sleep-py": 2
-  }
-}

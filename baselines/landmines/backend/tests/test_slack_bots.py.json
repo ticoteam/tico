@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_slack_bots.py": {
-    "no-fixed-sleep-py": 3
-  }
-}
