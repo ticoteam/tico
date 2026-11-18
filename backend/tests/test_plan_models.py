@@ -11,7 +11,7 @@ from backend.tests.helpers.model_subscriptions import add, codex_file, company
 
 ROLES = {"ops": "feature-owner", "cpo": "reviewer", "inbox": "librarian"}
 CLAUDE_TASKS = {"model": "claude-opus-5-5", "reasoning_effort": "medium", "runtime": "claude"}
-CHATGPT_TASKS = {"model": "gpt-6.1-sol", "reasoning_effort": "high", "runtime": "codex"}
+CHATGPT_TASKS = {"model": "gpt-6.2-sol", "reasoning_effort": "high", "runtime": "codex"}
 
 
 def bots(api):
@@ -74,7 +74,7 @@ def test_a_claude_plan_puts_the_bots_on_the_claude_set(api):
 def test_a_chatgpt_plan_alone_moves_the_bots_off_claude(api):
     second = bots(api)
     add(api, "codex_login", codex_file(), name="ChatGPT")
-    light = offered("gpt-6.1-terra") or "gpt-6.1-sol"
+    light = offered("gpt-6.1-terra") or "gpt-6.2-sol"
     assert on(api, "ops")[0] == light and on(api, "ops")[2] == "codex"
     assert on(api, "cpo")[0] == light and on(api, "cpo")[2] == "codex"
     assert tasks_on(api, "ops") == tasks_on(api, "cpo") == CHATGPT_TASKS
@@ -90,7 +90,7 @@ def test_a_second_plan_moves_to_both_and_removing_one_goes_back(api):
     add(api)
     chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     assert on(api, "ops")[0] == "claude-haiku-5-5" and tasks_on(api, "ops") == CLAUDE_TASKS  # the Claude pair
-    assert on(api, "cpo")[2] == "claude" and on(api, second) == ("gpt-6.1-sol", "high", "codex")  # two providers
+    assert on(api, "cpo")[2] == "claude" and on(api, second) == ("gpt-6.2-sol", "high", "codex")  # two providers
     assert on(api, "inbox")[2] == "codex"
     with api.app.state.store.transaction() as c:
         MS.remove(c, api.app.state.store.settings, _owner(), chatgpt, confirm=True)
@@ -223,7 +223,7 @@ def test_a_task_model_keeps_its_context_length_and_leaves_with_the_role(api):
 def test_the_assistant_keeps_the_strong_model_and_no_task_model():
     assert PM.role_of("assistant", False) == PM.ASSISTANT
     assert PM.pick(PM.ASSISTANT, PM.CLAUDE) == ("claude-opus-5-5", "medium")
-    assert PM.pick(PM.ASSISTANT, PM.CHATGPT) == ("gpt-6.1-sol", "high")
+    assert PM.pick(PM.ASSISTANT, PM.CHATGPT) == ("gpt-6.2-sol", "high")
     assert PM.task_pick(PM.ASSISTANT, PM.CLAUDE) is None
     # Every Owner, Feature Owner and manager is heavy: Haiku for its own turns, Opus for its tasks.
     for template in ("qa-owner", "release-owner", "feature-owner", "engineering-manager", "general-manager"):
@@ -239,7 +239,7 @@ def test_the_assistant_keeps_the_strong_model_and_no_task_model():
 def test_a_model_not_offered_yet_gives_the_sets_pick_on_the_same_tool(monkeypatch):
     monkeypatch.setitem(PM.SETS[PM.LIGHT], PM.CHATGPT, ("gpt-6.1-terra", "medium"))
     monkeypatch.setattr(PM, "_offered", lambda model: model != "gpt-6.1-terra")
-    assert PM.pick(PM.LIGHT, PM.CHATGPT) == ("gpt-6.1-sol", "high")
+    assert PM.pick(PM.LIGHT, PM.CHATGPT) == ("gpt-6.2-sol", "high")
 
 
 def _owner():

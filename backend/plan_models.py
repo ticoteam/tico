@@ -62,13 +62,13 @@ SETS: dict[str, dict[str, tuple[str, str]]] = {
     },
     ASSISTANT: {
         CLAUDE: ("claude-opus-5-5", "medium"),
-        CHATGPT: ("gpt-6.1-sol", "high"),
+        CHATGPT: ("gpt-6.2-sol", "high"),
         BOTH: ("claude-opus-5-5", "medium"),
     },
     REVIEWER_2: {
         CLAUDE: ("claude-haiku-5-5", "xhigh"),
         CHATGPT: ("gpt-6.1-terra", "medium"),
-        BOTH: ("gpt-6.1-sol", "high"),
+        BOTH: ("gpt-6.2-sol", "high"),
     },
     LIGHT: {
         CLAUDE: ("claude-haiku-5-5", "xhigh"),
@@ -82,7 +82,7 @@ SETS: dict[str, dict[str, tuple[str, str]]] = {
 TASK_SETS: dict[str, dict[str, tuple[str, str]]] = {
     HEAVY: {
         CLAUDE: ("claude-opus-5-5", "medium"),
-        CHATGPT: ("gpt-6.1-sol", "high"),
+        CHATGPT: ("gpt-6.2-sol", "high"),
         BOTH: ("claude-opus-5-5", "medium"),
     },
 }

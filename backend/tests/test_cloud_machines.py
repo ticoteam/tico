@@ -2941,7 +2941,7 @@ def test_a_plan_an_owner_took_off_a_computer_is_not_brought_back_by_a_later_chan
 def test_a_claude_bot_with_a_codex_task_model_gets_the_codex_plan_too(cloud):
     sid = plan_company(cloud, "ops")
     csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
-    task_on(cloud.api, "ops", "gpt-6.1-sol", "codex")
+    task_on(cloud.api, "ops", "gpt-6.2-sol", "codex")
     computer = own_computer(cloud, "ops")
     assert given(cloud, computer["runner_id"]) == {"claude": sid, "codex": csid}
 
@@ -3676,7 +3676,7 @@ def test_a_codex_bot_moved_onto_a_running_shared_machine_takes_the_chatgpt_plan(
     shared = shared_for(cloud, "cpo", token="ben-test")
     codex_heartbeat(cloud, shared)
     csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
-    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
     box = runner(cloud.api, label="Box")
     assign(cloud.api, box, "ops")
     idle(cloud)
@@ -3698,7 +3698,7 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     plan_company(cloud, "cpo")
     shared = shared_for(cloud, "cpo")
     codex_heartbeat(cloud, shared)
-    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
     change_as(cloud, "ops", mode="cloud", placement="shared")
     checks = health_of(cloud)
     assert "Codex" in checks["computer_signin"]["summary"] and "Claude" not in checks["computer_signin"]["summary"]

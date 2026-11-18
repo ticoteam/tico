@@ -9,7 +9,7 @@ from backend.store import H, encode
 from backend.tests.helpers.api import post  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 
-MODEL = {"model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None}
+MODEL = {"model": "gpt-6.2-sol", "effort": "high", "harness": None, "runner_id": None}
 
 
 def inbox_bot_of(api, person):

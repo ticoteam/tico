@@ -1322,7 +1322,7 @@ BOT = (
         "bot task-model",
         "the model the bot's tasks run on, with its effort and harness; --clear puts them back on the bot's own model",
         args=(Arg("model", positional=True, nargs="?"),),
-        example="tico bot task-model builder gpt-6.1-sol --effort high",
+        example="tico bot task-model builder gpt-6.2-sol --effort high",
     ),
     Command("bot pause", "pause a bot (BotOps)", example="tico bot pause builder"),
     Command("bot resume", "resume a bot (BotOps)", example="tico bot resume builder"),

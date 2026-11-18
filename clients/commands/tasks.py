@@ -196,7 +196,7 @@ def task_create(api, args):
         "title": _s("What to do"),
         "message": _s("The first message on its chat", default=""),
         "check_model": _s(
-            "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
+            "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.2-sol`; `auto` for "
             "the company's check model, from a provider other than the parent's author when one can run it"
         ),
         "check_role": {
@@ -1348,7 +1348,7 @@ TASK = (
         "the model a bot-owned task's runs use; no model shows it",
         args=(Arg("model", positional=True, nargs="?"),),
         omit=("on_behalf_of",),
-        example="tico task model T1 gpt-6.1-sol --effort high",
+        example="tico task model T1 gpt-6.2-sol --effort high",
     ),
     Command(
         "task child",

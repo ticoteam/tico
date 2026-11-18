@@ -18,7 +18,7 @@ def bot(api, slug, reports_to=None):
             "status": "active",
             "repo": "emp-" + slug,
             "thread_mode": "personal",
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "effort": "high",
             "harness": None,
             "operator": "ana",
@@ -38,7 +38,7 @@ def finish(api, machine, attempt):
             "last_seq": 0,
             "text": "Done.",
             "usage": {
-                "model": "gpt-6.1-sol",
+                "model": "gpt-6.2-sol",
                 "runtime": "codex",
                 "harness": "codex",
                 "billing": "api",

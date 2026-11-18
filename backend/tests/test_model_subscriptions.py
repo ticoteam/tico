@@ -433,7 +433,7 @@ def test_removing_a_subscription_in_use_confirms_then_takes_it_off_every_compute
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = machine(api)
     give(api, m, "codex", sid)
@@ -549,8 +549,8 @@ def test_a_reconnect_confirms_then_restarts_runs_on_the_old_value_and_their_late
 def test_a_run_reads_only_the_revision_it_was_handed_or_the_same_accounts_refresh(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m, n = machine(api), machine(api, bot="cpo", label="Other Mac")
     give(api, m, "codex", sid)
@@ -853,7 +853,7 @@ def test_a_switch_leaves_a_bot_of_another_runtime_on_the_same_computer_alone(api
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api)
     assign(api, m, "cpo")
@@ -912,7 +912,7 @@ def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keep
     # the bot (it runs Claude as its fallback), and it is freed only when that fallback can take the turn.
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     with api.app.state.store.transaction() as c:
         config = BS.read(c, 'ops')
         config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
@@ -959,7 +959,7 @@ def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
     # switch leaves it alone.
     setup(api)
     company(api)
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     on(api, "ops", "claude", "claude-sonnet-5-5")
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api, signed_in=True)
@@ -981,7 +981,7 @@ def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_
 
     setup(api)
     company(api)
-    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = machine(api, signed_in=True)
     assign(api, m, "cpo")
@@ -1042,7 +1042,7 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
             config = BS.read(c, 'ops')
             config["fallback"] = {
                 "harness": "codex" if mode == "named" else "claude",
-                "model": "gpt-6.1-sol" if mode == "named" else "claude-sonnet-5-5",
+                "model": "gpt-6.2-sol" if mode == "named" else "claude-sonnet-5-5",
             }
             BS.write(c, 'ops', config)
         if mode in ("absent", "uninstalled"):
@@ -1286,7 +1286,7 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
                 (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
             )
             config = BS.read(c, 'ops')
-            config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}
+            config["fallback"] = {"harness": "codex", "model": "gpt-6.2-sol"}
             BS.write(c, 'ops', config)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
@@ -1589,7 +1589,7 @@ def test_a_rename_keeps_the_readings_taken_for_a_plan_and_a_new_secret_ends_them
 def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -1609,7 +1609,7 @@ def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api
 def test_a_chatgpt_login_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -1631,7 +1631,7 @@ def test_a_background_login_read_during_a_subscription_turn_is_not_that_plans_us
     # read taken while the plan's turn runs is no reading of the plan. Only the turn's own reading (its origin and id) is.
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     sid = add(api, "codex_login", codex_file(email=""), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -1752,7 +1752,7 @@ def test_a_persons_plans_list_in_use_first_across_tools(api):
     by their soonest weekly reset (`place`). Each tool's `order` stays its own pick order."""
     setup(api)
     company(api)
-    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "ops", "codex", "gpt-6.2-sol")
     claude = add(api)["id"]
     chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = machine(api)
