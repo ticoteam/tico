@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
 
 if __package__:
@@ -2332,8 +2333,52 @@ def pytest_command(workers, report):
         *PYTEST_FLAGS,
         "-o",
         "junit_family=xunit1",
-        f"--junitxml=ci-results/{report.name}",
+        f"--junitxml={report}",
     ]
+
+
+def check_base_failures(root, suite, retry_report, remaining):
+    """Record failures reproduced on the base and return the head SHA if they explain the failed retry."""
+    base = os.environ.get("BASE_SHA", "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        return None
+    messages = junit_failure_messages(retry_report)
+    # A test that vanished or was skipped on retry cannot be cleared by the base.
+    if not messages or messages.keys() != remaining or any("" in lines for lines in messages.values()):
+        return None
+    base_report = retry_report.with_name(f"{suite}-base.xml").resolve()
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        if base == commit:
+            return None
+        for path in dict.fromkeys(test.split("::", 1)[0] for test in messages):
+            subprocess.run(["git", "cat-file", "-e", f"{base}:{path}"], cwd=root, check=True)
+        with TemporaryDirectory(prefix="tico-pr-base-") as temp:
+            worktree = Path(temp) / "base"
+            try:
+                subprocess.run(["git", "worktree", "add", "--detach", str(worktree), base], cwd=root, check=True)
+                command = [*pytest_command("0", base_report), "--quarantine", *messages]
+                status = subprocess.run(command, cwd=worktree, check=False, timeout=300).returncode
+            finally:
+                subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if status != 1 or junit_failure_messages(base_report) != messages:
+        return None
+    tests = list(messages)
+    warnings = [
+        f"{test} fails the same way on {base[:10]}; this change did not break it. "
+        "Release validation and main-red track the fix."
+        for test in tests
+    ]
+    for warning in warnings:
+        print(f"::warning title=Already failing underneath this change::{warning}", flush=True)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a") as stream:
+            stream.write("\n".join(warnings) + "\n")
+    record = {"suite": suite, "tests": tests, "base": base, "commit": commit}
+    base_report.with_name(f"base-broken-{suite}.json").write_text(json.dumps(record) + "\n")
+    return commit
 
 
 def run(plan_path, suite, root=None, quarantine=False):
@@ -2382,7 +2427,7 @@ def run(plan_path, suite, root=None, quarantine=False):
     else:
         if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = pytest_command(os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)), report)
+        command = pytest_command(os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)), report.relative_to(root))
         if slow:
             command += ["-m", "slow"]
             # A content sweep runs as the release gate runs it (CONTENT_SWEEPS): the job names its environment, or, in an
@@ -2408,7 +2453,14 @@ def run(plan_path, suite, root=None, quarantine=False):
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     failed = []
     if quarantine:
-        for path in (report, retry_report, flaky_report, browser_failures):
+        for path in (
+            report,
+            retry_report,
+            flaky_report,
+            browser_failures,
+            results / f"{suite}-base.xml",
+            results / f"base-broken-{suite}.json",
+        ):
             path.unlink(missing_ok=True)
     if browser and quarantine:
         status, failed = browser_attempt(command, root, env)
@@ -2439,7 +2491,9 @@ def run(plan_path, suite, root=None, quarantine=False):
             return status
     if not 0 < len(failed) <= flake_quarantine.MAX_FAILURES_PER_JOB:
         return status
+    commit = None
     if browser:
+        # Checking browser failures against the base would need a UI build of the base.
         retry_env = {**env, "TICO_UI_TIMINGS": str(results / f"{suite}-retry.json")}
         retry_status, remaining = browser_attempt([*browser_command, *failed], root, retry_env)
         if retry_status:
@@ -2448,17 +2502,24 @@ def run(plan_path, suite, root=None, quarantine=False):
             return retry_status
         browser_failures.unlink(missing_ok=True)
     else:
-        retry = [*pytest_command("0", retry_report), "--quarantine", *failed]
+        retry = [*pytest_command("0", retry_report.relative_to(root)), "--quarantine", *failed]
         retry_status = subprocess.run(retry, cwd=root, env=None, check=False).returncode
-        if retry_status:
+        if retry_status not in (0, 1):
             return retry_status
         try:
             passed = flake_quarantine.passed_tests(retry_report.read_bytes())
         except (ET.ParseError, OSError):
+            return retry_status or status
+        if retry_status:
+            commit = check_base_failures(root, suite, retry_report, set(failed) - passed)
+            if commit is None:
+                return retry_status
+            failed = [test for test in failed if test in passed]
+            if not failed:
+                return 0
+        elif not passed.issuperset(failed):
             return status
-        if not passed.issuperset(failed):
-            return status
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    commit = commit or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     flaky_report.write_text(json.dumps({"suite": suite, "tests": failed, "commit": commit}) + "\n")
     for test in failed:
         print(f"Flaky (failed, then passed on retry): {test}", flush=True)
@@ -2594,6 +2655,18 @@ def junit_failures(path):
     except (ET.ParseError, OSError):
         return
     yield from (case for case in cases if case.find("failure") is not None or case.find("error") is not None)
+
+
+def junit_failure_messages(path):
+    messages = defaultdict(set)
+    for case in junit_failures(path):
+        test = flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+        for outcome in case:
+            if outcome.tag in ("failure", "error"):
+                lines = outcome.get("message", "").splitlines()
+                first = lines[0] if lines else ""
+                messages[test].add(" ".join(re.sub(r"\b0x[0-9a-fA-F]+\b", "", first).split()))
+    return messages
 
 
 def junit_failed(paths, limit=3):
@@ -2800,7 +2873,8 @@ def main():
             return 1
     elif args.action == "failed":
         folder = Path(args.folder)
-        failed = junit_failed(sorted(folder.glob("*-retry.xml"))) or junit_failed(sorted(folder.glob("*.xml")))
+        reports = sorted(path for path in folder.glob("*.xml") if not path.stem.endswith("-base"))
+        failed = junit_failed(path for path in reports if path.stem.endswith("-retry")) or junit_failed(reports)
         if not failed:
             failed = [
                 name for path in sorted(folder.glob("failed-browser-*.txt")) for name in path.read_text().splitlines()
@@ -2811,7 +2885,7 @@ def main():
     elif args.action == "durations":
         results = Path("ci-results")
         measured = durations(
-            (path for path in results.glob("python-*.xml") if not path.stem.endswith("-retry")),
+            (path for path in results.glob("python-*.xml") if not path.stem.endswith(("-retry", "-base"))),
             (path for path in results.glob("browser-*.json") if not path.stem.endswith("-retry")),
         )
         if not measured:

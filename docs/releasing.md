@@ -454,9 +454,10 @@ checks on that merge commit, and moves main only when they pass.
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
 - **Quarantined tests**. PR checks and queue groups retry up to five failed tests per Python or browser leg once.
-  When all pass on retry, the leg passes and logs each flake. Queue groups save those flips in the `queue-flaky`
-  artifact. `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily. It reports Python
-  and browser flakes and proposes `ci/quarantine/` entries for pytest tests that failed and passed on the same
+  When all pass on retry, the leg passes and logs each flake. A Python leg also passes if all remaining failures
+  match on the base commit. Release validation and main-red track those failures. Queue groups save retry passes
+  in the `queue-flaky` artifact. `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily.
+  It reports Python and browser flakes and proposes `ci/quarantine/` entries for pytest tests that failed and passed on the same
   commit. Write proposals with `python3 scripts/flake_quarantine.py detect --write ci/quarantine`. A listed test
   runs as a non-strict xfail in PR checks and the queue. Release validation runs without retries or quarantine.
   The weekly report fails when an entry is older than 14 days. The fix deletes the entry.
