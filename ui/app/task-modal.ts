@@ -51,6 +51,8 @@ interface ModalDialog extends TfDialog {
   taskActivity?: boolean;
   /** The task's documents as its last full read listed them: a redraw from a list row or a save keeps its tabs. */
   taskDocs?: TaskDoc[] | null;
+  /** Where a page open in the window (`page:<id>`) came from: a Spec card ('chat') or the Files tab ('files'). */
+  taskPageFrom?: TaskTab;
 }
 // GET /v2/tasks/{id} as the dialog and its conversation read it.
 interface ModalDetail {
@@ -110,6 +112,20 @@ function taskDialogWire(d: ModalDialog) {
     const url = new URL(anchor.href, location.href);
     const match = url.origin === location.origin && url.pathname.match(/^\/api\/v2\/files\/([^/]+)$/);
     if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'))) ev.preventDefault();
+  });
+  // A Spec card or a page row of Files opens the page in the window, in place of the chat (taskPageDocOf); a Spec card
+  // that is open goes back to the chat. A click for a new tab or window still opens the page's own view.
+  d.addEventListener('click', ev => {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    const el = eventElement(ev)?.closest<HTMLElement>('[data-task-spec], [data-tft-page]');
+    if (!el || el.closest('dialog') !== d) return;
+    const key = 'page:' + (el.dataset.taskSpec || el.dataset.tftPage || '');
+    if (!taskPageDocOf(d, key)) return;
+    ev.preventDefault();
+    const spec = el.hasAttribute('data-task-spec');
+    if (spec && d.taskTab === key) { taskTabShow(d, 'chat'); return; }
+    d.taskPageFrom = spec ? 'chat' : TASK_FILES_TAB;
+    taskTabShow(d, key);
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
@@ -1382,7 +1398,7 @@ function taskCauseLinkHTML(href: string | null | undefined): string {
 // then the documents; a Spec is a card under the title, taskSpecsHTML); or Details (what it is, what it needs to leave
 // its stage and a short list of facts), from its icon in the head, which closes back to what showed before. The
 // style guide's Task window; kept on the dialog across redraws.
-type TaskTab = string;   // 'chat', 'files', 'details' or a document's key
+type TaskTab = string;   // 'chat', 'files', 'details', a document's key or a page open in the window (`page:<id>`)
 /** The documents the window draws: the task's own read's, else the last read's for the same task. */
 const taskTabRow = (d: ModalDialog) => d.querySelector<HTMLElement>('.tw-tabs');
 const taskDetailsButton = (d: ModalDialog) => d.querySelector<HTMLElement>('[data-task-tab="details"]');
@@ -1391,13 +1407,19 @@ function taskDocsOf(d: ModalDialog, t: ModalTask): TaskDoc[] {
   return d.taskDocs || [];
 }
 function taskTabPaint(d: ModalDialog) {
-  // A document that is gone (archived, unreadable now), or a Spec (its card sits under the title), shows the chat instead.
-  if (d.taskTab?.startsWith('doc:') && !taskDocOf(d, d.taskTab)) d.taskTab = 'chat';
-  if (d.taskTabBack?.startsWith('doc:') && !taskDocOf(d, d.taskTabBack)) d.taskTabBack = 'chat';
-  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = taskDocOf(d, tab);
+  // A document or page that is gone (archived, unreadable now), or a Spec as a document key (its card sits under the
+  // title and opens it as a page), shows the chat instead.
+  const gone = (key: TaskTab | undefined) => (key?.startsWith('doc:') && !taskDocOf(d, key)) || (key?.startsWith('page:') && !taskPageDocOf(d, key));
+  if (gone(d.taskTab)) d.taskTab = 'chat';
+  if (gone(d.taskTabBack)) d.taskTabBack = 'chat';
+  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = taskDocOf(d, tab) || taskPageDocOf(d, tab);
   if (body) body.dataset.taskTabShown = doc ? 'doc' : tab;
+  // The tab lit: under Details or an open page, the tab it came from; a Spec's page lights its card, no tab.
+  const under = tab === 'details' ? d.taskTabBack || 'chat' : tab, page = under.startsWith('page:') ? under.slice(5) : null;
+  const lit = page ? d.taskPageFrom || 'chat' : under;
   const row = taskTabRow(d);
-  if (row) docTabsPaint(row, tab === 'details' ? d.taskTabBack || 'chat' : tab, b => b.dataset.taskTab, tab !== 'details');   // Details covers them: none selected
+  if (row) docTabsPaint(row, lit, b => b.dataset.taskTab, tab !== 'details' && !(page && lit === 'chat'));   // Details covers them: none selected
+  for (const card of d.querySelectorAll<HTMLElement>('[data-task-spec]')) card.setAttribute('aria-current', String(tab === 'page:' + card.dataset.taskSpec));
   taskDetailsButton(d)?.setAttribute('aria-pressed', String(tab === 'details'));
   const pane = $('.task-doc', d) as HTMLElement | null;
   if (pane && doc) docViewMount(pane, doc);
@@ -1429,6 +1451,12 @@ function taskTabsBind(d: ModalDialog) {
 // Spec pages have cards under the title. Every other document gets a tab after Files.
 const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => (docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown');
 const taskDocOf = (d: ModalDialog, key: string | null | undefined): TaskDoc | null => docOf(taskTabDocs(d.taskDocs), key);
+/** A page open in the window (`page:<id>`): one of the task's Spec pages, else a page row of its Files tab. */
+function taskPageDocOf(d: ModalDialog, key: string | null | undefined): TaskDoc | null {
+  if (!key?.startsWith('page:')) return null;
+  const id = key.slice(5);
+  return (d.taskDocs || []).find(x => x.name === 'Spec' && x.kind !== 'markdown' && (x.page_id || x.file_id) === id) || TFT_PAGES.get(id) || null;
+}
 /** The tabs on the title row, and the change of a document as the task is read again: a new tab, a new version, one gone. */
 function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined) {
   const on = tab === 'details' || !tab ? 'chat' : tab, shown = taskTabDocs(docs);
@@ -1449,6 +1477,7 @@ function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   const specs = taskSpecsHTML(t.documents, String(t.id), TFT_TITLES), card = d.querySelector<HTMLElement>('[data-task-specs]');
   if (card) { if (specs) card.outerHTML = specs; else card.remove(); }
   else if (specs) d.querySelector<HTMLElement>('.tmodal-head')?.insertAdjacentHTML('afterend', specs);
+  taskFilesPaint(d as unknown as TftHost, String(t.id));   // a page that became a document leaves the Files list
   taskTabsBind(d);
 }
 // The tab a task opens on, once its conversation is read: Chat, where the box is and what is happening now. A tab the

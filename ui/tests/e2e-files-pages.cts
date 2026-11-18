@@ -158,7 +158,8 @@ async function filesPages({hub, browser, phone}: PassContext) {
     assertClean(reader, `${where}: linked pages refresh without reopening the task`);
     await reader.context().close();
 
-    // A Markdown attachment is one document tab and one file row, even after it gets another version.
+    // A Markdown attachment is one document tab, even after it gets another version, and no row under Files: a document
+    // shows in one place.
     const attach = (text: string) => must<{file_id: string; version: number}>(hub, 'dana', 'POST', `tasks/${id}/files`, {
       name: 'Launch notes.md', text,
     });
@@ -174,10 +175,9 @@ async function filesPages({hub, browser, phone}: PassContext) {
     await body.getByText('Ready for approval.').waitFor({timeout: t(15000)});
     assert.equal(await doc.count(), 1);
     await pagesTab(page);
-    const fileRow = win.locator(`[data-tft-file="${notes.file_id}"]`);
-    await fileRow.waitFor({timeout: t(10000)});
-    assert.equal(await win.getByRole('tab', {name: 'Files 1', exact: true}).count(), 1);
-    assert.equal(await fileRow.count(), 1);
+    await win.locator('.tft-list .tft-none').waitFor({timeout: t(10000)});
+    assert.equal(await win.getByRole('tab', {name: 'Files', exact: true}).count(), 1);
+    assert.equal(await win.locator(`[data-tft-file="${notes.file_id}"]`).count(), 0);
     assert.equal(await win.locator(`[data-tft-page="${notes.file_id}"]`).count(), 0);
     await page.context().close();
 }
