@@ -409,8 +409,11 @@ scheme, host and port exactly, and has no trailing slash).
 
 ## Rate limits
 
-Tico applies **no request-rate limit** to the API: it will answer as fast as it can. The limits that exist:
+A person's own sign-in (the cookie or a bearer session) has **no request-rate limit**: Tico answers as fast as it can.
+The limits that exist:
 
+- A personal API token runs at most 4 requests at once and 240 a minute ([api.md](api.md#rate-limits-and-size-limits));
+  past that it gets `429 rate_limited` with `Retry-After`. Wait that long and send it again.
 - Bodies: 2 MB for writes; 20 MB for uploads (`/api/v2/uploads/...`) and meeting imports (`413 too_large`).
 - A few actions have a daily allowance (tool notes, the server's decisions) and answer `429` when it is used; the
   `detail` says which.

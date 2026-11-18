@@ -178,9 +178,15 @@ included:
 
 ## Rate limits and size limits
 
-Tico does not rate-limit ordinary calls. What it does enforce: writes are limited to 2 MB (uploads and meeting
-imports 20 MB, `413 too_large`), a few actions have a daily budget (`429`), and each open live stream costs the
-server a small read every second. [custom-frontend.md](custom-frontend.md#rate-limits) has the guidance.
+Each API client has a fair share of the server, so one script cannot slow everyone else: an API token or service key
+runs at most 4 requests at once and 240 a minute, a bot or a person's Assistant 8 at once and 600 a minute. Past
+either, the request is refused at once with `429 rate_limited`, a `Retry-After` header and the same seconds in
+`retry_after`; the `tico` client retries it. Runners and people in the app have no limit. The server's
+operator changes the numbers with `TICO_FAIR_SHARE_TOKEN_CONCURRENT`, `TICO_FAIR_SHARE_TOKEN_PER_MINUTE`,
+`TICO_FAIR_SHARE_BOT_CONCURRENT` and `TICO_FAIR_SHARE_BOT_PER_MINUTE` (0 is no limit). Writes are limited to 2 MB
+(uploads and meeting imports 20 MB, `413 too_large`), a few actions have a daily budget (`429`), and each open live
+stream costs the server a small read every second. [custom-frontend.md](custom-frontend.md#rate-limits) has the
+guidance.
 
 File imports have limits of their own. A conversion stops after 30 seconds, or when it needs more than 1 GiB of memory.
 The import then fails with `422 import_failed`, and its `detail` says to split the file. Two conversions run at once.

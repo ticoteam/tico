@@ -356,6 +356,13 @@ class Settings:
     # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
+    # Each API client's fair share of the server (backend/fair_share.py): requests running at once and requests a
+    # minute, for one API token or service key, and for one bot or one person's Assistant. 0 turns that limit off.
+    # The app itself reads a task once when it opens and once per change after that, a few a minute.
+    fair_share_token_concurrent: int = 4
+    fair_share_token_per_minute: int = 240
+    fair_share_bot_concurrent: int = 8
+    fair_share_bot_per_minute: int = 600
     company_file_data: str = field(default="", repr=False)
     # Whether the installer named a company file at all, apart from whether its text could be read, and why not: an
     # empty or unreadable file is a failed import the owner sees.
@@ -671,6 +678,10 @@ class Settings:
             ),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
+            fair_share_token_concurrent=max(0, int(os.environ.get("TICO_FAIR_SHARE_TOKEN_CONCURRENT", "") or 4)),
+            fair_share_token_per_minute=max(0, int(os.environ.get("TICO_FAIR_SHARE_TOKEN_PER_MINUTE", "") or 240)),
+            fair_share_bot_concurrent=max(0, int(os.environ.get("TICO_FAIR_SHARE_BOT_CONCURRENT", "") or 8)),
+            fair_share_bot_per_minute=max(0, int(os.environ.get("TICO_FAIR_SHARE_BOT_PER_MINUTE", "") or 600)),
             **_company_file_fields(rehearsal),
             enabled_providers=tuple(
                 part.strip().lower() for part in os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()
