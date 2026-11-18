@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_read_deps_sweep.py": {
+    "timing-assert": 1
+  }
+}

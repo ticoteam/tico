@@ -33,17 +33,18 @@ else Playwright's Chromium): runner images ship no dev tools. The browser script
 On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
-checks only. PR checks and the queue run a test listed in `ci/quarantine/` (it failed and passed on one commit) without failing on it; release validation still fails on it (`scripts/flake_quarantine.py`, `.github/workflows/flaky-tests.yml`). The fix for a quarantined test deletes its entry file. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+checks only. A flaky test is never quarantined, skipped or retried away: a test that failed and passed on one commit is fixed at its root cause the same day, or deleted (`scripts/flake_detect.py` lists them daily in `.github/workflows/flaky-tests.yml`, which goes red on one). The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change within two levels. The queue stops at hubs such as `backend/app.py` and follows the input–hub pairs in `QUEUE_HUB_INPUTS` to their direct tests up to level three. The plan is capped at nineteen VMs and includes the smoke set when it drops tests. Release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
-it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
+it, the Rust and desktop checks when they changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
 and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
 ready. The PR checks and the queue fail a change when fewer than 80% of the Python statements it adds to backend/ and
 clients/ run under its selected tests (`scripts/diff_coverage.py`); a line opts out only with `# pragma: no cover - <reason>`
-on that line. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
+on that line. A run of up to about 100 Python tests, or one to three browser scripts, may run locally under `nice -n 19`
+with `-n 2` at most and never `-m slow`; anything bigger goes to RunsOn (`scripts/remote.py`) or PR checks. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
 queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
@@ -70,7 +71,10 @@ against a dev install with a real model, on demand only; `backend/tests/test_bot
 hold customer text and never enter this repository.
 
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
-never ship around a known failure. If a test may fail, it shouldn't exist.
+never ship around a known failure. If a test may fail, it shouldn't exist. A test that passes only on a rerun is flaky,
+not green. Fewer strong tests beat many weak ones: a low-value test is deleted, with its reason in the commit body.
+`skills/honest-code/SKILL.md` has the steps; `scripts/landmines.py` (run by `scripts/lint.sh`) holds fixed sleeps and
+waits, retries, raised timeouts and `unittest.mock` to counts that only go down.
 
 ## Before you push
 Turn on the pre-push hook once per clone: `git config core.hooksPath .githooks`. It is expected in every clone, bots' included.
@@ -146,4 +150,5 @@ flight file, not the database.
   vendor code, a Node test, or in the `KEPT_JS` list (the classic scripts that stay JavaScript, each with its reason).
   Each `.ts` must pass `ui/tsconfig.strict.json`; one with findings has a piece under `ui/baselines/strict/` that only
   shrinks, and a new `.ts` must be at zero (a renamed `.js` may keep its count).
-- Comments say why in the present tense; they do not name who asked or when.
+- Comments say why in the present tense; they do not name who asked or when. No divider lines, no narration of the
+  change, no commented-out code. A suppression (`noqa`, `type: ignore`, `#[allow]`) says why on the same line.

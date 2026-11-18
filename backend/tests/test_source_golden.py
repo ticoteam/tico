@@ -1,5 +1,5 @@
-"""Golden standings: what Tico does today with GitHub, pinned before the generic "sources" refactor (cut 1 of
-reports/2026-11-09-pipelines-v3/sources-build-plan.md) so the refactor can show it changed no behaviour.
+"""Golden standings: what Tico does today with GitHub, pinned so a refactor of the GitHub facts and merge-queue code can
+show it changed no behaviour.
 
 Each situation below drives the real code with the in-memory GitHub (backend/tests/helpers/fake_github.py): webhooks
 the way the server takes them, the 5-minute re-read, the Merge stage's effects step, queue again. Then it records, in a
@@ -16,7 +16,7 @@ The expected answers are in backend/tests/fixtures/source_golden.json. A differe
 `TICO_GOLDEN_WRITE=1` rewrites the situations it runs (only do that when a change in behaviour is wanted, and list the
 changed situations in the PR).
 
-CUT 1: `Seam` below is the ONE helper to repoint. Every call into task_facts / merge_queue and every read of their
+`Seam` below is the one helper to repoint. Every call into task_facts / merge_queue and every read of their
 tables (pr_facts, releases, release_reads, release_commits, effects, requirements.kind, task_links) goes through it. When
 those modules move to backend/sources/github.py, backend/item_facts.py and backend/source_actions.py, change `Seam`
 only; the situations and the golden file stay as they are. `Seam.WAIT_STATE` maps renamed waiting states (`github` ->
@@ -49,10 +49,9 @@ B, RM, EM = "bot:builder", "bot:release", "bot:eng-manager"
 GITHUB_KINDS = ("pr_open", "checks_pass", "pr_merged", "in_release")
 
 
-# ============================================================================= the one seam cut 1 repoints
 class Seam:
-    """Everything the situations do to, and read from, the GitHub fact and merge-queue code. Cut 1 changes this class
-    and nothing else in this file."""
+    """Everything the situations do to, and read from, the GitHub fact and merge-queue code. A move of that code changes
+    this class and nothing else in this file."""
 
     # Waiting states as `waiting_on` names them -> as the golden file names them.
     WAIT_STATE: dict[str, str] = {"source": "github"}
@@ -79,7 +78,6 @@ class Seam:
         state = Seam.WAIT_STATE.get(w.state, w.state)
         return [state, None if w.state == "source" else w.who, w.line]
 
-    # ------------------------------------------------------------------ driving
     @staticmethod
     def webhook(c, event, payload, delivery=None, app_slug=None):
         """A webhook as the server's route takes it (backend/github.py `install_github.handle`): a repeated delivery
@@ -128,7 +126,6 @@ class Seam:
         """A failing check saved on the PR's fact (as a check_run webhook would), at a fresh version."""
         F.save_pr(c, repo, number, {"checks": [{"name": "unit", "state": "failure"}]}, F.version_now())
 
-    # ------------------------------------------------------------------ time passing (rows are backdated)
     @staticmethod
     def age_fact(c, number, field, hours=0, minutes=0, repo=REPO):
         """Move one time of a PR's fact back: read_at (last word from GitHub), head_seen_at, checks_started_at,
@@ -152,7 +149,6 @@ class Seam:
     def age_release_reads(c, hours):
         c.execute("UPDATE github_release_reads SET read_at=?", (H.shift(H.now(), hours=-hours),))
 
-    # ------------------------------------------------------------------ reading
     @staticmethod
     def github_requirements(c, row):
         """The pipeline's GitHub requirements on any stage, in stage then position order: [(name, requirement)]."""
@@ -248,7 +244,6 @@ class Seam:
         return MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"])
 
 
-# ============================================================================= recording
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SHA = re.compile(r"\b[0-9a-f]{40}\b")
 TS = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)?")
@@ -310,7 +305,6 @@ def record(c, task_id, gh, extra=None):
     return found
 
 
-# ============================================================================= building blocks
 class World:
     def __init__(self, store):
         self.store = store
@@ -445,7 +439,6 @@ def situation(name):
     return add
 
 
-# ============================================================================= PR open
 @situation("unlinked task")
 def _(w):
     with w.tx() as c:
@@ -534,7 +527,6 @@ def _(w):
     return task_id
 
 
-# ============================================================================= Checks pass
 @situation("checks running (check_run webhook)")
 def _(w):
     with w.tx() as c:
@@ -659,7 +651,6 @@ def _(w):
     return task_id
 
 
-# ============================================================================= the merge queue
 @situation("entered Merge, queue owed")
 def _(w):
     return in_merge(w, 1)
@@ -903,7 +894,6 @@ def _(w):
     return task_id
 
 
-# ============================================================================= In a release
 @situation("merged, releases never read")
 def _(w):
     task_id = merged(w)
@@ -973,7 +963,6 @@ def _(w):
     return task_id
 
 
-# ============================================================================= GitHub not answering
 class Refusing(FakeGitHub):
     """Every PR read fails with `reason`."""
 
@@ -1073,7 +1062,6 @@ def _(w):
     return task_id
 
 
-# ============================================================================= webhooks out of order, repeated
 @situation("webhook with an older updated_at after a newer one")
 def _(w):
     with w.tx() as c:
@@ -1112,7 +1100,6 @@ def _(w):
     return task_id, {"webhooks": said}
 
 
-# ============================================================================= the test
 def _golden():
     return json.loads(GOLDEN.read_text()) if GOLDEN.exists() else {}
 

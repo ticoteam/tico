@@ -61,6 +61,8 @@ def version():
 
 
 HISTORY = "release-history"
+# About four weeks at 18 releases a day (2026-11-17), about 25 KB: enough for a weekly report of merge to production.
+HISTORY_KEPT = 500
 
 
 def record_start(c, now):
@@ -71,12 +73,14 @@ def record_start(c, now):
     seen = json.loads(row[0]) if row else []
     if seen and seen[-1].get("version") == current:
         return seen
-    seen = (seen + [{"version": current, "since": now}])[-20:]
+    seen = (seen + [{"version": current, "since": now}])[-HISTORY_KEPT:]
     c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (HISTORY, json.dumps(seen)))
     return seen
 
 
 def history(c):
+    """Every kept entry as stored: {version, since} each, oldest first. The owner-only system/update route reads its
+    tail; Health shows the list to bots and people (backend/health.py `release_history`)."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
     return json.loads(row[0]) if row else []
 

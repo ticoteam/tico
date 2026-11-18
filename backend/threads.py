@@ -4562,7 +4562,7 @@ def brief(c, principal, row):
 
 def live_calls(c, ids):
     """{thread id: {"id", "live_count"}} for the threads among `ids` with a live call (backend/calls.py), one query a
-    chunk. A Tico Meet call counts the people in it; a Google Meet call, what its status source last said."""
+    chunk. A call whose End was pressed (ending) is not live here: nobody can join it. A Tico Meet call counts the people in it; a Google Meet call, what its status source last said."""
     out = {}
     for part in H.chunks(list(dict.fromkeys(ids))):
         out.update(
@@ -4570,7 +4570,8 @@ def live_calls(c, ids):
             for r in c.execute(
                 "SELECT k.thread_id, k.id, CASE WHEN k.provider='tico' THEN (SELECT COUNT(*) FROM call_participants p "
                 "WHERE p.call_id=k.id AND p.left_at IS NULL AND p.removed_at IS NULL) ELSE k.live_count END "
-                "FROM calls k WHERE k.state='live' AND k.thread_id IN (%s)" % ",".join("?" * len(part)),
+                "FROM calls k WHERE k.state='live' AND k.ending_at IS NULL AND k.thread_id IN (%s)"
+                % ",".join("?" * len(part)),
                 part,
             )
         )

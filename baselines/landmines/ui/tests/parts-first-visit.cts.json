@@ -1,0 +1,5 @@
+{
+  "ui/tests/parts-first-visit.cts": {
+    "no-fixed-wait-ui": 2
+  }
+}

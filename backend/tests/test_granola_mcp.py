@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+import threading
 from urllib.parse import parse_qs
 
 import httpx
 
+from backend import oauth_refresh
 from backend.auth import Identity
 from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
 from backend.tests.helpers.media import import_meeting
@@ -219,7 +221,7 @@ def test_untrusted_verification_urls_rejected(api):
     assert provider.service.load("human:ana") is None
 
 
-def test_two_refreshes_of_one_granola_connection_send_its_rotated_refresh_token_once(api):
+def test_two_refreshes_of_one_granola_connection_send_its_rotated_refresh_token_once(api, monkeypatch):
     """Granola rotates its refresh token and refuses a used one. Two services on one database (as two processes run)
     refresh the same connection at once: one refresh reaches Granola, and the other takes the tokens it stored."""
     from backend.granola_mcp import GranolaMCP
@@ -228,12 +230,23 @@ def test_two_refreshes_of_one_granola_connection_send_its_rotated_refresh_token_
     provider.connect()
     current, accepted, refused = {"refresh": "fake-refresh-sensitive"}, [], []
     answer = provider.handle
+    found_in_flight, in_flight = threading.Event(), []
+    real_take = oauth_refresh.take
+
+    def take_or_note(c, sign_in):
+        holder = real_take(c, sign_in)
+        if holder is None:  # another holder's refresh is live: this service waits on it
+            found_in_flight.set()
+        return holder
+
+    monkeypatch.setattr(oauth_refresh, "take", take_or_note)
 
     async def handle(request):
         form = parse_qs(request.content.decode()) if request.url.path == "/oauth2/token" else {}
         if form.get("grant_type") != ["refresh_token"]:
             return answer(request)
-        await asyncio.sleep(0.3)  # the answer takes a while, as it does over the network
+        # the answer takes a while, as it does over the network: held until the other service is waiting on it
+        in_flight.append(await asyncio.to_thread(found_in_flight.wait, 10))
         sent = form["refresh_token"][0]
         if sent != current["refresh"]:
             refused.append(sent)
@@ -256,6 +269,7 @@ def test_two_refreshes_of_one_granola_connection_send_its_rotated_refresh_token_
         )
 
     assert asyncio.run(both()) == [None, None]
+    assert in_flight == [True], "the other service never found the refresh in flight"
     assert accepted == ["fake-refresh-sensitive"] and refused == []
     assert first[2]["access_token"] == second[2]["access_token"] == "fake-access-rotated"
     saved = provider.service.load("human:ana")

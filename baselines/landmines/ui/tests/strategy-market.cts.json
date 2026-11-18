@@ -1,0 +1,5 @@
+{
+  "ui/tests/strategy-market.cts": {
+    "no-fixed-wait-ui": 4
+  }
+}

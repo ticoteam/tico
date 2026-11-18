@@ -7,7 +7,6 @@ a fake set on `related_input.ENGINE`, as the idea check's is.
 """
 
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -313,28 +312,6 @@ def test_settings_out_of_range_are_refused_at_save(company):
     said = str(refused.value)
     assert "The bar on" in said or "has no setting color" in said
     assert RI.settings_of({"settings": {"bar": 2, "most": True}}) == (RI.BAR, RI.MOST, RI.WAIT_HOURS)
-
-
-def test_the_migration_adds_the_kind_and_keeps_every_row():
-    from importlib import import_module
-
-    migration = import_module("backend.migrations.20261114075516_related_input")
-    conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE requirements (id TEXT PRIMARY KEY, stage_id TEXT, "
-        "kind TEXT NOT NULL CHECK (kind IN ('owner_done', 'ok', 'page', 'item', 'linked_done', 'answer')), "
-        "person_id TEXT, CHECK (person_id IS NULL OR kind IN ('ok', 'page', 'answer')))"
-    )
-    conn.execute("CREATE INDEX requirements_stage ON requirements(stage_id)")
-    conn.execute("INSERT INTO requirements VALUES ('r1', 's1', 'owner_done', NULL)")
-    migration.up(conn)
-    migration.up(conn)  # again: nothing changes
-    conn.execute("INSERT INTO requirements VALUES ('r2', 's1', 'related_input', NULL)")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO requirements VALUES ('r3', 's1', 'related_input', 'human:ana')")
-    assert [r[0] for r in conn.execute("SELECT id FROM requirements ORDER BY id")] == ["r1", "r2"]
-    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='requirements_stage'").fetchone()
-    assert conn.execute("SELECT COUNT(*) FROM related_inputs").fetchone()[0] == 0
 
 
 def test_a_stage_whose_time_runs_out_with_nobody_picked_moves_on(features, jev, time_machine):

@@ -38,7 +38,7 @@ interface ToolApiCall {
 }
 interface ToolApiPage {rows?: ToolApiCall[]; next?: string | null}
 interface ToolApiKey {id: string; name: string; preview?: string | null; access_level: string; expires_on?: string | null;
-  last_used_at?: string | null; created_at?: string | null}
+  last_used_at?: string | null; created_at?: string | null; can_remove?: boolean}
 // A tool's setting: a plain variable every run holding a level on the tool gets (backend/tool_settings.py).
 interface ToolApiSetting {id: string; name: string; value: string}
 interface ToolApiCheck {ok: boolean; checked_at?: string | null; status_code?: number | string | null; detail?: string | null}
@@ -202,7 +202,7 @@ function taKeysCard(d: ToolApiData): string {
       <span class="tt-key-name"><b>${esc(k.name)}</b>${k.preview ? ` <span class="mono muted">${esc(k.preview)}</span>` : ''}</span>
       <span class="pill${k.access_level === 'read' ? '' : ' in-progress'}" data-key-level="${esc(k.access_level)}">${esc(taLevelName(k.access_level))}</span>
       <span class="tt-key-acts">${manage ? `<button type="button" class="linkish" data-ta-rotate="${esc(k.id)}">Rotate</button>` : ''}<button type="button" class="linkish" data-ta-reveal="${esc(k.id)}">Reveal · logged</button>${
-        manage ? `<button type="button" class="linkish danger" data-ta-key-delete="${esc(k.id)}">Remove</button>` : ''}</span></div>`).join('');
+        (k.can_remove ?? manage) ? `<button type="button" class="linkish danger" data-ta-key-delete="${esc(k.id)}">Remove</button>` : ''}</span></div>`).join('');
   const soonest = keys.map(k => k.expires_on).filter(Boolean).sort()[0];
   const used = keys.map(k => k.last_used_at).filter(Boolean).sort().pop();
   const added = keys.map(k => k.created_at).filter(Boolean).sort()[0];

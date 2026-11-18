@@ -7,7 +7,9 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::orgs;
-use crate::windows::{open_meeting_window, org_of, Home};
+use crate::windows::{
+    call_window_org, open_call_window, open_meeting_window, org_of, resize_call_window, Home,
+};
 use crate::{
     add_org, applog, emit_orgs, log_dir, org_count, popup_orgs, update_now, visual_origin, App,
     AppState, LOG_LINES,
@@ -24,9 +26,19 @@ const BRIDGE_SCRIPT: &str = r#"
   window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
   // What this build's bridge answers beyond the first three, so a page never posts into a
   // shell too old to hear it.
-  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles', 'visualView', 'orgInfo', 'bootTiming'];
+  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles', 'visualView', 'orgInfo', 'bootTiming', 'callWindow'];
   // The shell's version and the end of its log ({version, lines}), for Support diagnostics.
   window.ticoNativeLog = () => invoke('app_log');
+})();
+"#;
+
+/// A call's meeting window (windows::open_call_window): the bridge for its one ask, `callWindowSize`, and nothing else.
+pub(crate) const CALL_WINDOW_SCRIPT: &str = r#"
+(() => {
+  if (!window.__TAURI__ || !window.__TAURI__.core) return;
+  const invoke = window.__TAURI__.core.invoke;
+  window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
+  window.ticoNativeFeatures = ['callWindowSize'];
 })();
 "#;
 
@@ -91,31 +103,19 @@ const DIALOG_SCRIPT: &str = r#"
 })();
 "#;
 
-/// What only a Mac build answers: whether Tico Recorder is installed (`hasRecorder`), opening it on the page's org
-/// (`openRecorder`), having it record a call there (`recordCall`) or a calendar event (`recordEvent`).
-const RECORDER_SCRIPT: &str = r#"
-(() => {
-  if (!window.ticoNativeFeatures) return;
-  window.ticoNativeFeatures.push('openRecorder', 'recordCall', 'recordEvent');
-})();
-"#;
-
 /// The bridge plus this shell's version, which Settings shows beside the server's.
 pub(crate) fn bridge_script(app: &App) -> String {
     script_for(
         &app.package_info().version.to_string(),
         orgs::multi_org_build(),
-        cfg!(target_os = "macos"),
     )
 }
 
-/// The page script for a build: the bridge, the org features when this build keeps a list of orgs, the Recorder's on
-/// a Mac, and the version.
-fn script_for(version: &str, several_orgs: bool, recorder: bool) -> String {
+/// The page script for a build: the bridge, the org features when this build keeps a list of orgs, and the version.
+fn script_for(version: &str, several_orgs: bool) -> String {
     let version = serde_json::to_string(version).unwrap_or_else(|_| "\"\"".into());
     let extra = if several_orgs { ORG_SCRIPT } else { "" };
-    let recorder = if recorder { RECORDER_SCRIPT } else { "" };
-    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{CAPTURE_SCRIPT}{extra}{recorder}window.ticoNativeVersion = {version};\n")
+    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{CAPTURE_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
 }
 
 // ----------------------------------------------------------------------------- bridge
@@ -160,8 +160,37 @@ fn server_document(
 fn own_page_call(name: &str) -> bool {
     matches!(
         name,
-        "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming" | "capture" | "hasRecorder"
+        "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming" | "capture"
     )
+}
+
+/// `callWindowSize` ({call: id, wide}): a call's meeting window grows while a screen is shared and goes back after
+/// (ui/app/call-window.ts cwWide). Only that call's own window (`call-<org>-<id>`), at that org's origin.
+fn call_window_size(app: &App, webview: &Webview, body: Option<&Value>) -> Result<(), String> {
+    let id = body
+        .and_then(|b| b.get("call"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let wide = body
+        .and_then(|b| b.get("wide"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let label = webview.label();
+    let own = call_window_org(label, id).is_some_and(|org| {
+        let hub = app
+            .state::<AppState>()
+            .orgs
+            .lock()
+            .unwrap()
+            .get(org)
+            .and_then(|o| o.hub());
+        server_document(hub.as_ref(), org, Some(org), webview.url().ok().as_ref())
+    });
+    if !own {
+        return Err("Only a call's own window may size it.".into());
+    }
+    resize_call_window(app, label, wide);
+    Ok(())
 }
 
 /// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
@@ -238,7 +267,7 @@ pub(crate) fn bridge_reply(name: &str, count: usize) -> Value {
     }
 }
 
-/// What the page posts: `openWindow` ({meeting: id}), `orgInfo`, `showOrgMenu`, `addOrg` and the rest. Older pages
+/// What the page posts: `openWindow` ({meeting: id}), `callWindow` ({call: id}), `orgInfo`, `showOrgMenu`, `addOrg` and the rest. Older pages
 /// also post `windowMode`, which is ignored now that the window has one mode.
 #[tauri::command]
 pub(crate) fn bridge(
@@ -247,6 +276,10 @@ pub(crate) fn bridge(
     name: String,
     body: Option<Value>,
 ) -> Result<Value, String> {
+    // A call window is no org page (org_of): its one ask is checked against its own label instead.
+    if name == "callWindowSize" {
+        return call_window_size(&app, &webview, body.as_ref()).map(|()| Value::Null);
+    }
     let caller = if from_server(&app, &webview) || own_page_call(&name) {
         page_org(&app, &webview)
     } else {
@@ -286,6 +319,30 @@ pub(crate) fn bridge(
                 open_meeting_window(&app, &home, id);
             }
         }
+        // A Tico Meet call's meeting window (ui/app/call-window.ts), for the caller's own org as above; `join`: it
+        // joins the call as it opens.
+        "callWindow" => {
+            let id = body
+                .as_ref()
+                .and_then(|b| b.get("call"))
+                .and_then(Value::as_str);
+            let join = body
+                .as_ref()
+                .and_then(|b| b.get("join"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let caller = org_of(webview.label()).and_then(|org| {
+                app.state::<AppState>()
+                    .orgs
+                    .lock()
+                    .unwrap()
+                    .get(org)
+                    .cloned()
+            });
+            if let (Some(id), Some(home)) = (id, caller.and_then(|org| Home::of(&org))) {
+                open_call_window(&app, &home, id, join);
+            }
+        }
         // The page's "App update" bar: check the feed now instead of at the next six-hourly check.
         "checkForUpdates" => update_now(&app),
         // Help's "Show the app's log": the log file, selected in Finder (or the platform's file manager).
@@ -320,78 +377,8 @@ pub(crate) fn bridge(
             );
         }
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
-        "showOrgMenu" => {
-            if orgs::multi_org_build() {
-                popup_orgs(&app)
-            }
-        }
-        "addOrg" => {
-            if orgs::multi_org_build() {
-                add_org(&app);
-            }
-        }
-        // Whether Record (Tico Recorder) can be offered instead of its download.
-        "hasRecorder" => return Ok(Value::Bool(crate::recorder::installed())),
-        // Record: the Recorder opens on the caller's own org, from its label, never an address the page names.
-        "openRecorder" => {
-            let org = org_of(webview.label()).and_then(|org| {
-                app.state::<AppState>()
-                    .orgs
-                    .lock()
-                    .unwrap()
-                    .get(org)
-                    .cloned()
-            });
-            if let Some(hub) = org.and_then(|org| org.hub()) {
-                crate::recorder::open_recorder(&hub);
-            }
-        }
-        // A call started or joined on the page ({call: id}): the Recorder records it on the caller's own org, as
-        // Record opens it. Answers whether the Recorder was opened (installed, and the id is a call id).
-        "recordCall" => {
-            let call = body
-                .as_ref()
-                .and_then(|b| b.get("call"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let org = org_of(webview.label()).and_then(|org| {
-                app.state::<AppState>()
-                    .orgs
-                    .lock()
-                    .unwrap()
-                    .get(org)
-                    .cloned()
-            });
-            let opened = org
-                .and_then(|org| org.hub())
-                .is_some_and(|hub| crate::recorder::record_call(&hub, call));
-            return Ok(Value::Bool(opened));
-        }
-        // A calendar event's Join ({event: occurrence id, title}): the Recorder records it on the caller's own org, as
-        // `recordCall` does for a call. Answers whether the Recorder was opened (installed, and a link it takes).
-        "recordEvent" => {
-            let event = body
-                .as_ref()
-                .and_then(|b| b.get("event"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let title = body
-                .as_ref()
-                .and_then(|b| b.get("title"))
-                .and_then(Value::as_str);
-            let org = org_of(webview.label()).and_then(|org| {
-                app.state::<AppState>()
-                    .orgs
-                    .lock()
-                    .unwrap()
-                    .get(org)
-                    .cloned()
-            });
-            let opened = org
-                .and_then(|org| org.hub())
-                .is_some_and(|hub| crate::recorder::record_event(&hub, event, title));
-            return Ok(Value::Bool(opened));
-        }
+        "showOrgMenu" if orgs::multi_org_build() => popup_orgs(&app),
+        "addOrg" if orgs::multi_org_build() => add_org(&app),
         _ => {}
     }
     Ok(bridge_reply(&name, org_count(&app)))
@@ -1067,20 +1054,18 @@ mod visual_bridge_tests {
             "multiOrg",
             "bootTiming",
             "capture",
-            "hasRecorder",
         ] {
             assert!(own_page_call(name));
         }
         for name in [
             "openWindow",
+            "callWindow",
+            "callWindowSize",
             "checkForUpdates",
             "showLog",
             "showOrgMenu",
             "addOrg",
             "windowMode",
-            "openRecorder",
-            "recordCall",
-            "recordEvent",
         ] {
             assert!(!own_page_call(name));
         }

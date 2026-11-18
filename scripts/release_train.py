@@ -22,10 +22,15 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     SCHEDULE                               schedule only: the cron that fired (the backstop)
     RUN_EVENT, RUN_CONCLUSION, RUN_TITLE,  workflow_run only: the Release validation run that finished
     RUN_URL
+    VALIDATION_RUN                         workflow_dispatch only: the id of the Release validation run on main that
+                                           just finished. ci.yml's last job dispatches the train with it, because a run
+                                           the train dispatched with GITHUB_TOKEN never fires workflow_run. Such a
+                                           dispatch counts as that finished run, not as a manual run
     CANARY_URL, CANARY_UPDATE_KEY          the canary install (Tico Team) and its update key (docs/service-keys.md)
     STABLE_URL, STABLE_UPDATE_KEY          the stable install and its update key
     RELEASE_HOLD                           any value holds promotion to stable (a hotfix too, unless override_hold)
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
+                                           (a dispatch naming VALIDATION_RUN is a finished run, not a manual one)
     RELEASE_NEEDS_PERSON                   `on`: every release waits for a person's approval. Anything else (the
                                            default): a release whose notes list no High risk item needs no person
     GITHUB_ACTOR                           hotfix only: who overrode a hold
@@ -107,6 +112,9 @@ VALIDATION_WAIT = 150 * 60
 DISPATCH_WAIT = 120
 UPDATE_WAIT = 30 * 60  # the updater pulls, snapshots, restarts and checks health, or rolls back
 UPDATE_PATH = "/api/v2/system/update"
+# Reads of an install's update status before it counts as unreadable, POLL apart: on Nov 18 single reads of stable
+# (TIDY) went unanswered about one train step in two while it was up, and each such miss failed the whole step.
+READ_TRIES = 3
 POLL = 20
 REPUBLISH_AFTER = timedelta(minutes=30)  # a tag still unpublished this long after its Release run started
 RELEASE_RUNS = 2  # the first Release run on a tag, and one more
@@ -126,6 +134,8 @@ def _load(name, path):
 
 INCREMENT_PATH = ROOT / "scripts/release_increment.py"
 RED_JOB = re.compile(r"(python|browser)-\d+")  # the jobs whose logs name the tests that failed (release_increment)
+# A cancelled gate part that ran this long ran into its own timeout (ci.yml gate: timeout-minutes 45), not fail fast.
+FAIL_FAST_UNDER = timedelta(minutes=40)
 
 rollout = _load("tico_rollout", ROLLOUT_PATH)
 release_notes = _load("tico_release_notes", NOTES_PATH)
@@ -138,7 +148,11 @@ def sleep(seconds):
 
 
 class Fail(Exception):
-    """A step failed: it is reported on the release-train issue."""
+    """A step failed: it is reported on the release-train issue. `status` is the HTTP code of a GitHub call that failed."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 # ---- versions, titles and the clock ----
@@ -238,6 +252,15 @@ def reason_ok(reason):
 # ---- GitHub ----
 
 
+def fail_fast_cancelled(job):
+    """Whether a cancelled gate part was cut short by fail fast rather than stopped by its own 45-minute timeout, which
+    GitHub also reports as cancelled: a part that ran out its time hung, a failure nobody can name, and stays one."""
+    if job.get("conclusion") != "cancelled":
+        return False
+    started, completed = parse_time(job.get("started_at")), parse_time(job.get("completed_at"))
+    return started is None or completed is None or completed - started < FAIL_FAST_UNDER
+
+
 def validation_record(run):
     """A Release validation run as the incremental decisions read it (release_increment.anchor_of and red_since)."""
     parsed = parse_title(run.get("display_title"))
@@ -256,13 +279,16 @@ def validation_record(run):
 
 def ceiling_stops(gh, runs, now):
     """The day's validation runs that ci.yml's ceiling stopped: failed runs created on this UTC day whose ceiling job said
-    so. The count only grows until 00:00 UTC, so one stopped today means the day's ceiling is reached."""
+    so. The count only grows until 00:00 UTC, so one stopped today means the day's ceiling is reached. The ceiling counts
+    and stops full validations only, so an incremental run's jobs are never read (each read is a few seconds, and most
+    of a day's runs are incremental)."""
     day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
     return [
         run
         for run in runs
         if (run.get("created_at") or "").startswith(day)
         and run.get("conclusion") == "failure"
+        and parse_anchor(run.get("display_title")) is None
         and gh.ceiling_stopped(run)
     ]
 
@@ -295,7 +321,7 @@ class GitHub:
                 with exc:
                     raw = exc.read()
                     if exc.code >= 500 and attempt < 2:
-                        time.sleep(5 * (attempt + 1))
+                        sleep(5 * (attempt + 1))
                         continue
                     try:
                         return exc.code, json.loads(raw or b"{}"), ""
@@ -304,7 +330,7 @@ class GitHub:
             # A reply cut short (IncompleteRead) is as passing as a 502, so it is retried too.
             except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 if attempt < 2:
-                    time.sleep(5 * (attempt + 1))
+                    sleep(5 * (attempt + 1))
                     continue
                 raise Fail("GitHub %s %s: %s" % (method, path.split("?")[0], exc)) from exc
         raise Fail("GitHub %s %s did not answer" % (method, path))
@@ -312,7 +338,7 @@ class GitHub:
     def get(self, path):
         code, data, _ = self.call("GET", path)
         if code != 200:
-            raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")))
+            raise Fail("GitHub GET %s: %s %s" % (path.split("?")[0], code, data.get("message", "")), status=code)
         return data
 
     def pages(self, path, key=None, limit=10):
@@ -344,6 +370,10 @@ class GitHub:
     def contains(self, ref, sha):
         """Whether `ref` (main) has `sha` in its history."""
         return self.compare(sha, ref) in ("ahead", "identical")
+
+    def workflow_run(self, run_id):
+        """One Actions run, by id."""
+        return self.get("actions/runs/%d" % int(run_id))
 
     def validation_runs(self):
         """Release validation runs dispatched on main, newest first (only these count as candidates)."""
@@ -387,13 +417,35 @@ class GitHub:
     def failed_tokens(self, run_id):
         """The tests a red validation's failed jobs name (release_increment.failed_tokens); None when a failure cannot be
         named, so any later commit could be the fix."""
-        jobs = self.pages("actions/runs/%d/jobs?per_page=100" % run_id, key="jobs")
+        failed = self.failed_parts(run_id)
+        # An incremental validation stops at its first failed part (ci.yml's gate: fail-fast), cancelling the others:
+        # those failed nothing, so the run's failures are the parts that did fail (and cut_short keeps it from anchoring).
+        if any(entry.get("conclusion") != "cancelled" for entry in failed):
+            failed = [entry for entry in failed if not fail_fast_cancelled(entry)]
         pairs = []
-        for entry in jobs:
+        for entry in failed:
             name = entry.get("name") or ""
-            if entry.get("conclusion") in FAILED and name not in increment.IGNORED_JOBS:
-                pairs.append((name, self.job_log(entry["id"]) if RED_JOB.fullmatch(name) else ""))
+            pairs.append((name, self.job_log(entry["id"]) if RED_JOB.fullmatch(name) else ""))
         return increment.failed_tokens(pairs)
+
+    def cut_short(self, run_id):
+        """Whether fail fast cancelled parts of this red run beside a part that failed: it ran only part of its suite."""
+        failed = self.failed_parts(run_id)
+        return any(fail_fast_cancelled(entry) for entry in failed) and any(
+            entry.get("conclusion") != "cancelled" for entry in failed
+        )
+
+    def failed_parts(self, run_id):
+        """A validation run's jobs that did not pass, other than its consequences (IGNORED_JOBS); read once per run."""
+        cache = self.__dict__.setdefault("_failed_parts", {})
+        if run_id not in cache:
+            jobs = self.pages("actions/runs/%d/jobs?per_page=100" % run_id, key="jobs")
+            cache[run_id] = [
+                entry
+                for entry in jobs
+                if entry.get("conclusion") in FAILED and (entry.get("name") or "") not in increment.IGNORED_JOBS
+            ]
+        return cache[run_id]
 
     def tag_commit(self, name):
         """The commit refs/tags/<name> points at (through an annotated tag), or None when there is no such tag."""
@@ -546,9 +598,28 @@ def update_status(target):
     return status if code == 200 and isinstance(status, dict) else None
 
 
+def read_status(target):
+    """update_status for a step that cannot go on without it: read up to READ_TRIES times, POLL apart, so one unanswered
+    read (a proxy blip, an answer slower than the 30-second timeout) is not an unreadable install. Fail names the last
+    answer's HTTP code (no answer: none)."""
+    code = 0
+    for attempt in range(READ_TRIES):
+        if attempt:
+            sleep(POLL)
+        try:
+            code, status = rollout.call(target, "GET", UPDATE_PATH)
+        except rollout.Stop as exc:
+            raise Fail(str(exc.args[0])) from exc
+        if code == 200 and isinstance(status, dict) and rollout.plain(status.get("running")):
+            return status
+    raise Fail(
+        "%s: its update status cannot be read (GET %s with the update key: %s, %d tries)"
+        % (target["name"], UPDATE_PATH, "HTTP %s" % code if code else "no answer", READ_TRIES)
+    )
+
+
 def running(target):
-    status = update_status(target)
-    return rollout.plain(status.get("running")) if status else ""
+    return rollout.plain(read_status(target).get("running"))
 
 
 BUSY = ("pulling", "restarting", "uncertain")
@@ -562,10 +633,8 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     `pulling`, then restarts the server; or its state, target or message is no longer what it said before the request):
     an earlier update's outcome, even one to the same version, is never judged."""
     want, name = rollout.plain(version), target["name"]
-    snapshot = update_status(target)
-    before = rollout.plain((snapshot or {}).get("running"))
-    if not before:
-        raise Fail("%s: its update status cannot be read (GET %s with the update key)" % (name, UPDATE_PATH))
+    snapshot = read_status(target)
+    before = rollout.plain(snapshot.get("running"))
     if before == want:
         note("%s already runs v%s" % (name, want))
         return
@@ -679,8 +748,24 @@ def catch_up_latest(gh, env):
 # ---- the train: what to do now ----
 
 
-def event_run(env):
-    """workflow_run only: the Release validation run that just finished, as {conclusion, title, url}."""
+def manual_run(env):
+    """A person's run of the train: a workflow_dispatch that does not hand over a finished validation run."""
+    return env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and not env.get("VALIDATION_RUN", "").strip()
+
+
+def event_run(env, gh=None):
+    """The Release validation run that just finished, as {conclusion, title, url}: a workflow_run's, or the one ci.yml's
+    last job handed over in VALIDATION_RUN (read from GitHub; train.yml waited for it to complete)."""
+    handed = env.get("VALIDATION_RUN", "").strip()
+    if env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and handed and gh is not None:
+        found = gh.workflow_run(handed)
+        if found.get("status") != "completed":
+            return None
+        return {
+            "conclusion": found.get("conclusion") or "",
+            "title": found.get("display_title") or "",
+            "url": found.get("html_url") or "",
+        }
     if env.get("GITHUB_EVENT_NAME") != "workflow_run" or env.get("RUN_EVENT") != "workflow_dispatch":
         return None
     return {
@@ -814,7 +899,10 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     def named(record):
         return gh.failed_tokens(record["id"])
 
-    anchor = increment.anchor_of(records, now, main_has, named)
+    def complete(record):
+        return not gh.cut_short(record["id"])
+
+    anchor = increment.anchor_of(records, now, main_has, named, complete)
     # The open reds: the anchor when it is red and no green validation since supersedes it, then the newest red since it.
     reds = [anchor] if increment.anchor_open(records, anchor, main_has) else []
     newer = increment.red_since(records, anchor, main_has)
@@ -907,19 +995,19 @@ def hotfix_busy(gh):
 def cmd_guard(gh, env, now):
     """Read-only, outside the release concurrency group: decides whether the release job runs at all, so a push that
     finds nothing to do never enters the `release` environment or queues behind (or displaces) a hotfix."""
-    event = env.get("GITHUB_EVENT_NAME", "")
+    manual = manual_run(env)
     go = False
-    if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
+    if not manual and env.get("RELEASE_TRAINS", "").strip() != "on":
         note("The release train is off (repository variable RELEASE_TRAINS is not `on`)")
     else:
         busy = hotfix_busy(gh)
         if busy:
             note("A hotfix is running (%s); it reports itself, and the next event acts after it" % busy.get("html_url"))
-        elif event == "workflow_dispatch":
+        elif manual:
             go = True
             note("Train step: manual run")
         else:
-            plan = plan_step(gh, now, event_run(env))
+            plan = plan_step(gh, now, event_run(env, gh))
             lines = problems(plan)
             go = plan["action"] in ("ship", "dispatch") or bool(lines and not reported(gh, lines))
             note("Train step: %s" % plan["why"])
@@ -1272,13 +1360,12 @@ def promote(gh, env):
     if not canary or not stable:
         note("Promote: skipped, " + missing("CANARY" if not canary else "STABLE"))
         return
-    status = update_status(canary)
-    canary_release = rollout.plain((status or {}).get("running"))
-    if not canary_release:
-        raise Fail("promote: holding, the canary's update status cannot be read")
-    stable_release = running(stable)
-    if not stable_release:
-        raise Fail("promote: holding, stable's update status cannot be read")
+    try:
+        status = read_status(canary)
+        stable_release = running(stable)
+    except Fail as exc:
+        raise Fail("promote: holding, %s" % exc) from exc
+    canary_release = rollout.plain(status.get("running"))
     want, have = as_tag(canary_release), as_tag(stable_release)
     if want == have:
         note("Promote: stable already runs %s" % want)
@@ -1372,10 +1459,22 @@ def cmd_step(gh, env, now=None):
     # Stable takes the canary's approved release before the canary moves on.
     step("promote", lambda: promote(gh, env))
     plan = {}
-    manual = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    manual = manual_run(env)
+
+    def validate(chosen):
+        dispatch_candidate(
+            gh,
+            chosen["sha"],
+            chosen["version"],
+            chosen["newest"],
+            anchor=chosen.get("anchor"),
+            carried=chosen.get("carried"),
+            anchor_previous=chosen.get("anchor_previous"),
+        )
+
     step(
         "plan",
-        lambda: plan.update(plan_step(gh, now, event_run(env), manual=manual, checkout=increment.Checkout(ROOT))),
+        lambda: plan.update(plan_step(gh, now, event_run(env, gh), manual=manual, checkout=increment.Checkout(ROOT))),
     )
     if plan:
         note("Train: " + plan["why"])
@@ -1383,15 +1482,20 @@ def cmd_step(gh, env, now=None):
             failures.append(line)
             note("REPORTED " + line)
         if plan["action"] == "ship":
+            published = {}
 
-            def ship():
-                nonlocal shipment, record
+            def tag():
                 canary = install("CANARY", env)
                 if not canary:
                     raise Fail("ship: %s; nothing tagged" % missing("CANARY"))
                 base = release_base(env, plan["previous"])
                 notes = release_notes.build(gh, base, plan["sha"])
                 publish(gh, plan["sha"], plan["version"])
+                published.update(canary=canary, base=base, notes=notes)
+
+            def ship():
+                nonlocal shipment, record
+                canary, base, notes = published["canary"], published["base"], published["notes"]
                 # The approval record exists before the canary moves, so an approval of the candidate is never lost.
                 approval = open_approval(
                     gh, plan["version"], plan["sha"], notes, plan.get("run", {}).get("html_url", "")
@@ -1414,20 +1518,26 @@ def cmd_step(gh, env, now=None):
                 if not mark_latest(gh, plan["version"]):
                     record = "Release %s shipped, not marked latest (a newer release is)" % plan["version"]
 
-            step("ship", ship)
+            step("ship", tag)
+            if published:
+                # Main moved on while the candidate was validated: validate its head now, as soon as the release is
+                # published (the next validation compares with it), while the canary updates. Waiting for the next event
+                # could take a while: a quiet main has no pushes, and GitHub drops most backstop schedules.
+                after = {}
+                step(
+                    "plan the next candidate",
+                    lambda: after.update(plan_step(gh, now, checkout=increment.Checkout(ROOT))),
+                )
+                if after.get("action") == "dispatch":
+                    note("Train: " + after["why"])
+                    step("validate", lambda: validate(after))
+                step("ship", ship)
+            if shipment:
+                # Continuous: stable takes the release as soon as the canary runs it healthy and it is approved (by a
+                # person, or automatically: approval_state), in this same step, not at the next event.
+                step("promote", lambda: promote(gh, env))
         elif plan["action"] == "dispatch":
-            step(
-                "validate",
-                lambda: dispatch_candidate(
-                    gh,
-                    plan["sha"],
-                    plan["version"],
-                    plan["newest"],
-                    anchor=plan.get("anchor"),
-                    carried=plan.get("carried"),
-                    anchor_previous=plan.get("anchor_previous"),
-                ),
-            )
+            step("validate", lambda: validate(plan))
     if failures:
         report(gh, False, list(LOG), key=failures)
     elif shipment:

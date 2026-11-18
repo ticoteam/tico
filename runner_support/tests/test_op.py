@@ -1,7 +1,7 @@
 """op:// values in a secrets file are read from 1Password before a turn; the token stays home."""
 
+import subprocess
 import unittest
-from unittest.mock import MagicMock
 
 from runner_support import op
 
@@ -10,13 +10,10 @@ class OnePassword(unittest.TestCase):
     def fake_op(self, answers):
         def run(cmd, **kw):
             ref = cmd[-1]
-            r = MagicMock()
-            if ref in answers:
-                r.returncode, r.stdout, r.stderr = 0, answers[ref], ""
-            else:
-                r.returncode, r.stdout, r.stderr = 1, "", "[ERROR] 2026/09/06 could not find item"
             self.seen.append((cmd, kw.get("env", {}).get("OP_SERVICE_ACCOUNT_TOKEN")))
-            return r
+            if ref in answers:
+                return subprocess.CompletedProcess(cmd, 0, answers[ref], "")
+            return subprocess.CompletedProcess(cmd, 1, "", "[ERROR] 2026/09/06 could not find item")
 
         self.seen = []
         return run

@@ -49,7 +49,7 @@ def _harness_name(runtime):
 from .store import H, Problem, readiness_document
 from .views import roster
 from . import bot_settings as BS
-from .api_contract import api_v2
+from .api_contract import api_v2, error as answer_error
 
 QUEUE_MINUTES = 15  # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2  # a person's own message, sooner: someone is sitting there waiting for the reply
@@ -4095,6 +4095,30 @@ def note_github_token(store, error=None, action=""):
             )
 
 
+def _instant(value):
+    """A stored or asked-for ISO time as an aware UTC datetime, or None when it is not one. A time without a zone is UTC."""
+    try:
+        at = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def release_history(c, since=None):
+    """The releases this server ran and when it first started on each (backend/releases.py `record_start`), oldest
+    first, as Health shows them to bots and people: only version and since, whatever else an entry may carry. `since`
+    (an ISO time) keeps the entries that started at or after it; a malformed one is refused with a 400."""
+    entries = [
+        {"version": str(r.get("version") or ""), "since": str(r.get("since") or "")} for r in releases.history(c)
+    ]
+    if since is None:
+        return entries
+    start = _instant(since)
+    if start is None:
+        raise Problem("invalid_since", "since must be an ISO time, like 2026-11-17T00:00:00Z", 400)
+    return [r for r in entries if (at := _instant(r["since"])) is not None and at >= start]
+
+
 def install(app, store, auth, settings):
     from fastapi import Request
 
@@ -4122,14 +4146,21 @@ def install(app, store, auth, settings):
             "getHealth",
             "Checks, computers and failures (bots see counts, computers and failed runs)",
             "Health",
+            parameters={
+                "since": "An ISO time (2026-11-17T00:00:00Z; no zone means UTC): update.history keeps only the "
+                "releases this server started on at or after it. A malformed one is refused with a 400"
+            },
+            responses={"400": answer_error("invalid_since: since is not an ISO time")},
         ),
     )
-    def read(request: Request):
+    def read(request: Request, since: str | None = None):
         who = request.state.identity
         if who.role != "bot":
             _person(who)
         github = getattr(request.app.state, "github_app", None)
         with store.read_transaction() as c:
+            # The release history is checked first, so a malformed `since` costs no health read.
+            ran = release_history(c, since)
             # Health reads only these two parts of the config; building all of it cost a changelog parse per poll.
             return view(
                 c,
@@ -4137,5 +4168,5 @@ def install(app, store, auth, settings):
                 settings,
                 auth,
                 github,
-                {"update": hosted_updates.notice(c, settings), "backup": replication.status()},
+                {"update": {**hosted_updates.notice(c, settings), "history": ran}, "backup": replication.status()},
             )

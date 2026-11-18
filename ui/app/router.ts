@@ -61,6 +61,7 @@ function route(hash: string = location.hash): void {
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
   decideStop();     // the Needs you card closes with its page; its waiting answer goes now
   window.liveMeetingsStop?.();
+  if (!S.route.startsWith(CALL_ROUTE)) callWindowStop();   // the meeting window (ui/app/call-window.ts); the call goes on
   v2ChatStop(); meetStop(); onbStop(); tasksLeave(); // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
@@ -80,6 +81,7 @@ function route(hash: string = location.hash): void {
     const id = new URLSearchParams(S.route.split('?')[1] || '').get('recording');
     location.hash = MEETINGS + (id ? '?meeting=' + encodeURIComponent(id) : ''); return;
   }
+  else if (S.route.startsWith(CALL_ROUTE)) pageCallWindow(decodeURIComponent(S.route.slice(CALL_ROUTE.length).split('?')[0] ?? ''));
   else if (S.route === '#/inbox' || S.route.startsWith('#/inbox?')) { location.hash = MAIL; return; }
   else if (S.route === HOME) pageDashboard('person:me');
   // Company is one page: the Dashboard, Floor, Campus, Graph and Factories addresses it once had tabs for land on it, so a

@@ -40,6 +40,12 @@ import traceback
 
 from . import hubdb
 
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 LOG = logging.getLogger("tico.flight")
 
 SLOW_MS = 1000  # a request this slow is logged on its own
@@ -276,6 +282,18 @@ def caller_kind(who):
     )
 
 
+def client_of(who):
+    """How a signed-in caller reached the server, for a slow request's record: "token:<label>" for a personal API
+    token (the assistant or script it names), "assistant" for the Assistant acting for a person, "browser" for any
+    other person's sign-in. Empty for bots, runners and service keys, whose actor already says what they are. A
+    person's tag lists came from six accounts at hundreds an hour, and nothing said which of these sent them."""
+    if who is None or getattr(who, "role", "") not in ("owner", "human"):
+        return ""
+    if getattr(who, "via_token", False):
+        return "token:" + (getattr(who, "token_label", "") or "unnamed")[:40]
+    return "assistant" if getattr(who, "via", "") == "assistant" else "browser"
+
+
 class Recorder:
     """In-memory collection. The request and SQL paths only append; `drain` (the background thread) does the rest."""
 
@@ -316,12 +334,14 @@ class Recorder:
 
     # The hot paths: one append each, safe from any thread. A full buffer (the background thread is not keeping up)
     # discards the oldest sample; `dropped` counts them, approximately, so the gap shows in the minute's row.
-    def request(self, route, caller, status, ms, nbytes=0, actor="", cost=None):
+    def request(self, route, caller, status, ms, nbytes=0, actor="", cost=None, client=""):
         if len(self.samples) >= BUFFER:
             self.dropped += 1
         sql_ms, wait_ms, queries = cost[:3] if cost else (0.0, 0.0, 0)
         statements = cost[3] if cost is not None and len(cost) > 3 else None
-        self.samples.append(("r", route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements))
+        self.samples.append(
+            ("r", route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements, client)
+        )
 
     def query(self, sql, ms, locked=False):
         if len(self.samples) >= BUFFER:
@@ -409,7 +429,7 @@ class Recorder:
                     if locked:
                         self.locked += 1
                 elif kind == "r":
-                    _, route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements = s
+                    _, route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements, client = s
                     row = self.requests.get((route, caller))
                     if row is None:
                         row = self.requests[(route, caller)] = [0, 0, 0, 0.0, 0.0, {}, 0, 0.0, 0.0]
@@ -444,6 +464,7 @@ class Recorder:
                                 "route": route,
                                 "caller": caller,
                                 "actor": actor,
+                                **({"client": client} if client else {}),
                                 "ms": slow[4],
                                 "bytes": slow[5],
                                 "status": status,
@@ -1240,7 +1261,7 @@ class Flight(threading.Thread):
     def record_start(self):
         try:
             event = start_event(self.settings)
-            at = time.time()  # a write the lock defers keeps the time it happened
+            at = _now()  # a write the lock defers keeps the time it happened
             self.write_db(lambda c: _event(c, "start", event, at))
         except Exception as exc:
             LOG.warning("Flight recorder start event failed: %s", type(exc).__name__)
@@ -1304,7 +1325,7 @@ class Flight(threading.Thread):
                 "usage": usage,
                 "threads": record["threads"],
             }
-            at = time.time()
+            at = _now()
             self.write_db(lambda c: _event(c, "stall", detail, at))
         return record
 

@@ -84,6 +84,7 @@
 
 .rdo-sheet .bd-field>span:last-child{color:var(--muted);text-align:right}
 .rdo-open{font-size:var(--t-sm)}
+.rdo-acts{display:flex;align-items:center;justify-content:space-between;gap:8px}
 
 @media (max-width:760px){
   .rdo-pane{max-height:none}

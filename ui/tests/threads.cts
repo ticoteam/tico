@@ -168,6 +168,9 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
   await page.addInitScript(() => {
     window.__rooms = [];
+    // A browser that blocks pop-ups: a Tico Meet call's window (ui/app/call-window.ts) cannot open, so Start and Join
+    // join in this page, as the call bar's fallback does (ui/tests/call-window.cts covers the window).
+    window.open = () => null;
     window.LivekitClient = {
       RoomEvent: {TrackSubscribed: 'ts', TrackUnsubscribed: 'tu', ParticipantConnected: 'pc', ParticipantDisconnected: 'pd', LocalTrackUnpublished: 'lu', Disconnected: 'd'},
       Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},

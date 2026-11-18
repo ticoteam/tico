@@ -474,14 +474,16 @@ breaks the `op://` form; reference it by its item id.
   server added in Tools needs the grant alone). Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
 - Each bot can have only one active granted Credential for a variable. Revoke its previous grant before replacing it.
-- `can:` describes intended operations; restrict the vendor key or endpoint to enforce read-only access. Tico does not filter a vendor's MCP tools by `can`.
+- `can:` in `bot.yaml` describes intended operations; Tico does not filter a vendor's MCP tools by it, so restrict the vendor key or endpoint. An MCP server held in Tools with only a read-and-write key is different: a bot at Read may call only the tools the server marks `readOnlyHint`; a key added at Read is trusted to be read-only at the vendor.
 - Store new values in Credentials and grant them to the bot; a shell export does not grant access.
 
 ## Delete a Credential
 
-A Credential administrator can choose **Delete** in Credentials, use `tico credential delete <name>`, or call
-`DELETE /api/v2/credentials/<id>`. Deletion erases the encrypted value and all grants together. History records names and
-variable names only. Revocation removes access while keeping the stored value; deletion removes the Credential itself.
+The person or bot that added a credential can remove it while they can still see its tool, including after someone
+else rotates it. This also applies to independently stored credentials and website accounts. Credential administrators
+can remove credentials they manage. Use **Remove** on the tool, **Delete** on a standalone key, or
+`tico credential delete <name>` for a key in the vault. Deletion erases the encrypted value and grants, and the audit
+event records who removed it and the credential's identifying metadata.
 
 **Every computer (signs models in)** is available only for stored model API keys and tokens whose explicit or inferred variable is
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`. Those names infer a blank variable;

@@ -568,7 +568,7 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
                 (k, *v.last().unwrap_or(&0), v[v.len() / 2], v.len())
             })
             .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.1));
         for (step, max, median, count) in rows.iter().take(8) {
             say(
                 &mut out,

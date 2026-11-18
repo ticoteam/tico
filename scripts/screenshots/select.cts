@@ -73,6 +73,8 @@ const UNSHOWN: string[] = [
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
   // A website tool's live browser view (Open browser on the tool's page, or a browser ask): no page shows a live browser.
   'ui/app/browser-view.ts', 'ui/styles/browser-view.css',
+  // The call window (#/call/<id>) needs a live Tico Meet room, which no screenshot server runs.
+  'ui/app/call-window.ts', 'ui/styles/call-window.css',
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.

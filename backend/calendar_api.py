@@ -128,7 +128,6 @@ class CalendarSettings(Contract):
     work_starts: str | None = Field(default=None, max_length=5)
     work_ends: str | None = Field(default=None, max_length=5)
     work_days: str | None = Field(default=None, max_length=40)
-    record_on_join: bool | None = None
 
 
 class SharedCreate(Contract):
@@ -1649,14 +1648,12 @@ def _settings_view(c: Any, pid: str, zone: str | None = None) -> Row:
     if cal is None:
         raise Problem("not_found", "You are not on the roster", 404)
     human = cal["row"]
-    record = human.get("record_on_join")
     return {
         "time_zone": human.get("time_zone") or zone or "UTC",
         "time_zone_set": bool(human.get("time_zone")),
         "work_starts": human.get("work_starts") or WORK_STARTS,
         "work_ends": human.get("work_ends") or WORK_ENDS,
         "work_days": human.get("work_days") or WORK_DAYS,
-        "record_on_join": record is None or bool(record),
     }
 
 
@@ -1843,8 +1840,7 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
         ),
     )
     def calendar_event(request: Request, occurrence_id: str) -> Row:
-        """One occurrence as the caller sees it (the Recorder checks a Join link against it). 404 when it is not an
-        event, or the caller cannot see it."""
+        """One occurrence as the caller sees it. 404 when it is not an event, or the caller cannot see it."""
         with store.read() as c:
             return _one_occurrence(c, auth, request.state.identity, occurrence_id)
 
@@ -2033,7 +2029,7 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
         **api_v2(
             "Calendar",
             "setCalendarSettings",
-            "Change your zone, working hours or Record calls I join (send only what changes)",
+            "Change your zone or working hours (send only what changes)",
             "CalendarSettingsView",
         ),
     )
@@ -2050,8 +2046,6 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
                 changes[key] = None if given[key] is None else _clock(given[key], key)
         if "work_days" in given:
             changes["work_days"] = None if given["work_days"] is None else _days(given["work_days"])
-        if "record_on_join" in given:
-            changes["record_on_join"] = None if given["record_on_join"] is None else int(given["record_on_join"])
         with store.read() as c:
             caller = person_of(c, who)
             cal = _person(c, caller["id"])
@@ -2061,7 +2055,7 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
             pid = person_of(c, who)["id"]
             before = dict(
                 c.execute(
-                    "SELECT time_zone, work_starts, work_ends, work_days, record_on_join FROM humans WHERE id=?", (pid,)
+                    "SELECT time_zone, work_starts, work_ends, work_days FROM humans WHERE id=?", (pid,)
                 ).fetchone()
             )
             after = {**before, **changes}

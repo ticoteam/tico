@@ -171,7 +171,7 @@ def test_one_person_runs_setup_check_at_most_twice_a_minute(environment, monkeyp
     api = environment()
     clock = [1000.0]
     monkeypatch.setattr(setup_check, "_last", {})
-    monkeypatch.setattr(setup_check.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(setup_check, "_monotonic", lambda: clock[0])
     assert api.post("/api/v2/support/setup-check", headers=signed_in()).status_code == 200
     busy = api.post("/api/v2/support/setup-check", headers=signed_in())
     assert busy.status_code == 429 and "half a minute" in busy.text

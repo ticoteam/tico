@@ -176,7 +176,8 @@ AUDIENCE = {
     # The Tools Owner gives and takes back a bot's key with the rights of the person who asked it (the server lends them
     # on Tools changes only, backend/tools_delegation.py); any other bot is refused with who can.
     **{name: REQUESTER + ("bot",) for name in ("tico_credential_grant", "tico_credential_revoke", "tico_tool_level")},
-    **{name: REQUESTER for name in ("tico_credential_import", "tico_credential_delete")},
+    "tico_credential_import": REQUESTER,
+    "tico_credential_delete": REQUESTER + ("bot", "agent"),
     # A bot registers, changes or removes its own bot.yaml tool entries; the Tools Owner any bot's (backend/bot_tools.py).
     **{name: REQUESTER + ("bot",) for name in ("tico_tool_add", "tico_tool_update", "tico_tool_remove")},
     **{

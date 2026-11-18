@@ -805,12 +805,12 @@ def signals_changes(base, key, since="", limit=200, timeout=TIMEOUT, opener=None
     )
 
 
-# The most an answer the recorder's speech relay passes on may be: a transcript of a clip, never a whole file.
+# The most an answer a speech relay call passes on may be: a transcript of a clip, never a whole file.
 RELAY_LIMIT = 30 * 1024 * 1024
 
 
 def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
-    """(status, body bytes) for a call the recorder's speech relay passes on, the Gateway's answer kept as it is. An
+    """(status, body bytes) for a speech relay call, the Gateway's answer kept as it is. An
     error answer keeps its status and body; status 0 means the Gateway could not be reached. The key goes only where
     `safe_base` allows it, and never through a redirect."""
     try:
@@ -821,3 +821,38 @@ def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
         method, url, body, "application/json", RELAY_LIMIT, headers=headers, timeout=timeout
     )
     return status, answer
+
+
+SPEECH_RATE = 24000  # the sample rate of the Gateway's speech when it names none
+
+
+def relay_speech(url, body, headers=None, timeout=TIMEOUT):
+    """(status, pcm bytes, sample rate) for a text-to-speech relay call (`POST /audio/speech` with response_format pcm):
+    raw 16-bit little-endian mono PCM at the rate the `X-Audio-Sample-Rate` header names. An error answer keeps its
+    status and body; status 0 means the Gateway could not be reached. The key goes only where `safe_base` allows it,
+    and never through a redirect."""
+    try:
+        safe_base(url)
+    except ValueError:
+        return 0, b"", SPEECH_RATE
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={**(headers or {}), "Accept": "audio/pcm", "Content-Type": "application/json"},
+    )
+    try:
+        with _send(request, timeout=timeout) as response:
+            answer = response.read(RELAY_LIMIT + 1)
+            named = response.headers.get("X-Audio-Sample-Rate") or ""
+            status = getattr(response, "status", 200)
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                return exc.code, exc.read(4096), SPEECH_RATE
+            except (OSError, http.client.HTTPException, ValueError, AttributeError):
+                return exc.code, b"", SPEECH_RATE
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
+        return 0, b"", SPEECH_RATE
+    rate = int(named) if named.strip().isdigit() and 8000 <= int(named) <= 96000 else SPEECH_RATE
+    return status, answer[:RELAY_LIMIT], rate

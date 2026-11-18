@@ -1057,6 +1057,8 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
 
 # ------------------------------------------------------------------------------------------------ the thread
 BELL = Bell()
+# Set once a pass of the current worker has ended, so a test waits for it and not for a sleep. `start` clears it.
+FIRST_PASS = threading.Event()
 _worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
 
 
@@ -1075,6 +1077,7 @@ def start(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None 
             return
         if cast(threading.Event, _worker["stop"]).is_set():
             _worker["stop"] = threading.Event()
+        FIRST_PASS.clear()
         made = threading.Thread(
             target=_loop, args=(store, vault, rehearsal, make, _worker["stop"]), name="finance-banking", daemon=True
         )
@@ -1105,4 +1108,5 @@ def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: thre
             step(store, vault, rehearsal=rehearsal, make=make)
         except Exception:
             log.exception("Finance sync failed")
+        FIRST_PASS.set()
         BELL.wait(seen, SWEEP)

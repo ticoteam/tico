@@ -1,0 +1,5 @@
+{
+  "ui/tests/model-keys.cts": {
+    "no-raised-timeout": 3
+  }
+}

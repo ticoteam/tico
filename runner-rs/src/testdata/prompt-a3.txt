@@ -18,5 +18,5 @@ answer: {"choice": "é"}
 
 Attachments: [{"id": "f1"}]
 
-Current message from human:ana@acme.test:
+Current message from human:ana@acme.test [m4]:
 Hi

@@ -21,6 +21,8 @@ from typing import Any
 import httpx
 from fastapi import Request
 
+from clients import transcript_formats as TF
+
 from . import mcp_client, oauth_refresh
 from .auth import Identity, validate_identity
 from .imports import MeetingImport, segments_of
@@ -39,6 +41,8 @@ GET_MEETINGS_RETRIES = (20, 60)  # spaced waits for a get_meetings throttle with
 FIRST_GET_MEETINGS_GAP = 10  # the first get_meetings waits this long after the sync's previous MCP call
 HOLD_MAX = 3  # syncs a checkpoint is held for untried notes before they are given up
 REVISIT = 24 * 3600  # an imported note is re-read for a late summary only while its meeting is this recent
+# Granola's stand-in for a summary it has not written yet (lower-cased; matched by its start).
+NO_SUMMARY = "no ai summary has been generated"
 DEBOUNCE = 120
 GET_MEETINGS_INTERVAL = 6
 SIGNALS = (
@@ -974,6 +978,9 @@ class GranolaMCP:
         notes = note.get("notes")
         if not summary and isinstance(notes, dict):
             summary = notes.get("summary") or notes.get("ai_summary") or ""
+        summary = str(summary or "").strip()
+        if summary.casefold().startswith(NO_SUMMARY):
+            summary = ""
         external_id = note.get("note_id") or note.get("id") or note.get("meeting_id")
         if not external_id:
             raise GranolaError("bad_response")
@@ -992,13 +999,31 @@ class GranolaMCP:
                 title=text(note.get("title"), 300) or "Granola meeting",
                 started_at=started.isoformat() if started else None,
                 participants=participants,
-                notes=str(summary).strip()[:200_000],
+                notes=summary[:200_000],
                 transcript=transcript,
                 media_url=https_url(note.get("web_url")),
             )
             if summary or transcript
             else None
         )
+
+    @staticmethod
+    def named_turns(transcript, me):
+        """Granola labels the note-taker's microphone and the other side's audio; Tico files them as people."""
+        turns = TF.parse(transcript)
+        for turn in turns:
+            label = turn["speaker"].casefold()
+            if label == "microphone":
+                turn["speaker"] = me
+            elif label in ("speaker", "system"):
+                turn["speaker"] = "Others"
+        return turns
+
+    def note_taker(self, who):
+        """The name Granola's microphone is filed under: the person's own name, else a neutral label."""
+        with self.store.read() as c:
+            row = c.execute("SELECT name FROM humans WHERE id=?", (who.actor.removeprefix("human:"),)).fetchone()
+        return (row[0] if row else "") or "Note-taker"
 
     def imported_ids(self, actor, ids):
         """Which of these Granola notes this person already has as a meeting: {id: whether it has a transcript}."""
@@ -1052,6 +1077,7 @@ class GranolaMCP:
                 return reason
 
             try:
+                me = await asyncio.to_thread(self.note_taker, who)
                 meta["transcripts_unavailable"] = False
                 meta["plan_hint"] = (
                     "paid" if meta.get("transcript_succeeded") else meta.get("account_plan_hint", "free")
@@ -1304,6 +1330,7 @@ class GranolaMCP:
                                 )
                                 if not segments_of(MeetingImport(transcript=transcript)):
                                     raise GranolaError("bad_response")
+                                transcript = self.named_turns(transcript, me)
                                 transcript_errors = 0
                                 meta.update(transcript_succeeded=True, plan_hint="paid")
                             except Exception as exc:
@@ -1326,11 +1353,15 @@ class GranolaMCP:
                         step = "import_meeting"
                         try:
                             item = self.item(note, transcript)
-                            if item:
+                            # A note already filed that Granola now has no summary for gives its stored summary back.
+                            if item or str(nid) in imported:
 
-                                def file_item():
+                                def file_item(item=item, external_id=str(nid)):
                                     with self.store.transaction() as c:
                                         validate_identity(c, who)
+                                        if not item:
+                                            self.app.state.clear_import_notes(c, who, "granola", external_id)
+                                            return
                                         result = self.app.state.import_meeting(c, who, item, [], fill_empty=True)
                                         if not result["existing"]:
                                             meta["imported_count"] = meta.get("imported_count", 0) + 1

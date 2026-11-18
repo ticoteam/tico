@@ -20,7 +20,6 @@ from starlette.requests import ClientDisconnect
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
 from . import outcome_stats
 from . import pipeline_judges
-from . import recorder_installs
 from . import assistant_changes, why_here
 from . import tools_delegation
 from . import setup_failures
@@ -539,7 +538,6 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
-        meeting_screen_task = asyncio.create_task(app.state.meeting_frames.run(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -738,7 +736,6 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
             app.state.live_meeting_routing.stop()
-            await meeting_screen_task
             if inbound_task:
                 await inbound_task
             if hook_relay_task:
@@ -1199,9 +1196,6 @@ def _install_request_guard(
                     raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
-                # Which Recorder a person runs (backend/recorder_installs.py): a write only when one is due.
-                if (recorder := app.state.recorder_seen.due(who, request.headers)) is not None:
-                    await asyncio.get_running_loop().run_in_executor(None, app.state.recorder_seen.note, *recorder)
                 if who.via:
                     # The Assistant acting for a person (backend/assistant.py): what it writes is
                     # recorded via assistant, and unless the person just confirmed a proposal it may
@@ -1263,17 +1257,8 @@ def _install_request_guard(
                     re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                     and request.headers.get("content-type", "").lower().startswith("multipart/form-data")
                 )
-                # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
-                recorder_audio = (
-                    request.url.path == "/api/v2/recorder/audio/transcriptions"
-                    and request.state.identity.role in ("human", "owner")
-                )
                 limit = (
-                    1_000_000
-                    if re.fullmatch(r"/api/v2/live-meetings/[^/]+/screen/frame", request.url.path)
-                    else 26_214_400
-                    if recorder_audio
-                    else 1024 * 1024
+                    1024 * 1024
                     if request.url.path == "/api/v2/team/icon"
                     else 2 * 1024 * 1024
                     if request.url.path == "/api/v2/company-page/logo"
@@ -1778,7 +1763,12 @@ def _register_environment(app, settings, store):
         with store.read_transaction() as c:
             return {
                 **config_view(c, settings, request.state.identity),
-                "features": {"task_files_multipart": True, "file_media_stream": True},
+                # tico_meet: whether this server runs Tico Meet (backend/calls.py), the only calls a bot can join.
+                "features": {
+                    "task_files_multipart": True,
+                    "file_media_stream": True,
+                    "tico_meet": getattr(request.app.state, "call_media", None) is not None,
+                },
             }
 
 
@@ -2321,7 +2311,6 @@ def _install_features(
     from .granola_mcp import install_granola
 
     install_granola(app)
-    recorder_installs.install(app, store)  # before /api/v2/meetings/{id}
     from .meeting_review import install_meeting_review
 
     install_meeting_review(app, store, auth, mutate)
@@ -2467,9 +2456,9 @@ def _install_features(
     from .calls import install_calls
 
     install_calls(app, store, auth, mutate)  # Tico Meet calls in threads (backend/calls.py)
-    from .recorder_relay import install_recorder_relay
+    from .call_notes import install_call_notes
 
-    install_recorder_relay(app, store, auth, settings)
+    install_call_notes(app, store, auth, mutate)  # the meeting window's notes and ringing (backend/call_notes.py)
     from .mail import install_mail
 
     install_mail(app, store, auth)

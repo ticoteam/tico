@@ -4,7 +4,7 @@
 
 // The vault as GET /v2/credentials answers it (integrations.js vaultFetch): credentials as metadata, and who they are shared with.
 interface VaultGrant { id: string; subject: string; parent_id?: string | null; can_revoke?: boolean; }
-interface VaultCredential { id: string; name: string; kind: string; env?: string; source?: string; username?: string; stored?: boolean; revision?: number; grants: VaultGrant[]; }
+interface VaultCredential { id: string; name: string; kind: string; env?: string; source?: string; username?: string; stored?: boolean; revision?: number; can_remove?: boolean; remove_only?: boolean; grants: VaultGrant[]; }
 // A person or a bot a credential can be shared with.
 interface VaultParty { id: string; name?: string; email?: string; }
 interface VaultState { credentials: VaultCredential[]; computers?: { id: string; label?: string }[]; people: VaultParty[]; bots: VaultParty[]; can_manage?: boolean; }

@@ -894,8 +894,8 @@ def classify(app, store, snap, review=None):
     try:
         result = engine(state, questions, "email.sending")
         answers = result.get("answers") or {}
-        value = (answers.get("legal_or_money") or {}).get("value")
-        verdict = (answers.get("review") or {}).get("value")
+        value = (answers.get("legal_or_money") or {}).get("choice")
+        verdict = (answers.get("review") or {}).get("choice")
         return {
             "legal_or_money": value == "yes" if value in ("yes", "no") else None,
             "review": verdict == "send" if verdict in ("send", "stop") else None,

@@ -64,6 +64,12 @@ from . import visuals as V
 from .store import H, Problem, encode
 from .api_contract import api_v2, ref as schema_ref
 
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 TOPICS = (
     "tasks",
     "messages",
@@ -105,7 +111,7 @@ LEAD_SECONDS = 0.02  # a ring after a quiet window waits only this long, for the
 def gathered(window, read_at):
     """How long a stream waits after a ring before it reads: at most one read per `window`, but a ring after
     a quiet window is read almost at once instead of a full window later (a chat reply, a job for a computer)."""
-    return max(LEAD_SECONDS, window - (time.monotonic() - read_at))
+    return max(LEAD_SECONDS, window - (_monotonic() - read_at))
 
 
 BATCH = 500

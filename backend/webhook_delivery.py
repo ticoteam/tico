@@ -241,6 +241,11 @@ def claim(store, now):
     return None
 
 
+def _now():
+    """Every webhook-timestamp is read here, so a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 def deliver(store, vault, claimed, *, transport=None):
     """Post one claimed send and record what came back. Nothing is posted once the claim is no longer this worker's."""
     send_id, token = claimed
@@ -271,7 +276,7 @@ def deliver(store, vault, claimed, *, transport=None):
         return
     # A body queued before the API v2 rename still says attempt_id: it leaves as a run, like one queued after it.
     body = runs.public_json(send["body"]).encode()
-    timestamp = int(time.time())
+    timestamp = int(_now())
     started = time.monotonic()
     status, head, error, abort = None, "", "", False
     try:

@@ -143,12 +143,16 @@ def key_file_copy(key, name):
     return key + ".keys/" + name
 
 
-def read_key_files(key_dir, db=None):
+def read_key_files(key_dir, db=None, env=None):
     """{name: bytes} for the key files present in `key_dir` (with slack.key while the database at `db` still holds the
     row it opens). One that is not 32 bytes is not a key: refused by name, never carried, so a bundle never holds a copy
-    that opens nothing."""
+    that opens nothing. Once AWS KMS holds the data key (TICO_CREDENTIAL_KMS_KEY in `env`, default the process's) and the
+    database records the key files as retired (replication.key_files_retired), credential.key and github-app.key are
+    never carried, present or not: they open nothing a newer backup holds."""
+    env = os.environ if env is None else env
+    retired = db is not None and replication.kms_key_set(env) and replication.key_files_retired(db)
     found = {}
-    for name in KEY_FILES + (replication.old_key_files(db) if db is not None else ()):
+    for name in (() if retired else KEY_FILES) + (replication.old_key_files(db) if db is not None else ()):
         path = Path(key_dir) / name
         if not path.is_file():
             continue

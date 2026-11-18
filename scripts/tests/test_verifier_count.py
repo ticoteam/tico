@@ -120,15 +120,14 @@ def test_each_counted_kind_once_and_working_tree_is_ignored(repo, monkeypatch, t
     )
     write(repo, "backend/holds.py", "import os  # noqa: F401\n")
     write(repo, "baselines/ruff/backend/holds.py.json", '{"backend/holds.py": {"F401": 2}}\n')
-    write(repo, "ci/quarantine/holds.json", '{"test": "backend/tests/test_holds.py::test_kept"}\n')
     write(repo, "scripts/check.sh", "exit 1\n")
     commit(repo, monkeypatch)
     write(repo, "backend/tests/test_holds.py", "")
     result = check(repo, base)
     assert kinds(result) == dict.fromkeys(
-        ["deleted_test", "new_skip", "quarantine_entry", "new_suppression", "raised_baseline", "verifier_edit"], 1
+        ["deleted_test", "new_skip", "new_suppression", "raised_baseline", "verifier_edit"], 1
     )
-    assert result["count"] == 6
+    assert result["count"] == 5
     monkeypatch.setattr(verifier_count, "check", lambda base: result)
     output, summary = tmp_path / "facts.json", tmp_path / "summary.md"
     summary.write_text("Earlier summary\n")
@@ -137,7 +136,7 @@ def test_each_counted_kind_once_and_working_tree_is_ignored(repo, monkeypatch, t
     assert verifier_count.main(["--base", base]) == 0
     assert json.loads(output.read_text()) == result
     assert summary.read_text().startswith("Earlier summary\n")
-    assert "verifier count: 6" in summary.read_text()
+    assert "verifier count: 5" in summary.read_text()
 
 
 @pytest.mark.parametrize("token", ["sha", "#4008"])

@@ -20,7 +20,7 @@ owns:
 never:
   - "Rerun, cancel or trigger a workflow, or run a deploy, unless the request asks for it and a Tool allows it"
   - "Change a workflow file, a runner, a credential or a branch rule on GitHub, unless the request asks for it and a Tool allows it"
-  - "Skip, delete or quarantine a test; the QA Owner decides that"
+  - "Skip, delete or quarantine a test; the QA Owner decides fix or delete"
   - "Judge a human by whose commit broke the build"
 prerequisites:
   - tool: github

@@ -3,7 +3,6 @@ comments once naming the failure for the rest. No network: a fake GitHub serves 
 
 import copy
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -17,12 +16,11 @@ FIXTURES = Path(__file__).parent / "stale_pr_keeper"
 NOW = datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc)
 # The tests and UI script the real logs name, read from them: a literal path to a test here would make pr_checks.py select
 # this file for every change to that test (and its folder).
-RECRUITING = re.search(r" FAILED (\S+) - ", (FIXTURES / "pytest-failed.log").read_text()).group(1)  # quarantined
+RECRUITING = re.search(r" FAILED (\S+) - ", (FIXTURES / "pytest-failed.log").read_text()).group(1)  # a real failure
 CRASHED = re.search(r" FAILED (\S+) - worker", (FIXTURES / "worker-crashed.log").read_text()).group(1)
 UI_SCRIPT = re.search(r"UI scripts failed: (\S+)", (FIXTURES / "browser-failed.log").read_text()).group(1)
 # Made-up test ids live under a folder no checkout has.
 OTHER = "made_up/test_x.py"
-QUARANTINE = frozenset({RECRUITING})
 
 
 def sha(c):
@@ -47,7 +45,7 @@ def jobs_with(failing_name, failing_step="Run selected tests"):
 
 # Each queue commit's run: its failed job's name and log. The log is None when it expired.
 RUNS = {
-    sha("1"): ("python-5", "pytest-failed.log"),  # #2984: the quarantined recruiting test
+    sha("1"): ("python-5", "worker-crashed.log"),  # #2984: an xdist worker crashed
     sha("2"): ("python-9", "worker-crashed.log"),  # #3060: an xdist worker crashed
     sha("3"): ("python-8", "pytest-failed.log"),  # #3034: the recruiting test
     sha("6a"): ("browser-1", "browser-failed.log"),  # #3033: a UI script
@@ -56,17 +54,16 @@ RUNS = {
 }
 
 
-def comment_marker(head, queue, tests=QUARANTINE, flags="", failed=(RECRUITING, CRASHED)):
-    """A comment's marker lines, written when `tests` were quarantined and naming `failed`."""
-    key = sweep.quarantine_key(failed, tests)
+def comment_marker(head, queue, flags="", failed=(CRASHED,)):
+    """A comment's marker lines, naming `failed`."""
     return (
         f"<!-- stale-pr-keeper:tests {json.dumps(list(failed))} -->\n"
-        f"<!-- stale-pr-keeper:comment {head} queue={queue} quarantine={key}{flags} -->"
+        f"<!-- stale-pr-keeper:comment {head} queue={queue}{flags} -->"
     )
 
 
-def requeued_marker(head, queue, tests=QUARANTINE, failed=(RECRUITING, CRASHED)):
-    return comment_marker(head, queue, tests, " requeued", failed)
+def requeued_marker(head, queue, failed=(CRASHED,)):
+    return comment_marker(head, queue, " requeued", failed)
 
 
 class FakeGitHub:
@@ -164,7 +161,7 @@ def test_a_crash_pytest_never_summarised_still_names_its_test():
     ]
     tests = sweep.read_log(lines)[0]
     assert tests == [(CRASHED, True), ("no pytest summary", False)]
-    assert not sweep.flaky([finding(*tests)], set())  # what else failed is unknown
+    assert not sweep.flaky([finding(*tests)])  # what else failed is unknown
 
 
 def test_a_failed_line_outside_the_summary_is_test_output_not_a_failure():
@@ -198,10 +195,12 @@ def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
 
 
 def test_a_log_that_ends_inside_the_summary_is_never_a_flake():
-    lines = summary(f"FAILED {RECRUITING} - x")[:-1]  # no result line: the log was cut off
+    lines = summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'")[
+        :-1
+    ]  # no result line: the log was cut off
     tests, _ = sweep.read_log(lines)
-    assert tests == [(RECRUITING, False), ("pytest's summary, cut off", False)]
-    assert not sweep.flaky([finding(*tests)], QUARANTINE)
+    assert tests == [(CRASHED, True), ("pytest's summary, cut off", False)]
+    assert not sweep.flaky([finding(*tests)])
 
 
 def test_a_parameter_id_holding_a_dash_is_read_whole():
@@ -224,7 +223,7 @@ def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
         summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'", f"ERROR {OTHER}")
     )
     assert tests == [(CRASHED, True), (OTHER, False)]
-    assert not sweep.flaky([finding(*tests)], set())
+    assert not sweep.flaky([finding(*tests)])
 
 
 def test_an_internalerror_is_named_and_is_never_a_crash():
@@ -235,9 +234,14 @@ def test_an_internalerror_is_named_and_is_never_a_crash():
 
 
 def test_failures_the_summary_does_not_list_are_named():
-    tests, _ = sweep.read_log(summary(f"FAILED {RECRUITING} - x", results="2 failed, 1 error, 3 passed in 1.0s"))
-    assert tests == [(RECRUITING, False), ("2 failure(s) the summary does not list", False)]
-    assert not sweep.flaky([finding(*tests)], QUARANTINE)
+    tests, _ = sweep.read_log(
+        summary(
+            f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'",
+            results="2 failed, 1 error, 3 passed in 1.0s",
+        )
+    )
+    assert tests == [(CRASHED, True), ("2 failure(s) the summary does not list", False)]
+    assert not sweep.flaky([finding(*tests)])
 
 
 # Jobs and verdicts
@@ -307,7 +311,7 @@ def test_any_failed_step_names_its_tests_and_only_pytest_steps_can_be_flakes(job
     run(gh)
     calls = written_to(gh, 2984)
     assert [c[0] for c in calls] == (["comment", "enqueue"] if requeued else ["comment"])
-    assert f"`{RECRUITING}` (quarantined) in [{job}]" in calls[0][2]
+    assert f"`{CRASHED}` (worker crashed) in [{job}]" in calls[0][2]
 
 
 def test_a_job_that_timed_out_after_a_failed_step_counts_both():
@@ -323,7 +327,7 @@ def test_every_failed_step_of_a_job_counts():
     gh = FakeGitHub()
     gh.jobs = lambda run_id: [{**job, "id": f"{run_id}:{job['id']}"}]
     run(gh)
-    assert [c[0] for c in written_to(gh, 2984)] == ["comment"]  # a quarantined test, but the upload failed too
+    assert [c[0] for c in written_to(gh, 2984)] == ["comment"]  # a crashed worker, but the upload failed too
     assert sum(1 for c in gh.calls if c[0] == "log" and c[1].startswith(sha("1"))) == 1
 
 
@@ -334,11 +338,11 @@ def finding(*tests, job="python-5", step="Run selected tests", **kw):
 @pytest.mark.parametrize(
     ("findings", "expected"),
     [
-        ([finding((RECRUITING, False))], True),  # quarantined
         ([finding((CRASHED, True))], True),  # crashed worker
         ([finding((CRASHED, True), job="contracts")], True),
-        ([finding((RECRUITING, False), (CRASHED, True))], True),
-        ([finding((RECRUITING + "[a]", False))], True),  # a parameter of a quarantined test function
+        ([finding((CRASHED, True)), finding((CRASHED + "[a]", True), job="python-6")], True),
+        ([finding((RECRUITING, False))], False),  # a test that failed is never a flake to re-enqueue
+        ([finding((RECRUITING, False), (CRASHED, True))], False),
         ([finding((f"{OTHER}::test_y", False))], False),
         ([finding((RECRUITING, False)), finding((f"{OTHER}::test_y", False))], False),
         ([finding()], False),  # a failed step that named no test
@@ -351,75 +355,27 @@ def finding(*tests, job="python-5", step="Run selected tests", **kw):
         ([], False),
     ],
 )
-def test_only_quarantined_tests_and_crashed_workers_in_pytest_legs_are_flakes(findings, expected):
-    assert sweep.flaky(findings, QUARANTINE) is expected
-
-
-def entry(test, **overrides):
-    data = {
-        "test": test,
-        "first_seen": "2026-11-07",
-        "commit": sha("a"),
-        "runs": ["https://github.com/ticoteam/tico/actions/runs/1"],
-        "ticket": "",
-        "reason": "failed and passed on the same commit",
-    }
-    return {**data, **overrides}
-
-
-def test_the_quarantine_applies_flake_quarantines_rules_until_that_script_is_in_the_checkout(tmp_path):
-    folder = tmp_path / "ci" / "quarantine"
-    folder.mkdir(parents=True)
-    for test in (RECRUITING, CRASHED):
-        (tmp_path / test.split("::")[0]).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / test.split("::")[0]).write_text("")
-    (folder / sweep.entry_name(RECRUITING)).write_text(json.dumps(entry(RECRUITING)))
-    (folder / "misnamed.json").write_text(json.dumps(entry(CRASHED)))
-    (folder / sweep.entry_name(CRASHED)).write_text(json.dumps(entry(CRASHED, runs=[])))  # no run url
-    gone = "made_up/test_gone.py::test_x"
-    (folder / sweep.entry_name(gone)).write_text(json.dumps(entry(gone)))  # its test file is gone
-    (folder / "broken.json").write_text("{not json")
-    assert sweep.quarantined(tmp_path) == {RECRUITING}
-    assert sweep.quarantined(tmp_path / "missing") == set()
-
-
-def test_entry_names_match_flake_quarantine():
-    digest = hashlib.sha256(b"a/b.py::test_x[1-2]").hexdigest()[:10]
-    assert sweep.entry_name("a/b.py::test_x[1-2]") == f"a-b.py-test_x-1-2-{digest}.json"
-
-
-def test_the_quarantine_uses_flake_quarantine_load_when_the_checkout_has_it(tmp_path):
-    script = tmp_path / sweep.QUARANTINE_SCRIPT
-    script.parent.mkdir()
-    script.write_text("def load(root):\n    return {'from/flake_quarantine.py::test_load': {'file': str(root)}}\n")
-    assert sweep.quarantined(tmp_path) == {"from/flake_quarantine.py::test_load"}
+def test_only_crashed_workers_in_pytest_legs_are_flakes(findings, expected):
+    assert sweep.flaky(findings) is expected
 
 
 # The whole run
 
 
-def run(gh, tests=QUARANTINE, dry_run=False):
-    return sweep.keep(gh, set(tests), NOW, dry_run)
+def run(gh, dry_run=False):
+    return sweep.keep(gh, NOW, dry_run)
 
 
-def test_a_quarantined_failure_is_re_enqueued_at_its_head_with_its_marker_first():
+def test_a_crashed_worker_is_re_enqueued_at_its_head_with_its_marker_first():
     gh = FakeGitHub()
     text, ok = run(gh)
     assert ok
     calls = written_to(gh, 2984)
     assert [c[0] for c in calls] == ["comment", "enqueue"]
-    assert requeued_marker(sha("a"), sha("1"), failed=(RECRUITING,)) in calls[0][2]
-    assert f"`{RECRUITING}` (quarantined)" in calls[0][2]
+    assert requeued_marker(sha("a"), sha("1")) in calls[0][2]
+    assert f"`{CRASHED}` (worker crashed)" in calls[0][2]
     assert calls[1] == ("enqueue", 2984, sha("a"))  # expectedHeadOid: a newer push is not queued
     assert "#2984" in text.split("### Re-enqueued")[1].split("###")[0]
-
-
-def test_a_crashed_worker_is_re_enqueued():
-    gh = FakeGitHub()
-    run(gh)
-    calls = written_to(gh, 3060)
-    assert [c[0] for c in calls] == ["comment", "enqueue"]
-    assert "(worker crashed)" in calls[0][2]
 
 
 def test_without_a_queue_token_a_flake_is_commented_with_the_command_and_its_one_requeue_is_kept():
@@ -433,13 +389,13 @@ def test_without_a_queue_token_a_flake_is_commented_with_the_command_and_its_one
 
 def test_a_real_failure_gets_one_comment_naming_the_test_and_no_enqueue():
     gh = FakeGitHub()
-    run(gh, tests=set())
+    run(gh)
     calls = written_to(gh, 3034)
     assert [c[0] for c in calls] == ["comment"]
     body = calls[0][2]
     assert f"`{RECRUITING}` in [python-8]" in body
     assert "a check failed" in body
-    assert comment_marker(sha("c"), sha("3"), set(), failed=(RECRUITING,)) in body
+    assert comment_marker(sha("c"), sha("3"), failed=(RECRUITING,)) in body
 
 
 def test_a_ui_script_failure_names_the_script():
@@ -458,35 +414,26 @@ def test_a_head_already_commented_on_costs_no_run_lookup():
 
 
 def test_a_comment_on_an_older_head_does_not_count():
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("99"), sha("7a"), set())]})
-    run(gh, tests=set())
+    gh = FakeGitHub(comments={2966: [comment_marker(sha("99"), sha("7a"))]})
+    run(gh)
     assert [c[0] for c in written_to(gh, 2966)] == ["comment"]
 
 
-def test_a_test_quarantined_after_the_comment_gets_its_head_re_enqueued_in_the_same_comment():
-    # #2966 was commented on before the recruiting test was quarantined.
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"), set())]})
-    run(gh)
-    assert [c[0] for c in written_to(gh, 2966)] == ["enqueue"]
-    (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and requeued_marker(sha("c2"), sha("7a"), failed=(RECRUITING,)) in edit[2]
-    assert gh.calls.index(edit) < gh.calls.index(("enqueue", 2966, sha("c2")))  # the marker first
-
-
 def test_a_refused_enqueue_puts_the_existing_comment_back():
-    old = comment_marker(sha("c2"), sha("7a"), set())
-    gh = FakeGitHub(comments={2966: [old]}, fail={"enqueue"})
+    # #2953 was commented on for an older queue run; its new one (8a) failed only on a crashed worker.
+    old = comment_marker(sha("d3"), sha("0"))
+    gh = FakeGitHub(comments={2953: [old]}, fail={"enqueue"})
     _, ok = run(gh)
-    assert not ok
-    assert [c[1:] for c in gh.writes("edit_comment") if c[1] == 2966000][-1] == (2966000, old)
+    assert not ok and ("enqueue", 2953, sha("d3")) in gh.calls
+    assert [c[1:] for c in gh.writes("edit_comment") if c[1] == 2953000][-1] == (2953000, old)
 
 
 def test_a_new_queue_run_of_the_same_head_updates_the_comment_instead_of_adding_one():
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("55"), set())]})
-    text, _ = run(gh, tests=set())
+    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("55"))]})
+    text, _ = run(gh)
     assert written_to(gh, 2966) == []
     (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and comment_marker(sha("c2"), sha("7a"), set(), failed=(RECRUITING,)) in edit[2]
+    assert edit[1] == 2966000 and comment_marker(sha("c2"), sha("7a"), failed=(RECRUITING,)) in edit[2]
     assert "#2966 Mail from the source: updated" in text
 
 
@@ -500,14 +447,6 @@ def test_a_head_dropped_again_after_its_requeue_is_diagnosed_in_the_same_comment
     assert f"`{CRASHED}` (worker crashed)" in edit[2]
     (marker,) = sweep.markers([(1, edit[2])])
     assert marker.requeued and marker.queue == sha("8a")
-
-
-def test_a_requeued_head_is_never_re_enqueued_again_when_the_quarantine_changes():
-    gh = FakeGitHub(comments={2966: [requeued_marker(sha("c2"), sha("7a"), set())]})
-    run(gh)
-    assert written_to(gh, 2966) == []
-    (edit,) = gh.writes("edit_comment")
-    assert "Already re-queued once for this commit" in edit[2]
 
 
 def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued_once_a_token_is_added():
@@ -526,20 +465,13 @@ def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued
     assert marker.requeued and not marker.deferred
 
 
-def test_a_quarantine_change_that_touches_none_of_a_comments_tests_costs_no_reads():
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"))]})
-    run(gh, tests=QUARANTINE | {"made_up/test_other.py::test_z"})
-    assert written_to(gh, 2966) == [] and not any(c[0] == "edit_comment" and c[1] == 2966000 for c in gh.calls)
-    assert ("queue_run", sha("7a")) not in gh.calls
-
-
 def test_a_comment_naming_tests_with_an_html_comment_end_still_reads():
     test = f"{OTHER}::test_y[-->]"
     pr = sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
-    body = sweep.comment_body(pr, [finding((test, False))], {test}, None)
+    body = sweep.comment_body(pr, [finding((test, False))], None)
     assert "-->]" not in body.split("<!-- stale-pr-keeper:tests")[1]
     (marker,) = sweep.markers([(1, body)])
-    assert marker.tests == [test] and marker.quarantine == sweep.quarantine_key([test], {test})
+    assert marker.tests == [test]
 
 
 def with_mergeable(gh, number, state):
@@ -567,11 +499,11 @@ def test_huge_test_ids_keep_the_comment_small_and_are_never_a_flake():
     many = [(f"{OTHER}::test_y[{i}{'p' * 1000}]", True) for i in range(200)]
     findings = [finding(*many, job=f"python-{n}") for n in range(1, 6)]
     pr = sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
-    body = sweep.comment_body(pr, findings, set(), "https://x")
+    body = sweep.comment_body(pr, findings, "https://x")
     assert len(body) < 40_000
     (marker,) = sweep.markers([(1, body)])
     assert 0 < len(marker.tests) < 200 and marker.tests == [t for t, _ in many[: len(marker.tests)]]
-    assert not sweep.flaky(findings, set())  # every one a crash, but too many to be flakes
+    assert not sweep.flaky(findings)  # every one a crash, but too many to be flakes
 
 
 def with_reason(gh, number, reason):
@@ -587,16 +519,16 @@ def test_a_timed_out_removal_names_its_failing_tests_and_is_never_re_enqueued():
     run(gh)
     (call,) = written_to(gh, 2984)
     assert call[0] == "comment" and "its checks timed out" in call[2]
-    assert f"`{RECRUITING}` (quarantined) in [python-5]" in call[2]
+    assert f"`{CRASHED}` (worker crashed) in [python-5]" in call[2]
 
 
 def test_ids_holding_an_html_comment_end_stay_inside_the_budget():
-    many = [(f"{OTHER}::test_y[{i}{'-->' * 160}]", False) for i in range(40)]
+    many = [(f"{OTHER}::test_y[{i}{'-->' * 160}]", True) for i in range(40)]
     findings = [finding(*many[n * 8 : n * 8 + 8], job=f"python-{n}") for n in range(5)]
     pr = sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
-    body = sweep.comment_body(pr, findings, {t for t, _ in many}, "https://x")
+    body = sweep.comment_body(pr, findings, "https://x")
     assert len(body) < 60_000
-    assert not sweep.flaky(findings, {t for t, _ in many})  # quarantined, but not all fit the marker
+    assert not sweep.flaky(findings)  # every one a crash, but not all fit the marker
 
 
 def test_a_requeued_head_whose_comment_is_current_is_done():

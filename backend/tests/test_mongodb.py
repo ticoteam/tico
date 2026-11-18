@@ -204,6 +204,8 @@ def mongo():
     docker = shutil.which("docker")
     if not docker:
         pytest.skip("docker is not installed")
+    if subprocess.run([docker, "info"], capture_output=True, timeout=30).returncode:
+        pytest.skip("docker is installed but its daemon is not answering (`docker info` failed)")
     pymongo = pytest.importorskip("pymongo")
     name = "tico-mongo-test-" + uuid.uuid4().hex[:8]
     try:
@@ -228,9 +230,9 @@ def mongo():
             timeout=180,
         )
         if started.returncode:
-            pytest.skip("cannot start a mongo container: " + started.stderr.strip()[:120])
+            pytest.fail("docker refused to start a mongo container: " + started.stderr.strip()[:300])
     except subprocess.TimeoutExpired:
-        pytest.skip("docker did not answer")
+        pytest.fail("docker did not answer a run of mongo within 180 s")
     try:
         port = (
             subprocess.run([docker, "port", name, "27017/tcp"], capture_output=True, text=True)
@@ -253,7 +255,7 @@ def mongo():
                     candidate.close()  # a client that did not answer is closed here, not left to the garbage collector
                 time.sleep(1)
         else:
-            pytest.skip("mongo did not come up")
+            pytest.fail(f"mongo did not come up in 90 s (container {name})")
         app = admin["app"]
         app.orders.insert_many(
             [

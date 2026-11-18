@@ -4,14 +4,13 @@ import base64
 import copy
 import json
 import sqlite3
-from contextlib import closing, contextmanager
+from contextlib import closing
 from email.message import EmailMessage
-from unittest import mock
 from types import SimpleNamespace
 
 import pytest
 
-from backend import judge, task_asks
+from backend import task_asks
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post, runner, setup_attempt
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
@@ -28,14 +27,7 @@ from backend.tests.helpers.email_sending import (
     policy,
     queue,
 )
-
-
-@contextmanager
-def engine_mock(**kwargs):
-    """The decision engine `classify` asks (Jev), as a Mock that `server_engine` hands out."""
-    ask = mock.Mock(**kwargs)
-    with mock.patch.object(judge, "server_engine", return_value=ask):
-        yield ask
+from backend.tests.helpers.judge import fake
 
 
 def approved(api, queued, token="ana-test", expected=200):
@@ -81,9 +73,9 @@ def test_unsupported_recipient_visible_bodies_always_ask(inbox, form):
         message.set_content(commitment.encode(), maintype="application", subtype="x-body")
     snap = S.snapshot(raw(message), BOX)
     assert snap["classification_complete"] is False
-    with engine_mock() as ask:
-        response = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
-    ask.assert_not_called()
+    engine = fake(inbox)
+    response = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
+    assert engine.calls == []
     assert response["classification"]["legal_or_money"] is None
     assert response["state"] == "waiting_approval"
     preview = inbox.get("/api/v2/email/sends/" + response["id"], headers=headers()).json()
@@ -114,17 +106,12 @@ def test_named_inline_bodies_cannot_hide_commitments_from_classification(inbox, 
     supported = form in ("inline_html", "primary_plain", "named_container")
     assert snap["classification_complete"] is supported
 
-    def classify(context, *args):
-        assert commitment in context["body"]
-        return {"answers": {"legal_or_money": {"value": "yes"}}}
-
-    with (
-        engine_mock(side_effect=classify) as ask,
-        mock.patch.object(judge, "audit_detail", return_value={}),
-    ):
-        result = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
-    assert ask.call_count == int(supported)
-    assert result["classification"]["legal_or_money"] is (True if supported else None)
+    engine = fake(inbox, legal_or_money="yes")
+    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
+    assert len(engine.calls) == int(supported)
+    if supported:
+        assert commitment in engine.calls[0]["state"]["body"]
+    assert result["classification"]["status"] == ("classified" if supported else "incomplete_content")
     assert result["state"] == "waiting_approval" and dispatch(inbox) == []
 
 
@@ -142,16 +129,13 @@ def test_inline_text_files_are_classified_and_keep_attachment_approval_and_downl
     file = snap["attachments"][0]
     expected = message.get_payload()[-1].get_payload(decode=True)
     assert file["name"] == "notes." + subtype and file["sha256"] == S.digest(expected)
-    with (
-        engine_mock(return_value={"answers": {"legal_or_money": {"value": "no"}}}) as ask,
-        mock.patch.object(judge, "audit_detail", return_value={}),
-    ):
-        result = post(inbox, "email/sends", {"mailbox": BOX, "raw": encoded})["send"]
+    engine = fake(inbox, legal_or_money="no")
+    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": encoded})["send"]
     if subtype != "enriched":
-        assert "Harmless notes" in ask.call_args.args[0]["body"]
+        assert "Harmless notes" in engine.calls[0]["state"]["body"]
         assert "attachments" in result["decision"]["reasons"]
     else:
-        ask.assert_not_called()
+        assert engine.calls == []
         assert not snap["classification_complete"]
     assert result["state"] == "waiting_approval" and dispatch(inbox) == []
     response = inbox.get(f'/api/v2/email/sends/{result["id"]}/attachments/{file["part"]}', headers=headers())
@@ -178,21 +162,21 @@ def test_an_ok_of_one_copy_cannot_authorize_an_added_internal_bcc(inbox):
 
 
 def test_negative_chat_cannot_approve_a_different_large_send_through_the_api(inbox):
+    fake(inbox, legal_or_money="yes")
     _, _, attempt = setup_attempt(inbox, "ops")
     note = post(inbox, "chat/ops", {"text": "Do not send any email to outsiders."})
-    with mock.patch.object(S, "classify", return_value={"legal_or_money": True, "status": "classified"}):
-        result = post(
-            inbox,
-            "email/sends",
-            {
-                "mailbox": BOX,
-                "raw": mime(
-                    to=[f"person{i}@vendor.example" for i in range(11)], files=True, body="We agree to pay $100000."
-                ),
-                "approval_id": note["id"],
-            },
-            token=attempt["token"],
-        )["send"]
+    result = post(
+        inbox,
+        "email/sends",
+        {
+            "mailbox": BOX,
+            "raw": mime(
+                to=[f"person{i}@vendor.example" for i in range(11)], files=True, body="We agree to pay $100000."
+            ),
+            "approval_id": note["id"],
+        },
+        token=attempt["token"],
+    )["send"]
     assert result["state"] == "waiting_approval" and not result["decision"]["approved"]
     assert result["approval_id"] != note["id"]
 
@@ -228,37 +212,38 @@ def test_unnamed_inline_files_require_approval_and_bind_the_actual_bytes(inbox):
 
 
 def test_classifier_sees_html_as_well_as_plain_text_and_never_truncates_to_a_no(inbox):
+    engine = fake(inbox, legal_or_money="yes")
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"
     msg.set_content("Thanks for the update.")
     msg.add_alternative("<p>We accept the contract and agree to pay $100000.</p><script>bad()</script>", subtype="html")
-    seen = []
-    with (
-        mock.patch.object(judge, "audit_detail", return_value={}),
-        engine_mock(
-            side_effect=lambda context, *args: seen.append(context) or {"answers": {"legal_or_money": {"value": "yes"}}}
-        ),
-    ):
-        result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
-    assert result["legal_or_money"] is True and "$100000" in seen[0]["body"] and "Thanks" in seen[0]["body"]
-    assert "<p>" not in seen[0]["body"] and "bad()" not in seen[0]["body"]
+    result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
+    seen = engine.calls[-1]["state"]["body"]
+    assert result["status"] == "classified" and "$100000" in seen and "Thanks" in seen
+    assert "<p>" not in seen and "bad()" not in seen
     inline = EmailMessage()
     inline.set_content("<p>Also agree to pay $500000.</p>", subtype="html")
     inline["Content-Disposition"] = "inline"
     msg.make_mixed()
     msg.attach(inline)
-    with (
-        mock.patch.object(judge, "audit_detail", return_value={}),
-        engine_mock(
-            side_effect=lambda context, *args: seen.append(context) or {"answers": {"legal_or_money": {"value": "yes"}}}
-        ),
-    ):
-        S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
-    assert "$500000" in seen[-1]["body"]
-    with engine_mock() as ask:
-        result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(mime(body="a" * 16001 + "Pay $100000"), BOX))
-        assert result["legal_or_money"] is None
-        ask.assert_not_called()
+    S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
+    assert "$500000" in engine.calls[-1]["state"]["body"]
+    asked = len(engine.calls)
+    result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(mime(body="a" * 16001 + "Pay $100000"), BOX))
+    assert result["legal_or_money"] is None and len(engine.calls) == asked
+
+
+def test_the_classifier_reads_the_choice_the_judge_answers(inbox):
+    # The judge answers a choice question with `choice` (clients/judge.py `_project`); only the audit says `value`.
+    fake(inbox, legal_or_money="yes")
+    snap = S.snapshot(mime(body="We agree to pay $100000."), BOX)
+    assert S.classify(inbox.app, inbox.app.state.store, snap)["legal_or_money"] is True
+    fake(inbox, legal_or_money="no", review="send")
+    second = {"thread": None, "approver_instruction": None}
+    result = S.classify(inbox.app, inbox.app.state.store, snap, review=second)
+    assert result["legal_or_money"] is False and result["review"] is True
+    fake(inbox, legal_or_money="no", review="stop")
+    assert S.classify(inbox.app, inbox.app.state.store, snap, review=second)["review"] is False
 
 
 def test_nested_email_attachment_headers_and_mime_charset_are_bound_to_the_proof():
@@ -423,9 +408,9 @@ def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless
     preview = "\n".join(body["text"] for body in frozen["visible_bodies"])
     assert "Thanks." in preview
     assert "$100000" in preview or "contract.css" in preview
-    with engine_mock() as ask:
-        queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(msg)})["send"]
-    ask.assert_not_called()
+    engine = fake(inbox)
+    queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(msg)})["send"]
+    assert engine.calls == []
     assert queued["state"] == "waiting_approval"
     assert queued["classification"]["status"] == "incomplete_content"
     shown = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()
@@ -437,6 +422,6 @@ def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless
 )
 def test_unknown_classification_needs_approval_even_when_the_legal_prompt_is_off(inbox, body, status):
     autonomous(inbox, ask_legal_money=False)
-    with mock.patch.object(judge, "server_engine", return_value=None):
-        queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(body=body)})["send"]
+    inbox.app.state.judge = None  # no decision model is configured on this server
+    queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(body=body)})["send"]
     assert queued["state"] == "waiting_approval" and queued["classification"]["status"] == status

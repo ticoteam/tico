@@ -292,9 +292,13 @@ def test_red_main_replay_pinned_cases():
     results = runner.run(cases)
     caught = {row["case"] for row in results if row["caught"]}
     caught_at_pr = {row["case"] for row in results if row["caught_pr"]}
+    # A case whose failing test was deleted (a retired migration's, say) can no longer be replayed. It counts as
+    # stale, under the bound below, not as a lost catch.
+    stale = {row["case"] for row in results if row["stale"]}
     replay.report(results)
     print("Newly caught case IDs:", sorted(caught - PINNED_CAUGHT))
-    assert not (PINNED_CAUGHT - caught), f"Lost caught cases: {sorted(PINNED_CAUGHT - caught)}"
-    missing_at_pr = PINNED_CAUGHT_AT_PR - caught_at_pr
+    lost = PINNED_CAUGHT - caught - stale
+    assert not lost, f"Lost caught cases: {sorted(lost)}"
+    missing_at_pr = PINNED_CAUGHT_AT_PR - caught_at_pr - stale
     assert not missing_at_pr, f"Lost PR-stage catches: {sorted(missing_at_pr)}"
-    assert sum(row["stale"] for row in results) <= 9
+    assert len(stale) <= 10  # 10th: case 31, whose test and migration the v0.6.0 floor retired (#4169)

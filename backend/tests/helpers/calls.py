@@ -1,16 +1,27 @@
 """Helpers that other tests share, moved out of test_calls.py so they import no test file."""
 
+from array import array
+
 import pytest
 from backend import call_media, gateway_connection
 from backend.store import H
-from backend.tests.helpers.api import headers, post
+from backend.tests.helpers.api import assign, headers, post, runner
 from backend.tests.helpers.call_media import CONFIG
 
 
-PCM_ONE_SECOND = b"\x01\x00" * 16000
+# One second of speech as the pause detection hears it (call_voice.Segmenter): a loud square wave, 16 kHz mono.
+PCM_ONE_SECOND = array("h", [3000, -3000] * 8000).tobytes()
 
 
-PCM_EIGHT_SECONDS = PCM_ONE_SECOND * 8
+SILENCE_ONE_SECOND = bytes(32000)
+
+
+# Eight seconds of speech, then the pause that ends the utterance.
+PCM_EIGHT_SECONDS = PCM_ONE_SECOND * 8 + SILENCE_ONE_SECOND
+
+
+# A sentence of the Gateway's speech: 24 kHz mono, a tenth of a second.
+SPEECH_PCM = array("h", [2000, -2000] * 1200).tobytes()
 
 
 SYNTHETIC_SPEECH = "The rollout needs a reliability review"
@@ -23,6 +34,8 @@ class FakeMedia:
 
     def __init__(self):
         self.rooms, self.removed, self.recorders, self.ended = {}, [], {}, []
+        self.said, self.hushed = [], []  # (call_id, pcm, rate) played on the voice track; calls hushed
+        self.quiet = {}  # call_id -> the recorder's on_quiet, which a test calls as the media loop's timer would
         self.down = False  # LiveKit unreachable: every call to it is refused until the test clears this
 
     def _reachable(self):
@@ -30,7 +43,26 @@ class FakeMedia:
             raise call_media.MediaUnavailable("the media server is down")
 
     def person_token(self, room, identity, name):
+        self.rooms.setdefault(room, set()).add(identity)  # the person connects with it
         return call_media.person_token(CONFIG, room, identity, name)
+
+    def participants(self, room):
+        self._reachable()
+        return sorted(identity for identity in self.rooms.get(room, set()) if not call_media.is_voice(identity))
+
+    def mark(self, call_id):
+        return self.hushed.count(call_id) if call_id in self.recorders else None
+
+    def say(self, call_id, pcm, rate, started=None, mark=None):
+        if call_id not in self.recorders or mark is not None and mark != self.hushed.count(call_id):
+            return 0  # hushed since the speech was cleared to play
+        if started is not None:
+            started()
+        self.said.append((call_id, pcm, rate))
+        return max(1, len(pcm) * 1000 // (rate * 2))
+
+    def hush(self, call_id):
+        self.hushed.append(call_id)
 
     def room_exists(self, room):
         self._reachable()
@@ -46,9 +78,10 @@ class FakeMedia:
         self.rooms.pop(room, None)
         self.ended.append(room)
 
-    def start_recorder(self, call_id, room, on_audio):
+    def start_recorder(self, call_id, room, on_audio, on_quiet=None):
         self.recorders[call_id] = on_audio
-        self.rooms.setdefault(room, set()).add("tico-recorder")
+        self.quiet[call_id] = on_quiet
+        self.rooms.setdefault(room, set()).add(call_media.RECORDER_PREFIX + call_id)
 
     def stop_recorder(self, call_id):
         self.recorders.pop(call_id, None)
@@ -60,7 +93,10 @@ class FakeMedia:
 @pytest.fixture
 def meet(live, monkeypatch):
     live.app.state.call_media = FakeMedia()
-    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio: SYNTHETIC_SPEECH)
+    live.app.state.calls.voice.ticking = False  # tests tick the voice by hand (calls.voice.tick)
+    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: SYNTHETIC_SPEECH)
+    monkeypatch.setattr(call_media, "speech", lambda base, key, text, voice="": (SPEECH_PCM, 24000))
+    monkeypatch.setattr(call_media, "voices", lambda base, key: ["acme-alto", "acme-bass"])
     monkeypatch.setattr(
         gateway_connection,
         "target",
@@ -80,8 +116,8 @@ def thread(api, subject="Acme launch"):
         return H.open_conversation(c, "human:ana", ["human:ben", "bot:ops"], kind="chat", subject=subject)["id"]
 
 
-def start_call(api, cid, token="ana-test", title="Acme launch call"):
-    return post(api, f"threads/{cid}/calls", {"title": title}, token=token)
+def start_call(api, cid, token="ana-test", title="Acme launch call", **fields):
+    return post(api, f"threads/{cid}/calls", {"title": title, **fields}, token=token)
 
 
 def join(api, call_id, token="ana-test"):
@@ -102,3 +138,29 @@ def _restricted(api, prefix):
                 "SELECT restricted FROM messages WHERE body LIKE ? ORDER BY created_at", (prefix + "%",)
             )
         ]
+
+
+def private_lanes_ready(api, machine, bot):
+    """A current runner that takes a private meeting's turns: a call is a private meeting (execution.PRIVATE_LANES)."""
+    return post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "capabilities": ["private_lanes_v1"], "readiness": {bot: True}},
+        token=machine["token"],
+    )
+
+
+def bot_reply_by_run(api, bot, text):
+    """The bot answers its meeting turn the way the runner does: the job is claimed, started and completed with its reply."""
+    machine = runner(api)
+    assign(api, machine, bot)
+    private_lanes_ready(api, machine, bot)
+    attempt = post(api, "jobs/claim", {"bot": bot}, token=machine["token"])["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-call-turn"}, token=machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 0},
+        token=machine["token"],
+    )
+    return attempt

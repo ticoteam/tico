@@ -325,7 +325,9 @@ def test_imap_login_on_computers_rebex(api, computer):
     _, uses, _ = turn(api, computer, "IMAP test.rebex.net demo IMAP_PASSWORD")
     used = one(uses, "imap")
     if str(used["status"]).startswith("unreachable"):
-        pytest.skip(f"test.rebex.net: {used['status']}")
+        pytest.skip(
+            f"the computer could not reach test.rebex.net from its own network ({used['status']}); login not tried"
+        )
     # The demo password is the word "password", which shows in ordinary text: no `nowhere` check for it here.
     assert (used["status"], used["refused"]) == ("OK", "NO"), used
 

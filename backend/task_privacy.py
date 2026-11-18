@@ -491,6 +491,30 @@ def readable(c, actor, ids, who=None):
 
 def make_page_actor(c, actor, message):
     """The Assistant reads its person's own Make page request with that person's rights."""
+    refs = H._json(dict(message or {}).get("refs"), {}) or {}
+    if not isinstance(refs, dict) or not isinstance(refs.get("make_page"), dict):
+        return actor
+    return assistant_room_actor(c, actor, message)
+
+
+def attempt_reader(c, who, aid):
+    """The person a bot run's saved payload is read as when the run is that person's own Assistant room turn, else None
+    (require_payload then reads it as `who`)."""
+    if not aid or getattr(who, "role", "") != "bot" or not str(getattr(who, "actor", "")).startswith("bot:"):
+        return None
+    origin = read_cache.one(
+        c,
+        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        (aid,),
+    )
+    person = assistant_room_actor(c, who.actor, origin)
+    return person if person != who.actor else None
+
+
+def assistant_room_actor(c, actor, message):
+    """The person a run for their own message in their Assistant room is read as, else `actor`. The Assistant works
+    with that person's rights, so its replies there can link tasks only the person reads; its next run's claim names
+    them in the room's history and must not be refused for it (a refused claim stops the chat answering)."""
     message = dict(message or {})
     refs = H._json(message.get("refs"), {}) or {}
     if (
@@ -498,7 +522,6 @@ def make_page_actor(c, actor, message):
         or not isinstance(actor, str)
         or not actor.startswith("bot:")
         or actor != message.get("recipient_id")
-        or not isinstance(refs.get("make_page"), dict)
         or refs.get("assistant") is not True
         or refs.get("via")
         or message.get("deleted_at")
@@ -753,7 +776,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
                 "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
                 (aid,),
             )
-            principal = make_page_actor(c, principal, origin)
+            principal = assistant_room_actor(c, principal, origin)
         if isinstance(attempt, dict) and attempt.get("bot_id"):
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
@@ -1608,13 +1631,34 @@ def tag_attaches(c, tags):
     return out
 
 
+# The tags of a batch on at least one company-visible task: one any reader reads (H.task_private_readable), so such a
+# tag needs none of its links or attach events. A task a Rules Owner page copy gates (counsel.page_copies) is left
+# out: its copy decides who reads it. EXISTS stops at a tag's first such task (TIDY, 387 tags on 68K links: 2 ms; a
+# DISTINCT over every link took 130 ms).
+TAGS_ON_OPEN_TASKS_SQL = (
+    "SELECT g.id FROM tags g WHERE g.id IN ({marks}) AND EXISTS (SELECT 1 FROM task_tags tt JOIN tasks t "
+    "ON t.id=tt.task_id WHERE tt.tag_id=g.id AND t.private=0 AND t.id NOT IN (SELECT value FROM json_each(?)))"
+)
+
+
 def tags_readable(c, who, rows):
-    """The rows tag_readable passes, with every tag's task links and attach events read together and the tasks they
-    name looked up together first: one query per tag and per attachment was most of a tag list's SQL."""
+    """The rows tag_readable passes. A tag on a company-visible task passes on its own content alone; for the rest,
+    every tag's task links and attach events are read together and the tasks they name looked up together first: one
+    query per tag and per attachment was most of a tag list's SQL. Reading them for every tag held tens of MB per
+    call on a big install (TIDY: 68K links, 68K attach events), which a burst of tag lists turned into an OOM."""
+    from . import counsel
+
     snapshot(c)
     rows = list(rows)
+    gated = json.dumps(sorted(counsel.page_copies(c)))
+    open_tags = set()
+    for part in H.chunks([row["id"] for row in rows if not row.get("is_template")]):
+        sql = TAGS_ON_OPEN_TASKS_SQL.format(marks=",".join("?" * len(part)))
+        open_tags.update(tag for (tag,) in c.execute(sql, [*part, gated]))
+    # A template passes on its content alone too (_tag_readable): neither needs its links read.
+    rest = [row for row in rows if row["id"] not in open_tags and not row.get("is_template")]
     linked, attached = {}, {}
-    for part in H.chunks([row["id"] for row in rows]):
+    for part in H.chunks([row["id"] for row in rest]):
         marks = ",".join("?" * len(part))
         for tag, tid in c.execute(f"SELECT tag_id,task_id FROM task_tags WHERE tag_id IN ({marks})", part):
             linked.setdefault(tag, set()).add(tid)
@@ -1622,7 +1666,13 @@ def tags_readable(c, who, rows):
     prime_references(c, [detail for found in attached.values() for detail in found] + rows)
     _task_rows(c, set().union(*linked.values()))
     return [
-        row for row in rows if _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))
+        row
+        for row in rows
+        if (
+            content_readable(c, actor(who), row)
+            if row["id"] in open_tags or row.get("is_template")
+            else _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))
+        )
     ]
 
 

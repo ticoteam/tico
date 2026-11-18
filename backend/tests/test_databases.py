@@ -229,6 +229,8 @@ def postgres():
     docker = shutil.which("docker")
     if not docker:
         pytest.skip("docker is not installed")
+    if subprocess.run([docker, "info"], capture_output=True, timeout=30).returncode:
+        pytest.skip("docker is installed but its daemon is not answering (`docker info` failed)")
     try:
         psycopg = pytest.importorskip("psycopg")
         name = "tico-db-test-" + uuid.uuid4().hex[:8]
@@ -251,9 +253,9 @@ def postgres():
             timeout=120,
         )
         if started.returncode:
-            pytest.skip("cannot start a postgres container: " + started.stderr.strip()[:120])
+            pytest.fail("docker refused to start a postgres container: " + started.stderr.strip()[:300])
     except subprocess.TimeoutExpired:
-        pytest.skip("docker did not answer")
+        pytest.fail("docker did not answer a run of postgres within 120 s")
     try:
         port = (
             subprocess.run([docker, "port", name, "5432/tcp"], capture_output=True, text=True)
@@ -268,7 +270,7 @@ def postgres():
             except psycopg.OperationalError:
                 time.sleep(1)
         else:
-            pytest.skip("postgres did not come up")
+            pytest.fail(f"postgres did not come up in 60 s (container {name})")
         conn.execute("CREATE TABLE orders (id serial PRIMARY KEY, status text, total_cents int)")
         conn.execute(
             "INSERT INTO orders (status, total_cents) SELECT CASE WHEN g % 2 = 0 THEN 'paid' ELSE 'pending' END, g * 100 "

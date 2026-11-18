@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import sys
+import threading
 import time
 import types
 from types import SimpleNamespace
@@ -56,15 +57,43 @@ class FakeLiveKit:
     def __init__(self):
         self.rooms, self.joins, self.refuse = {}, [], False
 
-    def hear(self, loop, recorder, speaker, frames, *, kind=KIND_AUDIO, source=SOURCE_MICROPHONE):
-        """Publish a track from `speaker` that the recorder `recorder` subscribes to, on the media loop."""
+    def hear(self, loop, recorder, speaker, frames, *, kind=KIND_AUDIO, source=SOURCE_MICROPHONE, held=False):
+        """Publish a track from `speaker` that the recorder `recorder` subscribes to, on the media loop. A `held` track
+        stays open after its frames (a muted microphone) until the test sets its `release` event. Returns the track."""
         room = [joined for joined in self.joins if joined.identity == recorder][-1]
         track = SimpleNamespace(
             kind=kind,
             frames=[SimpleNamespace(data=memoryview(frame), samples_per_channel=len(frame) // 2) for frame in frames],
+            release=threading.Event() if held else None,
         )
         publication, participant = SimpleNamespace(source=source), SimpleNamespace(identity=speaker)
         asyncio.run_coroutine_threadsafe(room.emit("track_subscribed", track, publication, participant), loop).result(5)
+        return track
+
+
+class FakeLocalParticipant:
+    def __init__(self, room):
+        self.room, self.published = room, []
+
+    async def publish_track(self, track, options=None):
+        self.published.append((track, options))
+        return SimpleNamespace(sid="TR_voice")
+
+
+class FakeAudioSource:
+    """The voice track's source: what was captured, in frames."""
+
+    def __init__(self, sample_rate, num_channels, queue_size_ms=1000, loop=None):
+        self.sample_rate, self.num_channels, self.frames, self.cleared = sample_rate, num_channels, [], 0
+
+    async def capture_frame(self, frame):
+        self.frames.append(frame)
+
+    def clear_queue(self):
+        self.cleared += 1
+
+    async def wait_for_playout(self):
+        pass
 
 
 class FakeRoom:
@@ -72,6 +101,7 @@ class FakeRoom:
         self.server, self.handlers, self.token, self.options = server, {}, None, None
         self.identity = self.room = None
         self.connected = False
+        self.local_participant = FakeLocalParticipant(self)
 
     def on(self, event, handler):
         self.handlers[event] = handler
@@ -96,12 +126,16 @@ class FakeRoom:
 
 class FakeAudioStream:
     def __init__(self, track, sample_rate=0, num_channels=0):
-        self.frames = list(track.frames)
+        self.track, self.frames = track, list(track.frames)
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        release = getattr(self.track, "release", None)
+        if not self.frames and release is not None:
+            await asyncio.to_thread(release.wait, 10)
+            self.track.release = None
         if not self.frames:
             raise StopAsyncIteration
         return SimpleNamespace(frame=self.frames.pop(0))
@@ -118,6 +152,14 @@ def fake_rtc(monkeypatch):
     rtc.Room = lambda: FakeRoom(server)
     rtc.RoomOptions = lambda **options: SimpleNamespace(**options)
     rtc.AudioStream = FakeAudioStream
+    rtc.AudioSource = FakeAudioSource
+    rtc.AudioFrame = lambda data, sample_rate, num_channels, samples_per_channel: SimpleNamespace(
+        data=bytes(data), sample_rate=sample_rate, num_channels=num_channels, samples_per_channel=samples_per_channel
+    )
+    rtc.LocalAudioTrack = SimpleNamespace(
+        create_audio_track=lambda name, source: SimpleNamespace(name=name, source=source)
+    )
+    rtc.TrackPublishOptions = lambda **options: SimpleNamespace(**options)
     rtc.TrackKind = SimpleNamespace(KIND_AUDIO=KIND_AUDIO, KIND_VIDEO=KIND_VIDEO)
     rtc.TrackSource = SimpleNamespace(
         SOURCE_MICROPHONE=SOURCE_MICROPHONE,

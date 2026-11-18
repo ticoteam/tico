@@ -2,7 +2,6 @@
 
 import json
 from hashlib import sha256
-from unittest.mock import Mock
 
 import pytest
 
@@ -17,6 +16,26 @@ from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import add, give
 
 DEVICE_ID = sha256(b"acme-device-one").hexdigest()
+
+
+class ScreenRelay:
+    """Records what a removed computer makes the screen relay do. The relay is its own process (relay-rs), so the
+    test checks the calls it receives and not its answers."""
+
+    def __init__(self):
+        self.calls = []
+
+    def set_mode(self, rid, mode, reason):
+        self.calls.append(("set_mode", rid, mode, reason))
+
+    def push_exit_policy(self, rid):
+        self.calls.append(("push_exit_policy", rid))
+
+    def exit_close(self, exit=None, reason=""):
+        self.calls.append(("exit_close", exit, reason))
+
+    def push_bot_generation(self, bot, reason):
+        self.calls.append(("push_bot_generation", bot, reason))
 
 
 @pytest.mark.parametrize("shared", [False, True])
@@ -77,8 +96,8 @@ def test_hourly_sweep_retires_a_replaced_offline_computer_and_it_can_enroll_agai
     with store.transaction() as c:
         runner_states.save(c, rid, last_seen_at=H.shift(now, seconds=-computers.UNASSIGNED_OFFLINE_RETIRE_SECONDS - 1))
         c.execute("INSERT INTO registry_metadata VALUES(?,?)", ("computer-repositories:" + rid, '{}'))
-    sessions = Mock()
-    monkeypatch.setattr(store, "screen_sessions", sessions)
+    relay = ScreenRelay()
+    monkeypatch.setattr(store, "screen_sessions", relay)
     result = Scheduler(store, api.app.state.execution).tick(H.parse_ts(now))
     assert not result["failures"]
     assert rid not in {r["id"] for r in get(api, "computers")["computers"]}
@@ -96,8 +115,11 @@ def test_hourly_sweep_retires_a_replaced_offline_computer_and_it_can_enroll_agai
         assert json.loads(events[0]["detail"])["reason"] == (
             f"No bots assigned and offline for over 24 hours; replaced by Acme Mac ({current['runner_id']})"
         )
-    sessions.set_mode.assert_called_once_with(rid, "off", "computer removed")
-    sessions.exit_close.assert_called_once_with(exit=rid, reason="computer removed")
+    assert relay.calls == [
+        ("set_mode", rid, "off", "computer removed"),
+        ("push_exit_policy", rid),
+        ("exit_close", rid, "computer removed"),
+    ]
     assert computers.sweep(store, now) == [], "retirement is idempotent"
     replacement = runner(api, label="Acme Mac")
     ready(api, replacement, [])

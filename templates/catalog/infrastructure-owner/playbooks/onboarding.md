@@ -18,7 +18,7 @@ deploy. Do not ask what these already say.
 
 What you do (find slow jobs, red-main streaks and runner faults and write the fix plan; hand flaky tests to the
 QA Owner), that you never rerun, cancel, trigger or edit a workflow or deploy, and that the QA Owner decides fix or
-quarantine for a flaky test.
+delete for a flaky test.
 
 ## 3. Ask, in one message
 

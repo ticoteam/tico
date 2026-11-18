@@ -33,5 +33,5 @@ Checks before you finish:
 Example (invented, for illustration): Run 88140 failed in the `test-api` job, at the step "Run integration tests", in
 `test_reminder_sends_at_7am`. The log shows the reminder was not sent when the clock read 23:30 UTC. The same commit passed in runs
 88131 and 88150, and the test reads the wall clock. Class: flaky test, timing (the test depends on the time of day). Confidence:
-high, because the history and the log agree. Hand-off: the decision in `skills/decide-fix-or-quarantine/SKILL.md`, with a
+high, because the history and the log agree. Hand-off: the decision in `skills/fix-or-delete-flaky-test/SKILL.md`, with a
 proposed frozen clock.

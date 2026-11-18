@@ -1,0 +1,5 @@
+{
+  "ui/tests/company-page.cts": {
+    "no-fixed-wait-ui": 4
+  }
+}

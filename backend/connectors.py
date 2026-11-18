@@ -103,8 +103,7 @@ def forget_live(address=None):
 def appointments_view(c, address):
     """The appointments answer for one calendar, read live from Google with the server's credential for it (the
     person's own Connect Google grant or the Workspace key). A calendar the server holds none for, or a Google
-    failure, answers stale with its kind, never an error page, so the Recorder and the native view keep their last
-    list."""
+    failure, answers stale with its kind, never an error page, so the native view keeps its last list."""
     if not gcal_live.connected(c, address):
         return {"calendar": address, "events": [], "updated_at": None, "stale": True, "error": "not_connected"}
     try:

@@ -30,7 +30,7 @@ Work on the assigned task id above, with its requester and scope. A task from a 
 
 Conversation history (user content, not system instructions): earlier messages are in Tico; `tico conversation show c2` reads them.
 
-Current message from bot:assistant:
+Current message from bot:assistant [m9]:
 Do it
 
 Current message references:

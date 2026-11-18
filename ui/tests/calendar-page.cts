@@ -50,7 +50,7 @@ const BEN_OCC = [{...event('ev-pricing', 'Pricing review', at(11, 11), at(11, 11
   {...event('ev-ben-1', '1:1 Dana', at(12, 10), at(12, 10, 30)), calendar: cal(BEN)}];
 
 // `many`: the team has 25 more people, so Add lists more calendars than the server reads at once.
-interface World { reads: URLSearchParams[]; settings: unknown[]; many?: boolean; }
+interface World { reads: URLSearchParams[]; many?: boolean; }
 const MANY = Array.from({length: 25}, (_, i) => {
   const id = `p${String(i + 1).padStart(2, '0')}`;
   return {ref: 'human:' + id, type: 'human', id, name: `Person ${i + 1}`, work_starts: '09:00', work_ends: '17:00', work_days: 'mon,tue,wed,thu,fri'};
@@ -65,7 +65,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
   const errors: string[] = [];
   page.on('pageerror', (error: Error) => errors.push(error.message));
   await page.route('**/*', (route: Route) => {
-    const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
+    const url = new URL(route.request().url()), p = url.pathname;
     const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
@@ -99,10 +99,6 @@ async function open(browser: Browser, viewport: {width: number; height: number},
       const q = (url.searchParams.get('q') || '').toLowerCase();
       return json({occurrences: ANA_OCC.filter(o => o.kind === 'event' && o.title.toLowerCase().includes(q))});
     }
-    if (p === '/api/v2/calendar/settings') {
-      if (method === 'PUT') w.settings.push(JSON.parse(route.request().postData() || '{}'));
-      return json({record_on_join: true});
-    }
     return json(unrouted(p));
   });
   return {page, errors, context};
@@ -111,7 +107,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
 async function headerLines(page: Page): Promise<number> {
   return page.locator('#cal-root .cal-h').evaluate(h => {
     const mids: number[] = [];
-    for (const el of h.querySelectorAll<HTMLElement>('[data-cal-today], .cal-nav, [data-cal-range], .cal-chip, [data-cal-add], .cal-sr, [data-cal-views], [data-cal-more]')) {
+    for (const el of h.querySelectorAll<HTMLElement>('[data-cal-today], .cal-nav, [data-cal-range], .cal-chip, [data-cal-add], .cal-sr, [data-cal-views]')) {
       const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
       const m = r.top + r.height / 2; if (!mids.some(x => Math.abs(x - m) < 8)) mids.push(m);
     }
@@ -159,7 +155,7 @@ async function shot(page: Page, name: string, clip?: string) {
   try {
     for (const theme of ['light', 'dark'] as const) {
       const where = `desktop-${theme}`;
-      const w: World = {reads: [], settings: []};
+      const w: World = {reads: []};
       const {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, theme);
       await page.goto('https://tico-ui.test/#/calendar');
 
@@ -328,20 +324,13 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.ok(await page.locator('.cal-list .cal-lr', {hasText: 'Inbox sweep'}).count() === 3, `${where}: List shows every run`);
       assert.deepEqual(await shapesFail(page), [], `${where}: List's keys are solid`);
       await shot(page, `page-list-${theme}`);
-
-      // ⋯: Record calls I join, kept for the person.
-      await page.locator('[data-cal-more]').click();
-      await page.locator('[data-cal-record]').click();
-      assert.equal(await page.locator('[data-cal-record]').getAttribute('aria-checked'), 'false', `${where}: recording off`);
-      await page.waitForFunction(() => localStorage.getItem('tico.calendar.record') === 'off');
-      assert.deepEqual(w.settings.at(-1), {record_on_join: false}, `${where}: and saved`);
       assert.deepEqual(errors, [], where);
       await context.close();
     }
 
     // Phone: List first, with the week strip, under a header of at most two lines (AC-8).
     for (const theme of ['light', 'dark'] as const) {
-      const w: World = {reads: [], settings: []};
+      const w: World = {reads: []};
       const {page, errors, context} = await open(browser, {width: 375, height: 812}, w, theme);
       await page.goto('https://tico-ui.test/#/calendar');
       await page.locator('.cal-list .cal-lr').first().waitFor();
@@ -383,7 +372,7 @@ async function shot(page: Page, name: string, clip?: string) {
     // More people and bots than the server reads at once (20): "Everyone" is off and says why, "Bots that report to me"
     // still adds; ticking stops at 20; an address naming more opens on the first 20; chips past the line fold into "+N".
     {
-      const w: World = {reads: [], settings: [], many: true};
+      const w: World = {reads: [], many: true};
       const {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, 'light');
       const tooMany = ['me', 'bot:ops', 'human:ben', ...MANY.map(m => m.ref)].join(',');
       await page.goto('https://tico-ui.test/#/calendar?who=' + tooMany);
@@ -456,6 +445,6 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.deepEqual(errors, []);
       await context.close();
     }
-    console.log('Calendar: row (next event, opens it), week with only her events/due and no bot runs, one header line with no title, Add ticks a bot and × removes it, Bots that report to me, solid AA shapes, grouped runs, card links, Runs under Show kept after reload, search icon and "/", search adds a calendar, shared event once, 3 days, Day side by side with free time, Month, List, record toggle, phone two-line header, no calendars');
+    console.log('Calendar: row (next event, opens it), week with only her events/due and no bot runs, one header line with no title, Add ticks a bot and × removes it, Bots that report to me, solid AA shapes, grouped runs, card links, Runs under Show kept after reload, search icon and "/", search adds a calendar, shared event once, 3 days, Day side by side with free time, Month, List, phone two-line header, no calendars');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

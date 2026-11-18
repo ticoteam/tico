@@ -29,10 +29,12 @@ class FakeDecide:
         self.choice, self.confidence = choice, confidence
         self.calls, self.fail, self.hold = [], None, None
         self.asked = threading.Event()  # set when a call arrives, so a test waits for the call itself
+        self.arrivals = threading.Semaphore(0)  # one release per call, so a test can wait for each of several
 
     def __call__(self, state, questions, label=None):
         self.calls.append({"state": state, "questions": questions, "label": label})
         self.asked.set()
+        self.arrivals.release()
         if self.hold:
             self.hold.wait(5)
         if self.fail:
@@ -434,9 +436,8 @@ def test_overlapping_new_topic_sends_clear_once_and_keep_the_first_message(chat,
     ]
     for sender in senders:
         sender.start()
-        deadline = time.monotonic() + 10.0
-        while len(model.calls) < senders.index(sender) + 1 and time.monotonic() < deadline:
-            time.sleep(0.01)
+    for _ in senders:
+        assert model.arrivals.acquire(timeout=10), f"only {len(model.calls)} of 2 sends reached Decide"
     assert len(model.calls) == 2, "both sends are asking Decide about the same chat"
     model.hold.set()
     for sender in senders:

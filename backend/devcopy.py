@@ -233,8 +233,6 @@ EMPTY = (
     # Personal phone consent and paid dispatch queues belong to the source install.
     "alert_preferences",
     "personal_alerts",
-    # Which Recorder each person's computers run (backend/recorder_installs.py): per-machine, the copy starts without it.
-    "recorder_installs",
     # Browsers that take Web Push (backend/web_push.py): a copy pushes to none of the live install's.
     "push_subscriptions",
     "bills_inbound",  # emailed bills: senders, subjects and HQ delivery ids

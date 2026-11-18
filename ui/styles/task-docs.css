@@ -14,6 +14,8 @@
 .task-specs{display:flex;flex-direction:column;gap:var(--s1);margin:0 var(--s4) var(--s2);min-width:0}
 .task-spec{display:flex;align-items:center;gap:var(--s3);min-width:0;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);text-decoration:none}
 .task-spec:hover{background:var(--surface2)}
+/* the Spec open in the window, in place of the chat: its card is lit; pressed again, the chat comes back */
+.task-spec[aria-current="true"]{border-color:var(--ink);background:var(--surface2)}
 .task-spec:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .task-spec-ic{flex:none;width:20px;height:20px;font-size:20px;color:var(--muted)}
 .task-spec-main{display:flex;flex-direction:column;flex:1;min-width:0}

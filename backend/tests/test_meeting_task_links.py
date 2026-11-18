@@ -324,8 +324,8 @@ def test_task_trash_restores_links_and_skips_a_meeting_deleted_while_trashed(api
     assert not get(api, f"tasks/{t['id']}/meetings")['meetings']
 
 
-def test_recorder_participant_audiences_keep_the_current_media_read_boundary(api):
-    from backend.tests.helpers.recorder_audience import live_meeting
+def test_participant_audiences_keep_the_current_media_read_boundary(api):
+    from backend.tests.helpers.participants_audience import live_meeting
 
     mid = live_meeting(api, visibility='team', joiner='cara')
     post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')

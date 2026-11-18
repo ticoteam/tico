@@ -13,7 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "sync", "signal", "net", "fs"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
+# rustls without a bundled provider: every client gets crate::tls's ring config, so aws-lc-rs is never built.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"] }
 rusqlite = { version = "=0.41.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

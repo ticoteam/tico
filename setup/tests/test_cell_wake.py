@@ -66,17 +66,19 @@ def upstream():
 
 
 class Slow:
-    """Makes `docker compose up` take `seconds` of real time, and counts the starts."""
+    """Counts the starts. With `gate`, each `docker compose up` for the company waits until the test sets it, so the
+    requests sent meanwhile are held behind that one start."""
 
-    def __init__(self, system, seconds=0.0):
-        self.system, self.seconds, self.ups = system, seconds, 0
+    def __init__(self, system, gate=None):
+        self.system, self.gate, self.ups = system, gate, 0
         self.real = system.run
         system.run = self.run
 
     def run(self, argv, **kw):
         if "--project-name" in argv and "up" in argv and argv[argv.index("--project-name") + 1] != cell.EDGE_PROJECT:
             self.ups += 1
-            time.sleep(self.seconds)
+            if self.gate is not None:
+                self.gate.wait(10)
         return self.real(argv, **kw)
 
 
@@ -97,6 +99,7 @@ def asleep(ready, upstream):
         )
         made["listener"] = W.serve(svc, ("127.0.0.1", 0), max_connections)
         svc.port = made["listener"].server_address[1]
+        svc.listener = made["listener"]
         return svc
 
     ready.start = start
@@ -117,7 +120,8 @@ def send(svc, method="GET", path="/", body=None, headers=None, slug="boatyard", 
 
 
 def test_concurrent_requests_share_one_start_and_get_the_servers_answers(asleep, upstream):
-    slow = Slow(asleep.system, 0.4)
+    gate = threading.Event()
+    slow = Slow(asleep.system, gate)
     svc = asleep.start()
     answers = [None] * 12
 
@@ -133,6 +137,11 @@ def test_concurrent_requests_share_one_start_and_get_the_servers_answers(asleep,
     threads = [threading.Thread(target=one, args=(i,)) for i in range(12)]
     for t in threads:
         t.start()
+    with svc.guard:  # all twelve are held behind the start before it is let finish
+        assert svc.guard.wait_for(lambda: sum(svc.held.values()) == 12, 10), (
+            f"only {sum(svc.held.values())} of 12 requests were held behind the start"
+        )
+    gate.set()
     for t in threads:
         t.join(30)
     assert slow.ups == 1 and svc.starts == 1
@@ -240,18 +249,14 @@ def test_connections_are_capped(asleep):
     svc = asleep.start(max_connections=1)
     idle = socket.create_connection(("127.0.0.1", svc.port))  # holds the only place, sending nothing
     try:
-        time.sleep(0.1)
+        assert svc.listener.wait_open(1, 10), "the server never took the idle connection's place"
         r, data = send(svc, timeout=5)
         assert r.status == 503 and r.getheader("Retry-After") == "5"
     finally:
         idle.close()
-    deadline = time.monotonic() + 5
-    while True:  # the place is free again
-        r, _ = send(svc)
-        if r.status == 201:
-            break
-        assert time.monotonic() < deadline
-        time.sleep(0.05)
+    assert svc.listener.wait_open(0, 10), "the idle connection never gave its place back"
+    r, _ = send(svc)
+    assert r.status == 201
 
 
 def test_a_websocket_wakes_the_company_then_is_asked_to_connect_again(asleep, upstream):

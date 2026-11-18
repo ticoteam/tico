@@ -23,7 +23,6 @@
 .call-card .spacer{flex:1}
 .call-card-join,.call-card-end{flex:none}
 .call-card-link{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
-.call-rec{flex:none;width:8px;height:8px;border-radius:50%;background:var(--fail)}
 
 /* the rail: a green phone at the end of a row whose thread has a live call */
 .tr-call{flex:none;display:inline-flex;color:var(--accent)}
@@ -44,7 +43,6 @@
 .call-ring-x{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;background:transparent;color:var(--muted)}
 .call-ring-x:hover{background:var(--hover);color:var(--ink)}
 .call-ring-join{height:28px;padding:0 12px}
-.call-recorder-link{display:none}
 
 /* a phone: a sheet at the bottom, Dismiss and Join side by side */
 @media (max-width:760px){

@@ -54,6 +54,113 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_credential_adder_backfill_uses_creation_evidence_without_guessing(tmp_path):
+    path = fresh(tmp_path)
+    version = next(m.version for m in migrations.files() if m.version.endswith('_credential_adders'))
+    with sqlite3.connect(path) as c:
+        c.execute('DELETE FROM schema_migrations WHERE version=?', (version,))
+        c.executemany(
+            'INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by,created_by) '
+            "VALUES(?,?,'api_key','now','later','human:rotator',?)",
+            [
+                (key, key, adder)
+                for key, adder in (
+                    ('legacy', None),
+                    ('existing', 'human:original'),
+                    ('ambiguous', ''),
+                    ('computer', None),
+                    ('unattributed', None),
+                )
+            ],
+        )
+        c.executemany(
+            'INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at,credential_id) '
+            "VALUES(?,?,'openai_key','',?,'now','now',?)",
+            [
+                (key, key, adder, key)
+                for key, adder in (('legacy', 'tico'), ('computer', 'tico'), ('existing', 'human:plan-adder'))
+            ],
+        )
+        for action, target, actor in (
+            ('credential.created', 'legacy', 'human:adder'),
+            ('credential.updated', 'legacy', 'human:rotator'),
+            ('credential.created', 'existing', 'human:other'),
+            ('credential.created', 'ambiguous', 'human:adder'),
+            ('credential.created', 'ambiguous', 'human:other'),
+            ('credential.migrated', 'computer', 'runner:computer'),
+            ('credential.created', 'unattributed', 'system'),
+        ):
+            H.event(c, actor, action, target)
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert dict(c.execute('SELECT id,created_by FROM credentials')) == {
+            'legacy': 'human:adder',
+            'existing': 'human:original',
+            'ambiguous': '',
+            'computer': None,
+            'unattributed': None,
+        }
+        assert dict(c.execute('SELECT id,added_by FROM model_subscriptions')) == {
+            'legacy': 'human:adder',
+            'computer': 'tico',
+            'existing': 'human:plan-adder',
+        }
+
+
+def test_moved_credential_adder_backfill_takes_the_one_person_or_bot_who_granted_it(tmp_path):
+    path = fresh(tmp_path)
+    version = next(m.version for m in migrations.files() if m.version.endswith('_moved_credential_adders'))
+    with sqlite3.connect(path) as c:
+        c.execute('DELETE FROM schema_migrations WHERE version=?', (version,))
+        c.executemany(
+            "INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by,created_by) "
+            "VALUES(?,?,?,'now','now','runner:old',?)",
+            [
+                (key, key, kind, adder)
+                for key, kind, adder in (
+                    ('moved', 'api_key', None),
+                    ('moved-blank', 'token', ''),
+                    ('bot-moved', 'api_key', None),
+                    ('existing', 'api_key', 'human:original'),
+                    ('two-granters', 'api_key', None),
+                    ('by-runner', 'api_key', None),
+                    ('by-tico', 'api_key', None),
+                    ('service', 'service', None),
+                    ('ungranted', 'api_key', None),
+                )
+            ],
+        )
+        c.executemany(
+            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,revoked_at) "
+            "VALUES(?,?,?,?,'now',?)",
+            [
+                ('g1', 'moved', 'bot:ops', 'human:mover', None),
+                ('g2', 'moved', 'bot:cpo', 'human:mover', 'later'),
+                ('g3', 'moved-blank', 'bot:ops', 'human:mover', None),
+                ('g4', 'bot-moved', 'bot:ops', 'bot:assistant', None),
+                ('g5', 'existing', 'bot:ops', 'human:mover', None),
+                ('g6', 'two-granters', 'bot:ops', 'human:mover', None),
+                ('g7', 'two-granters', 'bot:cpo', 'human:other', None),
+                ('g8', 'by-runner', 'bot:ops', 'runner:old', None),
+                ('g9', 'by-tico', 'bot:ops', 'tico', None),
+                ('g10', 'service', 'bot:ops', 'human:mover', None),
+            ],
+        )
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert dict(c.execute('SELECT id,created_by FROM credentials')) == {
+            'moved': 'human:mover',
+            'moved-blank': 'human:mover',
+            'bot-moved': 'bot:assistant',
+            'existing': 'human:original',
+            'two-granters': None,
+            'by-runner': None,
+            'by-tico': None,
+            'service': None,
+            'ungranted': None,
+        }
+
+
 def test_a_migration_written_after_the_baseline_runs_on_a_new_file(tmp_path, monkeypatch):
     """The baseline records the files it holds; one it does not (a later PR's) runs on top of it."""
     directory = tmp_path / "migrations"

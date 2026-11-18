@@ -575,7 +575,7 @@ def machine(c, bot):
     online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
-    awake = online and Execution.awake(row["awake_since"], now)
+    awake = online and Execution.awake(row["awake_since"], now, row["platform"])
     # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py). A missing
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
@@ -2652,11 +2652,12 @@ def install_views(app, store, auth, mutate, task_view):
                 and access.get(row["id"], auth.FULL)["see"]
                 and access.get(row["id"], auth.FULL)["write"]
             ]
-            from .credentials import administrator, can_open
+            from .credentials import administrator, can_open, has_removable_loose_key
             from .onboarding import config_view
             from .mail import can_access
 
             admins = store.settings.credential_admins
+            credential_access = can_open(c, who, admins)
             role = auth.company_role(who)
             domains_ = Access.company_domains(c, store.settings, auth.owner_email)
             return {
@@ -2682,7 +2683,8 @@ def install_views(app, store, auth, mutate, task_view):
                 "has_tokens": personal_tokens.has_live(c, who),
                 "proxy_session": who.via_proxy,
                 "sign_in_name": auth.sign_in_name(request.headers) if who.via_proxy else "",
-                "credential_access": bool(can_open(c, who, admins)),
+                "credential_access": credential_access,
+                "credential_remove_access": not credential_access and has_removable_loose_key(c, who),
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),

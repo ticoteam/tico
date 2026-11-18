@@ -382,7 +382,7 @@ def test_per_call_token_reuses_cache_without_writes_but_turn_start_keeps_45_minu
     runner_token(api, "cpo")
     clock = [time.time()]
     gh.clock = lambda: clock[0]
-    monkeypatch.setattr(G.time, "time", lambda: clock[0])
+    monkeypatch.setattr(G, "_now", lambda: clock[0])
 
     started = turn_token(api)
     assert started.status_code == 200, started.text
@@ -453,13 +453,24 @@ def test_concurrent_misses_share_one_mint_without_a_write_lock(api, gh, monkeypa
     store, writes = api.app_state.store, []
     original_transaction = store.transaction
     monkeypatch.setattr(store, "transaction", lambda: writes.append(True) or original_transaction())
-    release, answer = threading.Event(), gh.__call__
+    release, answer, inside = threading.Event(), gh.__call__, threading.Event()
 
     def slow(request):
         if request.url.path.endswith("/access_tokens"):
+            inside.set()
             release.wait(5)
         return answer(request)
 
+    # Counts the callers that reach mint (the real one runs), so the answer waits until all six are in.
+    real_mint, callers, all_callers = service.mint, [], threading.Event()
+
+    def counted_mint(*args, **kwargs):
+        callers.append(True)
+        if len(callers) == 6:
+            all_callers.set()
+        return real_mint(*args, **kwargs)
+
+    monkeypatch.setattr(service, "mint", counted_mint)
     monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(slow))
     mints_before, tokens = len(gh.of("/access_tokens")), []
     threads = [
@@ -468,10 +479,8 @@ def test_concurrent_misses_share_one_mint_without_a_write_lock(api, gh, monkeypa
     ]
     for thread in threads:
         thread.start()
-    deadline = time.time() + 5
-    while len(gh.of("/access_tokens")) == mints_before and time.time() < deadline:
-        time.sleep(0.01)
-    time.sleep(0.1)
+    assert inside.wait(10), "no mint request reached GitHub"
+    assert all_callers.wait(10), f"only {len(callers)} of 6 callers reached mint"
     release.set()
     for thread in threads:
         thread.join(5)

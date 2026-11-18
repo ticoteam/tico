@@ -46,6 +46,8 @@ def ready_waiting(c, runner_id):
 
 MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
+# Queued work its release policy holds (jobs.held): a notice wait, a digest, a routine run before its Due.
+HELD_WAIT = 'a scheduled release'
 
 
 def hold_rows(c, runner_ids):
@@ -568,16 +570,21 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         'on_ice': 'a card On ice',
     }
     for row in c.execute(
-        f"SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,b.state bot_state "
-        "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
+        f"SELECT a.runner_id,j.bot_id,j.held,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,"
+        "b.state bot_state FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
         f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
-        "GROUP BY a.runner_id,j.bot_id",
+        "GROUP BY a.runner_id,j.bot_id,j.held",
         runner_ids,
     ):
         rid = row['runner_id']
         runner = runners.get(rid)
         ready = readiness_document(runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
+        if not why and row['held']:
+            # A notice batch, digest or routine run its release policy holds (backend/wake_presets.py): no claim takes
+            # it before its release, so it is not queued work the computer leaves waiting.
+            add(rid, HELD_WAIT, row['n'], row['oldest'])
+            continue
         if not why and rid in asleep:
             # A sleeping computer cannot refresh its samples. Explain each job's claim hold instead of its last load.
             counted = 0

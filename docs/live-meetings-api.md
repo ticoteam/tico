@@ -1,8 +1,8 @@
-# Live Meetings API and Recorder event contract
+# Live Meetings API
 
-> **Beta**: the Live Meetings API and Recorder work today and may still change. See [Beta features](support.md#beta-features).
+> **Beta**: the Live Meetings API works today and may still change. See [Beta features](support.md#beta-features).
 
-This is Recorder wire contract revision 8 for the Tico Live Meetings API v2 server path in PR #92.
+This is the wire contract for the Tico Live Meetings API v2 server path.
 It handles transcript text only. Raw audio is never sent to or stored by Tico. Request and response
 shapes below are part of the contract; change them only with a reviewed contract update.
 
@@ -44,9 +44,9 @@ shapes below are part of the contract; change them only with a reviewed contract
 ## HTTP routes
 
 All routes are under `/api/v2/live-meetings` and require the same Tico session or token used by the
-signed-in company client. For an authenticated SSE fetch in Recorder's main process, send the human
+signed-in company client. For an authenticated SSE fetch, send the human
 credential in `Authorization: Bearer <credential>` just as for the other API calls. Do not put the
-credential in the URL. The Tico instance is the tenant boundary: a Recorder connected to one
+credential in the URL. The Tico instance is the tenant boundary: a client connected to one
 instance uses that user's credential for this instance only. The connector identity is stored as
 `owner_actor` and owns transcript input, lifecycle control and finalization. Participants can attach
 only bots they can see and contact under the existing org-chart Write permission.
@@ -70,19 +70,19 @@ fields are listed below.
 | `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
 | `POST /api/v2/live-meetings/{id}/bots` | Participant with See and Write access to each bot | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
 | `DELETE /api/v2/live-meetings/{id}/bots/{bot}` | Connector or the person who attached the bot | Send `{}` with an `Idempotency-Key` to remove one attached bot. HTTP 200 is `{"id":"<live-id>","bot":"<slug>","removed":<bool>,"canceled_turns":[<turn-id>,...],"event_id":<meeting-event-id>}`. Repeating the same key/body returns the saved result. Unclaimed/claimed turns are marked skipped as `bot_detached`; queued jobs are canceled; late replies cannot post. Removal is meeting-local and idempotent when the bot is already absent. |
-| `POST /api/v2/live-meetings/{id}/control` | Connector | `{action:"pause"|"disconnect"|"resume"|"end"}`. Pause and disconnect are server-side live-sharing controls: both set Tico state to `paused`, preserve text/chat, suppress new routing, and reject new chunk writes. They do not stop Recorder's local device capture, local recording, or review. Recorder must stop uploading chunks while paused/disconnected; local capture/review behavior remains under Recorder and the person. Reconnect with the same `client_id`; only an explicit `resume` re-enables live chunk writes. End is terminal. |
+| `POST /api/v2/live-meetings/{id}/control` | Connector | `{action:"pause"|"disconnect"|"resume"|"end"}`. Pause and disconnect are server-side live-sharing controls: both set Tico state to `paused`, preserve text/chat, suppress new routing, and reject new chunk writes. The client must stop uploading chunks while paused/disconnected. Reconnect with the same `client_id`; only an explicit `resume` re-enables live chunk writes. End is terminal. |
 | `POST /api/v2/live-meetings/{id}/finalize` | Connector | Finalize an ended meeting with transcript text through the existing meeting import path, using stable source `tico-live` and external id equal to the live meeting id. The transcript enters the connector's `review=pending` person queue and is not automatically shared. HTTP 200 body is exactly `{"id":"<live-id>","meeting_id":"<imported-meeting-id>","existing":<bool>,"changed":<bool>,"event_id":<meeting-event-id>}`. `meeting_id` is the imported Tico meeting id to use when linking reviewed meeting items. Finalization uses latest corrected text. A later finalize call with a fresh idempotency key returns the same `meeting_id` with `existing:true` and `changed:false`; retrying with the same key/body replays the original saved response. |
-| `GET /api/v2/live-meetings/{id}/events?after={event_id}` | Company human, or attached bot | Authenticated SSE replay of persisted meeting events after a monotonically increasing meeting-local id. Recorder's main process must attach its existing Bearer credential. Use `after` or the `Last-Event-ID` header; when a positive `after` is supplied it takes precedence, otherwise `Last-Event-ID` is used. Resume from the last fully processed event id. The server sends keepalives and closes the stream after at most 55 one-second polling cycles; reconnect from the cursor. |
+| `GET /api/v2/live-meetings/{id}/events?after={event_id}` | Company human, or attached bot | Authenticated SSE replay of persisted meeting events after a monotonically increasing meeting-local id. The client must attach its Bearer credential. Use `after` or the `Last-Event-ID` header; when a positive `after` is supplied it takes precedence, otherwise `Last-Event-ID` is used. Resume from the last fully processed event id. The server sends keepalives and closes the stream after at most 55 one-second polling cycles; reconnect from the cursor. |
 | `GET /api/v2/live-meetings/{id}/turns` | Attached bot | Pull pending turns, and turns this bot claimed through this API and has not answered (`status:"claimed"`), with their meeting-scoped transcript/chat context, for clients that execute meeting turns directly. A client that lost a claim's answer or restarted finds its claim here; a turn the bot's runner holds is not listed. |
 | `POST /api/v2/live-meetings/{id}/turns/{turn_id}/claim` | Turn's bot | Claim a pending turn before composing a reply through the meeting API. HTTP 200 is `{"id":"<turn-id>","status":"claimed","by":"direct"}`; claiming again returns the same claim. A turn has one owner: the runner job whose lease claimed it, or the bot's direct client. Claiming or replying to a turn the other holds returns `409` with `error.code = "turn_claimed"`, and a runner lease that meets a directly claimed turn cancels its job. A direct claim with no reply within 5 minutes is abandoned: the turn is skipped as `claim_abandoned` (never run again, since it may have acted), the bot is free for its next invitation, and a later reply returns `409`; current meeting access is checked before a fresh claim or cached receipt (403 for an unattached team-meeting bot, 404 for an unreadable private meeting). If the still-readable turn ended or lost its attaching human's Write authority before claim, it is durably skipped and returns `{"id":"<turn-id>","status":"skipped","reason":"<reason>"}`. |
 
-Initial Recorder setup calls connect once with a stable client id, then sends initial transcript
+A client's initial setup calls connect once with a stable client id, then sends initial transcript
 and later transcript segments through the same ordered chunk route. A retry reuses the same client
 id, chunk sequence, and idempotency key/body pair. Corrections use a new revision number; they never
 replace the history of a previously acknowledged chunk. A person's edit of a line already shared live is
 sent the same way, as that line's next revision with the new text. Removing a line sends the text `[removed]`,
 which Tico shows in place of the line; editing a removed line sends its text again and brings it back. A person's
-edit is kept against later automatic corrections from the finished audio. Recorder refuses edits while Send
+edit is kept against later automatic corrections from the finished audio. A client should refuse edits while Send
 runs for the meeting, even if Tico still shows it live or paused, and once the meeting has ended in Tico. Event IDs
 are monotonic per meeting and each event is committed with the state change it describes. Reconnect from the last fully processed id to
 replay without gaps or duplicate effects.
@@ -112,13 +112,8 @@ silence is answered. A late chunk, one whose `start_ms` falls inside a window al
 the next window that is open (opened if need be), once: its window's `chunk_range` names it, and no earlier window
 takes it again. Corrections (`/chunks/{seq}/corrections`) never route anything.
 
-`client` is optional on connect: omit it (or send null) for an unnamed connector, or use
-`"tico-recorder"`. Any other value is a validation error. The meeting view always includes
-`client` as `"tico-recorder"` or null. It is fixed at creation: reconnecting with an existing
-`client_id` returns that meeting unchanged. Finalize carries it into the filed meeting's metadata.
-Live now and the filed meeting show "From Tico Recorder" for that client. Existing meetings
-have null provenance. Visibility still defaults to `team`; event schemas and all other routes
-are unchanged.
+`client` is optional on connect and must be omitted or null. Any other value is a validation error. Reconnecting with
+an existing `client_id` returns that meeting unchanged. Visibility defaults to `team`.
 
 The stable UI link for Open in Tico is `<instance-base>/#/meetings?live=<id>` (URL-encode the
 meeting id). It selects the meeting directly, including an ended meeting. The link grants no
@@ -271,9 +266,8 @@ rehearsal mode, routing records a hidden PASS without calling a decision provide
 ## Replay and lifecycle
 
 Replay uses synthetic transcript chunks with the same sequence and router timestamps as production;
-no audio is involved. The Recorder can resume SSE by event id and can safely retry a chunk after a
-network loss. Pause/disconnect stop *server live sharing* while preserving received text; they do not
-stop or delete local device capture, local recording, or local review. Recorder must not stream new
+no audio is involved. A client can resume SSE by event id and can safely retry a chunk after a
+network loss. Pause/disconnect stop *server live sharing* while preserving received text. A client must not stream new
 chunks while Tico is paused. Resume is an explicit user/server control that permits uploads to
 continue from the last acknowledged sequence. End prevents new chunks, marks pending or claimed bot
 turns as skipped, cancels queued runner jobs, and records the unprocessed final window as a hidden
@@ -282,27 +276,14 @@ as a hidden PASS and cannot dispatch new turns. It then allows one stable import
 `recording_source_refs(source, resource_type, external_id)` uniqueness
 remains the finalization idempotency boundary.
 
-Recorder integration requirements remain client-side and are not claimed as implemented by PR #92:
-after a connected capture ends, final Send must use only the `meeting_id` returned by finalize, include
-the latest corrected transcript, and preserve reviewed-action receipts/idempotency when linking
-reviewed meeting items. A capture that never connected to Tico must keep its existing multi-instance
-Send flow unchanged. These rules do not add automatic meeting-item creation, external posts, or
-unreviewed action items to the server API.
-
-This contract is the PR #92 Recorder handoff for review; it does not claim that Recorder has
-integrated these behaviors or that PR #92 has shipped. Any implementation-specific shape change must
-be reviewed with Engineering Lead before Recorder ships against it.
-
 
 ## Live screen and meeting links
 
 Meeting views include `link`, an absolute browser URL under the server's public origin:
 `/#/meetings/live/{id}`. This works after sign-in and for ended meetings. A private link grants
 no access; add the intended people explicitly. `/#/meetings?live={id}` redirects to this route.
-`GET /api/v2/recorder/browser` returns `{url: public_url}` for a signed-in human so Recorder can
-link filed meetings/tasks without sending people to an API-only runner hostname.
 
-The macOS Recorder can share a selected window/display as JPEG frames, at most 5 fps and
+A client can share a selected window/display as JPEG frames, at most 5 fps and
 1920 pixels per edge. This is intended for documents and slides. It sends no audio or camera
 video and gives bots no image access. Images live only in process memory (one latest frame
 per meeting, at most 32 meetings and 2 per owner) and are excluded from SQLite, idempotency receipts and SSE.

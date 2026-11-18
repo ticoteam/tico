@@ -1,0 +1,5 @@
+{
+  "ui/tests/org-rules.cts": {
+    "no-fixed-wait-ui": 1
+  }
+}
