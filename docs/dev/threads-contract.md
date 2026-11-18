@@ -547,7 +547,7 @@ first:
 
 SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...]}`, rendered per viewer, to the root's readers
 (`bots` only to a stream whose `?thread=` is under that root; the others get the event without it) whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
-every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
+every 1 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
 (`thread_bot_status.send_trailing`).
 
 ## 5. C4: order and read state
