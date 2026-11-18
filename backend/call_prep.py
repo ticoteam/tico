@@ -26,6 +26,7 @@ did not reach wait for the next minute, so the heartbeat is never held up.
 
 import logging
 import threading
+import weakref
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -67,7 +68,7 @@ class Prep:
         self.unread: dict[str, int] = {}  # call_id -> passes in a row its event could not be read
         self.following: list[threading.Thread] = []
         with store.read() as c:
-            calendar_events.CALL_FOLLOWERS[str(H._main_path(c))] = self.follow
+            calendar_events.CALL_FOLLOWERS[str(H._main_path(c))] = weakref.WeakMethod(self.follow)
 
     def sweep(self) -> dict[str, int]:
         """One pass (the scheduler's, every minute): the scheduled calls due their prep, or past their end. Calls still
