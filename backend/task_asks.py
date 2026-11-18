@@ -105,6 +105,18 @@ def _proposal_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") 
     return module.ok_given(conn, grant, ctx)
 
 
+def _growth_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import growth_proposals
+
+    return growth_proposals.ok_given(conn, grant, ctx)
+
+
+def _growth_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import growth_proposals
+
+    return growth_proposals.may_ok(conn, person, grant)
+
+
 def _edition_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
     from .company_page import editions
 
@@ -187,6 +199,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "board": _board_ok,
     "email_send": _email_ok,
     "finance": _finance_ok,
+    "growth": _growth_ok,
     "letter": _letter_ok,
     "proposal": _proposal_ok,
     "support": _support_ok,
@@ -194,7 +207,18 @@ ON_OK: dict[str, Callable[..., object]] = {
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
 # (POST /api/v2/oks/{id}/use) never name one.
-OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish", "finance")
+OWNED = (
+    "email_send",
+    "letter",
+    "edition",
+    "board",
+    "proposal",
+    "support",
+    "webhook",
+    "publish",
+    "finance",
+    "growth",
+)
 
 # Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
 # words, or None when `person` may. Checked when the OK is given and again when it is used. An OWNED kind that is not
@@ -205,6 +229,7 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
     "board": _edition_may_ok,
     "edition": _edition_may_ok,
     "proposal": _proposal_may_ok,
+    "growth": _growth_may_ok,
     "file": _file_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
@@ -248,6 +273,7 @@ FILED_TITLES: dict[str, str] = {
     "webhook": "Make a webhook endpoint",
     "publish": "Publish to the roadmap",
     "finance": "OK a Finance action",
+    "growth": "Add to Growth",
 }
 
 

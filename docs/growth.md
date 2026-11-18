@@ -394,6 +394,16 @@ Every Growth read carries `you_may`: per action, what this caller may do: change
 any channel (`channels`), add or change sources (`sources`), record months (`months`). `channels` false does not stop a
 bot that owns a channel changing that channel's why, stage and budget. Each setup write (settings, a channel, a source,
 a month) answers with `setup` too, so the next step follows without another read.
+A bot may not add a channel or source, but it may **propose** one it will own: `tico growth channel propose <slug>
+--name "..."` (with `--source-system`, `--source-truth-for` and the other `--source-*` flags for the source of its
+numbers) or `tico growth source propose --channel <slug> ...` for a channel it already runs (`POST
+/api/v2/growth/proposals`). It is an OK asked of the owner, or of an admin named with `--ask`, that they give from its
+preview in Needs you. Nothing is added before that; on the OK, Tico checks it all again, adds the channel and source as
+that person, owned by the bot (the channel names the new source), and sends the bot a notice with what was added. A No
+adds nothing and the bot hears why. A bot never proposes another owner, a channel already added or already waiting, or
+a Finance ad spend source (a person connects it). While the next setup step is a channel or a source, a bot's `setup`
+says so under `you_may_propose`, with the command, the tool and who OKs it.
+
 `may_edit` stays as it was: in `channel list`, `source list` and `settings` it is "may change channels, sources and
 settings"; in `numbers` it is "may record months".
 
@@ -405,10 +415,10 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 ```
 tico growth numbers                       the page: each month's rows, Unknown and the totals
 tico growth setup                         the four first-run steps, each done or not, and the next one
-tico growth channel list | show SLUG | add | update SLUG | retire SLUG
+tico growth channel list | show SLUG | add | propose SLUG | update SLUG | retire SLUG
 tico growth channel update SLUG --input-kpi KPI_ID the KPI the channel moves (its target stays on its goal)
 tico growth segment show LABEL            one segment's 6 months from customer facts
-tico growth source list | add | update ID | retire ID
+tico growth source list | add | propose | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
 tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN
 tico growth source push ID --file FILE.csv | sync ID | run ID
