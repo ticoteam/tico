@@ -14,7 +14,8 @@ const GRS_ASK = 'Help me set up Growth.';
 // The row's state: the page it is on and whether Growth is set up (null until read).
 let GRS: {state: GrowthState; done: boolean | null; seq: number} | null = null;
 
-const grsBot = () => { const b = botByRef(GRS_BOT); return b && b.status !== 'archived' ? b : null; };
+// No row for a viewer who may not chat with it: Chat and Call would only fail.
+const grsBot = () => { const b = botByRef(GRS_BOT); return b && b.status !== 'archived' && b.can_chat !== false ? b : null; };
 
 function grsRowHTML(done: boolean | null) {
   const bot = grsBot();
@@ -61,11 +62,15 @@ async function grStartRead(state: GrowthState) {
 async function grsChat() {
   const bot = grsBot();
   if (!bot) return;
+  if (GRS && GRS.done === null) {   // clicked before the setup read came back: read it now, so the first ask is sent
+    try { GRS.done = !!(await get<{done?: boolean}>('/v2/growth/setup', {fresh: true})).done; }
+    catch { /* unknown: open the chat without the ask */ }
+  }
   if (GRS?.done === false) {
     try { await post(`/v2/chat/${encodeURIComponent(GRS_BOT)}`, {text: GRS_ASK}); }
     catch (e) { toast(errorMessage(e, 'Not sent'), true); return; }
   }
-  location.hash = '#/bot/' + encodeURIComponent(bot.id);
+  location.hash = '#/bot/' + encodeURIComponent(bot.id) + '/dm';   // the private chat, never the bot's Home
 }
 
 // Call: a voice call with the Growth Manager (callBot, ui/app/thread-call.ts).

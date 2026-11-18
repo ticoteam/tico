@@ -722,7 +722,7 @@ async function shot(page: Page, name: string) {
       await row(page).locator('[data-grs-call]').click();
       await page.waitForFunction(() => document.body.dataset.called === 'growth-manager');
       await row(page).locator('[data-grs-chat]').click();
-      await page.waitForFunction(() => location.hash === '#/bot/growth-manager');
+      await page.waitForFunction(() => location.hash === '#/bot/growth-manager/dm');
       assert.deepEqual(fake.writes.filter(w => w[1] === '/api/v2/chat/growth-manager').map(w => w[2]), [{text: 'Help me set up Growth.'}]);
       assert.deepEqual(errors, []);
       await page.close();
@@ -733,7 +733,7 @@ async function shot(page: Page, name: string) {
       await page.locator('#gr-start.grs-won').waitFor();
       assert.equal(await row(page).locator('.grs-l').count(), 0);
       await row(page).locator('[data-grs-chat]').click();
-      await page.waitForFunction(() => location.hash === '#/bot/growth-manager');
+      await page.waitForFunction(() => location.hash === '#/bot/growth-manager/dm');
       assert.equal(fake.writes.filter(w => w[1] === '/api/v2/chat/growth-manager').length, 0);
       assert.deepEqual(errors, []);
       await page.close();

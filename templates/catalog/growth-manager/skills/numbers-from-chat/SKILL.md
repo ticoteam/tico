@@ -13,16 +13,18 @@ description: Turn what someone said (a chat reply, a pasted sheet, a screenshot,
      dashes. Unknown is not a channel.
    - A month: `tico growth cohort set --channel <slug> --month <YYYY-MM> --spend <dollars> --new <count>`. Leave
      `--quality actual` off unless they read it from a system ("from the Stripe report": actual;
-     "about 30": estimate).
+     "about 30": estimate). `--quality` marks the whole month, so leave it off while any other
+     number for that channel and month is still an estimate.
    - Revenue per customer and margin: `tico growth settings --set revenue_month=N --set margin_pct=N`.
    - A KPI reading: `tico kpi log <kpi id> <value> "<who said it>" --period-end YYYY-MM-DD`, with
-     `--estimate` for a guess.
+     `--estimate` for a guess. If it is refused (not your KPI), send the number to the KPI's owner
+     in chat instead.
    - Where it came from: the first number a person gives for a channel names them as its source,
-     `tico growth source add --truth-for "<what>" --system "<their name>" --reach-kind person`, then
+     `tico growth source add --truth-for "<what>" --system "<their name>" --reach-kind person --reach-ref <their person id>`, then
      `tico growth channel update <slug> --source <id>`.
 4. Never change a number Tico computed, and never overwrite a typed actual with an estimate. A
    number that disagrees with its source: ask the person who typed it which is right, then
-   `tico growth cohort resolve`.
+   `tico growth cohort resolve --channel <slug> --month <YYYY-MM> --field <field> --keep <typed|source>`.
 5. Read back in one line what you saved, with "estimate" where it is one. Ask for nothing else in
    that line.
 
