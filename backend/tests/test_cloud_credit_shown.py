@@ -90,6 +90,37 @@ def test_a_frozen_company_stops_its_cloud_bots_too(environment, monkeypatch):
     assert _shown(api)["access"] == "open"
 
 
+def test_a_credit_mark_left_after_credit_returned_clears_at_the_next_look(environment, monkeypatch):
+    # TIDY, Nov 17: a look stamped every bot's own row out_of_credit while frozen; credit returned before the clear on
+    # recovery shipped, and HQ has said open since, so no recovery comes again. The bots run on the shared machine,
+    # so their own rows never start, and every page said Out of credit with $160 left.
+    api = _cloud_company(environment, monkeypatch)
+    store, manager = api.app.state.store, api.app.state.cloud_machines
+    with store.transaction() as c:
+        c.execute("INSERT INTO cloud_machines(bot, mode, state) VALUES('botops', 'cloud', 'none') ON CONFLICT(bot) DO NOTHING")
+        c.execute("UPDATE cloud_machines SET problem='out_of_credit', problem_at='2026-11-17T13:29:52Z'")
+        # A 402 still backing off keeps its mark: HQ refused that machine, and it is asked again later.
+        c.execute("UPDATE cloud_machines SET next_try_at=? WHERE bot='_shared'", (2**40,))
+    assert _shown(api)["access"] == "frozen"
+    manager.tick()
+    with store.read() as c:
+        marks = dict(c.execute("SELECT bot, problem FROM cloud_machines").fetchall())
+    assert marks["botops"] == "" and marks["_shared"] == "out_of_credit"
+    with store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET next_try_at=NULL WHERE bot='_shared'")
+    manager.tick()
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM cloud_machines WHERE problem='out_of_credit'").fetchone()[0] == 0
+    assert _shown(api)["access"] == "open"
+    # While HQ says frozen, a look keeps (and makes) the mark.
+    cloud_access.apply(store, cloud_access.parse(signals("frozen", "out_of_credit")))
+    with store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem='out_of_credit' WHERE bot='botops'")
+    manager.tick()
+    with store.read() as c:
+        assert c.execute("SELECT problem FROM cloud_machines WHERE bot='botops'").fetchone()[0] == "out_of_credit"
+
+
 def _at(hours):
     return (datetime(2026, 11, 17, tzinfo=timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 

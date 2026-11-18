@@ -1963,6 +1963,20 @@ class Manager:
         elif problem is None and not action and current["problem"].startswith("error:"):
             with self.store.transaction() as c:  # a look that ran clean again
                 save(c, key, problem="", problem_at=None)
+        elif (
+            problem is None
+            and not action
+            and current is not None
+            and current["problem"] == "out_of_credit"
+            and not found["frozen"]
+            and not (current["next_try_at"] and at < current["next_try_at"])
+        ):
+            # Not frozen, no 402 still backing off, nothing to start: nothing is stopped for credit, so the mark goes
+            # (`credit_refused` would keep every page on Out of credit). Credit landing clears these at once
+            # (cloud_access.apply); this clears what that missed: a mark a look made from a frozen read just after the
+            # clear, or one older than the clear (an idle bot's own row on the shared machine is never started).
+            with self.store.transaction() as c:
+                save(c, key, problem="", problem_at=None, next_try_at=None)
         if action:
             self.act(hq, current, action, found, at)
         return action
