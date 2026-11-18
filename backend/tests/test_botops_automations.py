@@ -4,6 +4,8 @@ said on. Asked by a bot it has only that bot's rights, so where the bot may not 
 version a person turns on. Ana owns the company, Cara is a member (the base fixture).
 """
 
+import json
+
 from backend import botops_act
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (fixture)
@@ -196,6 +198,18 @@ def test_a_card_never_shows_a_task_the_person_may_not_read_or_fails_on_a_gone_au
     assert why.startswith("BotOps asked while working for Ana."), why
     assert "Ana's private plan" not in why
     assert said == "Delete the automation gone", said
+
+
+def test_a_delete_of_a_gone_automation_is_refused_with_no_card(api, botops):
+    """Spec AC-4 as corrected: deleting an automation already gone is refused at once, through the same path that
+    makes cards, and leaves no card behind for the person to confirm."""
+    attempt = turn(api, botops, person="cara-test", text="Delete my receipts automation")
+    with api.app.state.store.transaction() as c:
+        before = c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0]
+    err, said = mcp(api, "tico_automation_delete", {"id": "gone"}, attempt["token"])
+    assert err and "No such automation" in json.dumps(said), said
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == before
 
 
 def test_a_card_says_why_by_its_rule_and_never_calls_a_gone_task_a_chat(api, botops):
