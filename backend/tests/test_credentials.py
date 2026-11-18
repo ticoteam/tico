@@ -198,6 +198,35 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
         assert 'PostHog' in event and 'synthetic-private' not in event and 'ciphertext' not in event
 
 
+def test_member_removes_a_credential_they_stored_without_a_grant_to_read_it(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='cpo'")
+    cid = member_stores(api, 'cpo', 'POSTHOG_API_KEY', 'phx-member-owned-value-123456')['id']
+    [item] = get(api, 'credentials', 'cara-test')['credentials']
+    assert item['id'] == cid and item['can_remove'] and not item['can_reveal']
+    assert api.delete(f'/api/v2/credentials/{cid}', headers=headers('cara-test')).json()['deleted']
+    with api.app.state.store.read() as c:
+        assert not c.execute('SELECT 1 FROM credentials WHERE id=?', (cid,)).fetchone()
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='credential.deleted' AND target=?", (cid,)).fetchone()[0]
+            == 'human:cara'
+        )
+
+
+def test_demoted_adder_can_list_and_remove_a_loose_password_without_seeing_its_value(api):
+    setup(api)
+    cid = post(
+        api, 'credentials', {'name': 'Acme account', 'kind': 'password', 'secret': 'stored-password'}, 'ben-test'
+    )['id']
+    api.app.state.store.settings.credential_admins = ('ana@acme.example',)
+    [item] = get(api, 'credentials', 'ben-test')['credentials']
+    assert item['id'] == cid and item['tool_id'] is None and item['remove_only'] and not item['can_reveal']
+    assert 'preview' not in item and 'username' not in item and item['grants'] == []
+    get(api, 'credentials', 'cara-test', expected=403)
+    assert api.delete(f'/api/v2/credentials/{cid}', headers=headers('ben-test')).json()['deleted']
+
+
 def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(api):
     setup(api)
     from backend.credentials import FILE_MIGRATION

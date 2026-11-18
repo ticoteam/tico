@@ -77,6 +77,31 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     assert len(get(api, f"api-tools/{tid}")["access"]) == 2
 
 
+def test_a_demoted_key_adder_can_remove_a_rotated_key_only_while_the_tool_is_visible(api):
+    setup(api)
+    tid = tool(api)["id"]
+    cid = key(api, tid, SECRET_RW, token="ben-test")["id"]
+    path = f"/api/v2/api-tools/{tid}/keys/{cid}"
+    assert api.patch(path, headers=headers(), json={"value": SECRET_RW + "rotated"}).status_code == 200
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    assert api.delete(path, headers=headers("ben-test")).status_code == 404
+    assert api.delete(f"/api/v2/credentials/{cid}", headers=headers("ben-test")).status_code == 403
+
+    r = api.patch(f"/api/v2/api-tools/{tid}", headers=headers(), json={"audience": {"people": ["ben", "cara"]}})
+    assert r.status_code == 200, r.text
+    page = get(api, f"api-tools/{tid}", "ben-test")
+    assert not page["can_manage"] and page["keys"][0]["can_remove"] and not page["keys"][0]["preview"]
+    assert not get(api, f"api-tools/{tid}", "cara-test")["keys"][0]["can_remove"]
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert get(api, f"api-tools/{tid}")["keys"][0]["id"] == cid
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    with api.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
+
+
 def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
     setup(api)
     tid = tool(api)["id"]

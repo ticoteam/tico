@@ -59,7 +59,7 @@ def test_every_tools_write_route_is_a_command_and_an_mcp_tool_or_a_persons_own_t
         assert name in commands, f"{name} ({route}) has no `tico` command"
     # The offered list is what an agent sees: every mapped tool is offered to a person and to a bot (the Tools Owner).
     offered = {t["name"] for t in hubtools.listing(local=True, kind="bot")}
-    assert set(tools_admin.ROUTES.values()) - {"tico_credential_import", "tico_credential_delete"} <= offered
+    assert set(tools_admin.ROUTES.values()) - {"tico_credential_import"} <= offered
 
 
 class Recorder:

@@ -234,15 +234,48 @@ def usable(c, who, credential, admins):
     return permitted(c, who, credential, admins) or _owns(c, who, row)
 
 
-def signed_in_person(who):
-    """A person at their own session: not a bot, a computer, an agent token, a run, support, BotOps or the Assistant."""
+def signed_in_person(who, *, allow_personal_token=False):
+    """A person acting directly, with personal tokens accepted only where explicitly allowed."""
     return who.role in ('human', 'owner') and not (
         who.via
-        or who.via_token
+        or (who.via_token and not allow_personal_token)
         or who.attempt_id
+        or getattr(who, 'task_actor', '')
         or who.agent
         or getattr(who, 'scope', None)
         or getattr(who, 'support', None)
+    )
+
+
+def may_remove(who, added_by, *, manages=False):
+    """Removal rights on a visible credential. Rotation changes the value and leaves its original adder recorded."""
+    if manages:
+        return True
+    if not added_by or added_by != who.actor or who.view:
+        return False
+    return signed_in_person(who, allow_personal_token=True) or (
+        who.role == 'bot' and who.actor.startswith('bot:') and not (who.via or who.task_actor or who.support)
+    )
+
+
+def adder_may_remove(c, who, row, admins, auth):
+    """The extra removal right in the vault, where a credential can have a tool or be stored on its own."""
+    from . import api_tools
+
+    return may_remove(who, row['created_by']) and (
+        not row['tool_id'] or api_tools.visible(c, who, row['tool_id'], admins, auth)
+    )
+
+
+def has_removable_loose_key(c, who):
+    """Whether Tools can show an independently stored credential with only its removal action."""
+    return (
+        may_remove(who, who.actor)
+        and c.execute(
+            "SELECT 1 FROM credentials WHERE tool_id IS NULL AND created_by=? AND kind NOT IN ('login','service') LIMIT 1",
+            (who.actor,),
+        ).fetchone()
+        is not None
     )
 
 
@@ -1239,16 +1272,19 @@ def install_credentials(app, store, delegate=None, propose=None):
         who = acting(request, None, on_behalf_of) if on_behalf_of else request.state.identity
         with store.read() as c:
             if who.role == 'bot' and not on_behalf_of and str(who.actor).startswith('bot:'):
-                # A bot sees the names and env names of what it is granted (granted: the same rule a run's values
-                # follow), so it can check they reach its turn. No preview, no other subject's grants, no people.
+                # A bot sees the names and env names of what it is granted or may remove, with no preview or grants.
                 ids = granted(c, who.actor)
-                mine = [
-                    {k: v for k, v in vault.brief(row).items() if k != 'preview'} | {'can_reveal': False, 'grants': []}
-                    for row in c.execute(
-                        "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
-                    )
-                    if row['id'] in ids
-                ]
+                mine = []
+                for row in c.execute(
+                    "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
+                ):
+                    remove = adder_may_remove(c, who, row, vault.admins, vault.auth)
+                    if remove or row['id'] in ids:
+                        mine.append(
+                            {k: v for k, v in vault.brief(row).items() if k != 'preview'}
+                            | {'can_reveal': False, 'can_remove': remove, 'grants': []}
+                            | ({'tool_id': row['tool_id']} if remove else {})
+                        )
                 return {
                     'credentials': mine,
                     'can_manage': False,
@@ -1258,15 +1294,16 @@ def install_credentials(app, store, delegate=None, propose=None):
                     'configured': vault.configured,
                     'key_storage': vault.cipher.storage,
                 }
-            if who.role not in ('human', 'owner') or not can_open(c, who, vault.admins):
+            if who.role not in ('human', 'owner'):
                 raise Problem(
                     'forbidden', ask_admin_detail(c, vault.admins, 'share credentials, or grant you access to one'), 403
                 )
             admin = administrator(c, who, vault.admins)
+            open_vault = can_open(c, who, vault.admins)
             rows, added, own = [], False, owned(c, who)
             from . import api_tools
 
-            hidden = api_tools.hidden_keys(c, who, vault.admins)  # keys of tools this person may not see
+            hidden = api_tools.hidden_keys(c, who, vault.admins, vault.auth)  # keys of tools this person may not see
             # A website account is listed on its website tool (backend/website_tools.py), never here.
             for row in c.execute(
                 "SELECT * FROM credentials WHERE kind NOT IN ('login','service') ORDER BY lower(name),id"
@@ -1275,13 +1312,27 @@ def install_credentials(app, store, delegate=None, propose=None):
                     continue
                 # A credential this person added is listed for sharing (its grants too), never revealed unless granted.
                 mine = row['id'] in own
-                revealable = permitted(c, who, row['id'], vault.admins)
+                revealable = open_vault and permitted(c, who, row['id'], vault.admins)
+                remove = admin or adder_may_remove(c, who, row, vault.admins, vault.auth)
                 if not (revealable or mine):
+                    if remove:
+                        rows.append(
+                            {k: row[k] for k in ('id', 'name', 'kind', 'env', 'tool_id')}
+                            | {
+                                'stored': row['ciphertext'] is not None,
+                                'can_reveal': False,
+                                'can_remove': True,
+                                'remove_only': True,
+                                'grants': [],
+                            }
+                        )
                     continue
                 added |= mine
                 # tool_id: the API tool that holds it as a key, so Tools lists it on that tool, not as a loose key.
                 item = (
-                    vault.brief(row) | {'can_reveal': revealable, 'tool_id': row['tool_id']} | last_used(c, row['id'])
+                    vault.brief(row)
+                    | {'can_reveal': revealable, 'can_remove': remove, 'tool_id': row['tool_id']}
+                    | last_used(c, row['id'])
                 )
                 item['grants'] = [
                     dict(g)
@@ -1299,6 +1350,10 @@ def install_credentials(app, store, delegate=None, propose=None):
                     and (admin or mine or g['subject'] == who.actor or g['granted_by'] == who.actor)
                 ]
                 rows.append(item)
+            if not rows and not open_vault:
+                raise Problem(
+                    'forbidden', ask_admin_detail(c, vault.admins, 'share credentials, or grant you access to one'), 403
+                )
             people = [dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []
             bots = [
                 dict(r)
@@ -1423,10 +1478,18 @@ def install_credentials(app, store, delegate=None, propose=None):
         who = request.state.identity
         with store.transaction() as c:
             validate_identity(c, who)
-            TA.require(c, who, TA.key(), action=TA.DELETE, admins=vault.admins, auth=vault.auth)
-            require_seen(c, who, cid, vault.admins)
             from . import api_tools
 
+            if not TA.admin(c, who, vault.admins):
+                candidate = c.execute('SELECT * FROM credentials WHERE id=? AND kind!=?', (cid, SERVICE)).fetchone()
+                if candidate is None or not adder_may_remove(c, who, candidate, vault.admins, vault.auth):
+                    TA.require(c, who, TA.key(), action=TA.DELETE, admins=vault.admins, auth=vault.auth)
+                elif candidate['kind'] == LOGIN:
+                    from .website_tools import delete_account
+
+                    return delete_account(c, who, candidate['tool_id'], cid, vault.admins, vault.auth)
+            elif api_tools.key_hidden(c, who, cid, vault.admins, vault.auth):
+                raise Problem('not_found', 'Credential not found', 404)
             api_tools.refuse_finance_key(c, [cid])  # a Finance source still reads it (409 key_in_use)
             row = vault.row(c, cid)
             from .model_subscriptions import before_delete

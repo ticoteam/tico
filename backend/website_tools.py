@@ -253,7 +253,7 @@ def _require_admin(c: Any, who: Any, admins: Iterable[str]) -> None:
 
 
 def _may_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = None, auth: Any = None) -> bool:
-    """Replace or remove this account (backend/tool_access.py): a credential administrator, or its holder (a person, or
+    """Replace this account (backend/tool_access.py): a credential administrator, or its holder (a person, or
     a person who manages the bot that holds it)."""
     return TA.may_change_access(c, who, TA.account(account), action=TA.EDIT, admins=_admins(admins), auth=_auth(auth))
 
@@ -758,12 +758,29 @@ def _access(c: Any, account: Any, users: list[str], label: dict[str, str], group
 def _account_view(
     c: Any, who: Any, account: Any, admin: bool, label: dict[str, str], admins: Iterable[str] | None, auth: Any
 ) -> dict[str, Any] | None:
-    """An account as the caller may see it, or None: a non-admin sees only the accounts they use or manage."""
+    """An account as the caller may see it, or the minimum needed to remove one they added."""
     uses = can_use(c, who.actor, account)
     manages = _may_manage(c, who, account, admins, auth)
-    if not (admin or uses or manages):
-        return None
+    removes = bool(vaults.may_remove(who, account["created_by"], manages=manages))
     holder = account["holder"] or None
+    if not (admin or uses or manages):
+        return (
+            {
+                "id": account["id"],
+                "kind": "own" if holder else "shared",
+                "has_password": False,
+                "has_totp": False,
+                "all_bots": False,
+                "holder": None,
+                "access": [],
+                "session": {"state": "unknown"},
+                "can_use": False,
+                "can_manage": False,
+                "can_remove": True,
+            }
+            if removes
+            else None
+        )
     users = _users(c, account)
     if not admin and not holder:
         # A member sees themselves and the grants they made, as on an API tool.
@@ -788,6 +805,7 @@ def _account_view(
         "session": _session(c, account["id"]),
         "can_use": uses,
         "can_manage": manages,
+        "can_remove": removes,
     }
     if _machine(who):
         del out["username"]  # a bot signs in with `tico login fill`; it never needs to read the username
@@ -1225,15 +1243,10 @@ def update_account(
 def delete_account(c: Any, who: Any, tool_id: str, account_id: str, admins: Iterable[str], auth: Any) -> dict[str, Any]:
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
-    TA.require(
-        c,
-        who,
-        TA.account(account),
-        action=TA.DELETE,
-        admins=admins,
-        auth=_auth(auth),
-        refused="Ask a credential administrator or the account's holder to remove this account.",
-    )
+    if not vaults.may_remove(who, account["created_by"], manages=_may_manage(c, who, account, admins, auth)):
+        raise Problem(
+            "forbidden", "Ask a credential administrator or the account's holder to remove this account.", 403
+        )
     api_tools._drop_key(c, who, account["id"])
     _close(str(account["id"]))
     with _spent_lock:
@@ -1527,7 +1540,12 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
 
     @app.delete(
         "/api/v2/website-tools/{tool_id}/accounts/{account_id}",
-        **api_v2("Tools", "deleteWebsiteAccount", "Remove an account and its grants", "WebsiteDeleted"),
+        **api_v2(
+            "Tools",
+            "deleteWebsiteAccount",
+            "Remove an account and its grants (its adder or anyone who can manage the account)",
+            "WebsiteDeleted",
+        ),
     )
     def delete_website_account(request: Request, tool_id: str, account_id: str) -> Any:
         return plain(request, lambda c, who: delete_account(c, who, tool_id, account_id, admins(), auth))

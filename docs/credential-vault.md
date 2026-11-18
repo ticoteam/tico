@@ -479,9 +479,11 @@ breaks the `op://` form; reference it by its item id.
 
 ## Delete a Credential
 
-A Credential administrator can choose **Delete** in Credentials, use `tico credential delete <name>`, or call
-`DELETE /api/v2/credentials/<id>`. Deletion erases the encrypted value and all grants together. History records names and
-variable names only. Revocation removes access while keeping the stored value; deletion removes the Credential itself.
+The person or bot that added a credential can remove it while they can still see its tool, including after someone
+else rotates it. This also applies to independently stored credentials and website accounts. Credential administrators
+can remove credentials they manage. Use **Remove** on the tool, **Delete** on a standalone key, or
+`tico credential delete <name>` for a key in the vault. Deletion erases the encrypted value and grants, and the audit
+event records who removed it and the credential's identifying metadata.
 
 **Every computer (signs models in)** is available only for stored model API keys and tokens whose explicit or inferred variable is
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`. Those names infer a blank variable;

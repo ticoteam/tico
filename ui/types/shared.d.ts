@@ -45,6 +45,7 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
   registered?: boolean;
   bot_admin?: boolean;
   credential_access?: boolean;
+  credential_remove_access?: boolean;
   credential_admin?: boolean;
   mail_access?: boolean;
   mover?: boolean;

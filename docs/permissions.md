@@ -407,6 +407,7 @@ credential stops being the member's once someone else saves a new value for it o
 their bots** off. Giving it to a bot with co-owners puts the value in every co-owner's runs of that bot. A human who holds a
 credential may also delegate it to a bot they own or run, directly or through BotOps. Revoking the human's grant removes the
 delegated bot access; changing the bot owner invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
+The person or bot that added a credential can remove it while they can still see its tool, including after rotation.
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
 and its declared profile and runtime keys. New bots do not inherit the whole environment or `_shared.env`.
 
