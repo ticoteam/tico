@@ -75,6 +75,7 @@ def test_a_push_tells_only_the_computers_of_that_repositorys_bots_that_take_the_
         },
     )
     # Another company with a bot of the same name and repository, on a computer that takes the hint.
+    (tmp_path / "other").mkdir()
     other_company = api_client(tmp_path / "other", api_database)
     other = next(other_company)
     try:

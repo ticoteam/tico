@@ -2122,22 +2122,25 @@ def tell_pushed(c, settings, payload):
     repository it is, and says it takes the hint (PUSH_HINTS), gets a `runner` row `pushed` naming the bot. It fetches
     that checkout at once, and no chat turn there starts on its fetch from before the push. A computer that does not
     say so is told nothing: an older runner reads every endpoint again for a kind it does not know. The bots told."""
-    from .execution import _github_app, bot_repository, capability_set
+    from .execution import _github_app, capability_set, runner_repository
+    from .repositories import Homes
 
     found = payload.get("repository") or {}
     repo = str(found.get("full_name") or "").lower()
     default = str(found.get("default_branch") or "main")
     if not repo or payload.get("deleted") or str(payload.get("ref") or "") != "refs/heads/" + default:
         return []
-    app = (_github_app(c),)
+    app, homes = (_github_app(c),), Homes(c)
     told = []
     for row in c.execute(
-        "SELECT a.bot,a.runner_id,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+        "SELECT a.bot,a.runner_id,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
         "WHERE r.revoked_at IS NULL ORDER BY a.bot"
     ).fetchall():
         if PUSH_HINTS not in capability_set(row["capabilities"]):
             continue
-        if (bot_repository(c, settings, row["bot"], app=app) or "").lower() != repo:
+        # The repository the computer fetches the bot from: "" when Tico does not use it (another company's, or one
+        # the App is not installed on), and then it is told nothing of that repository.
+        if (runner_repository(c, settings, row["bot"], app=app, homes=homes) or "").lower() != repo:
             continue
         c.execute(
             "INSERT INTO changes(topic,kind,subject_id,bot,created_at) VALUES('runner','pushed',?,?,?)",

@@ -105,30 +105,79 @@ fn pushed() -> &'static Mutex<HashMap<String, Instant>> {
     PUSHED.get_or_init(Default::default)
 }
 
-/// Bots whose repositories the hub said were pushed to, not yet handled by `run_loop`.
+/// Pushes the hub told of, not yet handled by `run_loop`.
 struct Heard {
-    bots: Mutex<HashSet<String>>,
+    pending: Mutex<Pending>,
+    /// The last `Pending::told` that `run_loop` has handled: each checkout told of until then is marked stale.
+    handled: Mutex<u64>,
     wake: tokio::sync::Notify,
 }
 
-fn heard_pushes() -> &'static Heard {
-    static HEARD: OnceLock<Heard> = OnceLock::new();
-    HEARD.get_or_init(|| Heard {
-        bots: Mutex::new(HashSet::new()),
-        wake: tokio::sync::Notify::new(),
-    })
+#[derive(Default)]
+struct Pending {
+    bots: HashSet<String>,
+    /// How many times the hub has told of a push.
+    told: u64,
 }
 
-/// The event stream said these bots' repositories were pushed to (crate::events).
+fn new_heard() -> Heard {
+    Heard {
+        pending: Mutex::new(Pending::default()),
+        handled: Mutex::new(0),
+        wake: tokio::sync::Notify::new(),
+    }
+}
+
+#[cfg(not(test))]
+fn heard_pushes() -> &'static Heard {
+    static HEARD: OnceLock<Heard> = OnceLock::new();
+    HEARD.get_or_init(new_heard)
+}
+
+/// In tests, each test thread hears only its own pushes: one test's push does not make another's chat turn fetch first.
+#[cfg(test)]
+fn heard_pushes() -> &'static Heard {
+    thread_local! {
+        static HEARD: &'static Heard = Box::leak(Box::new(new_heard()));
+    }
+    HEARD.with(|h| *h)
+}
+
+/// The event stream said these bots' repositories were pushed to (crate::events). Until `run_loop` has marked their
+/// checkouts stale (it looks up the bot's GitHub access first), no chat turn starts on a recent fetch (`unheard`).
 pub fn heard(bots: &[String]) {
     let heard = heard_pushes();
-    heard.bots.lock().unwrap().extend(bots.iter().cloned());
+    {
+        let mut pending = heard.pending.lock().unwrap();
+        pending.bots.extend(bots.iter().cloned());
+        pending.told += 1;
+    }
     heard.wake.notify_one();
+}
+
+/// Whether a push the hub told of is not yet handled: which checkout it concerns is not known until it is.
+fn unheard() -> bool {
+    let heard = heard_pushes();
+    let told = heard.pending.lock().unwrap().told;
+    *heard.handled.lock().unwrap() != told
 }
 
 #[cfg(test)]
 pub(crate) fn heard_of(bot: &str) -> bool {
-    heard_pushes().bots.lock().unwrap().contains(bot)
+    heard_pushes().pending.lock().unwrap().bots.contains(bot)
+}
+
+/// What `run_loop` takes from the pushes told of: the bots, and the count to mark handled once they are.
+fn take_heard() -> (Vec<String>, u64) {
+    let mut pending = heard_pushes().pending.lock().unwrap();
+    (pending.bots.drain().collect(), pending.told)
+}
+
+fn handled(told: u64) {
+    let mut handled = heard_pushes().handled.lock().unwrap();
+    if *handled < told {
+        *handled = told;
+    }
 }
 
 /// Each bot of this runner the hub said was pushed to: its checkout's fetch is forgotten and fetched again at once in
@@ -137,38 +186,41 @@ pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
     let heard = heard_pushes();
     while !runner.stopping() {
         heard.wake.notified().await;
-        let bots: Vec<String> = heard.bots.lock().unwrap().drain().collect();
-        let mine = runner.config.runner_id();
-        let assignments = runner.assignments_seen();
-        for bot in bots {
-            let Some(entry) = assignments
-                .iter()
-                .find(|e| text_of(&e["bot"]) == bot && text_of(&e["runner_id"]) == mine)
-            else {
-                continue;
-            };
-            if crate::sessions::is_shared(&entry["config"]) {
-                continue;
-            }
-            let path = crate::sessions::local_path(&runner.config, &bot, &entry["config"]);
-            if crate::repo_safety::outside_installation(&path).is_err()
-                || !path.join(".git").exists()
-            {
-                continue;
-            }
-            match runner.github_access(&bot, entry).await {
-                Ok(env) => after_push(&path, &crate::safegit::environment(&env)).await,
-                Err(why) => {
-                    // Without the bot's GitHub access the fetch cannot run: its next chat turn fetches first.
-                    forget(
-                        &path,
-                        &crate::safegit::environment(&crate::env::process_environment()),
-                    )
-                    .await;
-                    crate::util::diagnostic(&format!(
+        let (bots, told) = take_heard();
+        handle_pushes(&runner, bots).await;
+        handled(told);
+    }
+}
+
+async fn handle_pushes(runner: &crate::runner::Runner, bots: Vec<String>) {
+    let mine = runner.config.runner_id();
+    let assignments = runner.assignments_seen();
+    for bot in bots {
+        let Some(entry) = assignments
+            .iter()
+            .find(|e| text_of(&e["bot"]) == bot && text_of(&e["runner_id"]) == mine)
+        else {
+            continue;
+        };
+        if crate::sessions::is_shared(&entry["config"]) {
+            continue;
+        }
+        let path = crate::sessions::local_path(&runner.config, &bot, &entry["config"]);
+        if crate::repo_safety::outside_installation(&path).is_err() || !path.join(".git").exists() {
+            continue;
+        }
+        match runner.github_access(&bot, entry).await {
+            Ok(env) => after_push(&path, &crate::safegit::environment(&env)).await,
+            Err(why) => {
+                // Without the bot's GitHub access the fetch cannot run: its next chat turn fetches first. Marked
+                // stale rather than forgotten, so a fetch that began before the push cannot stand for it.
+                let env = crate::safegit::environment(&crate::env::process_environment());
+                if let Some(up) = upstream(&path, &env).await {
+                    up.stale();
+                }
+                crate::util::diagnostic(&format!(
                         "Tico runner: {bot}: heard of a push but cannot fetch it now ({why}); its next chat turn fetches first"
                     ));
-                }
             }
         }
     }
@@ -278,6 +330,7 @@ impl Upstream {
         let span = chat_fresh_for();
         let since_push = pushed().lock().unwrap().get(&self.key).copied();
         self.chat
+            && !unheard()
             && synced()
                 .lock()
                 .unwrap()
@@ -752,7 +805,7 @@ mod tests {
     /// Waits for a background fetch of the checkout's repository to finish.
     async fn behind_done(path: &Path, env: &Env) {
         let key = upstream(path, env).await.unwrap().key;
-        while running().lock().unwrap().contains(&key) {
+        while running().lock().unwrap().contains_key(&key) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
@@ -969,6 +1022,24 @@ mod tests {
             fetch_head_was,
             "the chat turn fetched first"
         );
+        // Heard on the event stream but not yet handled (the bot's GitHub access is still being looked up): which
+        // checkout it concerns is not known yet, so a chat turn starting now fetches first.
+        behind_done(&f.mine, &env).await;
+        push_elsewhere(&f.seed, "told.md");
+        heard(&["ops".to_string()]);
+        assert!(heard_of("ops") && unheard());
+        assert_eq!(
+            in_turn("h4", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            ""
+        );
+        assert!(
+            f.mine.join("told.md").is_file(),
+            "a chat turn started on a recent fetch while a push it was told of was not handled"
+        );
+        let (bots, told) = take_heard();
+        assert_eq!(bots, vec!["ops".to_string()]);
+        handled(told);
+        assert!(!unheard());
     }
 
     #[test]
