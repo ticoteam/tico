@@ -18,7 +18,7 @@ or org owner may remove it. Writes require an `Idempotency-Key`.
 `GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
 normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
 Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
-and return no totals. Pending meetings cannot have links. Deleted meetings disappear for good: there is no restore for a deleted meeting.
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear and cannot be restored.
 
 The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
 its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
@@ -71,7 +71,7 @@ the select-all box) for Share and Dismiss on all of them; they apply only to tic
 search and filters. Hidden meetings are never included, even if previously selected. Bulk sharing
 keeps each meeting's source privacy. Restore in Dismissed
 returns a meeting to Pending. Two words sound alike: a dismissed meeting can be restored; a deleted
-meeting is gone for good, with no restore. **Settings** controls future imports and, for the owner, the Team default.
+meeting cannot be restored. **Settings** controls future imports and, for the owner, the Team default.
 Human **Add notes** stays live, including a pasted or uploaded transcript; a human API caller
 can also choose `review: "live"`. Computer importers keep using the same payloads: the server
 decides the review state for the person named in `owner_email`.
