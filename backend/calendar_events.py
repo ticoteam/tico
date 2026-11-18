@@ -10,6 +10,7 @@ event through its own access. Outgoing webhooks do not take these (event_catalog
 """
 
 import logging
+import weakref
 import sqlite3
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -20,8 +21,9 @@ H: Any = _hubdb
 LOG = logging.getLogger("tico.calendar_events")
 ACTIONS = ("created", "changed", "cancelled")
 # A scheduled call follows its event (backend/call_prep.py): a change or cancel of a call's event, from any home, has
-# that call read again once the write commits. Keyed by the database file, so each hub's sweep hears only its own.
-CALL_FOLLOWERS: dict[str, Callable[[str], None]] = {}
+# that call read again once the write commits. Keyed by the database file, so each hub's sweep hears only its own. Held
+# weakly: an app let go (a test, a demo build) takes its sweep with it, and its entry is dropped on the next look.
+CALL_FOLLOWERS: dict[str, "weakref.WeakMethod[Callable[[str], None]]"] = {}
 
 
 def google_detail(calendar_id: str, occurrence_id: str | None = None, **more: object) -> dict[str, object]:
@@ -70,7 +72,11 @@ def emit(
 def _follow_call(c: sqlite3.Connection, subject: str, facts: dict[str, object]) -> None:
     """Queue the re-read of the scheduled call this event belongs to, for after the write commits."""
     try:
-        follow = CALL_FOLLOWERS.get(H._main_path(c))
+        path = H._main_path(c)
+        held = CALL_FOLLOWERS.get(path)
+        follow = held() if held is not None else None
+        if held is not None and follow is None:
+            CALL_FOLLOWERS.pop(path, None)
         hooks = getattr(c, "after_commit", None)
         if follow is None or hooks is None:
             return
