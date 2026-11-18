@@ -1,0 +1,85 @@
+{
+ "_about": "Granted secrets in the encoded forms the turn scrub must catch (spec E-607 cases A-E). Run by runner-rs/src/redact.rs tests and runner_support/tests/test_redact.py: each file's bytes (hex) go through file_outcome, each log line through scrub_text. `masked` is the expected UTF-8 text after masking.",
+ "secret": "acme-granted/v4lue\"é-fixture",
+ "files": [
+  {
+   "id": "A1",
+   "about": "JSON escapes as json.dumps writes them (\\u00e9, \\\")",
+   "hex": "7b226e6f7465223a202261636d652d6772616e7465642f76346c75655c225c75303065392d66697874757265227d0a",
+   "expect": "masked",
+   "masked": "{\"note\": \"••••\"}\n"
+  },
+  {
+   "id": "A2",
+   "about": "JSON escapes with \\/ for /",
+   "hex": "7b226e6f7465223a202261636d652d6772616e7465645c2f76346c75655c225c75303065392d66697874757265227d0a",
+   "expect": "masked",
+   "masked": "{\"note\": \"••••\"}\n"
+  },
+  {
+   "id": "A3",
+   "about": "every character \\uXXXX-escaped",
+   "hex": "7b226e6f7465223a20225c75303036315c75303036335c75303036445c75303036355c75303032445c75303036375c75303037325c75303036315c75303036455c75303037345c75303036355c75303036345c75303032465c75303037365c75303033345c75303036435c75303037355c75303036355c75303032325c75303045395c75303032445c75303036365c75303036395c75303037385c75303037345c75303037355c75303037325c7530303635227d0a",
+   "expect": "masked",
+   "masked": "{\"note\": \"••••\"}\n"
+  },
+  {
+   "id": "B1",
+   "about": "a UTF-16 file with a byte order mark",
+   "hex": "fffe74006f006b0065006e003a002000610063006d0065002d006700720061006e007400650064002f00760034006c00750065002200e9002d0066006900780074007500720065000a00",
+   "expect": "left_out"
+  },
+  {
+   "id": "B2",
+   "about": "a UTF-16 BE file with no byte order mark",
+   "hex": "0074006f006b0065006e003a002000610063006d0065002d006700720061006e007400650064002f00760034006c00750065002200e9002d0066006900780074007500720065000a",
+   "expect": "left_out"
+  },
+  {
+   "id": "C1",
+   "about": "token= and the value on the next line, UTF-8",
+   "hex": "746f6b656e3d0a61636d652d6772616e7465642f76346c756522c3a92d666978747572650a",
+   "expect": "masked",
+   "masked": "token=\n••••\n"
+  },
+  {
+   "id": "C2",
+   "about": "token= and the value on the next line, UTF-16 LE",
+   "hex": "74006f006b0065006e003d000a00610063006d0065002d006700720061006e007400650064002f00760034006c00750065002200e9002d0066006900780074007500720065000a00",
+   "expect": "left_out"
+  },
+  {
+   "id": "D1",
+   "about": "a file git treats as binary",
+   "hex": "89504e470d0a1a0a000061636d652d6772616e7465642f76346c756522c3a92d666978747572650001",
+   "expect": "left_out"
+  },
+  {
+   "id": "E1",
+   "about": "only the value under an existing Authorization: line changed",
+   "hex": "23206465706c6f790a417574686f72697a6174696f6e3a204265617265722061636d652d6772616e7465642f76346c756522c3a92d666978747572650a",
+   "expect": "masked",
+   "masked": "# deploy\nAuthorization: Bearer ••••\n"
+  },
+  {
+   "id": "N1",
+   "about": "ordinary text holding no form of the secret",
+   "hex": "417574686f72697a6174696f6e3a20426561726572204749544855425f544f4b454e2028736176656420696e20546f6f6c73290a",
+   "expect": "clean"
+  }
+ ],
+ "logs": [
+  {
+   "id": "L1",
+   "about": "a log line with the value JSON-escaped",
+   "line": "event {\"out\": \"acme-granted/v4lue\\\"\\u00e9-fixture\"}",
+   "masked": "event {\"out\": \"••••\"}"
+  },
+  {
+   "id": "L2",
+   "about": "a log line with the value as UTF-16 LE text",
+   "line": "stdout: a\u0000c\u0000m\u0000e\u0000-\u0000g\u0000r\u0000a\u0000n\u0000t\u0000e\u0000d\u0000/\u0000v\u00004\u0000l\u0000u\u0000e\u0000\"\u0000é\u0000-\u0000f\u0000i\u0000x\u0000t\u0000u\u0000r\u0000e\u0000",
+   "masked": "stdout: ••••"
+  }
+ ]
+}

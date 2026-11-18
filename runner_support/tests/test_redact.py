@@ -1,7 +1,9 @@
 """A granted secret never leaves the runner's Python helpers as text (runner_support/redact.py)."""
 
 import base64
+import json
 import unittest
+from pathlib import Path
 from urllib.parse import quote
 
 import pytest
@@ -122,3 +124,23 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
     long = redact.git_failure("fatal: " + "x" * 5000, limit=120)
     assert len(long) <= 120 and long.endswith("…")
     assert redact.git_failure("") == ""
+
+
+ENCODED = json.loads((Path(__file__).parent / "fixtures" / "redact_encoded_cases.json").read_text(encoding="utf-8"))
+
+
+class Encoded(unittest.TestCase):
+    """Cases A-E (spec E-607): the same file redact.rs's tests read, so both scrubs agree on every case."""
+
+    def test_each_changed_file_is_masked_or_left_out_as_the_shared_cases_say(self):
+        r = redact.Redactor([ENCODED["secret"]])
+        for case in ENCODED["files"]:
+            outcome, masked = r.file_outcome(bytes.fromhex(case["hex"]))
+            self.assertEqual(outcome, case["expect"], case["id"])
+            if case["expect"] == "masked":
+                self.assertEqual(masked.decode("utf-8"), case["masked"], case["id"])
+
+    def test_a_log_line_with_the_value_json_escaped_or_in_utf16_shows_the_mark(self):
+        r = redact.Redactor([ENCODED["secret"]])
+        for case in ENCODED["logs"]:
+            self.assertEqual(r.scrub_text(case["line"]), case["masked"], case["id"])

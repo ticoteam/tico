@@ -1162,6 +1162,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&top);
     }
 
+    /// Cases A-E (spec E-607), from the file runner_support/tests/test_redact.py reads too, so both scrubs agree.
+    #[test]
+    fn each_shared_encoded_case_is_masked_or_left_out_and_logs_show_the_mark() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let doc: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                repo.join("runner_support/tests/fixtures/redact_encoded_cases.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let r = Redactor::new(&[doc["secret"].as_str().unwrap().to_string()]);
+        for case in doc["files"].as_array().unwrap() {
+            let hex = case["hex"].as_str().unwrap();
+            let data: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            let id = case["id"].as_str().unwrap();
+            match (r.file_outcome(&data), case["expect"].as_str().unwrap()) {
+                (FileScrub::Clean, "clean") | (FileScrub::LeftOut, "left_out") => {}
+                (FileScrub::Masked(out), "masked") => assert_eq!(
+                    String::from_utf8(out).unwrap(),
+                    case["masked"].as_str().unwrap(),
+                    "{id}"
+                ),
+                (got, want) => panic!("{id}: {got:?}, want {want}"),
+            }
+        }
+        for case in doc["logs"].as_array().unwrap() {
+            assert_eq!(
+                r.scrub_text(case["line"].as_str().unwrap()),
+                case["masked"].as_str().unwrap(),
+                "{}",
+                case["id"]
+            );
+        }
+    }
+
     #[test]
     fn the_python_redactor_agrees() {
         let secrets = [
