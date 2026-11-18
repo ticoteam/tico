@@ -578,6 +578,9 @@ _PLACED = "SELECT r.revoked_at FROM assignments a JOIN runners r ON r.id = a.run
 _ONBOARDING = "SELECT onboarding_state FROM bot_config WHERE bot=?"
 
 
+_PRIMED = ("task_wakes.prime_bots",)  # the snapshot's bots primed so far
+
+
 def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> None:
     """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its run back-off and
     budget holds, its sign-in cards) in a few statements for all of them, and keep it in the snapshot's read
@@ -587,9 +590,15 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
 
     RC: Any = read_cache
     H = _h()
-    bots = sorted({str(H.actor_id(a)) for a in actors if H.is_bot(a)})
-    if not bots or RC.cache(conn) is None:
+    values: Any = RC.cache(conn)
+    if values is None:
         return
+    # A bot primed already in this snapshot is not read again: a build primes its bots from several places.
+    primed: set[str] = values.setdefault(_PRIMED, set())
+    bots = sorted({str(H.actor_id(a)) for a in actors if H.is_bot(a)} - primed)
+    if not bots:
+        return
+    primed.update(bots)
     listed = (json.dumps(bots),)
     states = {
         str(r[0]): r
@@ -621,6 +630,10 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     holds.prime(conn, holds.FAILING, "bot", bots)
     holds.prime(conn, holds.RUNAWAY, "bot", bots)
     cast("Any", reconnects).prime_open(conn, bots, "login:")
+    # A bot on no computer: the cloud machine it waits for (`_computer_cause`).
+    from . import cloud_machines
+
+    cast("Any", cloud_machines).prime_rows(conn, [b for b in bots if placed.get(b) is None])
 
 
 # A bot that can run may still be held on one task: its turn asked for a worktree it has no room for (D12). The wait

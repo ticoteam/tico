@@ -54,13 +54,48 @@ def _one(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> Row | N
     return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
 
 
+GET_SQL = "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?"
+
+
 def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row | None:
-    """The verdict row for a page version and rubric hash, or None when none is owed yet."""
-    return _one(
-        conn,
-        "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?",
-        (file_id, int(version), key),
+    """The verdict row for a page version and rubric hash, or None when none is owed yet. Kept for the read snapshot
+    (read_cache: a write starts it again); `prime` reads many together."""
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    cached = (GET_SQL, str(file_id), int(version), str(key))
+    if values is not None and cached in values:
+        found: Row | None = values[cached]
+        return dict(found) if found else None
+    found = _one(conn, GET_SQL, (file_id, int(version), key))
+    if values is not None:
+        values[cached] = dict(found) if found else None
+    return found
+
+
+def prime(conn: "sqlite3.Connection", keys: Iterable[tuple[str, int, str]]) -> None:
+    """Read `get` of many (file id, version, rubric hash) in one statement, misses too, for the reads that follow in
+    this snapshot. Nothing outside a snapshot."""
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    if values is None:
+        return
+    wanted = {(str(f), int(v), str(k)) for f, v, k in keys}
+    wanted = {key for key in wanted if (GET_SQL, *key) not in values}
+    if not wanted:
+        return
+    found: dict[tuple[str, int, str], Row] = {}
+    cursor = conn.execute(
+        "SELECT * FROM page_verdicts WHERE file_id IN (SELECT value FROM json_each(?))",
+        (json.dumps(sorted({f for f, _, _ in wanted})),),
     )
+    names = [d[0] for d in cursor.description]
+    for raw in cursor.fetchall():
+        row = dict(zip(names, raw, strict=True))
+        found[(str(row["file_id"]), int(row["version"]), str(row["rubric_hash"]))] = row
+    for key in wanted:
+        values.setdefault((GET_SQL, *key), found.get(key))
 
 
 # Each page's versions Jev passed, with the page requirement each counted for: newest version first, then the newest

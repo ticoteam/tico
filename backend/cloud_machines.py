@@ -446,9 +446,46 @@ def offered(c, settings=None):
     return cloud_company(c, settings) and bool(sizes(c))
 
 
+ROW_SQL = "SELECT * FROM cloud_machines WHERE bot=?"
+DELETING_SQL = "SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?"
+
+
 def row(c, bot):
-    found = c.execute("SELECT * FROM cloud_machines WHERE bot=?", (bot,)).fetchone()
+    # Kept for the read snapshot (read_cache: a write starts it again); `prime_rows` reads many bots' together.
+    from . import read_cache
+
+    found = read_cache.one(c, ROW_SQL, (bot,))
     return {**dict(found), "deleting": deleting(c, found["machine_id"])} if found else None
+
+
+def prime_rows(c, bots):
+    """`row` of each of these bots and of the shared machine (a cloud bot with no computer waits for one of them), in
+    two statements, for the reads that follow in this snapshot: "can this bot run" asks it of every such bot."""
+    from . import read_cache
+
+    if read_cache.cache(c) is None:
+        return
+    keys = sorted({str(b) for b in bots if b} | {SHARED})
+    found = {
+        r["bot"]: r
+        for r in c.execute(
+            "SELECT * FROM cloud_machines WHERE bot IN (SELECT value FROM json_each(?))", (json.dumps(keys),)
+        )
+    }
+    read_cache.prime(c, ROW_SQL, {(k,): found.get(k) for k in keys})
+    machines = sorted({r["machine_id"] for r in found.values() if r["machine_id"] is not None})
+    gone = (
+        {
+            r[0]
+            for r in c.execute(
+                "SELECT machine_id FROM cloud_machine_deletions WHERE machine_id IN (SELECT value FROM json_each(?))",
+                (json.dumps(machines),),
+            )
+        }
+        if machines
+        else set()
+    )
+    read_cache.prime(c, DELETING_SQL, {(m,): (1,) if m in gone else None for m in machines})
 
 
 def rows(c):
@@ -463,7 +500,9 @@ def rows(c):
 
 def deleting(c, machine_id):
     """A sent DELETE fences this id until HQ reports it gone or no longer pending deletion."""
-    return bool(c.execute("SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone())
+    from . import read_cache
+
+    return bool(read_cache.one(c, DELETING_SQL, (machine_id,)))
 
 
 def deletion_settled(answer, machine_id, refusal=None):
