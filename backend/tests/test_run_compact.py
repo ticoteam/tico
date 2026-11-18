@@ -173,3 +173,33 @@ def test_a_compact_step_counts_its_size_in_utf8_bytes(api):
     with api.app.state.store.read() as c:
         stored = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? AND seq=1", (aid,)).fetchone()[0]
     assert small["output"]["bytes"] == len(stored.encode()) > len(stored)
+
+
+def test_a_reply_s_text_goes_whole_to_a_reader_of_the_thread_as_it_is_written_and_to_nobody_else(api, monkeypatch):
+    """A chat draws the reply as it is written (thread-view.ts thvLiveStep): on the compact stream a text delta and an
+    assistant message go whole to whoever reads the thread, while thinking and tool steps stay compact. Someone who may
+    not read the thread gets none of it; nor does anyone while org rules hide the bot's replies."""
+    r, msg, aid, after = started_run(api)
+    delta = {"text": "Acme's renewal ", "delta_kind": "text"}
+    reply = {"text": "Acme's renewal is due Friday.", "final": False, "item_id": "m1"}
+    write(
+        api,
+        r,
+        aid,
+        (1, "delta", delta),
+        (2, "delta", {"text": "Weighing the dates", "delta_kind": "thought"}),
+        (3, "message", reply),
+        (4, "tool", {"name": "bash", "output": "ok"}),
+    )
+
+    def outputs(token):
+        return {d["output"]["seq"]: d["output"] for _, d, _ in read(api, token, after, True)[0] if "output" in d}
+
+    got = outputs("ana-test")
+    assert got[1]["payload"] == delta and got[3]["payload"] == reply
+    assert "compact" not in got[1] and "compact" not in got[3]
+    assert got[2]["compact"] is True and "payload" not in got[2]
+    assert got[4]["compact"] is True and "payload" not in got[4]
+    assert outputs("cara-test") == {}
+    monkeypatch.setattr(org_rule_check, "watched", lambda c, bot: True)
+    assert sorted(outputs("ana-test")) == [4]
