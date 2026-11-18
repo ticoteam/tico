@@ -47,10 +47,16 @@ def test_a_nearly_full_disk_plans_the_next_size_with_more_disk_up_to_the_largest
         CM.grow_plan(machine_row(state="running", size="small", machine_size="small"), disk(1), OFFERED, {}, 0)[0]
         == "large"
     )
-    assert (
-        CM.grow_plan(machine_row(state="running", size="large", machine_size="large"), disk(5, 111), OFFERED, {}, 0)[0]
-        == "xlarge"
+    # Never by itself into a size Tico does not recommend: at Large it says what to do instead.
+    large = machine_row(state="running", size="large", machine_size="large")
+    assert CM.grow_plan(large, disk(5, 111), OFFERED, {}, 0) == (None, "Disk 95% full at Large. Free space on it", 95)
+    assert CM.grow_plan(large, disk(5, 111), OFFERED, {}, 0, shared=True)[1] == (
+        "Disk 95% full at Large. Give its busiest bots their own Large machine"
     )
+    # A machine already above Large (a person's choice) still grows into a bigger listed size.
+    bigger = [*OFFERED, {**OFFERED[-1], "name": "huge", "cpu": 32, "disk_gb": 501}]
+    xl = machine_row(state="running", size="xlarge", machine_size="xlarge")
+    assert CM.grow_plan(xl, disk(5, 251), bigger, {}, 0)[0] == "huge"
     # Room on the disk, or a size already waiting for the restart: nothing to plan.
     assert CM.grow_plan(running, disk(30), OFFERED, {}, 0) == (None, None, None)
     assert CM.grow_plan(machine_row(state="running", size="large"), disk(0.2), OFFERED, {}, 0) == (None, None, None)
@@ -168,6 +174,37 @@ def test_off_by_the_company_an_own_machine_that_never_chose_stays_at_its_size(gr
     assert grow.row()["size"] == "default"
 
 
+def test_xlarge_is_offered_but_not_recommended_and_says_why_with_hqs_prices():
+    real = [{**s, "usd_per_hour": price} for s, price in zip(OFFERED, (0.0225, 0.045, 0.09, 0.25), strict=True)]
+    listed = CM.with_advice(real)
+    assert [s["recommended"] for s in listed] == [True, True, True, False]
+    assert [s["name"] for s in listed if "note" in s] == ["xlarge"]
+    assert listed[-1]["note"] == (
+        "Costs about as much as three Large machines ($0.25/h vs $0.09/h). "
+        "For more room, give busy bots their own Large machine."
+    )
+    # HQ's prices change without a release: under one and a half Large prices it never counts "1 Large machines".
+    cheap = CM.with_advice([*real[:3], {**real[3], "usd_per_hour": 0.12}])
+    assert cheap[-1]["note"].startswith("Costs more than a Large machine ($0.12/h vs $0.09/h).")
+    # Before HQ lists CPUs, or without Large in the list, nothing is marked.
+    assert all(s["recommended"] for s in CM.with_advice([{"name": "xlarge"}, {"name": "default"}]))
+
+
+def test_at_large_a_full_disk_is_not_grown_to_xlarge_and_says_what_to_do(grow):
+    computer = enrolled(grow)
+    ready(grow.api, computer, ["ops"])
+    with grow.store.transaction() as c:
+        CM.save(c, "ops", size="large", machine_size="large")
+    grow.hq.machines["m1"]["size"] = "large"
+    grow.full(5, 111)
+    grow.hq.calls.clear()
+    grow.tick(1)
+    row = grow.row()
+    assert row["size"] == "large" and row["problem"] == "disk_full"
+    assert row["grow_note"] == "Disk 95% full at Large. Free space on it"
+    assert "stop" not in grow.hq.actions()
+
+
 def test_at_the_largest_size_it_is_a_problem_on_health_not_a_resize(grow):
     computer = enrolled(grow)
     ready(grow.api, computer, ["ops"])
@@ -261,6 +298,19 @@ def test_the_settings_default_to_growing_and_the_routes_take_the_switch(grow):
     TCM.adopt(grow)
     answer = post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})["cloud_machine"]
     assert answer["grow_storage"] is True
+
+
+def test_agents_read_which_sizes_are_recommended_and_setting_xlarge_works_with_the_note(grow):
+    listed = grow.api.get("/api/v2/cloud-machines", headers=headers()).json()["sizes"]
+    assert [(s["name"], s["recommended"]) for s in listed][-2:] == [("large", True), ("xlarge", False)]
+    note = listed[-1]["note"]
+    assert note.startswith("Costs about as much as two Large machines")
+    answer = post(grow.api, "cloud-machines/shared", {"size": "xlarge"})
+    assert answer["shared"]["size"] == "xlarge" and answer["note"] == note
+    assert "note" not in post(grow.api, "cloud-machines/shared", {"size": "large"})
+    TCM.adopt(grow)
+    answer = post(grow.api, "bots/ops/cloud-machine", {"size": "xlarge"})
+    assert answer["cloud_machine"]["size"] == "xlarge" and answer["note"] == note
 
 
 def test_the_disk_read_is_the_runners_newest_minute_and_only_a_fresh_one(grow):

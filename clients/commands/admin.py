@@ -550,7 +550,7 @@ def settings_set(api, args):
     if "run" not in planned:
         return planned  # the Confirm card
     run = planned["run"]
-    who.call(run["method"], run["path"], run["body"], _key(args))
+    answer = who.call(run["method"], run["path"], run["body"], _key(args))
     # The value read back after the change, where Settings shows one; else the value sent.
     shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
     return {
@@ -558,6 +558,8 @@ def settings_set(api, args):
         "name": planned["setting"]["name"],
         "where": planned["setting"]["where"],
         "value": shown["value"] if "value" in shown else planned["value"],
+        # Advice the route gave with the change (a cloud machine size Tico does not recommend, and why).
+        **({"note": answer["note"]} if isinstance(answer, dict) and answer.get("note") else {}),
     }
 
 

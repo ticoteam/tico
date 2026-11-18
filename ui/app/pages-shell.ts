@@ -1032,7 +1032,7 @@ const INBOX_STATUS: Record<string, [string, string]> = {ok: ['ok', 'Connected'],
 // app/cloud-machines.ts
 const cloudMachineShared = (e: CloudMachineBot) => cloudMachineOn(e) && e.cloud_machine?.placement !== 'own';
 // "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and a grow note only while it
-// needs someone ("Disk 96% full: XLarge is the largest size"); a problem replaces the state.
+// needs someone ("Disk 96% full at Large. Give its busiest bots their own Large machine"); a problem replaces the state.
 function cloudMachineStatus(m: CloudMachineRow): string {
   const parts: (string | null | undefined)[] = [m.problem || CLOUD_STATES[m.state ?? ''] || m.state, cloudSizeName(m.machine_size || m.size)];
   if (m.cost_month_usd) parts.push(`$${Number(m.cost_month_usd).toFixed(2)} this month`);
@@ -1099,7 +1099,7 @@ function settingsTierName(id: string | null | undefined) {
 // app/cloud-machines.ts
 const CLOUD_STATES: Record<string, string> = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
-const cloudSizeName = (name: string | null | undefined) => name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+const cloudSizeName = (name: string | null | undefined) => name === 'xlarge' ? 'XLarge' : name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
 
 // app/automations.ts
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.

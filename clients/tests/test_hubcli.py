@@ -1641,6 +1641,38 @@ def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatc
     assert calls[1] == ("POST", "routines/ops:qa-review", {"enabled": False}, True)
 
 
+def test_settings_set_passes_on_the_routes_note_for_a_size_tico_does_not_recommend(monkeypatch):
+    from clients import remotecli
+
+    note = "Costs about as much as three Large machines ($0.25/h vs $0.09/h). For more room, give busy bots their own Large machine."
+
+    class Api:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            if path == "settings/catalog/cloud.shared_machine/plan":
+                return {
+                    "run": {"method": "POST", "path": "cloud-machines/shared", "body": {"size": "xlarge"}},
+                    "setting": {"name": "Shared cloud machine", "where": "Settings > Bots > Bot editor > Computer"},
+                    "value": {"size": "xlarge"},
+                }
+            if path == "cloud-machines/shared":
+                return {"shared": {"size": "xlarge"}, "note": note}
+            return {}
+
+        def get(self, path, **query):
+            return self.call("GET", path)
+
+        def post(self, path, body=None, key=None, **kw):
+            return self.call("POST", path, body, key)
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    args = hubcli.parser().parse_args(["settings", "set", "cloud.shared_machine", '{"size":"xlarge"}'])
+    assert remotecli.run(args)["note"] == note
+
+
 def test_a_plain_webhook_header_sends_no_secret_key():
     """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
     args = hubcli.parser().parse_args(

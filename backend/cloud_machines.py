@@ -840,6 +840,59 @@ def low_disk(disk):
     return free * 100 < GROW_FREE_PCT * total or free < GROW_FREE_GB * 1024**3
 
 
+# The largest size Tico recommends. A bigger one is still offered, but costs about as much as several of these, which
+# also spread the load and the risk: Tico marks it not recommended (`with_advice`), says why to whoever picks it (people
+# in Settings, agents in the API answer) and never grows a machine into it by itself (`grow_plan`).
+RECOMMENDED_TOP = "large"
+NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+def recommended(offered, name):
+    """Whether Tico recommends size `name`: True unless it has more CPUs than RECOMMENDED_TOP in HQ's list `offered`
+    (True when either is not listed or has no CPU count)."""
+    top = next((s for s in offered if s["name"] == RECOMMENDED_TOP), None)
+    here = next((s for s in offered if s["name"] == name), None)
+    return not (top and here and top.get("cpu") and here.get("cpu") and here["cpu"] > top["cpu"])
+
+
+def size_note(offered, name):
+    """Why Tico does not recommend size `name`, with HQ's prices: "Costs about as much as three Large machines ($0.25/h
+    vs $0.09/h). For more room, give busy bots their own Large machine." '' for a recommended size."""
+    if recommended(offered, name):
+        return ""
+    top = next(s for s in offered if s["name"] == RECOMMENDED_TOP)
+    here = next(s for s in offered if s["name"] == name)
+    advice = f"For more room, give busy bots their own {cloud_size_name(RECOMMENDED_TOP)} machine."
+    price, top_price = here.get("usd_per_hour"), top.get("usd_per_hour")
+    if not price or not top_price:
+        return f"Costs more than {cloud_size_name(RECOMMENDED_TOP)} machines. {advice}"
+    prices = f"(${_hourly(price)}/h vs ${_hourly(top_price)}/h)"
+    many = round(price / top_price)
+    if many < 2:  # HQ's prices can change without a release: never "about as much as 1 Large machines"
+        return f"Costs more than a {cloud_size_name(RECOMMENDED_TOP)} machine {prices}. {advice}"
+    count = NUMBER_WORDS.get(many, str(many))
+    return f"Costs about as much as {count} {cloud_size_name(RECOMMENDED_TOP)} machines {prices}. {advice}"
+
+
+def _hourly(usd):
+    return f"{usd:.6f}".rstrip("0").rstrip(".") if round(usd, 2) != usd else f"{usd:.2f}"
+
+
+def with_advice(offered):
+    """HQ's sizes, each with `recommended` and, for one Tico does not recommend, the `note` that says why."""
+    out = []
+    for s in offered:
+        note = size_note(offered, s["name"])
+        out.append({**s, "recommended": not note, **({"note": note} if note else {})})
+    return out
+
+
+def note_field(c, size):
+    """{"note": ...} for a size answer when `size` is one Tico does not recommend, else {}."""
+    note = size_note(sizes(c), size) if size else ""
+    return {"note": note} if note else {}
+
+
 def bigger(offered, name):
     """The next size up from `name` that has more disk (the least disk above its own, the fewest CPUs among those), or
     None at the largest, for a size HQ did not list, or without HQ's disk sizes."""
@@ -865,13 +918,14 @@ def unresized(current, disk, offered):
     return bool(here and here.get("disk_gb") and disk["total_bytes"] < 0.8 * here["disk_gb"] * 1e9)
 
 
-def grow_plan(current, disk, offered, caps, others_cpu, at=0):
+def grow_plan(current, disk, offered, caps, others_cpu, at=0, shared=False):
     """(size, why, full) for a running machine row `current` whose storage grows, from its runner's newest disk reading
     `disk`: `size` the next one with more disk to grow to, or None; `why` the words for a machine that cannot grow (the
     largest offered, or past HQ's CPU cap with `others_cpu` the CPUs of the company's other running machines, or a size
     HQ refused before and not yet due again, or a disk that did not grow with its size), else None; `full` the disk's
-    percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. Pure:
-    the clock is `at`."""
+    percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. It
+    grows only into a size Tico recommends: at RECOMMENDED_TOP `why` says what to do instead, for the `shared` machine
+    or a bot's own. Pure: the clock is `at`."""
     if not low_disk(disk) or resizing(current):
         return None, None, None
     full = round(100 * (1 - disk["free_bytes"] / disk["total_bytes"]))
@@ -879,6 +933,13 @@ def grow_plan(current, disk, offered, caps, others_cpu, at=0):
     if unresized(current, disk, offered):
         return None, f"Disk {full}% full: disk not resized to {cloud_size_name(here)}", full
     target = bigger(offered, here)
+    if target is not None and not recommended(offered, target) and recommended(offered, here):
+        instead = (
+            f"Give its busiest bots their own {cloud_size_name(RECOMMENDED_TOP)} machine"
+            if shared
+            else "Free space on it"
+        )
+        return None, f"Disk {full}% full at {cloud_size_name(here)}. {instead}", full
     if target is None:
         return None, f"Disk {full}% full: {cloud_size_name(here)} is the largest size", full
     until = current.get("grow_blocked_until")
@@ -2061,7 +2122,9 @@ class Manager:
             disk = fresh_disk(current, latest_disks(c, [current["runner_id"]], at).get(current["runner_id"]))
             on = grows(current, None if key == SHARED else row(c, SHARED))
             target, why, full = (
-                grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key), at) if on else (None, None, None)
+                grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key), at, shared=key == SHARED)
+                if on
+                else (None, None, None)
             )
         if target is None and why is None:
             if current["problem"] != "disk_full" or resizing(current):
@@ -3092,7 +3155,9 @@ def disk_words(c):
         elif resizing(current):
             advice = f"It restarts at {cloud_size_name(current['size'])} once its turns finish."
         elif current["problem"] == "disk_full":
-            advice = f"{current['grow_note'] or 'It cannot grow'}. Free space on it."
+            note = current["grow_note"] or "It cannot grow"
+            # A note from `grow_plan` at RECOMMENDED_TOP already says what to do.
+            advice = f"{note}." if " full at " in note else f"{note}. Free space on it."
         elif grows(current, None if key == SHARED else shared):
             advice = "It grows to a bigger size at the next look."
         else:
@@ -3383,7 +3448,7 @@ def install(app, settings, store, auth, execution, mutate):
                 return {"offered": False, "sizes": [], "caps": {}, "shared": None}
             return {
                 "offered": True,
-                "sizes": sizes(c) or [{"name": n} for n in SIZES],
+                "sizes": with_advice(sizes(c) or [{"name": n} for n in SIZES]),
                 "caps": listed_caps(c),
                 "shared": shared_view(c),
             }
@@ -3400,7 +3465,8 @@ def install(app, settings, store, auth, execution, mutate):
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
             return {
-                "shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes, body.grow_storage)
+                "shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes, body.grow_storage),
+                **note_field(c, body.size),
             }
 
         return mutate(request, body, run)
@@ -3442,7 +3508,8 @@ def install(app, settings, store, auth, execution, mutate):
                     body.placement,
                     body.pause_minutes,
                     body.grow_storage,
-                )
+                ),
+                **note_field(c, body.size),
             },
         )
 

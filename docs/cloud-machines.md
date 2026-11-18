@@ -91,7 +91,15 @@ cloud machine" under Computer).
 ## Size and Grow storage automatically
 
 HQ offers four sizes: Small and Default have a 51 GB disk, Large 111 GB and XLarge 251 GB. Settings shows each size's
-disk. A disk cannot shrink, so a size with less disk than the machine has now is refused (422 `too_small`) and is off
+disk and price.
+
+**Large is the size Tico recommends.** XLarge stays on offer but costs about as much as three Large machines, which
+also spread the load and the risk, so it reads "XLarge (not recommended)" in Settings, with the reason and both prices
+under it when picked. `GET /api/v2/cloud-machines` gives every size `recommended`, and XLarge a `note` saying why;
+setting it (Settings, `tico cloud set`, `tico settings set`, the API) works and the answer carries the same `note`.
+When a machine needs more room, give its busiest bots their own Large machine (the bot's Settings, Computer: Own cloud
+machine, Size: Large) rather than a bigger one. A shared machine's Performance page says which bots: the one or two
+that ran in every overload in the window ("Give A its own Large machine."). A disk cannot shrink, so a size with less disk than the machine has now is refused (422 `too_small`) and is off
 in Settings; replace the machine to start smaller. HQ resizes a machine only when it starts it, so a size chosen while
 the machine runs (by a person, or by growing) drains it first: its runner takes no new turn ("restarts at a new size
 once its turns finish"), and once no turn is out and no update is under way it stops, Always on too, and starts again
@@ -102,12 +110,14 @@ runs on at its size, takes work again, and the new size is tried again an hour l
 **Grow storage** (Settings, next to Always on) is on by default. The company sets it for the shared machine
 (`grow_storage` on `POST /api/v2/cloud-machines/shared`); an own machine follows the company until its bot chooses
 (`grow_storage` on `POST /api/v2/bots/{bot}/cloud-machine`). When it is on and the runner's newest disk reading shows
-under 15% or under 10 GB free, the machine is set to the next size with more disk (Default to Large to XLarge) and
+under 15% or under 10 GB free, the machine is set to the next size with more disk (Small or Default to Large) and
 restarts at it as above (event `cloud_machine.grew`). Only a reading taken since the machine last started counts (one
 from before a restart is of the old disk), at most 10 minutes old.
 
-It never goes past the largest size or the company's CPU cap at HQ (counting the size other machines are restarting
-at). When it cannot grow (the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
+It never grows past Large by itself (a person may still pick XLarge, and an XLarge machine grows on if a bigger size
+is listed), nor past the company's CPU cap at HQ (counting the size other machines are restarting at). At Large it
+says what to do instead: "Disk 92% full at Large. Give its busiest bots their own Large machine." for the shared
+machine, "… Free space on it." for a bot's own. When it cannot grow (Large, the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
 "disk not resized"), the machine is marked **Disk nearly full** with the reason, on Health, until the disk has room
 again (`cloud_machine.grow_blocked`). A size HQ refuses at the start goes back to the size the machine runs at. HQ's
 CPU cap, or HQ starting it at another size, is tried again after an hour; any other refusal waits until a person

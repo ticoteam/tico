@@ -26,6 +26,7 @@ declare const window: Window & typeof globalThis & {
 declare function settingsEditBot(slug?: string, inline?: boolean): void;
 declare function loadSettings(): Promise<void>;
 declare function cloudSizeOptions(sizes: CloudSize[], value: string | undefined, machineSize: string | null | undefined): string;
+const XLARGE_NOTE = 'Costs about as much as three Large machines ($0.25/h vs $0.09/h). For more room, give busy bots their own Large machine.';
 declare const CLOUD_SIZES: CloudSize[] | null;
 declare const BOT: {slug?: string} | null;
 declare const SETTINGS_DATA: {models?: unknown[]};
@@ -93,7 +94,8 @@ interface Call { bot: string | null; what: string; body: unknown }
         return json({size: 'default', always_on: false, bots: ['scout']});
       }
       if (p === '/api/v2/cloud-machines') return json({offered: true, caps: {}, sizes: ([['small', 2, 0.0225, 51], ['default', 4, 0.045, 51], ['large', 8, 0.09, 111], ['xlarge', 16, 0.25, 251]] as [string, number, number, number][])
-        .map(([name, cpu, usd_per_hour, disk_gb]) => ({name, cpu, memory_gb: cpu * 2, disk_gb, usd_per_hour, start_usd: 0.04, idle_stop_s: 300}))});
+        .map(([name, cpu, usd_per_hour, disk_gb]) => ({name, cpu, memory_gb: cpu * 2, disk_gb, usd_per_hour, start_usd: 0.04, idle_stop_s: 300,
+          recommended: name !== 'xlarge', ...(name === 'xlarge' ? {note: XLARGE_NOTE} : {})}))});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
       if (p === '/api/employees') return json(bots);
@@ -151,6 +153,14 @@ interface Call { bot: string | null; what: string; body: unknown }
       options.map(o => o.textContent!.match(/(\d+) GB disk/)![1])), ['51', '51', '111', '251'], 'each size shows its disk');
     assert.equal(await editor.locator('[data-bot-cloud-grow]').isChecked(), true, 'storage grows unless turned off');
     assert.deepEqual(await editor.locator('[data-bot-cloud-size] option:disabled').count(), 0, 'Default can go to any size');
+    // XLarge is offered but not recommended: its label says so first, and picking it shows why; any other size, nothing.
+    assert.match((await editor.locator('[data-bot-cloud-size] option[value="xlarge"]').textContent())!, /^XLarge \(not recommended\) · 16 CPU/);
+    const sizeNote = editor.locator('[data-bot-cloud-size-note]');
+    assert.equal(await sizeNote.isHidden(), true, 'no advice at a recommended size');
+    await editor.locator('[data-bot-cloud-size]').selectOption('xlarge');
+    assert.equal(await sizeNote.textContent(), XLARGE_NOTE);
+    await editor.locator('[data-bot-cloud-size]').selectOption('large');
+    assert.equal(await sizeNote.isHidden(), true);
     // Grown to Large, a size with less disk is off: a disk cannot shrink.
     assert.deepEqual(await page.evaluate(() => {
       const box = document.createElement('select');
