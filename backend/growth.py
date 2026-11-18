@@ -1198,10 +1198,10 @@ def install(app, store, auth, mutate):
         except Exception:  # noqa: BLE001 - a count must never fail the read
             logging.getLogger(__name__).warning("growth view read was not counted", exc_info=True)
 
-    def editor(who, what):
+    def editor(c, who, what):
         """The owner, an admin or the Growth Manager (backend/growth_setup.py editor): it writes what people tell it."""
         auth.domain(who)
-        if not SETUP.editor(auth, who):
+        if not SETUP.editor(auth, who, c):
             raise Problem("forbidden", f"Only the owner, an admin or the Growth Manager {what}", 403)
 
     def retirer(who, what):
@@ -1216,7 +1216,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {"channels": channels(c, include_retired), "may_edit": SETUP.editor(auth, who)}
+            out = {"channels": channels(c, include_retired), "may_edit": SETUP.editor(auth, who, c)}
         return answer(who, out)
 
     @app.get("/api/v2/growth/channels/{slug}")
@@ -1262,7 +1262,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "adds a channel")
+            editor(c, who, "adds a channel")
             return wrote(c, who, channel_create(c, who.actor, body))
 
         return mutate(request, body, work)
@@ -1275,7 +1275,7 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             fields = {k: getattr(body, k) for k in body.model_fields_set}
-            if not SETUP.editor(auth, who):
+            if not SETUP.editor(auth, who, c):
                 row = channel(c, slug)
                 if not row:
                     raise Problem("not_found", f"No channel {slug}", 404)
@@ -1325,7 +1325,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {**sources(c, include_retired), "may_edit": SETUP.editor(auth, who)}
+            out = {**sources(c, include_retired), "may_edit": SETUP.editor(auth, who, c)}
         return answer(who, out)
 
     @app.post("/api/v2/growth/sources")
@@ -1334,7 +1334,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "adds a source")
+            editor(c, who, "adds a source")
             return wrote(
                 c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None), who)
             )
@@ -1347,7 +1347,13 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "changes a source")
+            editor(c, who, "changes a source")
+            if {"sync_kind", "sync_map"} & body.model_fields_set:
+                row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
+                if row and (GS.is_customers(row) or row.get("sync_kind") == "db_query"):
+                    # Remapping a customers source deletes its customer facts; switching a database source's kind
+                    # deletes its daily run, which may be another bot's automation.
+                    retirer(who, "changes what a customers or database source fetches")
             return wrote(
                 c,
                 who,
@@ -1509,7 +1515,7 @@ def install(app, store, auth, mutate):
             slug = body.channel if body.channel not in (None, "", UNKNOWN) else None
             if body.keep == "computed" or body.against == "computed":
                 # A typed actual beside the figure computed from customer facts: the channel's owner chooses.
-                return choose(c, who.actor, SETUP.editor(auth, who), slug, body.month, body.field, body.keep)
+                return choose(c, who.actor, SETUP.editor(auth, who, c), slug, body.month, body.field, body.keep)
             channel_id = ""
             if slug:
                 found = channel(c, slug)
@@ -1521,7 +1527,7 @@ def install(app, store, auth, mutate):
             )
             if not row:
                 raise Problem("not_found", f"No numbers for {slug or UNKNOWN} in {body.month}", 404)
-            return GS.resolve(c, who.actor, SETUP.editor(auth, who), row["id"], body.field, body.keep)
+            return GS.resolve(c, who.actor, SETUP.editor(auth, who, c), row["id"], body.field, body.keep)
 
         return mutate(request, body, work)
 
@@ -1542,7 +1548,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {**settings(c), "may_edit": SETUP.editor(auth, who)}
+            out = {**settings(c), "may_edit": SETUP.editor(auth, who, c)}
         return answer(who, out)
 
     @app.put("/api/v2/growth/settings")
@@ -1551,7 +1557,9 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "changes the growth settings")
+            editor(c, who, "changes the growth settings")
+            if "key_readers" in body.model_fields_set:
+                retirer(who, "chooses who reads customer keys")
             return wrote(c, who, settings_update(c, who.actor, {k: getattr(body, k) for k in body.model_fields_set}))
 
         return mutate(request, body, work)

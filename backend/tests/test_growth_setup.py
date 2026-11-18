@@ -315,9 +315,10 @@ def test_the_setup_read_says_what_each_done_step_set_for_the_panel(api):
 def test_the_growth_manager_writes_what_people_tell_it_but_does_not_retire(api):
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT INTO bots(id,slug,display_name,state) VALUES('growth-manager','growth-manager','Growth Manager','active')"
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('0b1d2c3e','growth-manager','Growth Manager','active')"
         )
-    gm = bot(api, "growth-manager")
+    # A hired bot is stored by id, not slug: the Growth Manager is the bot that owns the Growth page.
+    gm = bot(api, "0b1d2c3e")
     assert get(api, "growth/channels", token=gm)["you_may"] == {
         "settings": True,
         "channels": True,
@@ -330,3 +331,5 @@ def test_the_growth_manager_writes_what_people_tell_it_but_does_not_retire(api):
     post(api, "growth/channels/referrals/retire", {}, token=gm, expected=403)
     post(api, f"growth/sources/{src['id']}/retire", {}, token=gm, expected=403)
     put(api, "growth/settings", {"margin_pct": 60}, token=bot(api, "ops"), expected=403)
+    # Who reads customer keys stays a person's.
+    put(api, "growth/settings", {"key_readers": ["bot:0b1d2c3e"]}, token=gm, expected=403)

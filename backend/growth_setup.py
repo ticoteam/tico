@@ -27,6 +27,7 @@ from . import access as _access_mod
 from . import auth as _auth_mod
 from . import brand as _brand_mod
 from . import hubdb as _hubdb_mod
+from . import page_owners as PageOwners
 from . import store as _store_mod
 
 H: Any = _hubdb_mod
@@ -59,20 +60,25 @@ FOLLOWS = {"set_up_before_first_open": "first_opened_at"}
 DATES = ("first_opened_at", "settings_at", "channel_at", "source_at", "month_at", "done_at", "numbers_seen_at")
 
 
-# The bot that gathers Growth's numbers by chat and calls (templates/catalog/growth-manager, skill growth-interview): it
-# writes what people tell it, so it changes settings, channels and sources as an admin does (retiring stays a person's).
-GROWTH_MANAGER = "bot:growth-manager"
+def manager(c: Any) -> str | None:
+    """The Growth Manager's actor id: the bot that owns the Growth page (backend/page_owners.py, default the catalogue's
+    growth-manager, skill growth-interview), never the General Manager standing in. Bots are stored by id, not slug."""
+    return PageOwners.owner(c, "growth", fallback=False)
 
 
-def editor(auth: Any, who: Any) -> bool:
-    """The owner or an admin as a person, or the Growth Manager: who changes settings, channels and sources."""
-    return bool(Brand.admin(auth, who)) or (who.role == "bot" and who.actor == GROWTH_MANAGER)
+def editor(auth: Any, who: Any, c: Any) -> bool:
+    """The owner or an admin as a person, or the Growth Manager: who changes settings, channels and sources. The Growth
+    Manager writes what people tell it; retiring, who reads customer keys and anything that discards customer facts or
+    a database run stay a person's (backend/growth.py)."""
+    if Brand.admin(auth, who):
+        return True
+    return who.role == "bot" and who.actor == manager(c)
 
 
-def you_may(auth: Any, who: Any) -> dict[str, bool]:
+def you_may(auth: Any, who: Any, c: Any) -> dict[str, bool]:
     """Per action, what this caller may do: the owner, admins and the Growth Manager change settings, channels and
     sources; they and any bot record months (backend/growth.py)."""
-    may = editor(auth, who)
+    may = editor(auth, who, c)
     return {"settings": may, "channels": may, "sources": may, "months": may or who.role == "bot"}
 
 
@@ -191,7 +197,7 @@ def block(c: Any, auth: Any, who: Any, st: dict[str, Any] | None = None) -> dict
     nxt = _next(c, st)
     if nxt is None:  # G: a setup not done has a step not done
         return {"done": True}
-    may = you_may(auth, who)[ACTION[nxt["step"]]]
+    may = you_may(auth, who, c)[ACTION[nxt["step"]]]
     nxt = {**nxt, "number": STEPS.index(nxt["step"]) + 1, "you_may": may}
     if not may:
         nxt["who_may"] = who_may(c)
@@ -253,7 +259,7 @@ def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool =
             store.write(who, work)
         except Store.Problem:
             pass  # a write refused for this caller never fails the read; the next read records it
-    return {**out, "you_may": you_may(auth, who), "setup": setup}
+    return {**out, "you_may": you_may(auth, who, c), "setup": setup}
 
 
 def _set(c: Any, st: dict[str, Any]) -> dict[str, Any]:
@@ -291,7 +297,7 @@ def show(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     out["steps"] = [{**s, "at": row.get(s["step"] + "_at")} for s in st["steps"]]
     out["channel"] = st["channel"]
     out["set"] = _set(c, st)
-    out["you_may"] = you_may(auth, who)
+    out["you_may"] = you_may(auth, who, c)
     for k in (
         "first_opened_at",
         "first_opened_by",
