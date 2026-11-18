@@ -6597,7 +6597,14 @@ def bots(conn, state=None):
         sql += " WHERE " + " AND ".join(where)
     from .read_cache import rows
 
-    return [dict(row) for row in rows(conn, sql + " ORDER BY slug", args)]
+    found = [dict(row) for row in rows(conn, sql + " ORDER BY slug", args)]
+    if not where:
+        # The whole table is shared between snapshots, but a finished turn's `last_turn_at` does not move the roster
+        # clock (roster_clock.BOTS_CLOCKED), so that one column is read in this snapshot.
+        turns = dict(rows(conn, "SELECT id,last_turn_at FROM bots"))
+        for row in found:
+            row["last_turn_at"] = turns.get(row["id"], row["last_turn_at"])
+    return found
 
 
 # The Tico account a person signed in with (backend/oidc.py `person`): matched by the sign-in only, never sent out.

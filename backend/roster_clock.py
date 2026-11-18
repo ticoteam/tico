@@ -13,6 +13,10 @@ from . import bot_settings as BS
 
 TABLES = ("bots", "bot_config", "bot_settings")
 STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug"})
+# Every column of `bots` but `last_turn_at`: a finished turn writes that one, and moving the clock on every turn threw
+# the shared rows away all the time on a busy server. A shared `bots` row's `last_turn_at` may therefore be older than
+# the snapshot's; hubdb.bots, its one reader, reads it fresh (migration 20261118211741).
+BOTS_CLOCKED = ("id", "slug", "display_name", "effort", "state", "created_at")
 
 
 def ensure(c):
@@ -20,8 +24,9 @@ def ensure(c):
     c.execute("INSERT OR IGNORE INTO roster_clock VALUES(1,0)")
     for table in TABLES:
         for operation in ("INSERT", "UPDATE", "DELETE"):
+            columns = f" OF {', '.join(BOTS_CLOCKED)}" if (table, operation) == ("bots", "UPDATE") else ""
             c.execute(
-                f"CREATE TRIGGER IF NOT EXISTS roster_clock_{table}_{operation.lower()} AFTER {operation} "
+                f"CREATE TRIGGER IF NOT EXISTS roster_clock_{table}_{operation.lower()} AFTER {operation}{columns} "
                 f"ON {table} BEGIN UPDATE roster_clock SET value=value+1 WHERE id=1; END"
             )
 
