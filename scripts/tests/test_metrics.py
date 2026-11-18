@@ -1,6 +1,7 @@
 """Verification metrics from fixture data, without network or git processes."""
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -589,3 +590,145 @@ def test_unmapped_manual_origin_stays_listed():
     assert "(in this window): 1." in page
     assert "- manual record 0123abc" in page
     assert "pull/2)" not in page
+
+
+QUEUE_SHA = "a" * 40
+
+
+def queue_run(number, pr, conclusion, created, base="main"):
+    return dict(
+        id=number,
+        status="completed",
+        conclusion=conclusion,
+        created_at=created,
+        head_branch=f"gh-readonly-queue/{base}/pr-{pr}-{QUEUE_SHA}",
+    )
+
+
+def timeline(number, *events, merged=None, base="main"):
+    nodes = [
+        dict(__typename="AddedToMergeQueueEvent", createdAt=when)
+        if why is None
+        else dict(__typename="RemovedFromMergeQueueEvent", createdAt=when, reason=why)
+        for when, why in events
+    ]
+    return dict(number=number, mergedAt=merged, baseRefName=base, timelineItems=dict(nodes=nodes))
+
+
+def test_queue_outcomes_read_cancelled_runs_from_the_queue_removal_record():
+    runs = [
+        # PR 1: its first run is cancelled by fail-fast and the queue removes it for failed checks;
+        # the second run passes.
+        queue_run(1, 1, "cancelled", "2026-11-16T10:00:00Z"),
+        queue_run(2, 1, "success", "2026-11-16T11:00:00Z"),
+        # PR 2: cancelled and rebuilt behind a failing group, no removal before its next run.
+        queue_run(3, 2, "cancelled", "2026-11-16T10:01:00Z"),
+        queue_run(4, 2, "cancelled", "2026-11-16T10:20:00Z"),
+        # PR 3: a run that ended failure with no removal read is still a failure.
+        queue_run(5, 3, "failure", "2026-11-16T10:02:00Z"),
+        # PR 4: taken out by hand.
+        queue_run(6, 4, "cancelled", "2026-11-16T10:03:00Z"),
+        # PR 5: its queue events were not read.
+        queue_run(7, 5, "cancelled", "2026-11-16T10:04:00Z"),
+        # Not counted: a release branch queue and a run still going.
+        queue_run(8, 6, "cancelled", "2026-11-16T10:05:00Z", base="release"),
+        dict(queue_run(9, 1, None, "2026-11-16T12:00:00Z"), status="in_progress"),
+    ]
+    timelines = {
+        1: timeline(1, ("2026-11-16T09:59:00Z", None), ("2026-11-16T10:06:00Z", "FAILED_CHECKS")),
+        # PR 2's later removal comes after its second run started, so only that run carries it.
+        2: timeline(2, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:30:00Z", "merge_conflict")),
+        3: timeline(3, ("2026-11-16T10:00:00Z", None)),
+        4: timeline(4, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:04:00Z", "manual")),
+    }
+    outcomes = {run["id"]: outcome for run, outcome in metrics.queue_outcomes(runs, timelines)}
+    assert outcomes == {
+        1: "failed",
+        2: "passed",
+        3: "superseded",
+        4: "removed",
+        5: "failed",
+        6: "removed",
+        7: "not read",
+    }
+
+
+def test_queue_merges_time_from_first_and_last_enqueue_and_count_throw_outs():
+    since, now = metrics.timestamp("2026-11-16T00:00:00Z"), metrics.timestamp("2026-11-22T23:59:59Z")
+    timelines = {
+        1: timeline(
+            1,
+            ("2026-11-16T10:00:00Z", None),
+            ("2026-11-16T10:10:00Z", "failed_checks"),
+            ("2026-11-16T11:00:00Z", None),
+            ("2026-11-16T11:15:00Z", "merged"),
+            merged="2026-11-16T11:15:00Z",
+        ),
+        2: timeline(
+            2, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:12:00Z", "merged"), merged="2026-11-16T10:12:00Z"
+        ),
+        # Merged without the queue, into a release branch, or before the window: not counted.
+        3: timeline(3, merged="2026-11-16T10:00:00Z"),
+        4: timeline(4, ("2026-11-16T10:00:00Z", None), merged="2026-11-16T10:05:00Z", base="release"),
+        5: timeline(5, ("2026-11-15T10:00:00Z", None), merged="2026-11-15T10:05:00Z"),
+        6: timeline(6, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:05:00Z", "manual")),
+        # Taken out of the queue by hand, then merged directly: queue events, but the queue did not merge it.
+        7: timeline(
+            7, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:05:00Z", "manual"), merged="2026-11-16T11:00:00Z"
+        ),
+    }
+    merges = {row["number"]: row for row in metrics.queue_merges(timelines, since, now)}
+    assert set(merges) == {1, 2}
+    assert (merges[1]["first"], merges[1]["last"], merges[1]["thrown_out"]) == (75, 15, True)
+    assert (merges[2]["first"], merges[2]["last"], merges[2]["thrown_out"]) == (12, 12, False)
+
+
+def test_queue_report_rows_give_weekly_shares_and_nearest_rank_p90():
+    since, now = metrics.timestamp("2026-11-16T00:00:00Z"), metrics.timestamp("2026-11-23T12:00:00Z")
+    runs = [queue_run(i, i, "success", "2026-11-16T10:00:00Z") for i in range(1, 10)]
+    runs.append(queue_run(10, 10, "cancelled", "2026-11-16T10:00:00Z"))
+    runs.append(queue_run(11, 11, "success", "2026-11-15T10:00:00Z"))  # before the window
+    merged = {i: f"2026-11-16T{10 + i // 6}:{i * 5 % 60:02d}:00Z" for i in range(1, 10)}
+    # A merge is a removal event too; it is not counted among the removals.
+    timelines = {
+        i: timeline(i, ("2026-11-16T10:00:00Z", None), (merged[i], "merged"), merged=merged[i]) for i in range(1, 10)
+    }
+    timelines[10] = timeline(10, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:03:00Z", "failed_checks"))
+    # A release branch queue's removal stays out of main's removal counts.
+    timelines[12] = timeline(12, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:04:00Z", "manual"), base="release")
+    lines = metrics.queue_report(runs, timelines, since, now)
+    rows = [line for line in lines if line.startswith("| 2026-W")]
+    # Merge minutes 5, 10, 15, 20, 25, 90, 95, 100, 105: p50 is the 5th of 9, p90 the 9th (nearest rank).
+    assert rows[0] == (
+        "| 2026-W47 | 10 | 9 (90.0%) | 1 (10.0%) | 0 (0.0%) | 0 (0.0%) | 9 | 25 / 105 | 105 | 0 (0.0%) | failed_checks 1 |"
+    )
+    assert rows[1] == "| 2026-W48 | 0 | 0 | 0 | 0 | 0 | 0 | — / — | — | 0 | — |"
+    assert not any(line.startswith("Not read") for line in lines)
+
+
+def test_unread_queue_is_named_and_the_rest_of_the_report_stands(monkeypatch):
+    class Refused(metrics.GitHub):
+        def queue_runs(self, since, now):
+            raise ValueError("GitHub read failed: actions/runs")
+
+    monkeypatch.setattr(metrics, "GitHub", Refused)
+    now = metrics.timestamp("2026-11-18T12:00:00Z")
+    queue = metrics.queue_health(REPO, now, 4)
+    assert queue == "GitHub read failed: actions/runs"
+    markdown = metrics.report(REPO, [], [], set(), now - metrics.timedelta(weeks=1), now, queue=queue)
+    assert "## Red → green episodes on main" in markdown
+    assert markdown.endswith("## Merge queue on main\n\nNot read: GitHub read failed: actions/runs.\n")
+
+
+def test_queue_timelines_batch_pull_requests_into_aliased_queries(monkeypatch):
+    queries = []
+
+    def graphql(self, query):
+        queries.append(query)
+        numbers = [int(n) for n in re.findall(r"pullRequest\(number: (\d+)\)", query)]
+        return {"repository": {f"p{n}": timeline(n) for n in numbers} | {"p0": None}}
+
+    monkeypatch.setattr(metrics.GitHub, "graphql", graphql)
+    found = metrics.GitHub(REPO).queue_timelines(range(1, metrics.TIMELINE_BATCH + 2))
+    assert len(queries) == 2 and 'repository(owner: "acme", name: "tico")' in queries[0]
+    assert sorted(found) == list(range(1, metrics.TIMELINE_BATCH + 2))
