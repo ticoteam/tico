@@ -539,8 +539,8 @@ def test_each_main_validation_hands_its_run_to_main_red_which_waits_for_it_to_fi
     ci, _ = _workflow("ci.yml")
     job = ci["jobs"]["main-red"]
     assert job["needs"] == "release-check" and job["if"] == "always() && github.ref == 'refs/heads/main'"
-    assert job["permissions"] == {"actions": "write"}
-    red_step, train_step = job["steps"]
+    assert job["permissions"] == {"actions": "write", "contents": "read"}
+    red_step, train_step = job["steps"][:2]  # then a red run goes to the Release Owner (test_tell_release_owner.py)
     for step in job["steps"]:
         assert step["continue-on-error"] is True  # a failed hand-off never turns the validation red
     assert (

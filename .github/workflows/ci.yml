@@ -662,9 +662,10 @@ jobs:
     needs: release-check
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 3
     permissions:
       actions: write
+      contents: read
     steps:
       - name: Hand this run to main-red.yml
         continue-on-error: true
@@ -678,3 +679,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run train.yml --repo "$GITHUB_REPOSITORY" --ref main -f validation_run="$GITHUB_RUN_ID"
+      # A red validation of main goes to its owner, the Release Owner bot on Tico Team, which fixes the cause or deletes
+      # the test the same day (scripts/ci/tell_release_owner.sh). main-red.yml still reviews the suspect pull requests.
+      - if: needs.release-check.result == 'failure'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        continue-on-error: true
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci/tell_release_owner.sh
+          sparse-checkout-cone-mode: false
+        timeout-minutes: 1
+      - name: Hand a red validation to the Release Owner
+        if: needs.release-check.result == 'failure'
+        continue-on-error: true
+        env:
+          TICO_RELEASE_OWNER_HOOK: ${{ secrets.TICO_RELEASE_OWNER_HOOK }}
+          TICO_RELEASE_OWNER_HOOK_SECRET: ${{ secrets.TICO_RELEASE_OWNER_HOOK_SECRET }}
+          TITLE: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}
+        run: scripts/ci/tell_release_owner.sh validation-red "$TITLE"

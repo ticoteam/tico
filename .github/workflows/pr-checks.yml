@@ -647,6 +647,8 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
     needs: [plan, tests, caddy-linux, static, types, merge-checks, rust-lint, desktop-app]
     runs-on: ubuntu-24.04
+    outputs:
+      flaky: ${{ steps.flaky.outputs.tests }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
@@ -693,6 +695,14 @@ jobs:
       - name: Collect flakes from leg retries
         continue-on-error: true
         run: python3 scripts/pr_checks.py flaky
+      # The tests that passed only on their retry, for the Release Owner (the release-owner job).
+      - name: Name the flaky tests
+        id: flaky
+        continue-on-error: true
+        run: |
+          if [ -f flaky.json ]; then
+            echo "tests=$(jq -r '[.[].tests[]] | unique | join(" ")' flaky.json | cut -c1-1500)" >> "$GITHUB_OUTPUT"
+          fi
       - name: Upload queue flakes
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         continue-on-error: true
@@ -711,8 +721,11 @@ jobs:
     needs: [plan, static, types, merge-checks, tests, rust-lint, desktop-app, caddy-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      failed: ${{ steps.verdict.outputs.failed }}
     steps:
       - name: Needed jobs passed or were skipped
+        id: verdict
         env:
           PLAN: ${{ needs.plan.result }}
           STATIC: ${{ needs.static.result }}
@@ -743,11 +756,16 @@ jobs:
           check caddy-linux "$CADDY"
           # A failed leg cancels the whole run, itself included, so its job reads "cancelled". Name the step that
           # really failed, or say that nothing did (cancelled from outside: a superseded queue group, or by hand).
-          if [ "$cancelled" = 1 ]; then
+          # The names are this job's `failed` output: a queue group with one goes to the Release Owner (release-owner).
+          failed=''
+          if [ "$status" = 1 ]; then
             # shellcheck disable=SC2016 # $job is a jq variable, not a shell one.
             failed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
               --jq '.jobs[] | select(.name != "checks") | .name as $job | .steps[]? | select(.conclusion == "failure") | "\($job): \(.name)"' \
               2>/dev/null | paste -sd ';' - | sed 's/;/; /g') || failed=''
+            echo "failed=${failed:0:1500}" >> "${GITHUB_OUTPUT:-/dev/null}"
+          fi
+          if [ "$cancelled" = 1 ]; then
             if [ -n "$failed" ]; then
               echo "::error::Failed: ${failed}. Fail fast then cancelled the other legs."
             else
@@ -784,3 +802,43 @@ jobs:
       - name: Diff coverage gate (added statements must run under the tests)
         if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         run: python3 scripts/diff_coverage.py gate --plan ci-plan.json --results ci-results
+
+  release-owner:
+    # A queue group that a step failed (the group is dropped from the queue), or whose tests passed only on a retry, goes
+    # to its owner: the Release Owner bot on Tico Team, which fixes the cause or deletes the test the same day
+    # (scripts/ci/tell_release_owner.sh, docs/releasing.md#who-fixes-a-red-or-flaky-test). A group cancelled from outside
+    # (superseded, or by hand) names no failed step and is not sent. Never required: `checks` does not wait for it.
+    needs: [checks, timings]
+    if: ${{ always() && github.event_name == 'merge_group' && (needs.checks.outputs.failed != '' || needs.timings.outputs.flaky != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        continue-on-error: true
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci/tell_release_owner.sh
+          sparse-checkout-cone-mode: false
+        timeout-minutes: 3
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci/tell_release_owner.sh
+          sparse-checkout-cone-mode: false
+        timeout-minutes: 3
+      - name: A step failed in this queue group
+        if: needs.checks.outputs.failed != ''
+        env:
+          TICO_RELEASE_OWNER_HOOK: ${{ secrets.TICO_RELEASE_OWNER_HOOK }}
+          TICO_RELEASE_OWNER_HOOK_SECRET: ${{ secrets.TICO_RELEASE_OWNER_HOOK_SECRET }}
+          FAILED: ${{ needs.checks.outputs.failed }}
+        run: scripts/ci/tell_release_owner.sh queue-failed "$FAILED"
+      - name: Tests passed only on their retry
+        if: needs.timings.outputs.flaky != ''
+        env:
+          TICO_RELEASE_OWNER_HOOK: ${{ secrets.TICO_RELEASE_OWNER_HOOK }}
+          TICO_RELEASE_OWNER_HOOK_SECRET: ${{ secrets.TICO_RELEASE_OWNER_HOOK_SECRET }}
+          FLAKY: ${{ needs.timings.outputs.flaky }}
+        run: scripts/ci/tell_release_owner.sh queue-flaky "$FLAKY"
