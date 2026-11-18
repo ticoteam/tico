@@ -649,3 +649,20 @@ jobs:
         run: |
           echo "Release gate parts: $GATE; images: $IMAGES"
           test "$GATE" = success && test "$IMAGES" = success
+
+  # The train dispatches this workflow with GITHUB_TOKEN, and GitHub starts no workflow_run for a run that token started,
+  # so main-red.yml never heard of the train's validations (none ran from Nov 16 to Nov 18). A dispatch from GITHUB_TOKEN
+  # does start a run: this job hands main-red.yml this run's id, and main-red waits for the run to finish before reading it.
+  main-red:
+    needs: release-check
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Hand this run to main-red.yml
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run main-red.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"
