@@ -107,6 +107,13 @@ def remember(attempt_id, value):
         _recent.setdefault(attempt_id, (now + REMEMBER_S, []))[1].append(value)
 
 
+def set_in_run(attempt_id):
+    """Whether a value was set for this run in the last hour: its streamed text pieces are not shown, as each upload is
+    scrubbed of it (scrub_attempt) but a value cut across two pieces would not be."""
+    entry = _recent.get(attempt_id)
+    return bool(entry and entry[0] >= time.monotonic())
+
+
 def scrub(text, values, label=MASK):
     for value in sorted(values or (), key=len, reverse=True):
         for form in {value, json.dumps(value)[1:-1]}:
