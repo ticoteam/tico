@@ -107,6 +107,13 @@ def test_an_incremental_anchor_chains_the_next_candidate_from_the_newest_green_i
     assert ri.full_within_day(records, NOW)["id"] == 1, "the day's full run is still the one that holds the day"
 
 
+def test_a_red_that_fail_fast_cut_short_is_no_anchor_so_the_one_before_it_is():
+    records = [record(3, C, conclusion="failure", incremental=True), record(2, B, hours=3, incremental=True)]
+    named = lambda item: {"backend/tests/test_a.py"}  # noqa: E731
+    assert ri.anchor_of(records, NOW, lambda sha: True, named, lambda item: item["id"] != 3)["id"] == 2
+    assert ri.anchor_of(records, NOW, lambda sha: True, named)["id"] == 3
+
+
 def test_the_anchor_is_the_newest_by_finish_time_not_by_list_order():
     records = [record(1, A, hours=3), record(2, B, hours=2)]  # oldest first
     assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 2

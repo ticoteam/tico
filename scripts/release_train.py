@@ -265,13 +265,16 @@ def validation_record(run):
 
 def ceiling_stops(gh, runs, now):
     """The day's validation runs that ci.yml's ceiling stopped: failed runs created on this UTC day whose ceiling job said
-    so. The count only grows until 00:00 UTC, so one stopped today means the day's ceiling is reached."""
+    so. The count only grows until 00:00 UTC, so one stopped today means the day's ceiling is reached. The ceiling counts
+    and stops full validations only, so an incremental run's jobs are never read (each read is a few seconds, and most
+    of a day's runs are incremental)."""
     day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
     return [
         run
         for run in runs
         if (run.get("created_at") or "").startswith(day)
         and run.get("conclusion") == "failure"
+        and parse_anchor(run.get("display_title")) is None
         and gh.ceiling_stopped(run)
     ]
 
@@ -400,13 +403,33 @@ class GitHub:
     def failed_tokens(self, run_id):
         """The tests a red validation's failed jobs name (release_increment.failed_tokens); None when a failure cannot be
         named, so any later commit could be the fix."""
-        jobs = self.pages("actions/runs/%d/jobs?per_page=100" % run_id, key="jobs")
+        failed = self.failed_parts(run_id)
+        # An incremental validation stops at its first failed part (ci.yml's gate: fail-fast), cancelling the others:
+        # those failed nothing, so the run's failures are the parts that did fail (and cut_short keeps it from anchoring).
+        if any(entry.get("conclusion") != "cancelled" for entry in failed):
+            failed = [entry for entry in failed if entry.get("conclusion") != "cancelled"]
         pairs = []
-        for entry in jobs:
+        for entry in failed:
             name = entry.get("name") or ""
-            if entry.get("conclusion") in FAILED and name not in increment.IGNORED_JOBS:
-                pairs.append((name, self.job_log(entry["id"]) if RED_JOB.fullmatch(name) else ""))
+            pairs.append((name, self.job_log(entry["id"]) if RED_JOB.fullmatch(name) else ""))
         return increment.failed_tokens(pairs)
+
+    def cut_short(self, run_id):
+        """Whether fail fast cancelled parts of this red run beside a part that failed: it ran only part of its suite."""
+        conclusions = {entry.get("conclusion") for entry in self.failed_parts(run_id)}
+        return "cancelled" in conclusions and len(conclusions) > 1
+
+    def failed_parts(self, run_id):
+        """A validation run's jobs that did not pass, other than its consequences (IGNORED_JOBS); read once per run."""
+        cache = self.__dict__.setdefault("_failed_parts", {})
+        if run_id not in cache:
+            jobs = self.pages("actions/runs/%d/jobs?per_page=100" % run_id, key="jobs")
+            cache[run_id] = [
+                entry
+                for entry in jobs
+                if entry.get("conclusion") in FAILED and (entry.get("name") or "") not in increment.IGNORED_JOBS
+            ]
+        return cache[run_id]
 
     def tag_commit(self, name):
         """The commit refs/tags/<name> points at (through an annotated tag), or None when there is no such tag."""
@@ -843,7 +866,10 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     def named(record):
         return gh.failed_tokens(record["id"])
 
-    anchor = increment.anchor_of(records, now, main_has, named)
+    def complete(record):
+        return not gh.cut_short(record["id"])
+
+    anchor = increment.anchor_of(records, now, main_has, named, complete)
     # The open reds: the anchor when it is red and no green validation since supersedes it, then the newest red since it.
     reds = [anchor] if increment.anchor_open(records, anchor, main_has) else []
     newer = increment.red_since(records, anchor, main_has)
@@ -1424,15 +1450,20 @@ def cmd_step(gh, env, now=None):
             failures.append(line)
             note("REPORTED " + line)
         if plan["action"] == "ship":
+            published = {}
 
-            def ship():
-                nonlocal shipment, record
+            def tag():
                 canary = install("CANARY", env)
                 if not canary:
                     raise Fail("ship: %s; nothing tagged" % missing("CANARY"))
                 base = release_base(env, plan["previous"])
                 notes = release_notes.build(gh, base, plan["sha"])
                 publish(gh, plan["sha"], plan["version"])
+                published.update(canary=canary, base=base, notes=notes)
+
+            def ship():
+                nonlocal shipment, record
+                canary, base, notes = published["canary"], published["base"], published["notes"]
                 # The approval record exists before the canary moves, so an approval of the candidate is never lost.
                 approval = open_approval(
                     gh, plan["version"], plan["sha"], notes, plan.get("run", {}).get("html_url", "")
@@ -1455,9 +1486,10 @@ def cmd_step(gh, env, now=None):
                 if not mark_latest(gh, plan["version"]):
                     record = "Release %s shipped, not marked latest (a newer release is)" % plan["version"]
 
-            step("ship", ship)
-            if shipment:
-                # Main moved on while the candidate was validated: validate its head now. Waiting for the next event
+            step("ship", tag)
+            if published:
+                # Main moved on while the candidate was validated: validate its head now, as soon as the release is
+                # published (the next validation compares with it), while the canary updates. Waiting for the next event
                 # could take a while: a quiet main has no pushes, and GitHub drops most backstop schedules.
                 after = {}
                 step(
@@ -1467,6 +1499,11 @@ def cmd_step(gh, env, now=None):
                 if after.get("action") == "dispatch":
                     note("Train: " + after["why"])
                     step("validate", lambda: validate(after))
+                step("ship", ship)
+            if shipment:
+                # Continuous: stable takes the release as soon as the canary runs it healthy and it is approved (by a
+                # person, or automatically: approval_state), in this same step, not at the next event.
+                step("promote", lambda: promote(gh, env))
         elif plan["action"] == "dispatch":
             step("validate", lambda: validate(plan))
     if failures:

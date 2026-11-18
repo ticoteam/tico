@@ -70,7 +70,7 @@ def failed_tokens(jobs):
     return tokens
 
 
-def anchor_of(records, now, contained, named):
+def anchor_of(records, now, contained, named, complete=lambda record: True):
     """The anchor: the newest validation, full or incremental, that finished within the last 24 hours (by finish time),
     whose commit main still contains, and that ran the suite to an answer: green, or red naming its failures. A green
     incremental validation covers its own diff from its anchor, so the chain of incrementals anchors the next one.
@@ -78,7 +78,9 @@ def anchor_of(records, now, contained, named):
     failures (a build, a VM, a startup failure), is no anchor; full_within_day still counts it, so no second full run is
     dispatched on its account. Returns the record with its "failed" tokens (empty when green), or None. `records` are
     every release's validations (validation_record in release_train): the anchor may have validated an earlier
-    release."""
+    release. `complete(record)` is False for a red run that fail fast cut short (ci.yml's gate cancels an incremental
+    validation's other parts at its first failure): it ran only part of its suite, so it is no anchor either; the next
+    validation selects from the anchor before it, which still covers its diff."""
     candidates = [
         record
         for record in records
@@ -92,7 +94,7 @@ def anchor_of(records, now, contained, named):
             continue
         if record["conclusion"] == "success":
             return {**record, "failed": set()}
-        if record["conclusion"] in FAILED:
+        if record["conclusion"] in FAILED and complete(record):
             failed = named(record)
             if failed is not None:
                 return {**record, "failed": failed}

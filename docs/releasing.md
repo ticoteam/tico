@@ -32,8 +32,10 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
 - **Each step** first promotes the canary's release to stable once it is approved and nothing holds it (see
   [Approval](#approval)). Then it ships a green candidate, or dispatches Release validation (`ci.yml`) for main's head
   as the next patch.
-- **A green candidate ships.** The train tags that commit, publishes it (`release.yml`, dispatched on the tag) and
-  updates the canary. The release is published as not latest; only once the canary runs it healthy does the train make
+- **A green candidate ships, continuously.** The train tags that commit and publishes it (`release.yml`, dispatched on
+  the tag). As soon as it is published, the train validates main's head when main has moved (the next validation
+  compares with it), then updates the canary. Once the canary runs it healthy and it is approved, stable takes it in the
+  same step: an automatically approved release goes from green to stable in one step, with no wait for another event. The release is published as not latest; only once the canary runs it healthy does the train make
   it the latest GitHub release and move the images' `latest` tags, so new installs, update checks and desktop apps
   never get a release the canary has not run. Latest never moves backwards, and a marking that failed is retried by the
   backstop once the canary runs that release healthy.
@@ -80,7 +82,8 @@ A validation the train dispatched fires no `workflow_run` (GitHub starts none fo
 Release validation's last job dispatches the train itself with `validation_run` set to its run id. The train's guard
 waits for that run to complete, and it counts as a finished run, not a manual one: `RELEASE_TRAINS` still applies. A
 step that ships a candidate also validates main's head when main has moved past the candidate, without waiting for
-another event. A quiet main has no pushes, and GitHub drops many backstop schedules.
+another event, as soon as the release is published and before the canary updates. A quiet main has no pushes, and
+GitHub drops many backstop schedules.
 
 Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
 and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
@@ -124,6 +127,10 @@ The train validates a head in one of two ways. A **full** validation is the whol
   says `the train waits` and why. A red run that names no failure, or whose diff cannot be read, is run again on the
   next commit, incrementally from the anchor (a full validation waits for a person, see above). A red run at main's
   head waits for a push.
+- **An incremental run stops at its first failure.** Its gate parts fail fast: the first part that fails cancels the
+  others, so a red incremental run ends minutes sooner and the train moves on. Such a run names the tests that did
+  fail (they are carried and waited for, as above), but its cancelled parts ran nothing, so it is no anchor: the next
+  validation selects from the anchor before it, which still covers its diff. A full validation runs every part.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane (which also runs the content sweeps a change reaches, see the selection rules below), and `alone` tests
   never do. A UI script runs when its own files or helpers change, its name matches the changed UI file, or a `UI_MAP`
@@ -159,8 +166,8 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
   repository's permission for that login is checked, and the account must be a person: a bot or a GitHub App does not
   count, even with write access, and neither does anyone without write access. The `hold` label keeps one release off
   stable.
-- **Promotion.** At each train step (the backstop runs one every 20 minutes), stable takes the canary's release once it
-  is approved, not held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it
+- **Promotion.** Right after the canary takes a release, in the same step, and again at each later train step (the
+  backstop runs one every 20 minutes, for a person's approval), stable takes the canary's release once it is approved, not held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it
   healthy. Stable's update closes the issue, and the issue says who approved it, or that it was approved automatically.
 - **Superseded.** A newer release on the canary closes an older issue with a link to the newer one. A candidate whose
   canary update failed is closed too, as not on the canary: there is nothing to approve.
