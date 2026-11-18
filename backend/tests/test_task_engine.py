@@ -1,9 +1,11 @@
+
 """The one writer of a task's stage, owner and status (backend/task_engine.py, docs/dev/pipelines-v3.md "How a task moves").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a three-stage Build pipeline, the fictional
 company's person and two bots.
 """
 
+import json
 import sqlite3
 
 import pytest
@@ -288,11 +290,12 @@ def _review_stage(c):
     return X.new_task(c, ANA, "Checkout flow", "product")
 
 
-def _says(c, row, sender, commit):
+def _says(c, row, sender, commit, about=None):
     body = f"PR https://github.com/acme/app/pull/7 at {commit}."
+    refs = json.dumps({"task": about}) if about else None
     c.execute(
-        "INSERT INTO messages(id, conversation_id, sender_id, kind, body, created_at) VALUES(?,?,?,?,?,?)",
-        (H.new_id(), row["conversation_id"], sender, "say", body, "2026-11-18T04:00:00Z"),
+        "INSERT INTO messages(id, conversation_id, sender_id, kind, body, refs, created_at) VALUES(?,?,?,?,?,?,?)",
+        (H.new_id(), row["conversation_id"], sender, "say", body, refs, "2026-11-18T04:00:00Z"),
     )
 
 
@@ -349,9 +352,12 @@ def test_a_review_gate_reads_the_commit_from_the_filers_request(c, general, monk
     monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
     row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
     check_models.record(c, reviewer, row["id"], REVIEW_CHECK)
-    _says(c, row, ANA, head)
     X.say_done(c, row)
     E.advance(c, row["id"])
+    # A message about another task, in the same conversation, names the head: it is not this review's commit.
+    _says(c, row, ANA, head, about=parent["id"])
+    assert R.standings(c, E.task(c, parent["id"]))[1].state == R.NOT_MET
+    _says(c, row, ANA, head)
     assert R.standings(c, E.task(c, parent["id"]))[1].state == R.MET
 
 

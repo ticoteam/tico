@@ -378,7 +378,7 @@ def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
 
 def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, str]]:
     """(PR ref, commit) pairs the review reads: the PR heads saved when it was filed (check_models.record), then each
-    "PR <url> at <commit>" in its own conversation, whoever wrote it (the filer's request or the owner's notes)."""
+    "PR <url> at <commit>" in a message about the review, whoever wrote it (the filer's request or the owner's notes)."""
     from .item_sources import github as F
 
     named: list[tuple[str, str]] = []
@@ -391,10 +391,14 @@ def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, s
         if isinstance(heads, dict):
             saved = cast("dict[str, object]", heads)
             named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
+    from .hubdb import MESSAGE_TASK_SQL
+
+    # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
     for (body,) in conn.execute(
-        "SELECT body FROM messages WHERE conversation_id=? AND kind='say' "
-        "AND deleted_at IS NULL AND superseded_at IS NULL ORDER BY created_at, id",
-        (review["conversation_id"],),
+        "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+        "WHERE m.conversation_id=? AND m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+        f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id",
+        (review["conversation_id"], review["id"]),
     ).fetchall():
         for repo, number, sha in REVIEW_NAMES_RE.findall(str(body or "")):
             named.append((F.pr_ref(repo, int(number)), sha.lower()))
