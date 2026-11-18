@@ -3622,6 +3622,15 @@ class GrowthSourceCreate(Contract):
     refresh_hours: int | None = Field(default=None, ge=1, le=24 * 92)
 
 
+class GrowthProposal(Contract):
+    """A bot's channel, source or both, that it will own, for the owner or an admin to OK (backend/growth_proposals.py)."""
+
+    channel: GrowthChannelCreate | None = None
+    source: GrowthSourceCreate | None = None
+    for_channel: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")
+    ask: str | None = Field(default=None, max_length=200)
+
+
 class GrowthSourceUpdate(Contract):
     truth_for: str | None = Field(default=None, min_length=1, max_length=80)
     system: str | None = Field(default=None, min_length=1, max_length=80)

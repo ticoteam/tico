@@ -1826,6 +1826,50 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
             "owner_ref": "bot:growth",
         },
     )
+    # A bot proposes the channel and its source in one ask; the source's fields go under source, without the prefix.
+    assert run(
+        "growth",
+        "channel",
+        "propose",
+        "linkedin",
+        "--name",
+        "LinkedIn posts",
+        "--source-system",
+        "HubSpot",
+        "--source-truth-for",
+        "signups",
+        "--source-reach-kind",
+        "mcp",
+        "--source-map",
+        "new_customers=signups",
+        "--ask",
+        "human:ana",
+    ) == (
+        "POST",
+        "growth/proposals",
+        {
+            "channel": {"slug": "linkedin", "name": "LinkedIn posts"},
+            "source": {
+                "truth_for": "signups",
+                "system": "HubSpot",
+                "reach_kind": "mcp",
+                "sync_map": {"fields": {"new_customers": "signups"}},
+            },
+            "ask": "human:ana",
+        },
+    )
+    assert run("growth", "channel", "propose", "linkedin", "--name", "LinkedIn") == (
+        "POST",
+        "growth/proposals",
+        {"channel": {"slug": "linkedin", "name": "LinkedIn"}},
+    )  # no source: none is proposed
+    assert run(
+        "growth", "source", "propose", "--channel", "linkedin", "--truth-for", "signups", "--system", "HubSpot"
+    ) == (
+        "POST",
+        "growth/proposals",
+        {"source": {"truth_for": "signups", "system": "HubSpot"}, "for_channel": "linkedin"},
+    )
     assert run("growth", "source", "update", "src1", "--may", "pause ads") == (
         "PATCH",
         "growth/sources/src1",

@@ -105,6 +105,18 @@ def _proposal_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") 
     return module.ok_given(conn, grant, ctx)
 
 
+def _growth_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import growth_proposals
+
+    return growth_proposals.ok_given(conn, grant, ctx)
+
+
+def _growth_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import growth_proposals
+
+    return growth_proposals.may_ok(conn, person, grant)
+
+
 def _edition_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
     from .company_page import editions
 
@@ -187,6 +199,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "board": _board_ok,
     "email_send": _email_ok,
     "finance": _finance_ok,
+    "growth": _growth_ok,
     "letter": _letter_ok,
     "proposal": _proposal_ok,
     "support": _support_ok,
@@ -194,7 +207,18 @@ ON_OK: dict[str, Callable[..., object]] = {
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
 # (POST /api/v2/oks/{id}/use) never name one.
-OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish", "finance")
+OWNED = (
+    "email_send",
+    "letter",
+    "edition",
+    "board",
+    "proposal",
+    "support",
+    "webhook",
+    "publish",
+    "finance",
+    "growth",
+)
 
 # Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
 # words, or None when `person` may. Checked when the OK is given and again when it is used. An OWNED kind that is not
@@ -205,9 +229,13 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
     "board": _edition_may_ok,
     "edition": _edition_may_ok,
     "proposal": _proposal_may_ok,
+    "growth": _growth_may_ok,
     "file": _file_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
+# Kinds whose OK anyone its MAY_OK rule lets OK it may give, not only the person it waits on: a bot's Growth proposal is
+# asked of the owner, and any admin may OK it (backend/growth_proposals.py). Shown, own click and used once still hold.
+ANY_ALLOWED = ("growth",)
 
 # The kinds a bot may ask for and use through the generic routes (POST /api/v2/tasks/{id}/oks, POST
 # /api/v2/oks/{id}/use), each with who may OK it. Nothing else: a kind not here is refused when asked, and an OK of a
@@ -248,6 +276,7 @@ FILED_TITLES: dict[str, str] = {
     "webhook": "Make a webhook endpoint",
     "publish": "Publish to the roadmap",
     "finance": "OK a Finance action",
+    "growth": "Add to Growth",
 }
 
 
@@ -536,6 +565,15 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
     if value != "ok" or _GIVING.get() == requirement_id:
         return None
     return FROM_PREVIEW if bound(conn, requirement_id) else None
+
+
+def given_by_another_allowed(conn: "sqlite3.Connection", requirement_id: str, value: object) -> bool:
+    """For the engine's answer check: whether give_ok is answering `ok` to an OK of an ANY_ALLOWED kind, whose giver
+    it already checked against the kind's rule (MAY_OK), so someone other than the person it waits on may answer."""
+    if value != "ok" or _GIVING.get() != requirement_id:
+        return False
+    found = grant(conn, requirement_id)
+    return bool(found) and kind_of(found["subject"]) in ANY_ALLOWED
 
 
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
@@ -828,7 +866,7 @@ def give_ok(
     if state == WITHDRAWN or not requirement or not visit or visit.get("left_at"):
         _refuse(conn, person, "task_requirement", "This is not asked any more", task_id)
     asked_of = R.person_of(conn, requirement, visit["id"])
-    if asked_of != person:
+    if asked_of != person and kind_of(row["subject"]) not in ANY_ALLOWED:
         name = H.actor_name(conn, asked_of) if asked_of else "someone who is here: give it to them"
         _refuse(conn, person, "task_requirement", f"This is asked of {name}", task_id)
     if str(shown_hash or "") != row["content_hash"]:

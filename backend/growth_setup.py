@@ -38,6 +38,22 @@ Store: Any = _store_mod
 STEPS = ("settings", "channel", "source", "month")
 # What doing a step is, as the actions every read names in `you_may`.
 ACTION = {"settings": "settings", "channel": "channels", "source": "sources", "month": "months"}
+# A bot may not add a channel or source, but it may propose one it will own: the owner or an admin OKs it in one click
+# (backend/growth_proposals.py). `oks` (added per read) names who may.
+PROPOSE = {
+    "channel": {
+        "says": "Propose the channel, and its source, that you will run: the owner or an admin OKs it in one click.",
+        "command": 'tico growth channel propose <slug> --name "<name>" --source-system "<system>" '
+        '--source-truth-for "<number>" --source-reach-kind <mcp|credential|url|person>',
+        "tool": "tico_growth_channel_propose",
+    },
+    "source": {
+        "says": "Propose the source for a channel you run: the owner or an admin OKs it in one click.",
+        "command": 'tico growth source propose --channel <slug> --system "<system>" --truth-for "<number>" '
+        "--reach-kind <mcp|credential|url|person>",
+        "tool": "tico_growth_source_propose",
+    },
+}
 # Columns set only together with the date they follow (else `<name minus _by>_at`).
 FOLLOWS = {"set_up_before_first_open": "first_opened_at"}
 DATES = ("first_opened_at", "settings_at", "channel_at", "source_at", "month_at", "done_at", "numbers_seen_at")
@@ -174,6 +190,8 @@ def block(c: Any, auth: Any, who: Any, st: dict[str, Any] | None = None) -> dict
     if not may:
         nxt["who_may"] = who_may(c)
         nxt["bots_may"] = nxt["step"] == "month"
+        if who.role == "bot" and nxt["step"] in PROPOSE:
+            nxt["you_may_propose"] = {**PROPOSE[nxt["step"]], "oks": nxt["who_may"]}
     return {"done": False, "steps": st["steps"], "next": nxt}
 
 

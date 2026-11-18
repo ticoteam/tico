@@ -1181,7 +1181,7 @@ def install(app, store, auth, mutate):
         SETUP.record(c, who.actor)
         return {**result, "setup": SETUP.block(c, auth, who)}
 
-    from . import growth_computed, growth_customers
+    from . import growth_computed, growth_customers, growth_proposals
 
     growth_customers.install(app, store, auth, mutate)  # customer facts in: load, delete
     growth_computed.install(app, store, auth)  # cohorts computed from them
@@ -1296,6 +1296,19 @@ def install(app, store, auth, mutate):
         def work(c):
             editor(who, "retires a channel")
             return channel_retire(c, who.actor, slug)
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/growth/proposals")
+    def growth_propose(request: Request, body: M.GrowthProposal):
+        """A bot: a channel, a source or both that it will own, asked as an OK of the owner (or the admin `ask` names).
+        Nothing is added until that person OKs it from its preview; then Tico adds it as them and tells the bot
+        (backend/growth_proposals.py)."""
+        who = request.state.identity
+
+        def work(c):
+            reader(who)
+            return growth_proposals.propose(c, who, body, getattr(request.app.state, "integrations", None))
 
         return mutate(request, body, work)
 

@@ -9,6 +9,7 @@
      is a web address (theirs are tico:editions/… and tico:stat-board/<hash>, which stay under Details).
    - proposal (backend/proposals.py): one line per change, from and to (GET /v2/usage/limits, /v2/task-caps).
    - webhook (backend/webhooks.py _spec): the endpoint's name, its address and what it sends (GET /v2/event-types).
+   - growth (backend/growth_proposals.py): the channel and the source a bot will own, as they will be added.
    - anything else (budget raise, HQ reply, a new kind): its title and text, then its plain fields as labelled lines.
    No route here changes anything, and nothing here changes what Approve sends (the OK's shown_hash).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -58,6 +59,7 @@ async function decideOkContentHTML(kind: string, content: unknown): Promise<stri
       : kind === 'edition' || kind === 'board' ? decideEditionHTML(content)
       : kind === 'proposal' ? await decideProposalHTML(content)
       : kind === 'webhook' ? await decideWebhookHTML(content)
+      : kind === 'growth' ? decideGrowthHTML(content)
       : '';
   } catch { head = ''; }
   return (head || decideFieldsHTML(content)) + decideDetailsHTML(content);
@@ -174,6 +176,27 @@ async function decideProposalHTML(content: unknown): Promise<string> {
     }
   }
   return lines.length ? `<h3 class="dc-title">${esc(lines[0]!)}</h3>${lines.slice(1).map(l => `<p class="dc-sum">${esc(l)}</p>`).join('')}` : '';
+}
+
+// ---- A bot's Growth channel and source, to be added owned by it
+const DC_REACH: Record<string, string> = {mcp: 'through its MCP tool', credential: 'with a stored login', url: 'at an address', person: 'from a person'};
+function decideGrowthHTML(content: unknown): string {
+  const o = dcObj(content), ch = dcObj(o.channel), src = dcObj(o.source);
+  const rows: [string, string][] = [];
+  if (dcStr(ch.slug)) {
+    rows.push(['Channel', esc(`${dcStr(ch.name)} (${dcStr(ch.slug)}) · ${dcStr(ch.track) || 'performance'} · ${dcStr(ch.stage) || 'idea'}`)]);
+    if (ch.budget_month != null) rows.push(['Budget a month', esc(dcStr(ch.budget_month))]);
+    if (dcStr(ch.why)) rows.push(['Why', esc(dcStr(ch.why))]);
+  }
+  if (dcStr(o.for_channel)) rows.push(['For channel', esc(dcStr(o.for_channel))]);
+  rows.push(['Owner', esc(actorLabel(dcStr(o.owner)) + ' (the bot asking)')]);
+  if (dcStr(src.system)) {
+    const reach = DC_REACH[dcStr(src.reach_kind)] || '';
+    rows.push(['Source', esc([dcStr(src.system), `truth for ${dcStr(src.truth_for)}`, reach].filter(Boolean).join(' · '))]);
+    if (dcStr(src.sync_kind)) rows.push(['Fills numbers', esc(dcStr(src.sync_kind).replace(/_/g, ' '))]);
+  }
+  const title = dcStr(ch.slug) && dcStr(src.system) ? 'Add a Growth channel and its source' : dcStr(ch.slug) ? 'Add a Growth channel' : 'Add a Growth source';
+  return `<h3 class="dc-title">${esc(title)}</h3>` + dcFacts(rows);
 }
 
 // ---- A webhook endpoint

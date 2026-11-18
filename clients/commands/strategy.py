@@ -393,7 +393,7 @@ def growth_segment_show(api, args):
 
 @tool(
     "tico_growth_channel_add",
-    "Owner or admin only: a new channel.",
+    "Owner or admin only: a new channel. A bot proposes one: tico_growth_channel_propose.",
     {"slug": _s("Lowercase, digits and dashes: google-search"), **CHANNEL_PROPS},
     required=("slug", "name"),
     writes=True,
@@ -537,13 +537,66 @@ def growth_source_list(api, args):
 
 @tool(
     "tico_growth_source_add",
-    "Owner or admin only: name the system that holds the truth for a number.",
+    "Owner or admin only: name the system that holds the truth for a number. A bot proposes one: "
+    "tico_growth_source_propose.",
     SOURCE_PROPS,
     required=("truth_for", "system"),
     writes=True,
 )
 def growth_source_add(api, args):
     return _as_person(api).post("growth/sources", _source_body(api, args), key=_key(args))
+
+
+PROPOSE_PROPS = {
+    "ask": _s("Whose Needs you it goes to: the owner (by default) or an admin, by person id; any admin may OK it"),
+}
+SOURCE_OF_CHANNEL = {"source_" + k: v for k, v in SOURCE_PROPS.items() if k not in ("owner", "campaign")}
+
+
+def _proposal(api, args, body):
+    if args.get("ask"):
+        body["ask"] = _target(api, args["ask"])
+    return api.post("growth/proposals", body, key=_key(args))
+
+
+@tool(
+    "tico_growth_channel_propose",
+    "A bot: propose a channel you will run, and with source_* the source of its numbers, for the owner or an admin "
+    "to OK in one click. Nothing is added until then; then both are yours and you get a notice.",
+    {
+        "slug": _s("Lowercase, digits and dashes: google-search"),
+        **{k: v for k, v in CHANNEL_PROPS.items() if k != "owner"},
+        **SOURCE_OF_CHANNEL,
+        **PROPOSE_PROPS,
+    },
+    required=("slug", "name"),
+    writes=True,
+)
+def growth_channel_propose(api, args):
+    body = {"channel": {"slug": args["slug"], **_channel_body(api, args, CHANNEL_PROPS)}}
+    own = {k.removeprefix("source_"): v for k, v in args.items() if k in SOURCE_OF_CHANNEL}
+    if any(v is not None for v in own.values()):
+        body["source"] = _source_body(api, own)
+    return _proposal(api, args, body)
+
+
+@tool(
+    "tico_growth_source_propose",
+    "A bot: propose a source you will own, for a channel you run (channel names it) or alone, for the owner or an "
+    "admin to OK in one click. Nothing is added until then.",
+    {
+        **{k: v for k, v in SOURCE_PROPS.items() if k not in ("owner", "campaign")},
+        "channel": _s("Your channel that will name this source"),
+        **PROPOSE_PROPS,
+    },
+    required=("truth_for", "system"),
+    writes=True,
+)
+def growth_source_propose(api, args):
+    body = {"source": _source_body(api, {k: v for k, v in args.items() if k in SOURCE_PROPS})}
+    if args.get("channel"):
+        body["for_channel"] = args["channel"]
+    return _proposal(api, args, body)
 
 
 @tool(
@@ -979,6 +1032,19 @@ CLI = (
         example="tico growth channel add google-search --name 'Google Search' --track performance --budget 2000",
     ),
     Command(
+        "growth channel propose",
+        "a bot: propose a channel you will run, and its source, for the owner or an admin to OK",
+        args=(
+            Arg("name", "--name"),
+            *_CHANNEL,
+            Arg("source_sync_kind", "--source-sync"),
+            Arg("source_map", "--source-map", metavar="NUMBER=COLUMN"),
+        ),
+        render=_growth_text,
+        example="tico growth channel propose linkedin --name 'LinkedIn posts' --source-system HubSpot "
+        "--source-truth-for signups --source-reach-kind mcp",
+    ),
+    Command(
         "growth channel update",
         "change a channel (owner or admin; the owning bot may change why, stage, budget, input KPI)",
         args=_CHANNEL,
@@ -1012,6 +1078,17 @@ CLI = (
         args=_SOURCE,
         render=_growth_text,
         example="tico growth source add --truth-for 'ad spend' --system 'Google Ads' --reach-kind mcp",
+    ),
+    Command(
+        "growth source propose",
+        "a bot: propose a source you will own, for your channel, for the owner or an admin to OK",
+        args=(
+            *_SOURCE[:3],
+            *[a for a in _SOURCE[3:] if a.name != "campaign"],
+            Arg("channel", "--channel", metavar="SLUG"),
+        ),
+        render=_growth_text,
+        example="tico growth source propose --channel linkedin --truth-for signups --system HubSpot --reach-kind mcp",
     ),
     Command(
         "growth source update",
