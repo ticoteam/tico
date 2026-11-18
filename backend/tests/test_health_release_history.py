@@ -30,7 +30,7 @@ def test_a_fresh_install_lists_the_release_it_runs(api, monkeypatch):
     """AC-8: the startup write gives a new install one entry, its running release."""
     stored(api, [])
     started(api, monkeypatch, "0.6.20", "2026-11-17T08:03:11.000000Z")
-    assert history(api) == [{"version": "0.6.20", "since": "2026-11-17T08:03:11.000000Z"}]
+    assert history(api) == [{"version": "0.6.20", "since": "2026-11-17T08:03:11Z"}]
 
 
 def test_a_new_release_is_added_last_and_a_restart_on_the_same_one_adds_nothing(api, monkeypatch):
@@ -38,7 +38,7 @@ def test_a_new_release_is_added_last_and_a_restart_on_the_same_one_adds_nothing(
     stored(api, [{"version": "0.6.18", "since": "2026-11-17T05:41:09.000000Z"}])
     started(api, monkeypatch, "0.6.19", "2026-11-17T07:12:30.000000Z")
     before = history(api)
-    assert before[-1] == {"version": "0.6.19", "since": "2026-11-17T07:12:30.000000Z"} and len(before) == 2
+    assert before[-1] == {"version": "0.6.19", "since": "2026-11-17T07:12:30Z"} and len(before) == 2
     started(api, monkeypatch, "0.6.19", "2026-11-17T09:00:00.000000Z")
     assert history(api) == before
 
@@ -49,8 +49,8 @@ def test_a_rollback_is_its_own_entry(api, monkeypatch):
     started(api, monkeypatch, "0.6.20", "2026-11-17T08:03:11.000000Z")
     started(api, monkeypatch, "0.6.19", "2026-11-17T08:30:00.000000Z")
     assert history(api)[-2:] == [
-        {"version": "0.6.20", "since": "2026-11-17T08:03:11.000000Z"},
-        {"version": "0.6.19", "since": "2026-11-17T08:30:00.000000Z"},
+        {"version": "0.6.20", "since": "2026-11-17T08:03:11Z"},
+        {"version": "0.6.19", "since": "2026-11-17T08:30:00Z"},
     ]
 
 
@@ -66,7 +66,8 @@ def test_500_are_kept_and_the_oldest_is_dropped_within_30_kb(api, monkeypatch):
     started(api, monkeypatch, "1.0.0", "2026-11-18T00:00:00.000000Z")
     listed = history(api)
     assert len(listed) == releases.HISTORY_KEPT == 500
-    assert listed[0] == full[1] and listed[-1] == {"version": "1.0.0", "since": "2026-11-18T00:00:00.000000Z"}
+    assert listed[0] == {"version": "0.0.1", "since": "2026-10-01T00:00:00Z"}
+    assert listed[-1] == {"version": "1.0.0", "since": "2026-11-18T00:00:00Z"}
     assert len(api.get("/api/v2/health", headers=headers()).content) - without <= 30 * 1024
 
 
@@ -74,7 +75,7 @@ def test_a_bot_reads_it_with_only_version_and_since(api, monkeypatch):
     """AC-5: a signed-in bot (not the owner) reads it; anything else an entry carries stays out."""
     stored(api, [{"version": "0.6.19", "since": "2026-11-17T07:12:30.000000Z", "actor": "human:ana", "host": "box"}])
     entries = history(api, bot_token(api))
-    assert entries == [{"version": "0.6.19", "since": "2026-11-17T07:12:30.000000Z"}]
+    assert entries == [{"version": "0.6.19", "since": "2026-11-17T07:12:30Z"}]
 
 
 def test_since_keeps_the_entries_from_that_time_and_a_malformed_one_is_refused(api):
@@ -91,3 +92,32 @@ def test_since_keeps_the_entries_from_that_time_and_a_malformed_one_is_refused(a
     assert [r["version"] for r in history(api, query="?since=2026-11-17T07:00:00")] == ["0.6.19"]  # no zone: UTC
     refused = api.get("/api/v2/health?since=yesterday", headers=headers())
     assert refused.status_code == 400 and "ISO time" in refused.text
+
+
+def test_500_prerelease_entries_with_microseconds_stay_within_30_kb(api, monkeypatch):
+    """The guard with ordinary prerelease versions: since is listed to the whole second, versions stay whole."""
+    stored(api, [{"version": "0.7.0-rc.39", "since": "2026-11-17T08:03:11.123456Z"} for _ in range(500)])
+    listed = history(api, bot_token(api))
+    assert len(listed) == 500 and {r["version"] for r in listed} == {"0.7.0-rc.39"}
+    assert len(json.dumps(listed, separators=(",", ":")).encode()) <= 30 * 1024
+
+
+def test_since_is_listed_to_the_whole_second_and_the_stored_record_keeps_microseconds(api):
+    stored(api, [{"version": "0.6.20", "since": "2026-11-17T08:03:11.123456Z"}])
+    assert history(api, bot_token(api)) == [{"version": "0.6.20", "since": "2026-11-17T08:03:11Z"}]
+    with api.app.state.store.transaction() as c:
+        assert releases.history(c)[0]["since"] == "2026-11-17T08:03:11.123456Z"
+
+
+def test_since_at_the_entrys_second_keeps_it(api):
+    """Inclusive at the second: since=08:03:11Z keeps an entry stored at 08:03:11.123456Z; a later second drops it."""
+    stored(api, [{"version": "0.6.20", "since": "2026-11-17T08:03:11.123456Z"}])
+    bot = bot_token(api)
+    assert [r["version"] for r in history(api, bot, "?since=2026-11-17T08:03:11Z")] == ["0.6.20"]
+    assert history(api, bot, "?since=2026-11-17T08:03:12Z") == []
+    # A fractional cutoff before the stored start in the same second keeps it; one after it drops it.
+    assert history(api, bot, "?since=2026-11-17T08:03:11.100000Z") == [
+        {"version": "0.6.20", "since": "2026-11-17T08:03:11Z"}
+    ]
+    assert history(api, bot, "?since=2026-11-17T08:03:11.200000Z") == []
+    assert api.get("/api/v2/health?since=2026-13-01", headers=headers()).status_code == 400
