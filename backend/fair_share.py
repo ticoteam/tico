@@ -1,3 +1,4 @@
+# pyright: strict
 """Each API client's fair share of the server (docs/api.md#rate-limits): one script must not slow the whole company.
 
 One person's API token reading a task 600 times a minute, each read about a second of SQL, left runners' heartbeats
@@ -21,8 +22,12 @@ import math
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NoReturn, Self
 
+from .auth import Identity
+from .config import Settings
 from .store import Problem
 
 WINDOW = 60.0
@@ -40,10 +45,10 @@ class Budget:
     per_minute: int  # requests started in any 60 seconds; 0 is no limit
 
 
-def client(who):
+def client(who: Identity) -> tuple[str, str] | None:
     """(budget kind, client key) for a caller with a budget, or None. The key is the credential where there is one,
     so two tokens of one person are two clients, and the Assistant acting for a person is not that person's token."""
-    if who is None or who.role == "runner" or who.view:
+    if who.role == "runner" or who.view:
         return None
     if who.via == "assistant":
         return "bot", "assistant:" + who.actor
@@ -56,7 +61,7 @@ def client(who):
     return None
 
 
-def _named(who):
+def _named(who: Identity) -> str:
     if who.via == "assistant":
         return "The Assistant"
     if who.via_token:
@@ -67,16 +72,16 @@ def _named(who):
 
 
 class FairShare:
-    def __init__(self, budgets, clock=time.monotonic):
+    def __init__(self, budgets: dict[str, Budget], clock: Callable[[], float] = time.monotonic) -> None:
         self.budgets = budgets  # {kind: Budget}
         self.clock = clock
         self.lock = threading.Lock()
-        self.running = collections.Counter()  # key -> requests running now that hold a slot
-        self.started = {}  # key -> deque of monotonic start times within WINDOW
+        self.running: collections.Counter[str] = collections.Counter()  # key -> requests running now that hold a slot
+        self.started: dict[str, collections.deque[float]] = {}  # key -> deque of monotonic start times within WINDOW
         self.admitted = 0
 
     @classmethod
-    def from_settings(cls, settings):
+    def from_settings(cls, settings: Settings) -> Self:
         return cls(
             {
                 "token": Budget(settings.fair_share_token_concurrent, settings.fair_share_token_per_minute),
@@ -84,10 +89,12 @@ class FairShare:
             }
         )
 
-    def admit(self, who, path):
+    def admit(self, who: Identity | None, path: str) -> str | None:
         """A ticket for `done` when the request may run (None when it has no budget or takes no slot); else raises
         429 `rate_limited`, which counts toward nothing."""
-        found = None if path in RELAYS else client(who)
+        if who is None or path in RELAYS:
+            return None
+        found = client(who)
         if found is None:
             return None
         kind, key = found
@@ -97,7 +104,7 @@ class FairShare:
         holds = bool(budget.concurrent) and not WAITS.fullmatch(path)
         now = self.clock()
         with self.lock:
-            window = self.started.setdefault(key, collections.deque())
+            window = self.started.setdefault(key, collections.deque[float]())
             while window and window[0] <= now - WINDOW:
                 window.popleft()
             if holds and self.running[key] >= budget.concurrent:
@@ -124,7 +131,7 @@ class FairShare:
                 self._sweep(now)
         return key if holds else None
 
-    def done(self, ticket):
+    def done(self, ticket: str | None) -> None:
         if ticket is None:
             return
         with self.lock:
@@ -132,7 +139,7 @@ class FairShare:
             if self.running[ticket] <= 0:
                 del self.running[ticket]
 
-    def _refuse(self, who, wait, what, extra):
+    def _refuse(self, who: Identity, wait: int, what: str, extra: dict[str, int | str]) -> NoReturn:
         raise Problem(
             "rate_limited",
             f"{_named(who)} {what}, so other work in the company is not held up. Retry in {wait} s, and "
@@ -142,7 +149,7 @@ class FairShare:
             extra={**extra, "retry_after": wait},
         )
 
-    def _sweep(self, now):
+    def _sweep(self, now: float) -> None:
         for key in [k for k, w in self.started.items() if not w or w[-1] <= now - WINDOW]:
             if not self.running.get(key):
                 del self.started[key]
