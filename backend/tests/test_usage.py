@@ -47,8 +47,9 @@ def test_a_finished_run_keeps_its_tokens_model_and_list_price_cost(api):
 
 
 def test_anthropic_cache_hits_follow_the_pricing_pages_multipliers():
-    """Anthropic's page prices a cache hit at 0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5."""
+    """Anthropic's page prices a cache hit at 0.025x input on Fable 5.2 and 5.1, 0.05x on Opus 5.5 and Sonnet 5.5."""
     for model, ratio in (
+        ("claude-fable-5-2", 0.025),
         ("claude-fable-5-1", 0.025),
         ("claude-opus-5-5", 0.05),
         ("claude-sonnet-5-5", 0.05),

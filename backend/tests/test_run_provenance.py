@@ -4,7 +4,7 @@ the model that ran it, never the bot's configured one, and a maker Tico cannot k
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "subscription"}
-CODEX = {"model": "gpt-6.1-sol", "runtime": "codex", "harness": "codex", "billing": "subscription"}
+CODEX = {"model": "gpt-6.2-sol", "runtime": "codex", "harness": "codex", "billing": "subscription"}
 CURSOR = {"model": "cursor-auto", "runtime": "cursor", "harness": "cursor-agent", "billing": "subscription"}
 
 
@@ -37,12 +37,12 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
     fell, aid = work(api, machine, "fell back", [(CLAUDE, 0), (CODEX, 50)], fallback="codex", primary_limited=True)
     made = ran_on(api, fell)
     assert made["family"] == "openai" and made["fallback"] == "codex"
-    assert [s["model"] for s in made["segments"]] == ["gpt-6.1-sol"]
+    assert [s["model"] for s in made["segments"]] == ["gpt-6.2-sol"]
     with api.app.state.store.read() as c:
         detail = c.execute("SELECT detail FROM events WHERE action='attempt.fallback' AND target=?", (aid,)).fetchone()[
             0
         ]
-    assert '"model": "gpt-6.1-sol"' in detail and '"primary_runtime"' in detail
+    assert '"model": "gpt-6.2-sol"' in detail and '"primary_runtime"' in detail
     assert [r["ran_on"]["family"] for r in get(api, "bots/ops/turns") if r["id"] == aid] == ["openai"]
     # Claude's login is held after its limit (backend/login_holds.py); Try now, as after the plan renews, lifts it.
     post(api, "bots/ops/limit/retry", {})

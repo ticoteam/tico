@@ -271,7 +271,7 @@ A bot can have another model look at its work without a second bot:
 
 ```sh
 tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --message "https://github.com/..."
-tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --message "..."
+tico task child <parent-id> --check-model codex:gpt-6.2-sol --title "Check the migration plan" --message "..."
 ```
 
 `--check-model` takes a runtime or `runtime:model`. With no value it takes the company's check model (Settings >

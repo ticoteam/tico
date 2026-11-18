@@ -51,7 +51,7 @@ def usage_turn(c, tid, computer=None, bot='ops'):
         'input_tokens': 100,
         'cached_tokens': 0,
         'output_tokens': 10,
-        'model': 'gpt-6.1-sol',
+        'model': 'gpt-6.2-sol',
         'provider': 'openai',
         'est_cost_usd': 0.01,
         'billing': 'subscription',

@@ -52,7 +52,7 @@ def open_computer(api, label="Team Mac"):
 # ------------------------------------------------------------------ any route, as the requester
 def test_an_owner_requester_may_and_a_member_requester_may_not(api, botops):
     ana = turn(api, botops, person="ana-test", text="Use a bigger model on ops")
-    changed = act(api, ana, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": 1})
+    changed = act(api, ana, "POST", "bots/ops/model", {"model": "gpt-6.2-sol", "expected_revision": 1})
     assert changed.status_code == 200, changed.text
     with api.app.state.store.read() as c:
         row = c.execute("SELECT actor,detail FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()
@@ -60,7 +60,7 @@ def test_an_owner_requester_may_and_a_member_requester_may_not(api, botops):
     finish(api, botops, ana)
     cara = turn(api, botops, person="cara-test", text="Use a bigger model on ops")
     # Not her bot: the server's own rule refuses, exactly as in the app.
-    assert act(api, cara, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": 2}).status_code == 403
+    assert act(api, cara, "POST", "bots/ops/model", {"model": "gpt-6.2-sol", "expected_revision": 2}).status_code == 403
     # What only an owner or an admin may ask for is refused at once, not handed over as a card that fails.
     assert act(api, cara, "PUT", "access/limits", {"member_bot_limit": 9}).status_code == 403
     assert act(api, cara, "PUT", "providers", {"enabled": ["openai"]}).status_code == 403
@@ -69,7 +69,7 @@ def test_an_owner_requester_may_and_a_member_requester_may_not(api, botops):
     revision = act(api, cara, "GET", "bots/jira-manager/access").json()["revision"]
     assert (
         act(
-            api, cara, "POST", "bots/jira-manager/model", {"model": "gpt-6.1-sol", "expected_revision": revision}
+            api, cara, "POST", "bots/jira-manager/model", {"model": "gpt-6.2-sol", "expected_revision": revision}
         ).status_code
         == 200
     )
@@ -192,7 +192,7 @@ def test_an_active_bot_goes_on_the_only_computer_or_the_least_busy_one(api):
             "display_name": "Scribe",
             "description": "Writes",
             "status": "active",
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "effort": "high",
             "harness": None,
             "runner_id": None,
@@ -209,7 +209,7 @@ def test_an_active_bot_goes_on_the_only_computer_or_the_least_busy_one(api):
             "display_name": "Writer",
             "description": "Writes",
             "status": "active",
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "effort": "high",
             "harness": None,
             "runner_id": None,
@@ -229,7 +229,7 @@ def test_activating_or_resuming_places_a_bot_and_the_scheduler_places_the_rest(a
             "display_name": "Scribe",
             "description": "Writes",
             "status": "planned",
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "effort": "high",
             "harness": None,
             "runner_id": None,
@@ -264,7 +264,7 @@ def test_a_members_bot_waits_for_a_computer_that_takes_it_and_then_goes_there(ap
             "display_name": "Mine",
             "description": "x",
             "status": "active",
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "effort": "high",
             "harness": None,
             "runner_id": None,
@@ -681,7 +681,7 @@ def test_a_human_requested_botops_run_starts_with_its_own_credentials_and_acts_a
     ana = turn(api, botops, person="ana-test", text="Use a bigger model on ops")
     fetched = api.get("/api/v2/credential-runtime", headers=headers(ana["token"]))
     assert fetched.status_code == 200, fetched.text
-    changed = act(api, ana, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": 1})
+    changed = act(api, ana, "POST", "bots/ops/model", {"model": "gpt-6.2-sol", "expected_revision": 1})
     assert changed.status_code == 200, changed.text
     with api.app.state.store.read() as c:
         row = c.execute("SELECT actor FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()
@@ -826,12 +826,12 @@ def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_
     later = _wake(api, botops)
     revision = act(api, later, "GET", "bots/ops/access", ref=task_id).json()["revision"]
     # Its own rights: refused, with what the person clicks and where.
-    own = act(api, later, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": revision})
+    own = act(api, later, "POST", "bots/ops/model", {"model": "gpt-6.2-sol", "expected_revision": revision})
     assert own.status_code == 403
     assert own.json()["error"]["link"].endswith("#/bot/ops/more") and "go ahead" in own.json()["error"]["fix"]
     # Citing her open task: her rights, recorded as hers via BotOps.
     changed = act(
-        api, later, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": revision}, ref=task_id
+        api, later, "POST", "bots/ops/model", {"model": "gpt-6.2-sol", "expected_revision": revision}, ref=task_id
     )
     assert changed.status_code == 200, changed.text
     with api.app.state.store.read() as c:
