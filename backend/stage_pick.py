@@ -317,17 +317,23 @@ def _manager_fallback(
 ) -> Choice | None:
     """Where the pick becomes the task's owner (On deck, Build) and every bot it picks from is paused, the pipeline's
     manager gets the task instead of nobody, so the work is still done (step 5's one exception). A list cut by a private
-    task or a stage rule still wakes the manager to pick, and so does a manager that cannot run or that a rule refuses.
-    No turn is taken: the bots' order is kept for when one is back."""
+    task or a stage rule still wakes the manager to pick, and so does a manager that is a person, cannot run, cannot
+    already read a private task (the engine never adds a reader to one), or that a rule refuses. No turn is taken: the
+    bots' order is kept for when one is back."""
     from . import task_engine
     from . import task_wakes as _task_wakes
 
     task_wakes: Any = _task_wakes
+    H = _h()
     if not pick.owns_task or not screen.paused or screen.unreadable or screen.refused:
         return None
     pipe = task_engine.pipeline(conn, str(stage.get("pipeline_id") or ""))
     manager = str((pipe or {}).get("manager_id") or "")
-    if not manager or task_wakes.cannot_run(conn, manager, {}) or refused_by(conn, row, stage, manager):
+    if not manager or not H.is_bot(manager) or task_wakes.cannot_run(conn, manager, {}):
+        return None
+    if row is not None and H.task_private(conn, row) and not H.task_private_readable(conn, manager, row):
+        return None
+    if refused_by(conn, row, stage, manager):
         return None
     return Choice(manager, f"every {role(conn, pick.bots)} it picks from is paused{_TO_MANAGER}", fallback=True)
 
