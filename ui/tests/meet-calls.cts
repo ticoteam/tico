@@ -23,6 +23,8 @@ declare var threadViewsLive: (kind: string, event: unknown) => unknown;
 declare var RING_SOUND: {timer: number};
 declare var callCount: (c: unknown) => number;
 declare var callFaces: (c: unknown) => string[];
+declare var callDmBot: (t: unknown) => string;
+declare var callVoiceDraw: (box: HTMLElement, voice: unknown) => void;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), at = (sec: number) => new Date(now - sec * 1000).toISOString();
@@ -233,7 +235,7 @@ let browser: import('playwright').Browser | null = null;
     // Once Tico Meet's room reports who is in it, the room's count and faces are what show; a DM with one bot calls it.
     assert.deepEqual(await page.evaluate(() => {
       const tico = {id: 'x', provider: 'tico', status_source: 'recorder', live_count: 1, participants: [{actor: 'human:ana', joined_at: 'x', in_call: true}, {actor: 'human:bea', joined_at: 'x', in_call: false}]};
-      const dm = (others: string[]) => callDmBot({id: 'd', audience: 'personal', dm_with: others.map(actor => ({actor})), dm_with_count: others.length} as unknown as ThreadRow);
+      const dm = (others: string[]) => callDmBot({id: 'd', audience: 'personal', dm_with: others.map(actor => ({actor})), dm_with_count: others.length});
       return [callCount(tico), callFaces(tico), dm(['bot:ops']), dm(['bot:ops', 'human:bea']), dm(['human:bea'])];
     }), [1, ['human:ana'], 'ops', '', '']);
     assert.match(await card.locator('.call-card-n').innerText(), /^4:1\d$/, 'the clock counts from when Google first saw someone');
@@ -384,7 +386,7 @@ let browser: import('playwright').Browser | null = null;
     // The bots' voice in the bar: dots while a bot thinks, its sentence while it speaks, a note when none answers.
     assert.deepEqual(await page.evaluate(() => {
       const box = document.createElement('div');
-      const shown = (voice: CallVoiceView | null) => { callVoiceDraw(box, voice); return box.hidden ? null : [box.querySelector('.typing') ? 'dots' : '', box.querySelector('.call-caption')?.textContent ?? '']; };
+      const shown = (voice: unknown) => { callVoiceDraw(box, voice); return box.hidden ? null : [box.querySelector('.typing') ? 'dots' : '', box.querySelector('.call-caption')?.textContent ?? '']; };
       return [
         shown(null),
         shown({bots: [{slug: 'ops', state: 'listening'}], note: null}),
