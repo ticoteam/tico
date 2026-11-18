@@ -2,7 +2,7 @@
 # A merge queue group's static checks on its merge commit, which is what lands on main: the static checks job's own list.
 # Two pull requests can each pass their own static checks and still break one together (a migration timestamp, a route
 # one removes and the other calls, a lint rule one turns on and the other's new code breaks), so the group runs them all.
-# The plan job starts this beside its test selection, so a group needs no static checks VM
+# The queue group's merge commit checks job runs it on its own VM, beside the plan and the tests
 # (.github/workflows/pr-checks.yml). Every check runs; any failure fails the script.
 # Includes scripts/gates.sh: shared gate scripts and ast-grep rules with their fixtures.
 #   PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh <base sha> <merge commit sha>

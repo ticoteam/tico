@@ -62,3 +62,4 @@ recommend_when: [sells_software, uses_slack]
 # Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/quick-perf-check

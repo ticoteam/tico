@@ -115,6 +115,84 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
     assert checks.durations([xml]) == {"a.py": 4, "b.py": 3}
 
 
+def test_a_plan_packs_by_the_seconds_the_last_green_queue_groups_measured_averaged_per_file(tmp_path, monkeypatch):
+    """One group's seconds for a file swing by 2x, so the plan averages the groups it restored (a file one group did not
+    run keeps the others' figure), and the queue's own timings job saves what the next plans read."""
+    a, b = "backend/tests/test_a.py", "backend/tests/test_b.py"
+    picked = {"python": [a, b], "browser": [], "caddy": False, "conformance": False, "rust": [], "contracts": False}
+    monkeypatch.setattr(checks, "selection", lambda *args, **kwargs: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *args, **kwargs: [])
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "collect", lambda: Counter({a: 1, b: 1}))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    for run, seconds in (("101", {a: 100.0, b: 10.0}), ("102", {a: 300.0, b: "text"}), ("103", {})):
+        (tmp_path / "previous" / run).mkdir(parents=True)
+        (tmp_path / "previous" / run / "durations.json").write_text(json.dumps(seconds))
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", tmp_path / "previous", head="head")
+    assert plan["timed_files"] == 2 and sum(plan["estimated_seconds"]) == 210.0  # a: (100 + 300) / 2, b: 10
+
+    jobs = workflow_jobs()["jobs"]
+    restore = next(s for s in jobs["plan"]["steps"] if s.get("name", "").startswith("Restore measured timings"))
+    for part in ("--workflow pr-checks.yml", "--event merge_group", "--status success", "--name queue-timings"):
+        assert part in restore["run"], part
+    select = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
+    assert "--timings previous-timings --light" in select["run"]
+    saved = {step.get("name") or step.get("uses", ""): step for step in jobs["timings"]["steps"]}
+    assert saved["Per-file seconds for the next plans"]["run"] == "python3 scripts/pr_checks.py durations"
+    upload = next(step for name, step in saved.items() if name.startswith("actions/upload-artifact@"))
+    assert upload["with"]["name"] == "queue-timings" and upload["with"]["path"] == "durations.json"
+    assert all(step.get("continue-on-error") for step in (saved["Per-file seconds for the next plans"], upload))
+
+
+def test_the_cli_plan_collects_tests_beside_the_dependency_map_and_stops_a_collection_it_does_not_need(
+    tmp_path, monkeypatch
+):
+    """On a hosted runner the collection and the map take about a minute each, so the CLI's plan starts the collection
+    first and reads it after the selection. A plan that selects no Python test stops it rather than waiting."""
+    from scripts import release_checks
+
+    order = []
+
+    class Collection:
+        returncode = 0
+        killed = False
+
+        def communicate(self):
+            order.append("read")
+            return "backend/tests/test_a.py::test_one\nbackend/tests/test_a.py::test_two\n", ""
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            order.append("stopped")
+
+    started = Collection()
+    monkeypatch.setattr(checks, "start_collect", lambda root=None: order.append("start") or started)
+    monkeypatch.setattr(release_checks, "validate_shard_coverage", lambda counts, selection, root: None)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: order.append("map") or "graph")
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "narrow", lambda picked, *args, **kwargs: picked)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    picked = {"python": ["backend/tests/test_a.py"], "browser": [], "caddy": False, "conformance": False, "rust": []}
+    monkeypatch.setattr(checks, "selection", lambda *args, **kwargs: {**picked, "contracts": False})
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True, prefetch=True)
+    assert order == ["start", "map", "read"] and plan["python"] == ["backend/tests/test_a.py"]
+
+    order.clear()
+    picked["python"] = []
+    checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True, prefetch=True)
+    assert order == ["start", "map", "stopped"] and started.killed
+    # Without prefetch (and for a change that needs no map) nothing starts early.
+    order.clear()
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_a.py": 1}))
+    picked["python"] = ["backend/tests/test_a.py"]
+    checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True)
+    assert order == ["map"]
+
+
 def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pytest(tmp_path, monkeypatch, mapped):
     files = {
         "backend/tests/test_task_engine.py": 2,
@@ -1347,7 +1425,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, static, types, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 6  # plan, tests, static, types, merge, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1505,15 +1583,18 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         ("caddy-linux", "caddy"),
     ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
-    # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
-    assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
-    assert "github.event_name == 'pull_request'" not in jobs["timings"]["if"]
+    # Only the cosmetic timing receipt (nothing waits on it) and the merge commit checks (a pull request's own static
+    # checks and types jobs run the same list on its head) run in the merge queue alone.
+    for name in ("timings", "merge-checks"):
+        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
+        assert "github.event_name == 'pull_request'" not in jobs[name]["if"], name
     queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
-    assert queue_only == {"timings"}
+    assert queue_only == {"timings", "merge-checks"}
     assert set(jobs) == {
         "plan",
         "static",
         "types",
+        "merge-checks",
         "tests",
         "checks",
         "rust-lint",
@@ -1536,7 +1617,7 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
         queue_only = "github.event_name == 'merge_group'" in condition and "pull_request" not in condition
         assert queue_only or "!github.event.pull_request.draft" in condition, name
     # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
-    # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
+    # checks run on pull requests only: the merge queue runs them in its merge commit checks job.
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
     for name in ("static", "types"):
         assert (
@@ -2092,32 +2173,34 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
         assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
         # The plan decided: no step inside the job diffs the branch again.
         assert not any("git diff" in str(step.get("run", "")) for step in jobs[job]["steps"]), job
-    # The static checks VM runs on pull requests only; a queue group's plan checks its merge commit in its place.
+    # The static checks VM runs on pull requests only; a queue group's merge commit checks job runs in its place.
     assert "github.event_name == 'pull_request'" in jobs["static"]["if"]
 
 
-def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_selection(tmp_path):
+def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_tests(tmp_path):
     """Two pull requests can pass their own static checks and break a whole-tree one together (a route one removes and
-    the other calls), so a queue group runs those on its merge commit. The plan job starts them before the selection and
-    reports them after it, so they cost no VM and little wall time."""
+    the other calls), so a queue group runs those on its merge commit. They run on their own VM beside the plan and the
+    tests: nothing waits for them but the gate, so they hold no test VM back."""
     jobs = workflow_jobs()["jobs"]
-    steps = jobs["plan"]["steps"]
+    job = jobs["merge-checks"]
+    assert job["if"] == "${{ github.event_name == 'merge_group' }}" and "needs" not in job
+    assert "merge-checks" in jobs["checks"]["needs"]
+    assert "merge-checks" not in str(jobs["tests"]["needs"])
+    assert "merge_commit_checks" not in str(jobs["plan"])
+    steps = job["steps"]
     names = [str(step.get("name", "")) for step in steps]
-    start = names.index("Start the merge commit checks")
-    select = names.index("Select affected tests and size measured Python and browser groups")
-    report = names.index("Merge commit checks")
-    assert names.index("Install (five minutes per attempt, one retry)") < start < select < report
-    for index in (start, report):
-        assert steps[index]["if"] == "github.event_name == 'merge_group'"
-    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[start]["run"]
-    assert "set +e" in steps[start]["run"] and steps[start]["run"].rstrip().endswith("&")
-    assert steps[report]["timeout-minutes"] <= 10 and 'exit "$(cat' in steps[report]["run"]
+    install = names.index("Install (five minutes per attempt, one retry)")
+    run = names.index("Merge commit checks")
+    assert install < names.index("Cache pinned tools") < run == len(steps) - 1
+    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[run]["run"]
+    assert steps[run]["env"]["QUEUE_HEAD"] == "${{ github.event.merge_group.head_sha }}"
+    assert job["timeout-minutes"] <= 12
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
     # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
     # one pull request turns on can fail the other's new code).
     static = [str(step.get("run", "")) for job in ("static", "types") for step in jobs[job]["steps"] if step.get("run")]
     found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
-    found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
+    found -= {"scripts/ci_install.sh"}  # the static job's install, which the merge commit checks job has already done
     found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
     assert found >= {
         "scripts/check_migration_order.py",

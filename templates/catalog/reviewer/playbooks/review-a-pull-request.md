@@ -54,6 +54,9 @@ Start from the diff, the Spec page and the failing checks. Read other files only
      `waiting for #<fix pull request> to merge`. Never a guessed date.
    - Once main is fixed, the fix is the task owner's rebase and push (`git rebase origin/<base branch>`), never re-run: a
      re-run tests the same merge with the old main and fails again.
+8. **SQL changes:** when the diff changes a query, a schema or an index, the author's quick perf check
+   (`.claude/skills/quick-perf-check/SKILL.md`) must be on the task: each query's plan, its old and new time, and any N+1
+   scan. Missing numbers are a `question:` on the page, and the author posts them before the change merges.
 
 ## 2. Check against the team's standard
 

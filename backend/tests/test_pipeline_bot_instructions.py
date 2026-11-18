@@ -382,3 +382,29 @@ def test_the_release_label_flow_stays_off_stages_that_wait_for_a_published_relea
     routing = agent("release-owner")
     assert 'no automatic "in a release" requirement' in routing
     assert routing.index("labels nothing") < routing.index("release:YYYY-MM-DD.N")
+
+
+# A change that adds or changes SQL: its author runs the quick perf check, and its reviewer reads the numbers it posts.
+PERF_SKILL = ".claude/skills/quick-perf-check"
+
+
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer"])
+def test_a_sql_change_gets_the_quick_perf_check_from_its_author_and_its_reviewer(template):
+    assert PERF_SKILL in card(template)["shared_files"], template
+    skill = catalog.files(template)[f"{PERF_SKILL}/SKILL.md"].read_text()
+    assert len(skill.splitlines()) <= 25
+    for words in ("EXPLAIN QUERY PLAN", "N+1", "copy of the data", "before the change merges"):
+        assert words in skill, words
+    assert f"{PERF_SKILL}/SKILL.md" in agent(template), template
+    playbook = " ".join((CATALOG / "reviewer" / "playbooks" / "review-a-pull-request.md").read_text().split())
+    assert f"{PERF_SKILL}/SKILL.md" in playbook
+
+
+def test_the_qa_owner_records_one_choice_for_each_red_main_or_revert():
+    text = agent("qa-owner")
+    choice = "Record one choice on the task for each red main or revert"
+    assert choice in text
+    assert "a selection fix (test selection missed an existing test)" in text
+    assert "a regression test (the behaviour was not covered)" in text
+    assert "a flake or infrastructure remedy" in text
+    assert text.index("## When main is red") < text.index(choice) < text.index("## Blockers only a person can fix")

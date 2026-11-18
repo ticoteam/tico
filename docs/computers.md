@@ -297,7 +297,8 @@ changes.
   Tico with its own run token, next to its credentials; it is never written into the bot's repository. A Claude token
   or Anthropic key is set in that turn's environment. A ChatGPT login or OpenAI key gets a Codex home of its own on
   that computer; its `auth.json` is there only while a turn on it runs, and when Codex refreshes the login there, the
-  refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
+  refreshed login is sent back to Tico. A ChatGPT login is also given to every turn on its computer, whatever tool the turn runs,
+  so a bot on Claude can run `codex` from its shell; an OpenAI key is not, since it pays per use. Each token in it is masked in what the turn leaves.
 - A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
   passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
   else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.

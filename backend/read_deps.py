@@ -25,12 +25,10 @@ refuses to drop a column a trigger names, so a migration dropping one of these c
 first; a rename is carried.
 """
 
-import json
-import sqlite3
-import threading
 import time
 
 from . import hubdb as H
+from . import row_clock
 from .store import Problem
 
 # A walk that read a message naming a file records this node; such a row is not settled, and the node is not kept.
@@ -81,14 +79,19 @@ class Walk:
         from .auth import Identity
         from .privacy_index import ReadIndex
 
-        self.index = ReadIndex(c, Identity("keeper", "owner"), rooms=True)
+        # Built under the sweep's write lock, once per write: no per-task readability (every task is private here,
+        # and nothing is denied), and the task ids and room map the server already shares (backend/row_clock.py). A
+        # Walk that worked out every private task's readers and read every room held the lock 0.25 s on TIDY before
+        # its first row (0.03 s now), seconds on a busy host, so each write settled one row while other writers, the
+        # Slack gateway's among them, gave up after their 10 s wait ("database is locked").
+        self.index = ReadIndex(c, Identity("keeper", "owner"), rooms=True, denials=False)
         self.c, self.nodes = c, set()
         index = self.index
         index.private = _Everything(self.nodes)
         index.denied = set()
-        tasks = set(index.task_ids)
+        tasks, rooms = row_clock.refs(c)
         index.known_task = lambda tid: self.nodes.add("t:" + str(tid)) or tid in tasks
-        index.conversation_tasks = _Recorded(dict(c.execute("SELECT id,task_id FROM conversations")), self.nodes)
+        index.conversation_tasks = _Recorded(rooms, self.nodes)
         index.target_message = self._message
         index.string_sources = index._string_sources
         index.message_sources = index._message_sources

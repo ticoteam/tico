@@ -104,7 +104,14 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   const rows: string[] = [];
   // Stage: the pipeline and the stage it is in (Done or Closed once finished); its menu moves it back or on.
   const stageName = taskStatusLabel(t), pipeName = t.pipeline?.name || '';
-  rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
+  // In a side stage: "↳ Rejected · from Bot QA · 2h", and Send back, a plain move to the stage it came from.
+  const from = t.status === 'open' ? taskCameFrom(t) : null;
+  if (from) {
+    const said = [`from ${from.name}`, ageShort(taskStageSince(t))].filter(Boolean).join(' · ');
+    rows.push(row('stage', 'Stage', `${SIDE_MARK}${txt(stageName)}<span class="prop-txt prop-from">· ${esc(said)}</span>`,
+      {edit: r.edit && !!t.pipeline_id, words: `Side stage ${stageName} · ${said}`,
+        extra: r.edit ? `<button type="button" class="ghost small prop-back" data-prop-send-back="${esc(from.id)}">Send back</button>` : ''}));
+  } else rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
     {edit: r.edit && !!t.pipeline_id, words: stageName}));
   // Owner. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
@@ -166,6 +173,10 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   }
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
+// When a task entered its stage: its own read's (stage_since), else its row's on the Tasks page while that row is in the
+// same stage.
+const taskStageSince = (t: PropTask): string | null =>
+  t.stage_since || TASKS_ST?.tasks.find(x => x.id === t.id && x.stage_id === t.stage_id)?.stage_since || null;
 // The goal row's title, read once per goal (tasks.ts keeps them in GOAL_TITLES).
 async function taskGoalRowFill(root: ParentNode): Promise<void> {
   const a = root.querySelector<HTMLAnchorElement>('[data-goal-row]'); if (!a) return;
@@ -452,6 +463,8 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       void save('people', cur => ({roles: {[role]: ((cur.roles || {})[role] || []).filter(a => a !== gone)}}));
       return;
     }
+    const back = eventElement(ev)?.closest<HTMLElement>('[data-prop-send-back]');
+    if (back) { void save('stage', {move: back.dataset.propSendBack ?? ''}); return; }
     const clear = eventElement(ev)?.closest<HTMLElement>('[data-prop-clear]');
     if (clear) {
       const field = clear.dataset.propClear ?? '';

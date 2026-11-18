@@ -50,7 +50,8 @@ Delivery: the claim records what it handed each attempt (`attempt_subscriptions`
 (`subscriptions`, ids and kinds only). The run reads values with its own run token from `GET credential-runtime`. An
 environment subscription (a token or Anthropic key) is set in the turn's environment for that CLI; a home subscription
 (a ChatGPT login or OpenAI key for Codex) becomes `auth.json` in a home of its own per subscription on that computer,
-there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). Codex refreshes a ChatGPT login in that
+there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). A ChatGPT login is also handed to every
+turn on its computer, whatever runtime the turn runs, so a bot on Claude can run `codex` from its shell (`for_shell`). Codex refreshes a ChatGPT login in that
 file; the runner sends the refreshed file back (`POST runner-model-subscription-refresh`) so the next computer starts
 from it. Only a live run still given the subscription on that computer, at the revision it was handed, writes back
 (`refreshed`).
@@ -1823,10 +1824,16 @@ def for_claim(c, runner, config, loads=None, bot=""):
         record = providers.load(c)
     ready = readiness_document(row["readiness"]) if row else {}
     out = []
-    for runtime in turn_runtimes(config, record):
+    runtimes = turn_runtimes(config, record)
+    # A plan login the computer keeps in a home (a ChatGPT login) also signs its CLI in for the turn's own commands:
+    # a bot on Claude runs `codex exec` on it (runner-rs/src/model_subscriptions.rs `for_shell`).
+    shell = [rt for (rid, rt) in given if rid == runner["id"] and rt in RUNTIMES and rt not in runtimes]
+    for runtime in [*runtimes, *shell]:
         if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
             continue  # a subscription authenticates a CLI; it cannot install one
         sub = in_effect(c, runner["id"], runtime, loads=loads)
+        if sub and runtime in shell and not for_shell(sub):
+            continue
         if (
             sub
             and bot
@@ -1837,9 +1844,18 @@ def for_claim(c, runner, config, loads=None, bot=""):
         ):
             continue
         if sub:
-            lazy = runtime not in own
+            # Another runtime's value is sent only if the turn moves to it (`activate`), except a shell login, which
+            # every process of the turn gets from the start.
+            lazy = runtime not in own and not for_shell(sub)
             out.append({"runtime": runtime, "subscription": sub, "activate": lazy})
     return out
+
+
+def for_shell(sub):
+    """Whether a subscription signs its CLI in for any turn's own commands on its computer: a plan login kept in the
+    CLI's home (a ChatGPT login), never an API key, which spends per use."""
+    spec = KINDS.get(sub.get("kind")) or {}
+    return bool(spec.get("file")) and spec.get("billing") == "subscription"
 
 
 def hand_out(c, attempt_id, chosen):
