@@ -1,85 +1,80 @@
-from pathlib import Path
-from unittest.mock import Mock, patch
+import socket
+import sqlite3
 
+from botocore.exceptions import ClientError
 import pytest
 
-from backend.operations import api_healthy, backup, health, replication_healthy, restore_check, tunnel_healthy
+from backend import operations
+from backend.operations import backup, health, restore_check
 from backend.store import H
+from backend.tests.helpers.backup_bundle import ObjectStore
+from backend.tests.helpers.cloudwatch import CloudWatch
+from backend.tests.live import live  # noqa: F401 - pytest finds the live fixture by this import
 
 
-def test_operational_health_never_advances_backup_time_after_failed_upload(api):
+class UnavailableObjectStore(ObjectStore):
+    """Every upload is refused the way S3 refuses it while it is unavailable."""
+
+    def put_object(self, **kw):
+        raise ClientError({"Error": {"Code": "ServiceUnavailable"}}, "PutObject")
+
+
+def closed_url(path):
+    """A loopback URL that nothing listens on, so the probe gets connection refused."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return f"http://127.0.0.1:{port}{path}"
+
+
+def test_operational_health_never_advances_backup_time_after_failed_upload(api, live, tmp_path):
     store = api.app.state.store
-    s3, cw = Mock(), Mock()
-    with patch(
-        "backend.operations.upload_bundle",
-        return_value={
-            "verified": True,
-            "sha256": "a" * 64,
-            "bytes": 1,
-            "objects": 0,
-            "object_bytes": 0,
-            "manifest_sha256": "b" * 64,
-        },
-    ):
-        backup(store, s3, cw, "test-bucket")
+    cw = CloudWatch()
+    backup(store, ObjectStore(), cw, "test-bucket")
     with store.read() as c:
         before = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='backup'").fetchone()[0]
-    with (
-        patch("backend.operations.upload_bundle", side_effect=RuntimeError("cannot upload")),
-        pytest.raises(RuntimeError),
-    ):
-        backup(store, s3, cw, "test-bucket")
+    with pytest.raises(ClientError):
+        backup(store, UnavailableObjectStore(), cw, "test-bucket")
     with store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='backup'").fetchone()
-        assert row["last_succeeded_at"] == before and row["last_error"] == "RuntimeError"
-    with (
-        patch("backend.operations.api_healthy", return_value=True),
-        patch("backend.operations.replication_healthy", return_value=True),
-        patch("backend.operations.tunnel_healthy", return_value=True),
-    ):
-        metrics = health(store, cw)
+        assert row["last_succeeded_at"] == before and row["last_error"] == "ClientError"
+    metrics = health(
+        store,
+        cw,
+        api_url=live + "/healthz",
+        replication_url=closed_url("/metrics"),
+        tunnel_config=tmp_path / "no-tunnel.yml",
+    )
     assert metrics["disk_free_bytes"] > 0
-    assert (
-        metrics["api_healthy"] is True and metrics["replication_healthy"] is True and metrics["tunnel_healthy"] is True
-    )
-    assert cw.put_metric_data.call_count == 9
-    assert all(
-        {"Name": "Scope", "Value": "default"} in call.kwargs["MetricData"][0]["Dimensions"]
-        for call in cw.put_metric_data.call_args_list
-    )
+    assert metrics["api_healthy"] is True and metrics["tunnel_healthy"] is True
+    assert metrics["replication_healthy"] is False
+    assert cw.points("BackupSucceeded") == [1, 0]
+    assert len(cw.calls) == 9
+    assert all({"Name": "Scope", "Value": "default"} in m["Dimensions"] for c in cw.calls for m in c["MetricData"])
 
 
-def test_failed_restore_check_does_not_advance_prior_success(api, tmp_path):
+def test_failed_restore_check_does_not_advance_prior_success(api, tmp_path, monkeypatch):
     store = api.app.state.store
-    from backend.tests.helpers.backup_bundle import ObjectStore
-
-    s3, cw = ObjectStore(), Mock()
+    s3, cw = ObjectStore(), CloudWatch()
     backup(store, s3, cw, "bucket")
-    with (
-        patch("backend.operations.RESTORE_ROOT", tmp_path / "checks"),
-        patch("backend.operations.shutil.disk_usage", return_value=Mock(free=10 * 1024**3)) as capacity,
-    ):
+    monkeypatch.setattr(operations, "RESTORE_ROOT", tmp_path / "checks")  # double: the check writes under this root
+    monkeypatch.setattr(operations, "_free_bytes", lambda path: 10 * 1024**3)
+    restore_check(store, s3, cw, "bucket")
+    with store.read() as c:
+        before = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='restore-check'").fetchone()[0]
+    key = next(k for _, k in s3.objects if k.startswith("backups/") and k.endswith(".sqlite"))
+    s3.objects[("bucket", key)] = b"Damaged copy in the bucket"
+    with pytest.raises(sqlite3.DatabaseError):
         restore_check(store, s3, cw, "bucket")
-        with store.read() as c:
-            before = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='restore-check'").fetchone()[
-                0
-            ]
-        with (
-            patch("backend.operations.restore_bundle", side_effect=RuntimeError("corrupt")),
-            pytest.raises(RuntimeError),
-        ):
-            restore_check(store, s3, cw, "bucket")
-        capacity.return_value.free = 0
-        with (
-            patch("backend.operations.restore_bundle") as restore,
-            pytest.raises(RuntimeError, match="Not enough retained-volume capacity"),
-        ):
-            restore_check(store, s3, cw, "bucket")
-        restore.assert_not_called()
+    monkeypatch.setattr(operations, "_free_bytes", lambda path: 0)
+    with pytest.raises(RuntimeError, match="Not enough retained-volume capacity"):
+        restore_check(store, s3, cw, "bucket")
+    assert list((tmp_path / "checks").iterdir()) == []  # the refused check made no copy
     with store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='restore-check'").fetchone()
     assert row["last_succeeded_at"] == before and row["last_error"] == "RuntimeError"
-    assert cw.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
+    assert cw.points("RestoreCheckSucceeded") == [1, 0, 0]
 
 
 def test_backup_notifications_follow_active_implementation_without_rewriting_history(api, monkeypatch):
@@ -121,16 +116,14 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
         )
 
 
-def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_them(api, tmp_path):
+def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_them(api, tmp_path, monkeypatch):
     import json
-
-    from backend.tests.helpers.backup_bundle import ObjectStore
 
     store = api.app.state.store
     data = store.settings.db_path.parent
     (data / "credential.key").write_bytes(b"\x01" * 32)
     (data / "github-app.key").write_bytes(b"\x02" * 32)
-    s3, cw = ObjectStore(), Mock()
+    s3, cw = ObjectStore(), CloudWatch()
     report = backup(store, s3, cw, "bucket")
     assert report["key_files"] == ["credential.key", "github-app.key"]
     manifest = json.loads(s3.objects[("bucket", report["key"] + ".manifest.json")])
@@ -139,9 +132,7 @@ def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_
     with store.read() as c:
         detail = json.loads(c.execute("SELECT detail FROM service_health WHERE service='backup'").fetchone()[0])
     assert detail["key_files"] == ["credential.key", "github-app.key"] and "\x02" not in json.dumps(detail)
-    with (
-        patch("backend.operations.RESTORE_ROOT", tmp_path / "checks"),
-        patch("backend.operations.shutil.disk_usage", return_value=Mock(free=10 * 1024**3)),
-    ):
-        assert restore_check(store, s3, cw, "bucket")["verified"]
+    monkeypatch.setattr(operations, "RESTORE_ROOT", tmp_path / "checks")  # double: the check writes under this root
+    monkeypatch.setattr(operations, "_free_bytes", lambda path: 10 * 1024**3)
+    assert restore_check(store, s3, cw, "bucket")["verified"]
     assert not list((tmp_path / "checks").iterdir())  # the drill's copy, keys included, is removed

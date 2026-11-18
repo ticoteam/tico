@@ -65,6 +65,14 @@ def finished(computer):
     return len([a for a in computer.attempts() if a["result"]])
 
 
+def chatter_modes(api, message_id):
+    """The delivery modes the bot was given for one message: none when the bot was given no delivery."""
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT mode FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'", (message_id,)
+        ).fetchall()
+
+
 @pytest.mark.parametrize("harness", HARNESSES)
 def test_a_bot_woken_in_a_sub_thread_answers_there_from_that_subtree_and_no_sibling(api, computer):
     require_threads_api(api)
@@ -94,13 +102,10 @@ def test_a_mention_wakes_the_bot_and_plain_chatter_in_its_thread_does_not(api, c
     computer.start()
     t = create_thread(api, title="Standup", members=["bot:ops", "human:cara"])
     chatter = say(api, "cara-test", t["id"], "lunch at noon?")
-    time.sleep(2)
-    assert computer.attempts() == [], "plain chatter in a thread the bot follows starts no run"
-    with api.app.state.store.read() as c:
-        modes = c.execute(
-            "SELECT mode FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'", (chatter["id"],)
-        ).fetchall()
+    # The server writes a message's deliveries in the same write that posts it, so they are read here, not waited for.
+    modes = chatter_modes(api, chatter["id"])
     assert all(mode[0] in ("digest", "none") for mode in modes), f"the bot gets no run for chatter: {modes}"
+    assert computer.attempts() == [], "plain chatter in a thread the bot follows starts no run"
     asked = say(api, "ana-test", t["id"], "@ops what is on the agenda?")
     until(lambda: finished(computer) == 1, "the reply to the mention")
     assert len(computer.attempts()) == 1, "one mention starts one run"
@@ -168,8 +173,8 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
         until(lambda: finished(computer) == started(), f"round {n}: ops ends its turn before the next wake")
     assert held() >= 1, "past the guard the bot's wake is held as capped, never dropped"
     stopped = started()
-    time.sleep(2)
-    assert started() == stopped, "a held wake starts no run"
+    until(lambda: finished(computer) == started(), "ops ends its last turn after the hold")
+    assert started() == stopped, "a held wake starts no run before ops goes idle"
     attention = ok(call(api, "GET", "threads", "ana-test"))["attention"]
     assert t["id"] in [row.get("root_id") for row in attention], "the root is Needs you while its wakes are held"
     say(api, "ana-test", t["id"], "@ops carry on")

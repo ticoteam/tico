@@ -4,7 +4,18 @@ runner, and puts the old image back when the new one does not turn healthy."""
 import os
 import stat
 import subprocess
+import time
 from backend.tests.helpers.updater_runner import Moby, SOURCE, load
+
+
+def settled(updater, states, seconds=10.0):
+    """Waits until the updater leaves `states`. Its settle thread is the only writer of that change, so this waits for
+    the thread and names the state it never left."""
+    deadline = time.monotonic() + seconds
+    while updater.status["state"] in states:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"the updater stayed {updater.status['state']}: {updater.status}")
+        time.sleep(0.01)
 
 
 class Docker:
@@ -299,7 +310,6 @@ def test_an_answered_recreate_that_leaves_the_old_container_does_not_settle(monk
 
 def test_an_uncertain_outcome_survives_a_restart_and_is_settled_by_the_next_updater(monkeypatch, tmp_path):
     import json
-    import time
 
     updater = load(monkeypatch, "runner", tmp_path)
     (tmp_path / updater.STATUS_FILE).write_text(
@@ -318,9 +328,7 @@ def test_an_uncertain_outcome_survives_a_restart_and_is_settled_by_the_next_upda
     docker.containers = {"c1": {"tag": "v0.2.0", "running": True}}
     docker.pending = [["c1", 50]]
     updater.load_status()
-    deadline = time.time() + 10
-    while updater.status["state"] == "uncertain" and time.time() < deadline:
-        time.sleep(0.01)
+    settled(updater, ("uncertain",))
     assert updater.status["state"] == "rolled_back" and docker.ended == [("rolled_back", [])]
     assert [c["tag"] for c in docker.containers.values()] == ["v0.1.0"]
 
@@ -329,7 +337,6 @@ def test_an_updater_stopped_during_the_switch_settles_it_when_it_starts_again(mo
     """The updater container itself stops mid-switch (its compose client with it); Docker's accepted stop has not
     landed. What it saved before the switch makes the next updater hold and settle, not answer an old outcome."""
     import json
-    import time
 
     updater = load(monkeypatch, "runner", tmp_path)
     saved = []
@@ -354,9 +361,7 @@ def test_an_updater_stopped_during_the_switch_settles_it_when_it_starts_again(mo
     again = Moby(restarted, monkeypatch, lambda argv, tag, n: False)
     again.containers, again.pending = docker.containers, docker.pending
     restarted.load_status()
-    deadline = time.time() + 10
-    while restarted.status["state"] in ("restarting", "uncertain") and time.time() < deadline:
-        time.sleep(0.01)
+    settled(restarted, ("restarting", "uncertain"))
     assert restarted.status["state"] == "rolled_back" and again.ended == [("rolled_back", [])]
     assert "the updater stopped while it was switching to v0.2.0" in restarted.status["message"]
     assert [c["tag"] for c in again.containers.values()] == ["v0.1.0"]

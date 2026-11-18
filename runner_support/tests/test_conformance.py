@@ -962,6 +962,15 @@ def runtime_row(api, computer):
     return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {})
 
 
+def last_heartbeat(api, computer):
+    """When the computer last reported in: each heartbeat moves it."""
+    with api.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT last_seen_at FROM runners_with_state WHERE id=?", (computer.registration["runner_id"],)
+        ).fetchone()
+    return row[0] if row else None
+
+
 # The computer's own login's usage windows reach the heartbeat with their percentages: Claude's from its turns'
 # rate_limit_event (`unifiedWindows`), Codex's from the idle app-server read, with no turn spent to read them.
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -997,7 +1006,10 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
         "the API-key account",
         timeout=40,
     )
-    time.sleep(2)  # a later heartbeat
+    beat = last_heartbeat(api, computer)
+    until(
+        lambda: last_heartbeat(api, computer) not in (None, beat), "a heartbeat after the API-key account", timeout=40
+    )
     row = runtime_row(api, computer)
     assert "weekly" not in row and "five_hour" not in row
     assert not any(c.get("method") == "account/rateLimits/read" for c in computer.calls())
@@ -1286,7 +1298,8 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     )
 
     def certified():
-        # Each config change is a full readiness pass, which inspects the computer's worktrees.
+        # Each config change is a full readiness pass, which inspects the computer's worktrees. The pause paces the
+        # checks, so each one gets a pass to finish before the next change starts another.
         with api.app.state.store.transaction() as c:
             BS.update(c, 'ops', {'touched': time.monotonic()})
             row = c.execute("SELECT state, detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()

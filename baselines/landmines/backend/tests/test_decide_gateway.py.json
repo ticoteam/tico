@@ -1,5 +1,6 @@
 {
   "backend/tests/test_decide_gateway.py": {
-    "no-fixed-sleep-py": 1
+    "no-fixed-sleep-py": 1,
+    "timing-assert": 2
   }
 }

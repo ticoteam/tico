@@ -1,5 +1,5 @@
 {
   "clients/tests/test_environments.py": {
-    "no-unittest-mock": 3
+    "no-unittest-mock": 2
   }
 }

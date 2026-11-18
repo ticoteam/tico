@@ -7,6 +7,7 @@ loaded for real, because a set that does not load is a broken release.
 
 import io
 import json
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -77,7 +78,9 @@ class Sets(unittest.TestCase):
                 custom["version"] += 1
                 path = directory / (name + ".json")
                 path.write_text(json.dumps(custom))
-                with mock.patch.dict(os.environ, {"TICO_REGISTRY_DIR": registry}):
+                with mock.patch.dict(
+                    os.environ, {"TICO_REGISTRY_DIR": registry}
+                ):  # double: the OS environment, read per call
                     self.assertEqual(J.load_set(name)["label"], f"{name}@{custom['version']}")
                     self.assertEqual(J.load_set(name, root=J.QUESTIONS_DIR)["label"], original["label"])
                 self.assertEqual(J.load_set(name, registry_dir=registry)["questions"], custom["questions"])
@@ -158,24 +161,13 @@ class Sets(unittest.TestCase):
                     os.mkfifo(path)
                 elif case == "read-failure":
                     path.write_text(json.dumps(data))
+                    path.chmod(0o000)  # the open is refused: this user cannot read the file
                 elif case == "invalid-json":
                     path.write_text('{"outside-question-content-must-not-be-read": [}')
                 else:
                     path.write_text(json.dumps({"id": secret}))
-                outside_ids = {(p.stat().st_dev, p.stat().st_ino) for p in (outside, victim.parent, victim)}
-                real_open = os.open
-
-                def contained_open(*args, **kwargs):
-                    if case == "read-failure" and args[0] == path.name:
-                        raise PermissionError("private read error must not be exposed")
-                    descriptor = real_open(*args, **kwargs)
-                    info = os.fstat(descriptor)
-                    self.assertNotIn((info.st_dev, info.st_ino), outside_ids, "an outside descriptor must never open")
-                    return descriptor
-
-                with mock.patch.object(J.os, "open", side_effect=contained_open):
-                    with self.assertRaises(J.JudgeError) as refused:
-                        J.load_set("covered", registry_dir=registry)
+                with self.assertRaises(J.JudgeError) as refused:
+                    J.load_set("covered", registry_dir=registry)
                 self.assertEqual(refused.exception.code, "invalid")
                 self.assertEqual(
                     refused.exception.detail,
@@ -184,29 +176,28 @@ class Sets(unittest.TestCase):
                 self.assertNotIn(secret, str(refused.exception))
 
     def test_registry_file_swap_to_an_outside_symlink_is_refused(self):
-        import os, tempfile
-        from unittest import mock
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             questions = root / "registry/questions"
             questions.mkdir(parents=True)
             path = questions / "covered.json"
             path.write_text((J.QUESTIONS_DIR / path.name).read_text())
-            victim = root / "outside.json"
-            victim.write_text("private-outside-fixture")
-            real_open = os.open
+            # A valid set: were the link followed, it would load, so only a refused open passes.
+            (root / "outside.json").write_text(path.read_text())
 
-            def swapped_open(part, flags, **kwargs):
+            def swapped(part, flags, dir_fd):  # the file becomes a link after it was checked, before it is opened
                 if part == path.name:
                     path.unlink()
-                    path.symlink_to(victim)
-                return real_open(part, flags, **kwargs)
+                    path.symlink_to(root / "outside.json")
+                return opened(part, flags, dir_fd)
 
-            with mock.patch.object(J.os, "open", side_effect=swapped_open), mock.patch.object(J.os, "fdopen") as read:
-                with self.assertRaises(J.JudgeError):
+            opened, J._open = J._open, swapped
+            try:
+                with self.assertRaises(J.JudgeError) as refused:
                     J.load_set("covered", registry_dir=questions.parent)
-                read.assert_not_called()
+            finally:
+                J._open = opened
+            self.assertEqual(refused.exception.code, "invalid")
 
 
 if __name__ == "__main__":

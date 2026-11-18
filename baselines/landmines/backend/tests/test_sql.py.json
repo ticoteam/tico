@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_sql.py": {
-    "no-unittest-mock": 1
-  }
-}

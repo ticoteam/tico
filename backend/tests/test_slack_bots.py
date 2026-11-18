@@ -23,6 +23,7 @@ from backend import slack_gateway as SG
 from backend import slack_requests as SR
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.helpers.bot_tools import configure, report
+from backend.tests.helpers.wait import wait_for
 from backend.tests.helpers.slack_gateway import (  # noqa: F401  (fixture)
     CHANNELS,
     MARKETING,
@@ -460,7 +461,7 @@ def test_the_gateway_being_off_answers_503_saying_what_to_start(slack, monkeypat
             "UPDATE service_health SET detail=? WHERE service='slack:gateway'", (json.dumps({"state": "connected"}),)
         )
     slack.gw.stop.set()
-    time.sleep(0.05)
+    slack.thread.join(5)
     monkeypatch.setattr(SR, "CLAIM_SECONDS", 0.05)
     assert call(slack, "GET", "slack/history", 503, params={"channel": "#general", "oldest": 0}).json()["code"] == (
         "slack_gateway_off"
@@ -485,13 +486,6 @@ def resume_gateway(s):
 def pending(s):
     with s.store.read() as c:
         return c.execute("SELECT count(*) FROM slack_requests WHERE state='pending'").fetchone()[0]
-
-
-def until(check, seconds=5.0):
-    stop = time.monotonic() + seconds
-    while not check():
-        assert time.monotonic() < stop, "timed out"
-        time.sleep(0.01)
 
 
 def test_bots_waiting_on_slack_do_not_hold_the_servers_threads(slack, monkeypatch):
@@ -525,10 +519,9 @@ def test_bots_waiting_on_slack_do_not_hold_the_servers_threads(slack, monkeypatc
         ]
         for t in waits:
             t.start()
-        until(lambda: pending(slack) == 6)
-        started = time.monotonic()
-        me = slack.api.get("/api/v2/me", headers=headers(slack.token))
-        assert me.status_code == 200 and time.monotonic() - started < 1.0, "an unrelated request is not kept waiting"
+        wait_for(lambda: pending(slack) == 6, "the six reads pending on the gateway")
+        # Were it queued behind the paused reads, this would not answer until they resume.
+        assert slack.api.get("/api/v2/me", headers=headers(slack.token)).status_code == 200
         assert all(t.is_alive() for t in waits) and pending(slack) == 6, "the six reads are still waiting"
         resume_gateway(slack)
         for t in waits:
@@ -548,7 +541,7 @@ def test_past_the_cap_a_read_is_told_slack_is_busy(slack, monkeypatch):
         target=lambda: first.append(call(slack, "GET", "slack/files/F0FILE0001").content), daemon=True
     )
     waiting.start()
-    until(lambda: pending(slack) == 1)
+    wait_for(lambda: pending(slack) == 1, "the file read pending on the gateway")
     for path, kw in (
         ("slack/history", {"params": {"channel": "#general", "oldest": 0}}),
         ("slack/files/F0FILE0001", {}),
@@ -675,7 +668,7 @@ def test_the_request_thread_survives_a_bug_and_old_rows_and_files_are_swept(slac
     answer = call(slack, "GET", "slack/history", 502, params={"channel": "#general", "oldest": 0}).json()
     assert answer["code"] == "slack_failed" and "ZeroDivisionError" in answer["detail"]
     slack.gw.stop.set()
-    time.sleep(0.05)
+    slack.thread.join(5)
     old = H.shift(H.now(), seconds=-SR.KEEP_SECONDS - 5)
     with slack.store.transaction() as c:
         c.execute(

@@ -10,6 +10,7 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
+import time_machine
 
 from backend import company_page, hubdb as H, kpis as K
 from backend.auth import Identity
@@ -587,7 +588,7 @@ def test_a_shown_total_is_held_when_the_books_cannot_be_read(books):
     with books.transaction() as c:
         spend(c, "6000", 4_000_00, day="2026-09-10")
         ST.create_stat(c, OWNER, "finance_metric", "spend")
-    with mock.patch.object(
+    with mock.patch.object(  # double: no input makes the finance read refuse from outside; this forces the refusal
         ST._Books, "active_accounts", side_effect=ST._Books._errors()("forbidden", "books unreadable")
     ):
         with books.transaction() as c:
@@ -1143,7 +1144,7 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     # The next due day: only for an audience the schedule would write for, as the day it is in the company's zone.
     def dues():
         # Frozen on a Monday, 2 November 2026, so the business days below are fixed.
-        with mock.patch.object(H, "now", return_value="2026-11-02T12:00:00.000000Z"):
+        with time_machine.travel(datetime(2026, 11, 2, 12, tzinfo=timezone.utc), tick=False):
             return {a["id"]: a["next_due"] for a in call(api, "GET", "audiences")["audiences"]}
 
     call(api, "PATCH", "audiences/board", {"enabled": True})

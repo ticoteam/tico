@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_support_triage.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

@@ -1,6 +1,6 @@
+from contextlib import closing
 from datetime import datetime, timezone
 import sqlite3
-from unittest.mock import Mock
 
 import pytest
 
@@ -11,21 +11,39 @@ from backend.store import H
 from backend.tests.helpers.scheduler import _wake_by_hand
 
 
+def recording(calls, name, real):
+    """A spy: it records the call, then runs the real function."""
+
+    def spy(*args, **kwargs):
+        calls.append(name)
+        return real(*args, **kwargs)
+
+    return spy
+
+
 def test_failed_computer_retirement_records_failure_and_runs_the_remaining_cleanup(api, monkeypatch, caplog):
     from backend import computers, screening, support_triage
 
-    retirement = Mock(side_effect=sqlite3.OperationalError("writer lock timeout"))
-    monkeypatch.setattr(computers, "sweep", retirement)
-    following = []
-    for module in (support_triage, screening):  # the deadline sweeps after retirement (pruning is Clean up's)
-        sweep = Mock(wraps=module.sweep)
-        monkeypatch.setattr(module, "sweep", sweep)
-        following.append(sweep)
-    result = Scheduler(api.app.state.store, api.app.state.execution).tick()
+    store = api.app.state.store
+    real_retirement = computers.sweep
+
+    def retirement_behind_another_writer(store_, at):
+        # Another connection holds the write lock: the retirement waits out SQLite's busy timeout, then fails.
+        with closing(sqlite3.connect(store.settings.db_path)) as other:
+            other.execute("BEGIN IMMEDIATE")
+            try:
+                return real_retirement(store_, at)
+            finally:
+                other.rollback()
+
+    monkeypatch.setattr(computers, "sweep", retirement_behind_another_writer)
+    ran = []
+    # Both still run after the retirement sweep fails.
+    for name, module in (("support_triage", support_triage), ("screening", screening)):
+        monkeypatch.setattr(module, "sweep", recording(ran, name, module.sweep))
+    result = Scheduler(store, api.app.state.execution).tick()
     assert result["failures"] == [{"computer_retirement": "OperationalError"}]
-    retirement.assert_called_once()
-    for sweep in following:
-        sweep.assert_called_once()
+    assert ran == ["support_triage", "screening"]
     assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
@@ -41,7 +59,10 @@ def test_a_failure_late_in_the_tick_reaches_the_schedulers_health_row(api, monke
     """The health row is written at the end of the pass: a job that fails after the 10-second writes is on it."""
     from backend import thread_rank
 
-    monkeypatch.setattr(thread_rank, "tick", Mock(side_effect=RuntimeError("down")))
+    def down(*args, **kwargs):  # double: forces one job to fail; each job tests its own failure
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(thread_rank, "tick", down)
     store = api.app.state.store
     result = Scheduler(store, api.app.state.execution).tick()
     assert {"thread_rank": "RuntimeError"} in result["failures"]
@@ -53,7 +74,10 @@ def test_a_failure_late_in_the_tick_reaches_the_schedulers_health_row(api, monke
 def test_a_tick_that_raises_still_writes_its_health_row(api, monkeypatch):
     from backend import maintenance
 
-    monkeypatch.setattr(maintenance, "tick", Mock(side_effect=RuntimeError("down")))
+    def down(*args, **kwargs):  # double: forces one job to fail; each job tests its own failure
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(maintenance, "tick", down)
     store = api.app.state.store
     with pytest.raises(RuntimeError):
         Scheduler(store, api.app.state.execution).tick()

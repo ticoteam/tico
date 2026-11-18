@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_browser_commands.py": {
-    "no-fixed-sleep-py": 4
-  }
-}

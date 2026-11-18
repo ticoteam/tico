@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_operations.py": {
-    "no-unittest-mock": 1
-  }
-}

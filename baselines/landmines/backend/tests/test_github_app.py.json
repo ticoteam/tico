@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_github_app.py": {
-    "no-fixed-sleep-py": 2
-  }
-}

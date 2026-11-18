@@ -2,7 +2,7 @@
 derived calendars for one viewer, who may write where, and the live topic. Google is a fake in this file: gcal_live's
 calls are replaced, so nothing here reaches Google or a browser."""
 
-import time
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -72,8 +72,8 @@ class FakeGoogle:
 
     def events(self, c, as_mailbox, cal, start, end, *, q=None, limit=250, calendar=None, people=None, bot=None):
         self.reads.append((as_mailbox, cal, q, bot))
-        if cal in self.slow:
-            time.sleep(self.slow[cal])
+        if cal in self.slow:  # a read that holds until the test sets this Event
+            self.slow[cal].wait(10)
         if cal in self.failing:
             raise Problem("gcal_refused", "Google Calendar refused this calendar", 403)
         found = [dict(o) for o in self.cals.get(cal, []) if not q or q.lower() in o["title"].lower()]
@@ -372,23 +372,27 @@ def test_a_live_meeting_from_an_event_links_it_and_the_event_shows_the_meeting(a
 
 def test_search_merges_tico_and_google_and_is_partial_when_the_budget_runs_out(api, google, monkeypatch):
     people(api)
-    monkeypatch.setattr(calendar_api, "SEARCH_SECONDS", 0.3)
+    monkeypatch.setattr(calendar_api, "SEARCH_SECONDS", 1.0)
     google.connected.add("ana@acme.example")
     google.cals["ana@acme.example"] = [g_occ("ana@acme.example", "g1", "Budget sync", at(9), at(10))]
     google.cals["team-cal"] = [g_occ("team-cal", "g2", "Budget offsite", at(11), at(12))]
     google.listed = [{"id": "ana@acme.example", "primary": True}, {"id": "team-cal", "name": "Team"}]
-    google.slow["team-cal"] = 1.5
-    token, bot_id = bot(api)
-    create(api, {"title": "Budget draft", "start": at(13), "end": at(14)}, token)
-    r = api.get(f"/api/v2/calendar/search?q=budget&who=me,bot:{bot_id}", headers=headers())
-    assert r.status_code == 200, r.text
-    found = r.json()
-    titles = {o["title"] for o in found["occurrences"]}
-    assert {"Budget sync", "Budget draft"} <= titles and "Budget offsite" not in titles
-    assert found["partial"] is True
-    with api.app.state.store.read() as c:
-        logged = c.execute("SELECT detail FROM events WHERE action='calendar.search'").fetchone()
-    assert logged is not None and '"partial": true' in logged["detail"]
+    held = threading.Event()  # Google's read for team-cal is still out when the search answers
+    google.slow["team-cal"] = held
+    try:
+        token, bot_id = bot(api)
+        create(api, {"title": "Budget draft", "start": at(13), "end": at(14)}, token)
+        r = api.get(f"/api/v2/calendar/search?q=budget&who=me,bot:{bot_id}", headers=headers())
+        assert r.status_code == 200, r.text
+        found = r.json()
+        titles = {o["title"] for o in found["occurrences"]}
+        assert {"Budget sync", "Budget draft"} <= titles and "Budget offsite" not in titles
+        assert found["partial"] is True
+        with api.app.state.store.read() as c:
+            logged = c.execute("SELECT detail FROM events WHERE action='calendar.search'").fetchone()
+        assert logged is not None and '"partial": true' in logged["detail"]
+    finally:
+        held.set()
 
 
 def one(api, occurrence_id, token="ana-test", expected=200):

@@ -1,5 +1,5 @@
 {
   "scripts/tests/test_heavy.py": {
-    "no-fixed-sleep-py": 2
+    "no-fixed-sleep-py": 1
   }
 }

@@ -3,7 +3,6 @@
 import hashlib
 import json
 import stat
-from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +15,7 @@ from backend.operations import backup
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.backup_bundle import ObjectStore, bundle, target
+from backend.tests.helpers.cloudwatch import CloudWatch
 
 
 def sources(api):
@@ -68,14 +68,14 @@ def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(ap
     with api.app.state.store.read() as c:
         digest = c.execute("SELECT digest FROM blobs ORDER BY size LIMIT 1").fetchone()[0]
     (api.app.state.blobs.directory / Blobs.key(digest)).write_bytes(b"Corrupt test content")
-    s3, metrics = ObjectStore(), Mock()
+    s3, metrics = ObjectStore(), CloudWatch()
     with pytest.raises((Problem, RuntimeError)):
         backup(api.app.state.store, s3, metrics, "backup-bucket")
     assert not any(key.endswith(".manifest.json") for _, key in s3.objects)
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='backup'").fetchone()
         assert row["last_succeeded_at"] is None and row["last_error"]
-    assert metrics.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
+    assert metrics.points("BackupSucceeded") == [0]
 
 
 def test_corrupt_backups_fail_before_creating_restored_database(api, tmp_path):

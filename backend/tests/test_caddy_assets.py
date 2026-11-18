@@ -381,16 +381,18 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
     path.write_text(json.dumps(config))
     proc, stopped = None, False
 
-    def request(host, path="/", method="GET", headers=None, endpoint=port, body=None):
+    def request(host, path="/", method="GET", headers=None, endpoint=port, body=None, on_sent=None):
         connection = http.client.HTTPConnection("127.0.0.1", endpoint, timeout=2)
         try:
             connection.request(method, path, body=body, headers={"Host": host, **(headers or {})})
+            if on_sent:
+                on_sent()
             response = connection.getresponse()
             return response.status, {key.lower(): value for key, value in response.getheaders()}, response.read()
         finally:
             connection.close()
 
-    def wait_for(check):
+    def wait_for(check, what):
         until = time.monotonic() + 5
         while time.monotonic() < until:
             try:
@@ -399,7 +401,7 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
             except (OSError, http.client.HTTPException):
                 pass
             time.sleep(0.025)
-        raise AssertionError("Caddy fixture transition did not complete")
+        raise AssertionError("Caddy never got to: " + what)
 
     try:
         validation = subprocess.run(
@@ -411,7 +413,10 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
             proc = subprocess.Popen(
                 [binary, "run", "--config", str(path)], env=env, stdout=output, stderr=subprocess.STDOUT
             )
-            wait_for(lambda: request("127.0.0.1", assets.READY_PATH, endpoint=ready_port)[2] == marker.encode())
+            wait_for(
+                lambda: request("127.0.0.1", assets.READY_PATH, endpoint=ready_port)[2] == marker.encode(),
+                "serving its ready marker",
+            )
             for suffix, method in (("?", "GET"), ("", "HEAD"), ("", "POST")):
                 assert request("127.0.0.1", assets.READY_PATH + suffix, method, endpoint=ready_port)[0] == 404
             status, headers, body = request(
@@ -468,12 +473,12 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
             backend.shutdown()
             backend.server_close()
             stopped = True
-            held = {}
+            held, sent = {}, threading.Event()
             sender = threading.Thread(
-                target=lambda: held.update(answer=request(APP, "/api/v2/tasks", "POST", body=b"held"))
+                target=lambda: held.update(answer=request(APP, "/api/v2/tasks", "POST", body=b"held", on_sent=sent.set))
             )
             sender.start()
-            time.sleep(0.4)
+            assert sent.wait(10), "the write never left the client"
             backend = ThreadingHTTPServer(address, Backend)
             thread = threading.Thread(target=backend.serve_forever, daemon=True)
             thread.start()

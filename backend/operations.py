@@ -20,6 +20,8 @@ from .store import H, Store, encode
 
 RESTORE_ROOT = Path("/var/lib/tico/restore-checks")
 TUNNEL_CONFIG = Path("/etc/tico/tunnel.yml")
+API_HEALTHZ_URL = "http://127.0.0.1:8765/healthz"
+REPLICATION_METRICS_URL = "http://127.0.0.1:9091/metrics"
 
 
 def report_health(store, service, *, success=None, error=None, detail=None):
@@ -47,9 +49,9 @@ def metric(client, name, value, unit="Count"):
     )
 
 
-def api_healthy(settings):
+def api_healthy(settings, url=API_HEALTHZ_URL):
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=2) as response:
+        with urllib.request.urlopen(url, timeout=2) as response:
             raw = response.read(4097)
         if len(raw) > 4096:
             return False
@@ -66,9 +68,9 @@ def api_healthy(settings):
         return False
 
 
-def replication_healthy():
+def replication_healthy(url=REPLICATION_METRICS_URL):
     try:
-        with urllib.request.urlopen("http://127.0.0.1:9091/metrics", timeout=2) as response:
+        with urllib.request.urlopen(url, timeout=2) as response:
             raw = response.read(65537)
         return 0 < len(raw) <= 65536
     except urllib.error.HTTPError as error:
@@ -78,9 +80,9 @@ def replication_healthy():
         return False
 
 
-def tunnel_healthy():
+def tunnel_healthy(config=TUNNEL_CONFIG):
     """Treat an intentionally unconfigured tunnel as healthy; require it once configured."""
-    if not TUNNEL_CONFIG.is_file() or TUNNEL_CONFIG.is_symlink():
+    if not config.is_file() or config.is_symlink():
         return True
     try:
         result = subprocess.run(
@@ -93,6 +95,12 @@ def tunnel_healthy():
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _free_bytes(path):
+    """Free bytes on the disk that holds `path`. Every capacity check goes through here, so a test with a small disk
+    replaces this one function."""
+    return shutil.disk_usage(path).free
 
 
 def retention_tier(store, bucket, now):
@@ -196,7 +204,7 @@ def restore_check(store, s3, cloudwatch, bucket):
         ):
             raise RuntimeError("Latest backup has invalid capacity metadata")
         RESTORE_ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
-        free = shutil.disk_usage(RESTORE_ROOT).free
+        free = _free_bytes(RESTORE_ROOT)
         required = database_bytes * 2 + object_bytes + 5 * 1024**3
         if required > free:
             raise RuntimeError("Not enough retained-volume capacity for an isolated restore check")
@@ -228,7 +236,14 @@ def restore_check(store, s3, cloudwatch, bucket):
     return {**result, "verified": True}
 
 
-def health(store, cloudwatch):
+def health(
+    store,
+    cloudwatch,
+    *,
+    api_url=API_HEALTHZ_URL,
+    replication_url=REPLICATION_METRICS_URL,
+    tunnel_config=TUNNEL_CONFIG,
+):
     from . import heartbeat
 
     with store.read() as c:
@@ -247,9 +262,11 @@ def health(store, cloudwatch):
         if service == "scheduler":
             age = 1_000_000 if loop_age is None else loop_age
         metric(cloudwatch, name, age, "Seconds")
-    free = shutil.disk_usage(store.settings.db_path.parent).free
+    free = _free_bytes(store.settings.db_path.parent)
     metric(cloudwatch, "DataDiskFreeBytes", free, "Bytes")
-    api_ok, replication_ok, tunnel_ok = api_healthy(store.settings), replication_healthy(), tunnel_healthy()
+    api_ok = api_healthy(store.settings, api_url)
+    replication_ok = replication_healthy(replication_url)
+    tunnel_ok = tunnel_healthy(tunnel_config)
     metric(cloudwatch, "ApiHealthy", int(api_ok))
     metric(cloudwatch, "ReplicationHealthy", int(replication_ok))
     metric(cloudwatch, "TunnelHealthy", int(tunnel_ok))

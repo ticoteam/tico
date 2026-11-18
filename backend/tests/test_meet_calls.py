@@ -31,6 +31,7 @@ class FakeMeet:
         self.fail = None  # a status for every status read: 0 (no answer), 429, 503...
         self.hang = {}  # space name -> an Event its status read waits on, as a Google that does not answer
         self.lock_fail = False
+        self.restricted = threading.Event()  # set once Google has locked a space, so a test waits for the lock
 
     def __call__(self, method, url, *, token, body=None):
         self.calls.append((method, url, body))
@@ -45,6 +46,8 @@ class FakeMeet:
             if self.lock_fail:
                 return 500, {}
             self.spaces[path]["access"] = body["config"]["accessType"]
+            if body["config"]["accessType"] == "RESTRICTED":
+                self.restricted.set()
             return 200, {"name": path, "meetingUri": URI, "config": body["config"]}
         if method == "POST" and path == "spaces":
             name = f"spaces/space{len(self.spaces) + 1}"
@@ -125,16 +128,6 @@ def updates(api, call_id):
 def reads(fake, space):
     """How many times the space's status was read."""
     return len([c for c in fake.calls if c[0] == "GET" and c[1] == MEET + space])
-
-
-def locked(fake, space, wait=2.0):
-    """Whether the space was locked, waiting a little for a lock the sweep left to the poll pool."""
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        if fake.spaces[space].get("access") == "RESTRICTED":
-            return True
-        time.sleep(0.02)
-    return False
 
 
 def backdate(api, call_id, seconds, *columns):
@@ -311,7 +304,8 @@ def test_a_drop_and_rejoin_within_a_minute_keeps_the_call_and_a_minute_empty_end
     assert ended["state"] == "ended" and ended["end_reason"] == "meet_ended" and ended["live_count"] == 0
     view = get(meet, f"calls/{call['id']}")
     assert 505 <= view["duration_s"] <= 515  # first seen to last seen, across conferences: not the empty minute
-    assert locked(google, space)  # the sweep's end locks the space too
+    assert google.restricted.wait(10), "Google never got the space locked"  # the sweep's end locks the space too
+    assert google.spaces[space]["access"] == "RESTRICTED"
     texts = thread_texts(meet, cid)
     assert not any(text.startswith("Call transcript") for text in texts)  # nobody wrote one
 
@@ -435,9 +429,7 @@ def test_a_hanging_google_does_not_hold_up_the_sweep_or_the_other_calls(google, 
     answer = threading.Event()
     google.hang[slow_space] = answer
     try:
-        began = time.monotonic()
-        calls.sweep()
-        assert time.monotonic() - began < 3  # the pass waits its budget, not Google
+        calls.sweep()  # returns while Google still hangs: the pass waits its budget, not Google
         assert row(meet, quick["id"])["live_count"] == 2 and row(meet, slow["id"])["status_source"] is None
         participants = [c for c in google.calls if c[1].startswith(MEET + "conferenceRecords/c2/participants")]
         assert len(participants) == 1  # each call's people read once per pass

@@ -5,6 +5,7 @@ import json
 import uuid
 
 from backend import bot_settings as BS
+from backend import events as E
 from backend.tests.helpers.api import assign, get, headers, runner  # noqa: F401  (the api fixture)
 from backend.tests.helpers.bot_list_reads import add_bots
 
@@ -30,13 +31,16 @@ def beat(api, computer):
     return response
 
 
-def told(api, computer):
-    """How many times the server has told `computer` to read its bots again."""
+def newest(api):
     with api.app.state.store.read() as c:
-        return c.execute(
-            "SELECT count(*) FROM changes WHERE topic='runner' AND kind='assignments' AND subject_id=?",
-            (computer["runner_id"],),
-        ).fetchone()[0]
+        return E.latest(c)
+
+
+def told(api, computer, after):
+    """The kinds the computer's event stream (`runners/me/events`) tells it after change `after`."""
+    with api.app.state.store.read() as c:
+        events, _, _, _ = E.runner_read(c, computer["runner_id"], "runner:" + computer["runner_id"], after)
+    return {entry["kind"] for _, entry in events}
 
 
 def listed(api, computer):
@@ -61,12 +65,12 @@ def test_a_heartbeat_from_a_computer_with_53_bots_answers_under_10_kb(api):
 def test_a_changed_setting_still_reaches_the_computer_through_its_bot_list(api):
     computer, slugs = hosting(api)
     beat(api, computer)
-    before = told(api, computer)
+    after = newest(api)
 
     with api.app.state.store.transaction() as c:
         BS.update(c, slugs[0], {"model": "changed-model", "instructions": "Shorter now."})
 
-    assert told(api, computer) > before
+    assert "assignments" in told(api, computer, after)
     row = listed(api, computer)[slugs[0]]
     assert row["config"]["model"] == "changed-model" and row["config"]["instructions"] == "Shorter now."
     assert beat(api, computer).json()["assignments"] == []
@@ -75,12 +79,13 @@ def test_a_changed_setting_still_reaches_the_computer_through_its_bot_list(api):
 def test_a_bot_moved_between_computers_reaches_both_through_their_bot_lists(api):
     computer, slugs = hosting(api)
     other = runner(api, label="Other Mac")
-    beat(api, computer), beat(api, other)
-    before = told(api, computer), told(api, other)
+    beat(api, computer)
+    beat(api, other)
+    after = newest(api)
 
     assign(api, other, slugs[1], generation=1)
 
-    assert told(api, computer) > before[0] and told(api, other) > before[1]
+    assert "assignments" in told(api, computer, after) and "assignments" in told(api, other, after)
     assert slugs[1] not in listed(api, computer)
     assert listed(api, other)[slugs[1]]["generation"] == 2
     assert beat(api, other).json()["assignments"] == []

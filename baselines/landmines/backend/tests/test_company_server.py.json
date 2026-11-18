@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_company_server.py": {
-    "no-fixed-sleep-py": 1
-  }
-}

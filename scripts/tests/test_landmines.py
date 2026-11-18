@@ -66,6 +66,24 @@ def hits(path, text):
             "with mock.patch('clients.tico.time.monotonic'):\n    pass\n",
             "with time_machine.travel(0, tick=False):\n    pass\n",
         ),
+        (
+            "timing-assert",
+            PY,
+            "took = time.monotonic() - began\nassert took < 2.0\n",
+            "while not done():\n    assert time.monotonic() < deadline, 'never done'\n",
+        ),
+        (
+            "timing-assert",
+            UI,
+            "assert.ok(Date.now() - started < 500);\n",
+            "assert.equal(draws, 1);\n",
+        ),
+        (
+            "no-assigned-clock-seam",
+            "backend/thing.py",
+            "import time\n_clock = time.monotonic  # tests' clock\n",
+            "import time\n\n\ndef _clock():\n    return time.monotonic()\n",
+        ),
     ],
 )
 def test_each_rule_finds_its_bad_case_and_not_its_good_one(rule, path, bad, good):
@@ -117,6 +135,12 @@ def test_write_never_records_a_ban():
     assert landmines.counts_of(found) == {"pytest.ini": {}, PY: {"no-fixed-sleep-py": 1}}
 
 
+def test_the_shared_wait_helper_is_the_one_file_whose_poll_may_sleep():
+    poll = "import time\ntime.sleep(0.01)\n"
+    assert "no-fixed-sleep-py" not in hits(landmines.WAIT_HELPER, poll)
+    assert hits("backend/tests/helpers/other.py", poll).get("no-fixed-sleep-py") == 1
+
+
 def test_a_baseline_that_grew_against_the_base_fails():
     problems = landmines.growth({PY: {"no-fixed-sleep-py": 3}}, {PY: {"no-fixed-sleep-py": 2}}, {"no-fixed-sleep-py"})
     assert len(problems) == 1 and "grew from 2 to 3" in problems[0]
@@ -161,7 +185,7 @@ def test_a_true_lessons_table_passes():
         seen="2",
         status="encoded no-retry",
     )
-    cited_elsewhere = ("L02", "L26", "L31")  # the real rules cite rows this one-row table does not have
+    cited_elsewhere = ("L02", "L03", "L26", "L31")  # the real rules cite rows this one-row table does not have
     assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 
 

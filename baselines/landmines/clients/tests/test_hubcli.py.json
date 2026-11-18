@@ -1,5 +1,5 @@
 {
   "clients/tests/test_hubcli.py": {
-    "no-unittest-mock": 13
+    "no-unittest-mock": 3
   }
 }

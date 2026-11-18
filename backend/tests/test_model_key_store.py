@@ -371,6 +371,7 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
     unsent = {kind: login_job(api, golf, kind, "requested") for kind in ("use_key", "clear_key", "to_key")}
     staged = own_key(api, alpha, "claude", "ANTHROPIC_API_KEY", "sk-ant-staged-0123456789", "staged", unsent["use_key"])
     held = own_key(api, bravo, "claude", "ANTHROPIC_API_KEY", "sk-ant-held-0123456789", "staged", unsent["to_key"])
+    free = own_key(api, golf, "codex", "OPENAI_API_KEY", "sk-proj-free-0123456789", "staged", unsent["to_key"])
     add_bot(api, "mailer")
     with api.app.state.store.read() as c:
         mailer = H.resolve_bot(c, "mailer")["id"]
@@ -401,6 +402,7 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
         assert not tables & {"computer_keys", "computer_keys_by_runner", "model_login_key_off"}
         assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (staged,)).fetchone()
         assert not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=?", (staged,)).fetchone()
+        assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (free,)).fetchone()
         assert c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (held,)).fetchone()
         states = {r["id"]: r["state"] for r in c.execute("SELECT id,state FROM model_logins")}
     assert [states[lid] for lid in unsent.values()] == ["canceled"] * 3
@@ -463,27 +465,6 @@ def test_a_switch_to_a_subscription_with_a_lost_commit_keeps_the_key_it_runs_on(
         assert report(api, box, lid, verdict)["state"] == verdict
         assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
     assert given(api) == {(box["runner_id"], "codex"): ("Team OpenAI", team) for box in boxes}
-
-
-def test_a_key_job_the_runner_never_took_is_canceled_and_its_key_deleted(environment):
-    """A key job still `requested` (no runner has taken it) is canceled, and the key staged for it, which nothing else
-    holds, leaves the vault. The key the computer runs on stays given."""
-    api = setup(environment)
-    box = computer(api, "Alpha", source="computer")
-    key = own_key(api, box, "codex", "OPENAI_API_KEY", OWN)
-    jobs = {kind: login_job(api, box, kind, "requested") for kind in ("to_key", "use_key")}
-    staged = {
-        kind: own_key(api, box, "codex", "OPENAI_API_KEY", f"sk-proj-{kind}-0123456789", "staged", lid)
-        for kind, lid in jobs.items()
-    }
-    with api.app.state.store.transaction() as c:
-        DROP.up(c)
-    assert given(api) == {(box["runner_id"], "codex"): ("OpenAI API · Alpha", key)}
-    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
-    with api.app.state.store.read() as c:
-        for cid in staged.values():
-            assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone()
-        assert {r["state"] for r in c.execute("SELECT state FROM model_logins")} == {"canceled"}
 
 
 def test_the_computer_key_routes_say_where_keys_are_changed_now(environment):

@@ -5,7 +5,6 @@ stage labels. Success Experiments does not count. Examples use Acme, a home-clea
 
 import json
 
-from backend import growth_numbers as GN
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend.store import H
@@ -57,13 +56,6 @@ def _board(api, token="ana-test"):
     assert r.status_code == 200, r.text
     cards = {p["card"]["template"]: p["card"]["data"] for p in r.json()["pins"]}
     return cards
-
-
-class _ReadsAll:
-    """auth as the markers read it, for a reader who may read every task."""
-
-    def task_sql(self, c, who):
-        return "1"
 
 
 def test_a_test_in_each_growth_pipeline_stage_shows_in_its_lane_without_labels(api):
@@ -132,11 +124,11 @@ def test_the_board_is_hidden_with_no_growth_test_in_a_pipeline_or_labelled(api):
     assert _board(api).get("growth_board") is None
 
 
-def test_a_move_into_running_starts_a_test_and_done_or_closed_finishes_it_with_its_result(company):
+def test_a_move_into_running_starts_a_test_and_done_or_closed_finishes_it_with_its_result(api):
     """AC-6, AC-7, AC-8: Building to Running starts (and again after a move back); Done finishes as kept with its
     result tag; Closed finishes as dropped; filing straight into Running starts; a Success task and a restore mark
     nothing."""
-    with company.transaction() as c:
+    with api.app.state.store.transaction() as c:
         _set_up(c)
         failed = _filed(c, "Pricing headline", "growth-experiments", BUILDING, labels=["channel:cro"])
         _move(c, failed, RUNNING)
@@ -151,7 +143,7 @@ def test_a_move_into_running_starts_a_test_and_done_or_closed_finishes_it_with_i
         other = _filed(c, "Onboarding call", "success-experiments", "success-experiments-building")
         _move(c, other, "success-experiments-running")
         _move(c, other, E.CLOSED, "Not worth it")
-        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    found = get(api, "growth/numbers")["markers"]
     got = sorted((m["task_id"], m["kind"], m["outcome"], m["result"], tuple(m["channels"])) for m in found)
     assert got == sorted(
         [
@@ -166,10 +158,10 @@ def test_a_move_into_running_starts_a_test_and_done_or_closed_finishes_it_with_i
     )
 
 
-def test_a_test_with_both_a_running_stage_and_a_running_label_starts_once(company):
+def test_a_test_with_both_a_running_stage_and_a_running_label_starts_once(api):
     """A task with both forms counts once and its pipeline stage wins: filed into Running with growth:running, or
     moved into Running and labelled idea:live later, gives one start. A label-only idea still starts by its label."""
-    with company.transaction() as c:
+    with api.app.state.store.transaction() as c:
         _set_up(c)
         filed = _filed(c, "Pricing headline", "growth-experiments", RUNNING, labels=["growth:running"])
         moved = _filed(c, "Door hangers", "growth-experiments", BUILDING)
@@ -178,7 +170,7 @@ def test_a_test_with_both_a_running_stage_and_a_running_label_starts_once(compan
         labelled = H.task_create(c, ANA, "Weekend discount", "Try it.", OWNER, labels=["idea:on-deck"], lint=False)
         labelled = labelled["id"]
         H.task_update(c, ANA, labelled, labels=["idea:live"])
-        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    found = get(api, "growth/numbers")["markers"]
     starts = sorted(m["task_id"] for m in found if m["kind"] == "started")
     assert starts == sorted([filed, moved, labelled])
 

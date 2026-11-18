@@ -73,6 +73,25 @@ def _told(c):
     return [(r[0], r[1]) for r in rows]
 
 
+def _owner_told(c, task_id, rule_name):
+    """The wakes a task's owner bot was sent for one stage rule: (recipient, body)."""
+    rows = c.execute(
+        "SELECT recipient_id, body FROM messages WHERE json_extract(refs, '$.task') = ? AND body LIKE ? ORDER BY rowid",
+        (task_id, f"%Rule {rule_name}%"),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def _history(c, task_id):
+    """The Stage rules lines on a task's history, as a person reads them."""
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT note FROM history_events WHERE subject_id=? AND kind='stage_rule' ORDER BY rowid", (task_id,)
+        )
+    ]
+
+
 def _rule(c, **fields):
     rule = {
         "id": fields.pop("id", "test-rule"),
@@ -287,16 +306,12 @@ def test_waiting_on_a_person_tells_the_owner_once(c, time_machine):
     assert T.sweep(c)["told"] == 0
     time_machine.shift(timedelta(minutes=1))
     assert T.sweep(c)["told"] == 1
-    told = c.execute(
-        "SELECT body FROM messages WHERE recipient_id='bot:builder' AND wake_key LIKE ?", (f"{waiting}:%:stage_rule:%",)
-    ).fetchall()
-    assert len(told) == 1 and "Rule Chase the OK" in told[0][0]
-    assert (
-        c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (f"{working}:%:stage_rule:%",)).fetchone()[0]
-        == 0
-    )
+    told = _owner_told(c, waiting, "Chase the OK")
+    assert [who for who, _ in told] == ["bot:builder"] and "Rule Chase the OK" in told[0][1]
+    assert _owner_told(c, working, "Chase the OK") == []
     time_machine.shift(timedelta(hours=1))
     assert T.sweep(c)["told"] == 0  # the same wait is told once
+    assert len(_owner_told(c, waiting, "Chase the OK")) == 1
 
 
 def test_a_task_late_lists_while_it_waits_for_the_hourly_wake_is_not_named_again(c, time_machine):
@@ -314,8 +329,9 @@ def test_a_task_late_lists_while_it_waits_for_the_hourly_wake_is_not_named_again
     time_machine.shift(timedelta(minutes=31))
     T.sweep(c)
     assert len(_told(c)) == 1
-    outcomes = dict(c.execute("SELECT task_id, outcome FROM stage_rule_marks WHERE task_id IN (?, ?)", (first, second)))
-    assert outcomes == {first: "told", second: "late"}
+    assert _title(c, first) in _told(c)[0][1] and _title(c, second) not in _told(c)[0][1]
+    assert any("was told" in note for note in _history(c, first))
+    assert not any("was told" in note for note in _history(c, second))
 
 
 def test_a_task_that_ends_before_the_wake_is_dropped_not_told(c, time_machine):
@@ -332,7 +348,6 @@ def test_a_task_that_ends_before_the_wake_is_dropped_not_told(c, time_machine):
     T.sweep(c)
     told = _told(c)
     assert len(told) == 2 and told[1][1].startswith("Stage rules: 1 task.") and _title(c, named) in told[1][1]
-    outcomes = dict(
-        c.execute("SELECT task_id, outcome FROM stage_rule_marks WHERE task_id IN (?, ?, ?)", (first, gone, named))
-    )
-    assert outcomes == {first: "told", gone: "dropped", named: "told"}
+    assert any("was told" in note for note in _history(c, first))
+    assert any("was told" in note for note in _history(c, named))
+    assert not any("was told" in note for note in _history(c, gone))
