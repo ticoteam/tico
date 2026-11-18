@@ -660,3 +660,18 @@ def test_scrub_report_also_covers_a_short_current_fill_value():
         "account", bc.BrowserReport(ok=True, text=value, title=value, url=value, error=value), value
     )
     assert all(value not in str(getattr(report, field)) for field in ("text", "title", "url", "error"))
+
+
+def test_a_typed_secret_reaches_activity_as_the_verb_and_page_path_only(setup, tools):
+    # E-607: a bot that types a secret into a website leaves the verb and page path in Activity, never the text.
+    s = setup
+    typed = "acme-typed-" + PASSWORD
+    thread, box = call(s, s.ops, "type", {"ref": "e3", "text": typed})
+    [cmd] = collect(s, s.host)
+    report(s, s.host, cmd)
+    assert done(thread, box).status_code == 200
+    assert tools.logs == [("bot:ops", "type", "acme.example/home", "central", "use")]
+    with s.api.app.state.store.read() as c:
+        for table in ("events", "tool_calls"):
+            rows = c.execute(f"SELECT * FROM {table}").fetchall()
+            assert typed not in repr([tuple(r) for r in rows]), table
