@@ -142,7 +142,7 @@ def github(condition: str, **settings: object) -> Row:
     return {**out, "settings": settings} if settings else out
 
 
-def _page(line: str, rubric: str, **settings: bool) -> Row:
+def _page(line: str, rubric: str, **settings: bool | str) -> Row:
     return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
 
 
@@ -361,7 +361,7 @@ PRESETS["product"] = {
             "Validate",
             "Check it in production and attach a Checked in production page that names the version production runs.",
             1440,
-            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True)],
+            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True, document="Checked in production")],
         ),
     ],
     "done": {"id": "product-done"},
@@ -467,7 +467,7 @@ PRESETS[PRODUCT] = {
             "Check it in production and attach a Checked in production page that names the version production runs "
             "(skill validate-in-production).",
             1440,
-            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True)],
+            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True, document="Checked in production")],
             owner=ASSIGNEE,
         ),
     ],

@@ -44,8 +44,29 @@ def _in_validate(c, title="Drawer account row"):
     return row
 
 
+def _as_document(c, row, file_id, version):
+    """The page is the task's Checked in production document, as attaching it to Validate makes it: a live page at
+    `version`, linked to the task with that role."""
+    now = H.now()
+    c.execute(
+        "INSERT OR IGNORE INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+        "last_activity_at) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?)",
+        (file_id, "pm", "bot", file_id, "Checked in production", now, now),
+    )
+    c.execute("UPDATE bot_files SET current_version=max(current_version, ?) WHERE id=?", (version, file_id))
+    c.execute(
+        "INSERT OR IGNORE INTO pages (file_id, cadence, created_at, updated_at) VALUES (?, 'none', ?, ?)",
+        (file_id, now, now),
+    )
+    c.execute(
+        "INSERT OR IGNORE INTO page_links (id, page_id, target, role, created_by, created_at) VALUES (?,?,?,?,?,?)",
+        (H.new_id(), file_id, "task:" + row["id"], "Checked in production", PM, now),
+    )
+
+
 def _attach(c, row, file_id="f-check", version=1):
     rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (G.STAGE,)).fetchone()[0]
+    _as_document(c, row, file_id, version)
     c.execute("DELETE FROM requirement_pages WHERE visit_id=? AND requirement_id=?", (row["visit"]["id"], rid))
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
@@ -239,6 +260,10 @@ def test_not_validated_moves_the_task_back_with_the_note_and_files_new_engineeri
 
 
 def test_a_passed_page_with_no_ask_goes_to_done_with_no_person(c):
-    row = _jev(c, _attach(c, _in_validate(c)))
+    """Validate's page is the task's Checked in production document, and still nobody is asked."""
+    row = _in_validate(c)
+    (requirement,) = [r for r in R.for_visit(c, row["visit"]) if r["kind"] == "page"]
+    assert R.document_of(requirement) == "Checked in production"
+    row = _jev(c, _attach(c, row))
     assert E.advance(c, row["id"])["status"] == "done"
     assert not c.execute("SELECT 1 FROM answers WHERE by_id LIKE 'human:%'").fetchone()

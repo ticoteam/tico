@@ -491,3 +491,74 @@ def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(a
     replay = api.post(path, json=payload, headers=request_headers)
     assert replay.status_code >= 400 and "approval" not in replay.json(), replay.text
     assert all(p["file_id"] not in replay.text for p in (first, second))
+
+
+@pytest.mark.parametrize("document", ["Proposal", "Results", "Checked in production"])
+def test_a_stage_approves_its_own_document_by_its_name(api, document):
+    """Opportunity's Proposal, an experiment's Results and Validate's Checked in production are documents of their
+    own: written under that name, in the stage, they are submitted to its approval, never to a QA report's."""
+    from backend import pipeline_settings as PS
+
+    req = {"kind": "page", "line": document, "settings": {"document": document, "rubric": "Says it."}}
+    problems: list[str] = []
+    PS._check_settings(req, "Stage", problems)  # pyright: ignore[reportPrivateUsage]
+    assert problems == []
+    _, row = _flow(api, document)
+    _, attempt = turn(api)
+    written = _write(api, row["id"], SPEC, attempt["token"], document.lower())  # any spelling is the fixed name
+    assert written["submitted"]["version"] == 1
+    _verdict(api, row["id"], "met")
+    entry = _entry(api, row["id"])
+    assert (entry["line"], entry["approval"]["document"]) == (document, document)
+
+
+# ----------------------------------------------------------------------------- the names migration
+NAMES_MIGRATION = "backend.migrations.20261118000630_approval_document_names"
+
+
+def test_the_names_migration_gives_proposal_results_and_checked_in_production_their_own_documents(api):
+    migration = importlib.import_module(NAMES_MIGRATION)
+    qa = {"kind": "page", "line": "QA report", "person": ANA, "settings": {"document": "QA report", "rubric": "R"}}
+    stages = (
+        {"name": "Proposal", "owner": OPS, "requirements": [qa]},
+        {"name": "Running", "owner": OPS, "requirements": [{"kind": "page", "line": "Results page"}]},
+        {"name": "Validate", "owner": OPS, "requirements": [{"kind": "page", "line": "Checked in production"}]},
+        {"name": "QA", "owner": OPS, "requirements": [qa]},
+        {
+            "name": "Review",
+            "owner": OPS,
+            "requirements": [{"kind": "page", "line": "Results page", "settings": {"at_head": True}}],
+        },
+    )
+    with api.app.state.store.transaction() as c:
+        made = X.pipeline(c, "sales", "Sales", stages)
+        row = X.new_task(c, ANA, "Acme lights", "sales", assignee=OPS)
+    _, attempt = turn(api)
+    file_id = _write(api, row["id"], SPEC, attempt["token"], "QA report")["file_id"]  # what the old name wrote
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+
+        def named(stage):
+            return [
+                (r["line"], R.document_of(dict(r, settings=json.loads(r["settings"]))))
+                for r in c.execute(
+                    "SELECT * FROM requirements WHERE stage_id=? AND withdrawn_at IS NULL", (made["stages"][stage],)
+                ).fetchall()
+            ]
+
+        assert named("Proposal") == [("Proposal", "Proposal")]
+        assert named("Running") == [("Results", "Results")]
+        assert named("Validate") == [("Checked in production", "Checked in production")]
+        assert named("QA") == [("QA report", "QA report")]  # a real QA report stays
+        assert named("Review") == [("Results page", None)]  # a review of the newest commit is never a document
+        rubric = c.execute(
+            "SELECT json_extract(settings, '$.rubric') FROM requirements WHERE stage_id=?",
+            (made["stages"]["Proposal"],),
+        ).fetchone()[0]
+        assert rubric == "R"
+        docs = c.execute(
+            "SELECT role, page_id FROM page_links WHERE target=? AND role NOT IN ('writer', 'related')",
+            ("task:" + row["id"],),
+        ).fetchall()
+        assert [tuple(d) for d in docs] == [("Proposal", file_id)]

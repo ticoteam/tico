@@ -210,9 +210,7 @@ def test_an_experiment_goes_live_only_once_a_person_approves_its_release_report(
         answer(c, row["id"], go_live["id"], person, "ok", own_click=True)
         row = E.task(c, row["id"])
         assert (row["stage_id"], row["owner_id"]) == ("growth-experiments-running", assignee)
-        page = P.attach(
-            c, row["id"], "Results page", "page:" + _page(c, "Results"), assignee, seen_version=row["version"]
-        )
+        page = P.attach(c, row["id"], "Results", "page:" + _page(c, "Results"), assignee, seen_version=row["version"])
         _verdict(c, page)
         assert E.advance(c, row["id"])["stage_id"] == "growth-experiments-done"
 

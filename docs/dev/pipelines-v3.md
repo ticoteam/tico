@@ -72,8 +72,8 @@ architecture) and C (the screens).
 - **Person approvals** on Product: the Spec, the QA report and the Release report. The rest is bots and the decision
   model. There is no pitch: a feature starts as a chat, and its first approval is the Spec (Nov 16).
 - **Stage approvals name a document** (Nov 16). A stage that asks a person to approve names the task document it
-  approves (a page requirement with `settings.document`: Spec, QA report, Release report or Invoice,
-  `task_requirements.APPROVED`) and who approves it: any person (people only) or one person. The stage editor (✎) sets
+  approves (a page requirement with `settings.document`: Spec, QA report, Release report, Invoice, Proposal,
+  Results or Checked in production, `task_requirements.APPROVED`) and who approves it: any person (people only) or one person. The stage editor (✎) sets
   both. The bot writing that document while the task is in the stage is the submission (`task_pages.submit`, from
   `POST /api/v2/tasks/{id}/files` with `document`); no bot asks for an OK, and a bot adding an OK on such a stage is
   refused. The decision model checks the submitted version: a first fail goes back to the bot without telling anyone, a
