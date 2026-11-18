@@ -1536,7 +1536,7 @@ def send_anyway(api, hold_id, expected=200):
     return r.json()
 
 
-def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
+def test_send_anyway_runs_the_route_as_the_run_which_may_carry_private_work(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
     r, msg, attempt = started_turn(api)
@@ -1544,14 +1544,13 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     task = task_for_ops(api)
     held = [post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token=run)["held"]]
     assert all(held)
-    # The run now carries a private task neither Ana nor the company task's readers may read.
+    # The run now carries a private task too: a company task's comment from it goes out as any run's does.
     with api.app.state.store.transaction() as c:
         private = H.task_create(c, "human:ben", "Private plan", "Secret.", "human:ben", lint=False, private=True)
         read_by_run(c, aid, private)
     for h in held:
-        send_anyway(api, h["id"], expected=403)
-        assert hold_row(api, h["id"])["state"] == "held"
-    assert bodies(api, "favorite color is red") == [] and bodies(api, "favorite color is teal") == []
+        assert send_anyway(api, h["id"])["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is red")) == 1
     paths = [json.loads(hold_row(api, h["id"])["payload"])["provenance"]["path"] for h in held]
     assert paths == [f"/api/v2/tasks/{task['id']}/comments"]
 

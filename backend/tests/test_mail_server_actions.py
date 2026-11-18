@@ -286,6 +286,16 @@ def test_a_bot_reads_and_drafts_only_at_its_own_level(api, box):
     assert first["to"] == [SENDER] and first["thread"] == "t1" and len(box.drafts(BOX)) == 1
 
 
+def test_a_bot_s_run_on_a_private_task_drafts_mail_like_any_run(api, box):
+    from backend.tests.helpers.threads_private_execution import private_run
+
+    grant(api, "ops", "read_write")
+    _, attempt = private_run(api)
+    body = {"mailbox": BOX, "reply_to": "t1", "body": "Thanks for the invoice.\n\nOps"}
+    made = post(api, "mail/drafts", body, attempt["token"])
+    assert made["created"] and made["thread"] == "t1" and len(box.drafts(BOX)) == 1
+
+
 def test_a_bots_draft_meets_the_lint_first(api, box):
     token = as_bot(api, "ops")
     grant(api, "ops", "read_write")

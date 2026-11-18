@@ -31,7 +31,7 @@ re-run.
    `tico task comment <main-red task> "Blocks #<your task> (PR #<your pull request>): <test> fails, <run link>"`.
    Any relation but the dependency in step 2 changes the other owner's task too, and {{app_name}} refuses it. Only when
    none is open, file one titled `Main red: <the failing test or check>, since <the pull request or commit that broke it>`,
-   so the next bot finds it. Working on a private task, file it with `tico task create --from-private`
+   so the next bot finds it. Working on a private task, file it with `tico task create --public`
    (company-visible, in your own words: no text copied from the private task) and never `--private`; otherwise file
    it plainly, never under a private parent. A private one is hidden from the search, and a second bot files another.
 2. **Wait on that task, not on a date.** Make your own task depend on it:

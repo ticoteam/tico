@@ -4473,24 +4473,9 @@ def edit_message(c, principal, message_id, body):
     if v is not None and not can_post(c, v, thread):
         raise Problem("forbidden", "You can read this thread but not post in it", 403)
     secret_drop.refuse(c, thread, actor, text)  # an edit is checked as a new message is
-    # A private run's edit may only put its words in its own private task's thread (the same check as its post): a
-    # company message it wrote earlier cannot carry them. The edit keeps the run's provenance: the message is restricted
-    # (its per-message check applies) and the event names the run.
-    from . import task_privacy
-
-    private = v is not None and task_privacy.private_execution(c, v.who)
-    if private:
-        task_privacy.private_thread_destination(c, v.who, thread)
-        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
     H.path_mentioned(c, actor, "message", text, thread.get("task_id"))
     revision, _, warnings = _revise(c, message, actor, body=text)
-    _event(
-        c,
-        actor,
-        "message.edited",
-        message_id,
-        {"thread": thread["id"], "revision": revision, **({"attempt": v.who.attempt_id} if private else {})},
-    )
+    _event(c, actor, "message.edited", message_id, {"thread": thread["id"], "revision": revision})
     _audit(c, actor, "message:" + message_id, _audited(message, message.get("revision")), _audited(text, revision))
     edited = H.message(c, message_id)
     return {**edited, "warnings": warnings} if warnings else edited

@@ -1,10 +1,11 @@
-"""The Bookkeeper's Books check and Watch are private tasks, and its Finance actions made from them are admitted
-(bookkeeper.private_finance_run, task_privacy.guard_write). Synthetic fixtures only: Acme's Mercury feed, fictional
+"""The Bookkeeper's Books check and Watch are private tasks, and from them it makes only the Finance actions its checks
+need: categorize and attach (bookkeeper.private_finance_run). Synthetic fixtures only: Acme's Mercury feed, fictional
 people ben (no Finance access) and ana (the owner).
 
-Every other private run keeps its refusal: a run carrying anything besides the Books check or Watch, a task of the
-Bookkeeper's that a person filed, and every other write path of Finance. A refused write says so in one plain sentence;
-the row stays in the queue for the next check, and nothing asks a person to reissue, publish or make it visible."""
+A run carrying anything besides the Books check or Watch, or a task of the Bookkeeper's that a person filed, acts as any
+Finance Owner run does, and every other Finance route keeps its own rights checks. A refused write says so in one plain
+sentence; the row stays in the queue for the next check, and nothing asks a person to reissue, publish or make it
+visible."""
 
 import pytest
 
@@ -14,8 +15,6 @@ from backend.tests.helpers.api import headers  # noqa: F401
 from backend.tests.helpers.finance_bookkeeper_turns import _library_file, ask, chart, hire, mercury  # noqa: F401
 from backend.tests.helpers.finance_fixtures import OWNER  # noqa: F401
 from backend.tests.helpers.mcp import call  # noqa: F401
-
-PRIVACY = "Private task work cannot publish into company-wide resources"
 
 
 def private_run(api, *, carried=("books",), extra=None, feed=True):
@@ -137,7 +136,7 @@ def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(ap
     assert refused.status_code == 200, refused.text
     out = refused.json()
     assert out["status"] == "failed" and out.get("reason"), out
-    assert PRIVACY not in str(out)
+    assert out["code"] != "privacy", out
     reason = out["reason"]
     assert isinstance(reason, str) and "\n" not in reason and len(reason) <= 200, reason
     err, left = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
@@ -216,15 +215,15 @@ def test_a_month_close_from_its_own_private_run_is_refused_and_no_approval_is_as
         assert c.execute("SELECT COUNT(*) FROM fin_actions WHERE kind='close_period'").fetchone()[0] == 0
 
 
-def test_the_bills_address_write_from_the_books_check_stays_refused(api):
-    """Another Finance route (not the action route) keeps the privacy refusal from a private Books check run."""
+def test_the_bills_address_write_from_the_books_check_meets_its_own_rights_check(api):
+    """Another Finance route (not the action route) checks the run as it checks any run: only the owner or an admin."""
     token, made, _ = private_run(api)
     refused = api.put(
         "/api/v2/finance/bills-address",
         json={"address": "bills@acme.example"},
         headers=headers(token),
     )
-    assert refused.status_code == 403 and PRIVACY in refused.text, refused.text
+    assert refused.status_code == 403 and "Only the owner or an admin" in refused.text, refused.text
 
 
 MONEY_KINDS = [
@@ -257,11 +256,11 @@ def test_a_private_run_makes_no_money_action_and_no_row_is_written(api, carried,
         [("Books check (9)", "human:ben", BK.ACTOR)],  # named like one, but a person filed it
     ],
 )
-def test_a_run_carrying_other_private_work_keeps_the_refusal(api, extra):
+def test_a_run_carrying_other_private_work_acts_as_any_finance_owner_run(api, extra):
     token, made, _ = private_run(api, extra=extra)
     feed_id = deposit_feed_id(api, token)
-    refused = post_finance(api, token, "categorize", {"feed_id": feed_id, "account_id": chart(api, "4000")}, "cat:x")
-    assert refused.status_code == 403 and PRIVACY in refused.text, refused.text
+    done = post_finance(api, token, "categorize", {"feed_id": feed_id, "account_id": chart(api, "4000")}, "cat:x")
+    assert done.status_code == 200 and done.json()["status"] == "committed", done.text
 
 
 def test_an_open_books_check_takes_the_next_list_and_no_new_task_is_filed(api):

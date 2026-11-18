@@ -9,7 +9,7 @@ from backend import task_relations as TR
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put
 from backend.tests.helpers.tasks_board import bot_token
-from backend.tests.helpers.task_readers import dry_run, refused, run_on, subtask, task
+from backend.tests.helpers.task_readers import carry, dry_run, run_on, subtask, task
 
 
 @pytest.fixture(autouse=True)
@@ -91,11 +91,11 @@ def test_private_bot_task_reaches_one_named_person_and_nobody_else(api, requeste
     assert not sql_sees(api, "ben-test", "Confidential: Zip advisory intake.")
     assert not sql_sees(api, "ben-test", "Confidential: Zip lockfile scan.")
 
-    # A second, different person is refused, by the create and its dry-run in the same words.
+    # A second, different person gets their own private subtask, and reads that alone: the task stays Ben's.
     other = subtask(row["id"], "cara", title="Approve the zip triage plan again")
-    words = refused(api, other, attempt["token"])
-    assert "already reached Ben" in words
-    assert words in dry_run(api, other, attempt["token"])
+    assert not [p for p in dry_run(api, other, attempt["token"]) if "rivate" in p]
+    second = post(api, "tasks", other, attempt["token"])
+    assert second["private"] and readers(api, second["id"]) == {"cara"}
     assert readers(api, row["id"]) == {"ben"}
 
 
@@ -120,17 +120,16 @@ def test_the_readers_answer_comes_back_to_the_task_and_nowhere_wider(api):
     assert r.status_code == 403, r.text
 
 
-def test_refused_hand_offs_match_their_dry_run(api):
-    # A person's private task above: its work cannot reach someone who cannot read it.
+def test_a_hand_off_under_a_person_s_private_task_files_the_subtask_alone(api):
+    # A person's private task above: its work does not widen to someone who cannot read it, but the subtask is filed.
     above = task(api, "human:cara", "bot:cpo", "Cara's vendor dispute")
     row = task(api, "bot:cpo", "bot:ops", "Dispute triage", parent=above["id"])
     attempt = run_on(api)
     body = subtask(row["id"], "ben")
-    words = refused(api, body, attempt["token"])
-    assert words in dry_run(api, body, attempt["token"])
-    assert readers(api, row["id"]) == set()
-    with api.app.state.store.read() as c:
-        assert not H.task_readers(H.task(c, row["id"]))
+    assert not [p for p in dry_run(api, body, attempt["token"]) if "rivate" in p]
+    child = post(api, "tasks", body, attempt["token"])
+    assert child["private"] and readers(api, child["id"]) == {"ben"}
+    assert readers(api, row["id"]) == set() and readers(api, above["id"]) == {"cara"}
 
 
 def test_only_the_owning_bot_brings_a_person_in(api):
@@ -213,28 +212,19 @@ def test_the_readers_answer_clears_the_wait(api):
         assert H.task(c, row["id"])["status"] == "open"
 
 
-def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
-    from backend.tests.helpers.task_sealed_child import carry
-
+def test_a_run_carrying_work_the_person_cannot_read_reaches_them_on_its_own_task_only(api):
     own = task(api, "bot:ops", "bot:ops", "Zip triage")
     theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
     attempt = run_on(api)
     carry(api, attempt, theirs)
     body = subtask(own["id"], "ben", body="Ben, approve the vendor dispute reply? If yes, I will send it.")
-    r = api.post("/api/v2/tasks", json=body, headers=headers(attempt["token"]))
-    assert r.status_code == 403, r.text
+    child = post(api, "tasks", body, attempt["token"])
+    # Ben reads his subtask and the task it hands off from; the other private work the run carries stays Cara's.
+    assert child["private"] and readers(api, child["id"]) == {"ben"}
+    assert readers(api, own["id"]) == {"ben"} and readers(api, theirs["id"]) == {"cara"}
+    assert not sql_sees(api, "ben-test", "Confidential: Cara's vendor dispute.")
     r = question(api, own, "ben", "Send the reply? It decides what ships next.", attempt)
-    assert r.status_code == 422 and r.json()["error"]["code"] == "private", r.text
-    # Nothing reached Ben: no reader, no task of his, and no question on the task.
-    with api.app.state.store.read() as c:
-        assert not H.task_readers(H.task(c, own["id"]))
-        assert not c.execute("SELECT 1 FROM question_marks WHERE task_id=?", (own["id"],)).fetchone()
-    assert readers(api, own["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
-    # Once Ben reads every task the run carries, the same sub-task reaches him.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (theirs["id"],))
-    post(api, "tasks", body, attempt["token"])
-    assert readers(api, own["id"]) == {"ben"}
+    assert r.status_code == 200, r.text
 
 
 def test_a_question_reaches_one_reader(api):
@@ -391,29 +381,15 @@ def test_a_bot_adds_anyone_to_a_task_it_owns_others_within_its_reach_and_never_a
     assert r.status_code == 200 and r.json()["readers"] == ["group:" + gid], r.text
 
 
-def test_a_private_run_adds_only_readers_who_read_what_it_carries(api):
+def test_a_private_run_adds_a_reader_to_its_task_and_nothing_else(api):
     own = task(api, "bot:ops", "bot:ops", "Zip triage")
     theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
     attempt = run_on(api)
-    from backend.tests.helpers.task_sealed_child import carry
-
     carry(api, attempt, theirs)
     r = change(api, own["id"], {"add": ["ben"]}, attempt["token"])
-    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
-    words = r.json()["error"]["detail"]
-    problems = dry_run(
-        api,
-        {"owner": "ops", "title": "Zip triage follow-up", "body": "Next step.", "private": True, "readers": ["ben"]},
-        attempt["token"],
-    )
-    assert words in problems, problems
-    with api.app.state.store.read() as c:
-        assert not H.task_readers(H.task(c, own["id"]))
-    # Once Ben reads every task the run carries, the same add goes through.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (theirs["id"],))
-    r = change(api, own["id"], {"add": ["ben"]}, attempt["token"])
     assert r.status_code == 200 and r.json()["readers"] == ["human:ben"], r.text
+    # Ben reads the task he was added to; the other private task the run carries stays Cara's.
+    assert readers(api, own["id"]) == {"ben"} and readers(api, theirs["id"]) == {"cara"}
 
 
 def test_a_task_made_public_then_private_again_has_no_readers(api):

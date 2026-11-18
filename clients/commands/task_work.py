@@ -27,7 +27,6 @@ from clients.commands._shared import (
     _visuals,
     ambiguous_page,
     document_attachment,
-    private_document,
     text_file,
 )
 from clients.commands._requester import _as_person, _asked
@@ -713,14 +712,7 @@ def _document(api, args):
         body["text"] = args["text"]
     else:
         raise ValueError("Send the document's HTML as text, or path to an .html file")
-    published = private_document(
-        lambda: ambiguous_page(lambda: api.post("pages", body, key=_key(args))),
-        api,
-        args["id"],
-        args["document"],
-        body["text"],
-        _key(args),
-    )
+    published = ambiguous_page(lambda: api.post("pages", body, key=_key(args)))
     return document_attachment(published, args["document"])
 
 

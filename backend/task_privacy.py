@@ -1163,21 +1163,18 @@ def private_meetings(c, ids):
 
 
 def private_execution(c, who):
+    """Whether a run carries a private task. It narrows nothing the run may do: it keeps a refusal's record
+    content-free (hubdb.PRIVATE_WRITE) and makes a task the run files private unless the run asks otherwise
+    (app.task_create)."""
     return bool(who.attempt_id and any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id)))
-
-
-def _reads(c, actor, row, reach=None):
-    """`actor` reads `row`, counting the reader a write is about to bring in, (task id, person), as already there."""
-    return H.task_private_readable(c, actor, row) or bool(row and reach and reach == (row["id"], actor))
 
 
 def reach_for(c, who, person, parent):
     """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
-    the bot owns, makes them its reader (hubdb.task_reach); None when it does not; Problem when it is refused.
+    the bot owns, makes them its reader (hubdb.task_reach); None otherwise.
 
-    The hand-off is a subtask for them; waiting on them is hubdb's.
-    Outside private work a hand-off the reach rules refuse only for what is above the task goes on as before,
-    without a reader: the person gets the subtask alone. A second, different person is refused either way."""
+    The hand-off is a subtask for them; waiting on them is hubdb's. A hand-off the reach rules do not widen the parent
+    for (hubdb.task_reach_refusal) goes on without a reader: the person gets the subtask alone."""
     if not (
         parent
         and who.role == "bot"
@@ -1189,344 +1186,13 @@ def reach_for(c, who, person, parent):
         and not H.task_private_readable(c, person, parent)
     ):
         return None
-    refusal = H.task_reach_refusal(c, who.actor, parent, person)
-    if refusal is None:
+    if H.task_reach_refusal(c, who.actor, parent, person) is None:
         return parent["id"], person
-    if any(H.is_human(r) for r in H.task_readers(parent)) or private_execution(c, who):
-        raise Problem("privacy", refusal, 403)
     return None
 
 
-# ----------------------------------------------------------------------------- a sealed subtask for another bot
-# A private task with no person on it could hand nothing to a bot outside its parties: every create from its runs was
-# refused, so a repair its owner found stranded (Dev 632). Its owning bot (or that bot's manager) may file one private
-# subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
-# or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
-# widen: the refusal names them and the route to them.
-SEALED_ROUTE = "ask them with `tico task ask`, or have them file the subtask"
-COPIED_WORDS = 12
-
-
-def _person_on(row):
-    named = [row.get("requester_id"), row.get("owner_id")] + H.task_readers(row)
-    return next((p for p in named if p and H.is_human(p)), None)
-
-
-def _person_name(c, person):
-    return (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
-
-
-def sealed_for(c, who, owner, parent):
-    """The private tasks a run's create of a subtask for bot `owner` under private `parent` keeps from it (each one the
-    run carries that `owner` cannot read, the parent among them when the run carries it), when that create is a sealed
-    hand-off; None when it is not one, so the create is judged as before. Problem when one of them, or a private task
-    above it, has a person on it: the words name them and the route to them."""
-    if not (
-        parent
-        and who.role == "bot"
-        and not who.via
-        and not getattr(who, "task_actor", "")
-        and who.attempt_id
-        and H.is_bot(owner or "")
-        and owner != who.actor
-        and H.task_private(c, parent)
-        and H.task_represents(c, who.actor, parent["owner_id"])
-    ):
-        return None
-    kept = {}
-    for tid in attempt_tasks(c, who.attempt_id):
-        row = _task(c, tid)
-        if row and H.task_private(c, row) and not H.task_private_readable(c, owner, row):
-            kept.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
-    _no_person(c, who, kept.values())
-    return list(kept.values()) or None
-
-
-def _no_person(c, who, rows):
-    """Problem naming the person on one of `rows`, or on a private task above one, and the route to them."""
-    from . import task_relations as TR
-
-    for row in rows:
-        if person := _person_on(row):
-            raise Problem("privacy", f"{_person_name(c, person)} is on this private task: {SEALED_ROUTE}", 403)
-        for above in TR.ancestors(c, row["id"]):
-            above = H.task(c, above)
-            if above and H.task_private(c, above) and (person := _person_on(above)):
-                # A task above that the filer cannot read keeps its person's name, and the route goes through the
-                # filer's own requester, who can reach it.
-                if not H.task_private_readable(c, who.actor, above):
-                    raise Problem(
-                        "privacy",
-                        "A person is on a private task above this one: ask "
-                        f"{row['requester_id']}, who gave you this task, to file the subtask",
-                        403,
-                    )
-                raise Problem(
-                    "privacy", f"{_person_name(c, person)} is on a private task above this one: {SEALED_ROUTE}", 403
-                )
-
-
-def _words(text):
-    # Letters and digits only, any case: words joined by `_` (a path, a label) are still the words they copy.
-    return re.findall(r"[^\W_]+", str(text or "").lower())
-
-
-def _copied_runs(text):
-    words = _words(text)
-    return {tuple(words[i : i + COPIED_WORDS]) for i in range(len(words) - COPIED_WORDS + 1)}
-
-
-# A commit id is long, mixed and unbroken like a secret, yet a review or QA subtask must name the exact head. Only the
-# shape heuristic lets one through, and only where it reads as a commit: 40 hex digits right after a commit word, or as
-# the commit, tree or blob segment of a GitHub link (whose other segments are then judged one by one). A bare hex run,
-# one after a common word such as "at", and a longer one stay secret-shaped, as hex tokens and keys have those shapes.
-SHA = r"[0-9a-f]{40}"
-COMMIT_REF = re.compile(
-    r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision)\b)[\s:=#@`*]*\b" + SHA + r"\b"
-)
-GITHUB_PATH = re.compile(r"\bhttps?://(?:www\.)?github\.com(/[^\s?#\"'<>]*)")
-
-
-def _without_commits(text):
-    def link(m):
-        parts = m.group(1).split("/")
-        return " ".join(
-            part
-            for i, part in enumerate(parts)
-            if not (re.fullmatch(SHA, part) and i and parts[i - 1] in ("commit", "commits", "tree", "blob"))
-        )
-
-    return GITHUB_PATH.sub(link, COMMIT_REF.sub(" ", text))
-
-
-# The preview's long run reaches across `/`, `_` and `-`, so a branch, a session or a dated path would read as a secret.
-# A run is let through only when it reads as one of those: each piece between the separators a word, a number or a short
-# token (a word is lowercase or capitalised and a number at most eight digits, as a key's pieces are neither), with at
-# most one short hex id (a task id or short sha) and at least one real word, once its UUIDs are taken out.
-# A base64 or base64url value split by a separator has long mixed pieces, so it is still judged whole.
-REF_UUID = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")
-REF_PIECE = re.compile(r"[a-z]{0,16}|[A-Z][a-z]{0,15}|[0-9]{0,8}|[A-Za-z0-9]{1,4}")
-REF_ID = re.compile(r"[0-9a-f]{7,12}")
-
-
-def _workflow_ref(run):
-    pieces = re.split(r"[/_-]", REF_UUID.sub("", run))
-    ids = [piece for piece in pieces if not REF_PIECE.fullmatch(piece)]
-    return (
-        len(ids) <= 1
-        and all(REF_ID.fullmatch(piece) for piece in ids)
-        and any(re.fullmatch(r"[A-Za-z]{3,}", piece) for piece in pieces)
-    )
-
-
-def secret_shaped(text):
-    """Whether `text` holds a credential-shaped value: the token patterns and secret fields that mask one in a refusal
-    preview, or a long mixed run that is not a workflow reference (a branch, a session, a dated path)."""
-    from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
-
-    text = str(text or "")
-    return (
-        any(pattern.search(text) for pattern, _ in SECRETS)
-        or bool(SECRET_FIELD.search(text))
-        or any(
-            _looks_secret(m.group(0)) and not _workflow_ref(m.group(0)) for m in LONG.finditer(_without_commits(text))
-        )
-    )
-
-
-def sealed_words(kept, title, body):
-    """Refuse a sealed subtask whose words carry what the other bot may not read: a secret-shaped value, or 12 or more
-    words in a row copied from a private task it is kept from. The refusal names the check, never the text; it is a
-    writing correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
-    text = f"{title or ''}\n{body or ''}"
-    if secret_shaped(text):
-        raise Problem(
-            "lint", "This subtask holds a secret-shaped value: take it out, and say only what the repair needs", 422
-        )
-    runs = _copied_runs(text)
-    if runs and any(
-        runs & _copied_runs(f"{r.get('title') or ''}\n{r.get('body') or ''}\n{r.get('note') or ''}") for r in kept
-    ):
-        raise Problem(
-            "lint",
-            f"This subtask copies {COPIED_WORDS} or more words in a row from private work the other "
-            "bot cannot read: say only what the repair needs, in your own words",
-            422,
-        )
-
-
-# ----------------------------------------------------------------------------- a company-visible task from private work
-# A repair a private task's owner found may belong in the company's work: filed sealed, nobody else could pick it up or
-# see it done. The owning bot (or that bot's manager), from its own run, with no person on the work, files a
-# company-visible task "from private work" for any bot. Its own words are all it carries, so they are checked before it
-# is written: no secret-shaped value, no 12 words in a row from the private work, no file or link of a private task.
-# Filed under the private task, its owner is told when it is done, as for any subtask; the private task stays sealed.
-FROM_PRIVATE = True
-COMPANY_REFUSAL = (
-    "Private task work cannot create company-visible tasks: its owning bot may file one from private "
-    "work, in its own words (`tico task create --from-private`)"
-)
-FILE_ID = re.compile(r"\bfile-[0-9a-f]{24}\b")
-
-
-def from_private(c, who, owner, parent):
-    """The private tasks a company-visible task filed from private work must keep out of its words: its parent and every
-    private task the run carries. Problem when the route is not open to this create: switched off, not a bot's own
-    run on private task work, a parent that is not private, a private task the filer neither owns nor manages the owner
-    of (a reader only), or a person on one or above it (named, with the route to them, as for a sealed one)."""
-    if not FROM_PRIVATE:
-        raise Problem("privacy", COMPANY_REFUSAL, 403)
-    if not (
-        who.role == "bot"
-        and not who.via
-        and not getattr(who, "task_actor", "")
-        and who.attempt_id
-        and private_execution(c, who)
-    ):
-        raise Problem("privacy", "Only a bot's own run on private work files a task from it", 403)
-    if not H.is_bot(owner or ""):
-        raise Problem("privacy", "A task from private work is for a bot: ask a person with `tico task ask`", 403)
-    if parent and not H.task_private(c, parent):
-        raise Problem(
-            "privacy", "File a task from private work under the private task it comes from, or with no parent", 403
-        )
-    rows = {parent["id"]: parent} if parent else {}
-    for tid in attempt_tasks(c, who.attempt_id):
-        row = _task(c, tid)
-        if row and H.task_private(c, row):
-            rows.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
-    if any(not H.task_represents(c, who.actor, row["owner_id"]) for row in rows.values()):
-        raise Problem("privacy", "Only a private task's owning bot, or its manager, files a task from its work", 403)
-    _no_person(c, who, rows.values())
-    return list(rows.values())
-
-
-def _private_words(c, row):
-    criteria = H._json(row.get("acceptance"), []) or []
-    return "\n".join(
-        [
-            row.get("title") or "",
-            row.get("body") or "",
-            row.get("note") or "",
-            *(str(item or "") for item in (criteria if isinstance(criteria, list) else [])),
-            *(m.get("body") or "" for m in H.task_comments(c, row["id"])),
-        ]
-    )
-
-
-def _carries_private_file_or_link(c, kept, text):
-    """Whether `text` names a link on one of `kept`, a file of a private task or made by a run on one, or an
-    attachment of one of `kept` or of its comments."""
-    ids = [row["id"] for row in kept]
-    marks = ",".join("?" * len(ids))
-    if ids:
-        for row in c.execute(f"SELECT url FROM task_links WHERE task_id IN ({marks})", ids):
-            if row["url"] and row["url"] in text:
-                return True
-        for row in c.execute(f"SELECT blob_id FROM task_assets WHERE task_id IN ({marks})", ids):
-            if row["blob_id"] in text:
-                return True
-        for row in kept:
-            for m in H.task_comments(c, row["id"]):
-                for asset in c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (m["id"],)):
-                    if asset["blob_id"] in text:
-                        return True
-    for fid in set(FILE_ID.findall(text)):
-        found = c.execute("SELECT task_id,scope FROM bot_files WHERE id=?", (fid,)).fetchone()
-        if not found:
-            continue
-        tasks = {found["task_id"], found["scope"][5:] if found["scope"].startswith("task:") else None} - {None, ""}
-        if any(H.task_private(c, _task(c, tid)) for tid in tasks):
-            return True
-        for version in c.execute("SELECT attempt_id FROM bot_file_versions WHERE file_id=?", (fid,)):
-            if version["attempt_id"] and any(
-                H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, version["attempt_id"])
-            ):
-                return True
-    return False
-
-
-def create_texts(body):
-    """Every text a task create keeps besides its title and body (models.TaskCreate): what a task from private work
-    could otherwise carry past the words checks."""
-    from .task_roles import role_name
-
-    # A role's name is checked as sent and as stored (task_roles.role_name): the store lower-cases and trims it.
-    roles = [name for raw in (body.roles or {}) for name in (str(raw), role_name(raw) or "")]
-    return [
-        *body.acceptance_criteria,
-        *body.labels,
-        *body.links,
-        body.public_title or "",
-        body.public_summary or "",
-        *roles,
-    ]
-
-
-def from_private_words(c, kept, title, body, texts=()):
-    """Refuse a task from private work whose words carry it: a secret-shaped value, 12 or more words in a row copied
-    from one of `kept` (its title, body, note or comments), or a file or link from a private task, in its title, body or
-    any other text it keeps (`texts`, create_texts). The refusal names the check, never the text; it is a writing
-    correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
-    text = "\n".join([title or "", body or "", *(t for t in texts or () if t)])
-    if secret_shaped(text):
-        raise Problem(
-            "lint", "This task holds a secret-shaped value: take it out, and say only what the work needs", 422
-        )
-    runs = _copied_runs(text)
-    if runs and any(runs & _copied_runs(_private_words(c, row)) for row in kept):
-        raise Problem(
-            "lint",
-            f"This task copies {COPIED_WORDS} or more words in a row from private work: say only what "
-            "the work needs, in your own words",
-            422,
-        )
-    # A private task's title is shorter than a copied run yet names it outright; a false hit costs a rewrite.
-    words = " " + " ".join(_words(text)) + " "
-    if any((name := " ".join(_words(row.get("title")))) and f" {name} " in words for row in kept):
-        raise Problem("lint", "This task names a private task by its title: describe the work without it", 422)
-    if _carries_private_file_or_link(c, kept, text):
-        raise Problem(
-            "lint",
-            "This task carries a file or link from a private task: take it out, and say in your own "
-            "words what the work needs",
-            422,
-        )
-
-
-def require_create(
-    c, who, private, owner, parent, actor=None, title=None, body=None, from_private_work=False, texts=(), related=()
-):
-    """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
-    words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
-    Returns reach_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
-    `from_private_work`: a company-visible task filed from private work (from_private), whose words (`texts`, every
-    other text it keeps) are checked here; `related` are the ids of the tasks it is related to besides its parent."""
-    if from_private_work:
-        if private:
-            raise Problem("privacy", "A task from private work is company-visible: leave out --private", 422)
-        kept = from_private(c, who, owner, parent)
-        if any(H.task_private(c, _task(c, tid)) for tid in related):
-            # Related to or a duplicate of a private task, it would say so to that task's readers.
-            raise Problem("privacy", "A task from private work is related to no private task but its parent", 403)
-        from_private_words(c, kept, title, body, texts)
-        return None
-    execution = private_execution(c, who)
-    if execution and private is False:
-        raise Problem("privacy", COMPANY_REFUSAL, 403)
-    reach = reach_for(c, who, owner, parent)
-    if execution:
-        kept = None if reach else sealed_for(c, who, owner, parent)
-        if kept is not None:
-            sealed_words(kept, title, body)
-        require_destination(c, who, owner, None, {}, reach=reach, sealed={r["id"] for r in kept or ()})
-        require_destination(c, who, actor or who.actor, None, {}, reach=reach)
-    return reach
-
-
 def require_readers(c, who, task_id, readers, shared, owner=None):
-    """A bot adds readers within its reach (reach.check), any teammate to a task it owns, and a private run only those
-    who read every private task it carries, the task they are added to counted as read. `readers` are the ones being
+    """A bot adds readers within its reach (reach.check), any teammate to a task it owns. `readers` are the ones being
     added; `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent.
     `owner`: the task's owner, read from `task_id` when not given (a task not yet made has none to read)."""
     from . import reach
@@ -1535,8 +1201,6 @@ def require_readers(c, who, task_id, readers, shared, owner=None):
         owner = (H.task(c, task_id) or {}).get("owner_id")
     for reader in readers:
         reach.check(c, who, reader, "task", task_id=shared, owner=owner)
-        if private_execution(c, who):
-            require_destination(c, who, reader, None, {}, reach=(task_id, reader) if task_id else None)
 
 
 def public_message(c, message):
@@ -1655,89 +1319,10 @@ def content_readable_rows(c, actor, rows):
 
 
 def guard_write(c, who, path, auth):
-    """A private execution has no automatic company-publication capability."""
-    # These controls already enforce their own run ownership and never publish company content.
-    if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/")):
-        return
-    if re.fullmatch(r"/api/v2/calls/[^/]+/bot-notes", path):
-        return  # the call-notes route enforces the bot's identity and current attachment
-    if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
-        return
-    if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
-        return
-    native = re.fullmatch(r"/api/v2/(?:uploads/)?threads/([^/]+)/messages", path)
-    if native:
-        # The native message route, with files or without: admitted only into the run's own private task thread
-        # (private_thread_destination).
-        from . import threads
-
-        thread = threads.thread_row(c, native[1])
-        if thread is None:
-            raise Problem("not_found", "Thread not found", 404)
-        return private_thread_destination(c, who, thread)
-    if path.startswith(
-        ("/api/v2/files/", "/api/v2/messages", "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")
-    ):
-        task_path = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/.*)?", path)
-        if task_path and task_path[1] not in ("dry-run", "labels", "stuck"):
-            row = auth.task(c, who, auth.resolve_task(c, who, task_path[1]))
-            if row and not H.task_private(c, row):
-                raise Problem("privacy", "Private task work cannot write company-visible tasks", 403)
-            if row:
-                require_destination(c, who, row["owner_id"], row["conversation_id"], {"task": row["id"]})
-        return
-    if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
-        return
-    if path == "/api/v2/ci/permits":
-        return  # a CI minutes permit publishes nothing; the route admits only the ticket's own workers (ci_runs.may_ask)
-    if path == "/api/v2/rules":
-        from . import counsel
-
-        if counsel.run_read(c, who):
-            return  # the Rules Owner's suggestions from its own read task; the route checks each (counsel.private_suggestion)
-    if path == "/api/v2/finance/actions":
-        from . import bookkeeper
-
-        if bookkeeper.private_finance_run(c, who):
-            return  # the Finance Owner's Finance actions from its own Books check or Watch task; the act route checks the kind
-    if MAILBOX_WRITE.fullmatch(path):
-        # Mail from a mailbox the bot may use publishes nothing into Tico: the route checks the mailbox's own level
-        # (mailbox_access.may), and a send waits on the inbox's send gate, whose OK is a private task of the bot and its
-        # approver alone (email_sending.request_approval). The run's private task is no reason to refuse it.
-        return
-    raise Problem(
-        "privacy",
-        f"Private task work cannot publish into company-wide resources: {path} is one. A private task's run writes "
-        "its own task and thread, and mail from mailboxes it may use",
-        403,
-    )
-
-
-# A mailbox's own writes (backend/mail.py, backend/email_sending.py, backend/org_rule_check.py mail-check): a draft,
-# its discard, a lint or org rule check, labels, an unsubscribe, and queuing or canceling a send. Not the sending
-# policy, suppressions or Google connection, which are company settings.
-MAILBOX_WRITE = re.compile(
-    r"/api/v2/mail/(?:drafts(?:/[^/]+)?|lint|messages/organize|messages/[^/]+/unsubscribe)"
-    r"|/api/v2/email/sends(?:/[^/]+/cancel)?"
-    r"|/api/v2/bots/[^/]+/mail-check"
-)
-
-
-PRIVATE_THREAD_REFUSAL = "Private task work posts only in its own private task's thread"
-
-
-def private_thread_destination(c, who, thread):
-    """A private run's write into a thread (a post or an edit) stays in its own private task's thread: the root's task
-    is the one private task the run carries. Thread readers of a task thread are the readers of
-    its task, so nothing reaches anyone who cannot read the run's work. Refused otherwise. One check for the native
-    message route (guard_write) and for an edit (threads.edit_message). A run that is not private, or no run, passes."""
-    if who is None or not getattr(who, "attempt_id", None) or not private_execution(c, who):
-        return
-    root = H.conversation(c, thread.get("root_id") or thread["id"]) or thread
-    own = root.get("task_id")
-    carried = {tid for tid in attempt_tasks(c, who.attempt_id) if H.task_private(c, _task(c, tid))}
-    if not own or carried != {own}:
-        raise Problem("privacy", PRIVATE_THREAD_REFUSAL, 403)
+    """The write door's privacy hook (app.mutate, files, letters, org rule replays and the rest). It refuses nothing: a
+    run on a private task writes what a run on any task may, as privacy decides only who reads (H.task_private_readable,
+    message_readable, require_destination), and a meeting's run has its bot's normal permissions."""
+    return None
 
 
 def tag_readable(c, who, row):
@@ -1828,21 +1413,18 @@ def _tag_readable(c, who, row, linked, attached):
     )
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None, reach=None, sealed=()):
-    """Refuse a write whose audience cannot read every private task it carries. `reach` is the (task id, person) the
-    write itself makes a reader (reach_for), counted as already made so a dry-run refuses what the write would.
-    `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
-    A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
-    (hubdb.subtask_flows_up): a reached person's answer comes back to the task it was asked for."""
+def require_destination(c, who, to, conversation_id, refs, reply=None):
+    """Refuse a write its audience could not read: its refs or the message it replies to name a private task (or a
+    run, by `turn_id`, that carries one, as message_tasks reads it) that someone it reaches cannot read, or they name
+    a private meeting (a reference or a quote) that they are not in. A private subtask's words may go to its
+    parent's readers when every party of the subtask reads the parent (hubdb.subtask_flows_up): a reached person's
+    answer comes back to the task it was asked for."""
     conv = H.conversation(c, conversation_id) if conversation_id else None
-    if conv and conv.get("audience") and private_execution(c, who):
-        # A native thread's readers are its audience, not its participants list: a private run writes into it only as
-        # private_thread_destination allows (its own private task's thread). Both legacy send routes come through here.
-        private_thread_destination(c, who, conv)
     ids = references(c, refs)
     ids.update(message_tasks(c, reply) if reply else ())
-    if who.attempt_id:
-        ids.update(attempt_tasks(c, who.attempt_id))
+    run = refs.get("turn_id") if isinstance(refs, dict) else None
+    if isinstance(run, str) and run:
+        ids.update(attempt_tasks(c, run))
     # An explicit meeting reference or quote still has an audience, even when the bot can send ordinary messages.
     meetings = meeting_sources(c)
     meeting_ids = meetings.message({"refs": refs}) if refs else set()
@@ -1860,9 +1442,13 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = _task(c, target) if isinstance(target, str) else None
     for row in private:
-        if all(_reads(c, actor, row, reach) for actor in audience if not (actor == to and row["id"] in sealed)):
+        if all(H.task_private_readable(c, actor, row) for actor in audience):
             continue
-        if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
+        if not (
+            target
+            and H.subtask_flows_up(c, row, target)
+            and all(H.task_private_readable(c, actor, target) for actor in audience)
+        ):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)
     if (conv or {}).get("scope") == "shared":
         raise Problem("privacy", "Discuss private tasks in their task conversation", 403)

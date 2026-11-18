@@ -75,12 +75,10 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
                 raise Problem("quarantined", "Review the refusal and use quarantine clear to resume this bot", 409)
             if body.task_id:
                 auth.task(c, who, body.task_id)
-            if privacy.private_execution(c, who):
+            if not body.task_id and privacy.private_execution(c, who):
+                # A private run's focus names its private task, so only that task's readers see it (privacy.status).
                 sources = [tid for tid in privacy.attempt_tasks(c, who.attempt_id) if H.task_private(c, H.task(c, tid))]
-                if body.task_id and body.task_id not in sources:
-                    raise Problem("privacy", "Private execution status must keep its task provenance", 403)
-                if not body.task_id and sources:
-                    body.task_id = sources[0]
+                body.task_id = sources[0] if sources else None
             return H.status_set(c, who.actor, bot, state=body.state, focus=body.focus, task_id=body.task_id)
 
         return mutate(request, body, work)

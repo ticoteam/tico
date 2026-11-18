@@ -62,7 +62,9 @@ def task_context(api, args):
         "due": _s("ISO-8601 date-time with timezone"),
         "private": {
             "type": "boolean",
-            "description": "Only its requester, owner and readers see it; bot defaults also apply",
+            "description": "true: only its requester, owner and readers see it. false: company-visible, also from a "
+            "run on a private task or under a private parent. Left out: a private task's run files it private; "
+            "bot defaults also apply",
         },
         "readers": {
             "type": "array",
@@ -70,14 +72,6 @@ def task_context(api, args):
             "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>",
         },
         "follow": {"type": "boolean"},  # the filer follows it too (docs/tasks.md, Followers)
-        "from_private": {
-            "type": "boolean",
-            "default": False,
-            "description": "From a run on your own private task with no person on it: a "
-            "company-visible task for a bot, carrying only its own words (no 12 "
-            "words copied from the private work, no secret-shaped value, no file "
-            "or link of it). Parent: that private task, or none",
-        },
         "for_actor": _s(
             "A bot filing a person's own ask: the person (human:<id>) it is for, who becomes its requester. "
             "With from_message"
@@ -159,7 +153,6 @@ def task_create(api, args):
         "visibility",
         "public_title",
         "public_summary",
-        "from_private",
         "for_actor",
         "from_message",
         "model",

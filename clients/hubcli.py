@@ -681,11 +681,13 @@ def parser():
         "--follow", action="store_true", default=None, help="follow the task you file (its owner follows anyway)"
     )
     s.add_argument(
+        "--public",
         "--from-private",
-        dest="from_private",
-        action="store_true",
-        help="from a run on your private task: a company-visible task for a bot, in your own words (no "
-        "12 words copied from the private work, no secret-shaped value, no file or link of it)",
+        dest="private",
+        action="store_false",
+        default=None,
+        help="company-visible, also from a run on a private task (whose tasks are private unless you say so) or under "
+        "a private parent; a bot's private-by-default setting still keeps its tasks private",
     )
     s.add_argument(
         "--owner",
@@ -841,8 +843,7 @@ def parser():
         "--doc",
         metavar="NAME",
         help="an .html file as the task's document NAME: a page linked to the task with that role, the same as "
-        "tico page publish FILE --task ID --as NAME (a run on a private task, which may not publish pages, writes it "
-        "through the task's own files instead). Spec, QA report, Release report and Invoice are the names a "
+        "tico page publish FILE --task ID --as NAME. Spec, QA report, Release report and Invoice are the names a "
         "stage approves; say what changed in a comment (no --note)",
     )
     s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')

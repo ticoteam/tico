@@ -284,8 +284,8 @@ def install(app, store, auth, mutate, send):
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
             who = request.state.identity
-            # A goal is words the conversation's readers see: a private run sets one only where its own work may
-            # post (the same check as a message; task_privacy.private_thread_destination for a native thread).
+            # A goal is words the conversation's readers see: a private meeting's run sets none (the same check as a
+            # message).
             from . import task_privacy
 
             task_privacy.require_destination(c, who, who.actor, cid, {})

@@ -11,9 +11,6 @@ import pytest
 from backend import ask_ingest as A
 from backend import hubdb as H
 from backend import question_marks
-from backend.tests.helpers.api import unrelated_task_managers
-from backend.tests.helpers.task_readers import run_on
-from backend.tests.helpers.task_readers import task as private_task
 from backend.tests.helpers.api import setup_attempt  # noqa: F401
 from backend.tests.helpers.file_reviews import publish
 from backend.tests.helpers.tasks_board import api, get, headers, post
@@ -884,22 +881,6 @@ def test_a_refused_create_writes_no_row_and_its_call_is_labelled_refused(gate):
         headers=headers(token),
     )
     assert r.status_code == 404, r.text
-    [call] = calls(api)
-    assert len(model.calls) == 1 and not items(api) and reasons(api) == {call["id"]: "refused"}
-
-
-def test_a_privacy_refused_create_writes_no_row_and_its_call_is_labelled_refused(gate):
-    api, model, token = gate
-    with api.app.state.store.transaction() as c:
-        unrelated_task_managers(c)
-    private_task(api, "bot:cpo", "bot:cmo", "Zip triage")
-    attempt = run_on(api, "cmo")  # the run carries a private task: a company-visible create is refused
-    r = api.post(
-        "/api/v2/tasks",
-        json={"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?", "private": False},
-        headers=headers(attempt["token"]),
-    )
-    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
     [call] = calls(api)
     assert len(model.calls) == 1 and not items(api) and reasons(api) == {call["id"]: "refused"}
 

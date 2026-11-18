@@ -243,32 +243,28 @@ def test_private_execution_output_context_and_grants_revoke_on_reassignment(api)
     assert "Private runtime output" not in json.dumps(get(api, "bots/ops/execution-review"))
 
 
-def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
+def test_private_execution_writes_company_work_like_any_run_and_its_task_stays_private(api):
     row = task(api, requester="human:ben", owner="bot:ops")
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     attempt = claim(api, machine, "ops")
     public = task(api, private=False, requester="bot:ops", owner="bot:ops", title="Public work")
-    for ident in (public["id"], public["id"][:8]):
-        post(
-            api,
-            "tasks/" + ident,
-            {"version": public["version"], "body": "Private derived output"},
-            attempt["token"],
-            expected=403,
-        )
     post(
+        api, "tasks/" + public["id"][:8], {"version": public["version"], "title": "Public work, done"}, attempt["token"]
+    )
+    made = post(
         api,
         "tasks",
-        {"owner": "ops", "title": "Private follow-up", "body": "Keep this private", "private": False},
+        {"owner": "ops", "title": "Company follow-up", "body": "In my own words", "private": False},
         attempt["token"],
-        expected=403,
     )
-    post(api, "messages", {"to": "ana", "text": "Private derived output"}, attempt["token"], expected=403)
-    post(api, "updates", {"body": "Private derived output"}, attempt["token"], expected=403)
-    post(api, "tools/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
+    assert made["private"] is False
+    post(api, "updates", {"kind": "daily", "body": "- Shared result"}, attempt["token"])
+    post(api, "tools/github/learnings", {"text": "Shared result"}, attempt["token"])
+    # The private task itself is still only its readers'.
     assert not sql(api, "SELECT id FROM tasks WHERE id='" + row["id"] + "'")
+    get(api, "tasks/" + row["id"], "cara-test", expected=404)
 
 
 def test_live_events_stop_when_private_owner_loses_access(api):

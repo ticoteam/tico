@@ -1846,7 +1846,6 @@ def install(app, store, auth, mutate):
         blobs = request.app.state.blobs
 
         def work(c):
-            counsel.private_suggestion(c, who, data)
             if data.get("cite"):
                 cite = counsel.check_cite(c, auth, who, blobs, data["cite"])
                 if cite is None:

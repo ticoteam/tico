@@ -53,7 +53,7 @@ Start from the diff, the Spec page and the failing checks. Read other files only
      Any relation but the dependency below changes the other owner's task too, and {{app_name}} refuses it.
    - File one only when none is open, never a second for the same break, titled
      `Main red: <the failing test or check>, since <the pull request or commit that broke it>`.
-     Working on a private task, file it with `tico task create --from-private` (company-visible, in your own words:
+     Working on a private task, file it with `tico task create --public` (company-visible, in your own words:
      no text copied from the private task) and never `--private`; otherwise file it plainly, never under a private
      parent. A private one is hidden from the search, and a second bot files another.
    - When your stage cannot finish until main is fixed, make your task depend on it:

@@ -263,10 +263,9 @@ def test_a_write_that_names_an_old_room_lands_in_the_home(api, ops_rooms):
         assert not seqs(c, ops_rooms["ana"]) and not seqs(c, ops_rooms["ben"])
 
 
-def test_the_api_puts_a_reply_to_an_old_room_in_the_home_and_refuses_a_private_run_there(api, ops_rooms):
+def test_the_api_puts_a_reply_to_an_old_room_in_the_home_for_a_person_and_a_private_run(api, ops_rooms):
     """Finding 1: the API's checks read the room a message names. A reply to a moved room names the Home from the start,
-    so a private run's reply is checked against the Home (no audience for private text) and refused, and a person's
-    reply lands in the Home."""
+    so a person's reply, and a private run's, lands in the Home."""
     merge(api)
     home = ops_rooms["home"]
     sent = api.post(
@@ -275,26 +274,17 @@ def test_the_api_puts_a_reply_to_an_old_room_in_the_home_and_refuses_a_private_r
         headers=headers("ana-test"),
     )
     assert sent.status_code == 200, sent.text
-    with store(api).read() as c:
-        assert c.execute("SELECT conversation_id FROM messages WHERE id=?", (sent.json()["id"],)).fetchone()[0] == home
     row, attempt = private_run(api, "ops")
-    refused = api.post(
+    replied = api.post(
         "/api/v2/messages",
-        json={"to": "human:ana", "text": "Confidential reply", "conversation_id": ops_rooms["ana"]},
+        json={"to": "human:ana", "text": "Shared reply", "conversation_id": ops_rooms["ana"]},
         headers=headers(attempt["token"]),
     )
-    assert refused.status_code == 403, refused.text
-    refused = api.post(
-        "/api/v2/messages",
-        json={"to": "human:ana", "text": "Confidential again", "conversation_id": home},
-        headers=headers(attempt["token"]),
-    )
-    assert refused.status_code == 403, refused.text
+    assert replied.status_code == 200, replied.text
     with store(api).read() as c:
-        # Neither refused reply was written (the private task's own request is its first message, on its chat).
-        assert not c.execute(
-            "SELECT 1 FROM messages WHERE body IN ('Confidential reply', 'Confidential again')"
-        ).fetchone()
+        for message in (sent.json(), replied.json()):
+            landed = c.execute("SELECT conversation_id FROM messages WHERE id=?", (message["id"],)).fetchone()[0]
+            assert landed == home
         assert not seqs(c, ops_rooms["ana"])
 
 
@@ -455,18 +445,18 @@ def test_each_keyed_table_moves_in_one_statement_per_bot(api):
     assert sum(s.startswith("UPDATE thread_followups ") for s in recorded.statements) == 1
 
 
-def test_a_private_runs_message_to_its_requester_with_no_room_named_is_refused(api, ops_rooms):
+def test_a_private_runs_message_to_its_requester_with_no_room_named_lands_in_the_home(api, ops_rooms):
     """Finding 1 (P1): a bot's message to a person that names no room is that person's chat with the bot, which is the
-    Home once the chats have moved. A private run's words cannot go there: the destination is named before the checks,
-    and the named-room check refuses it, so nothing is written."""
+    Home once the chats have moved. A private run's message goes there as any run's does."""
     merge(api)
     _row, attempt = private_run(api, "ops")  # the run's requester is ben
-    refused = api.post(
-        "/api/v2/messages", json={"to": "human:ben", "text": "Implicit confidential"}, headers=headers(attempt["token"])
+    sent = api.post(
+        "/api/v2/messages", json={"to": "human:ben", "text": "Implicit update"}, headers=headers(attempt["token"])
     )
-    assert refused.status_code == 403, refused.text
+    assert sent.status_code == 200, sent.text
     with store(api).read() as c:
-        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Implicit confidential%'").fetchone()
+        landed = c.execute("SELECT conversation_id FROM messages WHERE id=?", (sent.json()["id"],)).fetchone()[0]
+        assert landed == ops_rooms["home"]
 
 
 def test_an_unread_home_message_between_moved_messages_stays_unread(api):
@@ -531,19 +521,19 @@ def test_a_write_to_an_open_room_asks_for_no_home_lookup(api, ops_rooms):
     assert not [s for s in recorded.statements if "home_merges" in s], recorded.statements
 
 
-def test_an_explicit_reply_to_a_moved_room_with_an_archived_home_is_checked_in_the_new_home(api, ops_rooms):
+def test_an_explicit_reply_to_a_moved_room_with_an_archived_home_lands_in_the_new_home(api, ops_rooms):
     """A reply that names a moved room whose Home is archived makes the bot's Home before the checks (as the implicit
-    path does), so a private run's reply is refused in that Home and a person's reply lands in the new one."""
+    path does), so a private run's reply and a person's reply both land in the new one."""
     merge(api)
     with store(api).transaction() as c:
         c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), ops_rooms["home"]))
     _row, attempt = private_run(api, "ops")
-    refused = api.post(
+    replied = api.post(
         "/api/v2/messages",
-        json={"to": "human:ana", "text": "Confidential after the archive", "conversation_id": ops_rooms["ana"]},
+        json={"to": "human:ana", "text": "Update after the archive", "conversation_id": ops_rooms["ana"]},
         headers=headers(attempt["token"]),
     )
-    assert refused.status_code == 403, refused.text
+    assert replied.status_code == 200, replied.text
     sent = api.post(
         "/api/v2/messages",
         json={"to": "bot:ops", "text": "Ana, after the archive", "conversation_id": ops_rooms["ana"]},
@@ -551,10 +541,11 @@ def test_an_explicit_reply_to_a_moved_room_with_an_archived_home_is_checked_in_t
     )
     assert sent.status_code == 200, sent.text
     with store(api).read() as c:
-        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Confidential after the archive%'").fetchone()
-        landed = c.execute("SELECT conversation_id FROM messages WHERE id=?", (sent.json()["id"],)).fetchone()[0]
         new_home = threads.home(c, "bot:ops", create=False)
-        assert new_home is not None and landed == new_home["id"] and landed != ops_rooms["home"]
+        assert new_home is not None and new_home["id"] != ops_rooms["home"]
+        for message in (replied.json(), sent.json()):
+            landed = c.execute("SELECT conversation_id FROM messages WHERE id=?", (message["id"],)).fetchone()[0]
+            assert landed == new_home["id"]
 
 
 def test_a_second_chat_resolution_in_a_transaction_costs_less_than_the_first(api, ops_rooms):

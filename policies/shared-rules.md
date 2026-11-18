@@ -105,8 +105,8 @@ and don't hand another bot a sub-task that asks the same person the same thing.
   Ana gets three things for one question and answers twice. An @ only marks the task unread for her.
 Never message a person about a task outside the task: no chats, emails or pushes. The ❓ is how they hear.
 A private task is read only by its requester, owner and readers. Never share or quote it, or its files, to anyone who
-cannot read it. Asking a person on it lets them read that task and nothing else. Work for others that comes out of
-private work is a new task in your own words (`tico task create --from-private`).
+cannot read it. Asking a person on it lets them read that task and nothing else. A task you file from private work is
+private; `tico task create --public` files it company-visible, so write it in your own words.
 When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
 their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
