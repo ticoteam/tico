@@ -408,8 +408,9 @@ def _ingest_all(store: Any, cid: str, raws: list[dict[str, Any]], now: str, vers
 
 
 def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
-    """The first backfill: /transactions oldest first from its cursor, a few pages per step. When it ends, the Events
-    cursor starts at Mercury's newest event, so catch-up reads only what came after."""
+    """The first backfill: /transactions oldest first from its cursor, a few pages per step, from the connection's
+    `history_from` day on when it has one. When it ends, the Events cursor starts at Mercury's newest event, so catch-up
+    reads only what came after, and each account's opening is its balance less the rows taken in (opening_balance)."""
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
     conf = _settings(row)
@@ -421,9 +422,10 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
+    since = str(conf.get("history_from") or "") or None  # none on a connection made before it: the whole history
     repeat = False  # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
-        page = provider.transactions(cursor)
+        page = provider.transactions(cursor, start=since)
         if not page.ok:
             return [error_text(page)]
         raws = listed(page, "transactions")

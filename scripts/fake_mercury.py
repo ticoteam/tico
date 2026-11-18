@@ -209,7 +209,9 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
     if method == "GET" and path == "/users":
         return 200, FIXTURES["users"]
     if method == "GET" and path == "/transactions":
-        chunk, nxt = page(STATE.txns, "id", after, limit)
+        start = one(q, "start")  # the created day the list starts from, as Mercury's `start` filter reads it
+        rows = [t for t in STATE.txns if not start or str(t.get("createdAt") or "")[:10] >= start]
+        chunk, nxt = page(rows, "id", after, limit)
         return 200, {"transactions": chunk, "page": nxt}
     if method == "GET" and parts[0] == "transaction" and len(parts) == 2:
         return found(next((t for t in STATE.txns if t["id"] == parts[1]), None))

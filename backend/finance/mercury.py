@@ -57,7 +57,7 @@ class Provider(Protocol):
     def accounts(self) -> Answer: ...
     def credit(self) -> Answer: ...
     def users(self) -> Answer: ...
-    def transactions(self, start_after: str | None, limit: int = PAGE) -> Answer: ...
+    def transactions(self, start_after: str | None, limit: int = PAGE, start: str | None = None) -> Answer: ...
     def transaction(self, txn_id: str) -> Answer: ...
     def account_transactions(
         self, account_id: str, search: str | None, start: str, end: str, offset: int = 0, request_id: str | None = None
@@ -170,8 +170,12 @@ class Mercury:
     def users(self) -> Answer:
         return self._call("GET", "/users")
 
-    def transactions(self, start_after: str | None, limit: int = PAGE) -> Answer:
-        return self._call("GET", "/transactions", {"limit": limit, "order": "asc", "start_after": start_after})
+    def transactions(self, start_after: str | None, limit: int = PAGE, start: str | None = None) -> Answer:
+        """Every account's transactions oldest first, after the row `start_after` names; `start` (YYYY-MM-DD), when
+        given, keeps the rows from that day on."""
+        return self._call(
+            "GET", "/transactions", {"limit": limit, "order": "asc", "start_after": start_after, "start": start}
+        )
 
     def transaction(self, txn_id: str) -> Answer:
         return self._call("GET", f"/transaction/{urllib.parse.quote(txn_id)}")

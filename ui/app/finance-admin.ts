@@ -60,7 +60,7 @@ interface FinToolStored { id: string; tool: string; made: boolean; vault?: undef
 interface FinCredential { id: string; name?: string; revision?: number | string }
 type FinVaultKey = FinCredential & {vault: true};
 type FinStoredKey = FinToolStored | FinVaultKey;
-type FinKeyForm = FinFormOf<{token: HTMLInputElement; level: HTMLSelectElement; approver?: HTMLInputElement}>;
+type FinKeyForm = FinFormOf<{token: HTMLInputElement; level: HTMLSelectElement; approver?: HTMLInputElement; history_from: HTMLInputElement}>;
 // A Finance trigger (backend/triggers.py summary) and the one POST /v2/triggers makes.
 type FinHookTrigger = WebhookTrigger & {last_received?: string | null};
 interface FinHookMade { id: string; url: string; replayed?: boolean }
@@ -286,7 +286,7 @@ const finKeyLabel = (tool: FinTool, key: FinToolKey) => [tool.name, key.access_l
 
 // Connect a source with a key: one of the service's Tools keys (a Read and write one picked first), or a new one
 // pasted, which is stored on Tools at the level chosen (finStoreKey). Then POST /api/v2/finance/connections tests it
-// and maps the accounts (Mercury also takes the approver who approves payments in Mercury). A pasted key whose
+// and maps the accounts from History from on (Mercury also takes the approver who approves payments in Mercury). A pasted key whose
 // connect fails is taken off Tools again, so a retry starts clean. The key never comes back.
 async function finConnectKey(provider: FinKeyProvider) {
   const src = FIN_KEY_SOURCES[provider];
@@ -300,9 +300,11 @@ async function finConnectKey(provider: FinKeyProvider) {
   const paste = `<div class="fin-paste" data-fin-paste${keys.length ? ' hidden' : ''}><label>${esc(src.secret)}<input name="token" type="password" autocomplete="off" spellcheck="false"${src.hint ? ` placeholder="${esc(src.hint)}"` : ''}></label>
     <label>Level<select name="level">${FIN_LEVELS.map(([v, l]) => `<option value="${v}"${v === src.level ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>`;
   const approver = provider === 'mercury' ? '<label>Approver email<input name="approver" type="email" autocomplete="off" spellcheck="false"></label>' : '';
+  // The first day of history Finance reads; the opening balance is the balance less the rows from that day on.
+  const since = `<label>History from<input name="history_from" type="date" value="${new Date().getFullYear()}-01-01" required></label>`;
   // A key kept in the vault (a reader who may not change Tools): a retry reuses it, as before Tools.
   let kept: FinVaultKey | null = null, keptToken = '';
-  const dlg = finDialog('Connect ' + src.name, radios + paste + approver, 'Connect', async (form: FinKeyForm) => {
+  const dlg = finDialog('Connect ' + src.name, radios + paste + since + approver, 'Connect', async (form: FinKeyForm) => {
     const id = form.querySelector<HTMLInputElement>('input[name=key]:checked')?.value || '';
     if (id) { await finConnectWith(provider, id, form); return; }
     const token = form.elements.token.value.trim(), level = form.elements.level.value;
@@ -329,6 +331,8 @@ async function finConnectWith(provider: FinKeyProvider, credentialId: string, fo
   const name = FIN_KEY_SOURCES[provider].name, body: FinConnRequest = {provider, credential_id: credentialId, name};
   const approver = form.elements.approver?.value.trim();
   if (approver) body.approver_email = approver;
+  const since = form.elements.history_from.value;
+  if (since) body.history_from = since;
   const r: FinConnResult | null = await post('/v2/finance/connections', body);
   if (r?.status === 'needs_approval') toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval');
   else if (r?.status !== 'committed') throw new Error(r?.reason || 'Not connected');

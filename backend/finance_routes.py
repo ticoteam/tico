@@ -92,8 +92,8 @@ Metric = Literal[
 class FinanceConnectionRequest(Contract):
     """Connect a bank, Stripe or Brex with a stored credential. Mercury's token: the approver is a Mercury user other than
     the token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key and
-    Brex's token need no approver. history_from is Brex's first day of history (Jan 1 of this year when left out); it is
-    read for Brex only."""
+    Brex's token need no approver. history_from is the first day of history Finance reads (Jan 1 of this year when left
+    out); the opening balance is the balance less the rows from that day on."""
 
     provider: Literal["mercury", "stripe", "brex"] = "mercury"
     credential_id: str = Field(min_length=1, max_length=120)
@@ -1226,17 +1226,13 @@ def install(app, store, auth, mutate):
         if why:
             raise Problem("invalid", why, 422)
         key = (request.headers.get("idempotency-key") or "").strip()
+        extra = [("name", body.name), ("history_from", body.history_from)]
         if body.provider == "mercury":
-            extra = (
-                ("name", body.name),
+            extra += [
                 ("approver_email", body.approver_email),
                 ("token_creator_email", body.token_creator_email),
                 ("server_ip", body.server_ip),
-            )
-        elif body.provider == "brex":
-            extra = (("name", body.name), ("history_from", body.history_from))
-        else:
-            extra = (("name", body.name),)
+            ]
         payload = {
             "provider": body.provider,
             "credential_id": body.credential_id,

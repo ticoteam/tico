@@ -22,7 +22,7 @@ from .handlers import Plan, Result
 from .store import banking as SK
 from .store import tico
 from .mercury import Answer
-from .stripe import Provider, Stripe, base_url, error_text, has_more, listed
+from .stripe import PAGE, Provider, Stripe, base_url, error_text, has_more, listed
 
 log = logging.getLogger(__name__)
 
@@ -116,8 +116,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Connect a Stripe account with a restricted key (a Tico credential, read at use time and never copied here). The
     account's balance is one money account on a Stripe balance asset line, keyed by the Stripe account id: connecting the
     same account again picks its money account back up, so its history is never taken in twice. `probe` is what probe()
-    read with that key. The key must see a balance in the book's currency: other currencies are not posted."""
-    V.only(p, ("provider", "credential_id", "name", "probe"))
+    read with that key. The key must see a balance in the book's currency: other currencies are not posted. History starts
+    at `history_from` (Jan 1 of this year when left out)."""
+    V.only(p, ("provider", "credential_id", "name", "probe", "history_from"))
     cred = V.text(p, "credential_id", 120)
     if any(
         str(r["credential_ref"] or "") == cred and str(r["status"]) != "disconnected" for r in SK.connections(ctx.c)
@@ -132,6 +133,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if not any(str(b.get("currency") or "").upper() == base.upper() for b in balances):
         raise invalid(f"the Stripe key sees no balance in {base}")
     name = V.opt_text(p, "name", 120) or "Stripe"
+    history = banking.history_from(ctx, p)
     live = SK.money_account_by_provider_id(ctx.c, ctx.book.id, "stripe", acct)
     held = SK.get(ctx.c, "fin_connections", str(live["connection_id"] or "")) if live is not None else None
     if held is not None and str(held["status"]) != "disconnected":
@@ -147,7 +149,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 "credential_ref": cred,
                 "status": "active",
                 "name": name,
-                "settings": SK.dump({"backfilled": False, "account": acct}),
+                "settings": SK.dump({"backfilled": False, "account": acct, "history_from": history}),
                 "next_sync_at": ctx.at,
                 "created_at": ctx.at,
                 "created_by": who,
@@ -304,6 +306,15 @@ def catch_up(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
     )
 
 
+def _since(conf: Mapping[str, Any]) -> int | None:
+    """The first moment the backfill reads, as Stripe's created[gte] takes it: 00:00 UTC on `history_from`. None on a
+    connection made before that setting, which reads the whole history."""
+    day = str(conf.get("history_from") or "")
+    if not day:
+        return None
+    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
+
+
 def _resume(row: Any) -> tuple[str | None, str | None, dict[str, Any]]:
     """Where a walk stands: its cursor (the row to read older rows from; None at the top), its head (the newest row it
     started from; None before its first page) and the settings it carries."""
@@ -316,11 +327,14 @@ def _backfill(store: Any, provider: Provider, cid: str, row: Any, now: str) -> l
     """The first step reads the first page and the balance together (see _bracket) and walks from there. Each later
     step continues from its cursor, BACKFILL_PAGES pages at a time, until the list ends."""
     cursor, head, conf = _resume(row)
+    since = _since(conf)
     if cursor is not None or head is not None:
-        return _walk(store, provider, cid, conf, cursor, head, BACKFILL_PAGES, now, stop=None, backfill=True)
+        return _walk(
+            store, provider, cid, conf, cursor, head, BACKFILL_PAGES, now, stop=None, backfill=True, since=since
+        )
     with store.read() as c:
         base = load(c, now).book.base_currency
-    page, held, why = _bracket(provider, base)
+    page, held, why = _bracket(provider, base, since)
     if page is None:
         return [why]
     return _walk(
@@ -335,26 +349,32 @@ def _backfill(store: Any, provider: Provider, cid: str, row: Any, now: str) -> l
         stop=None,
         backfill=True,
         first=page,
+        since=since,
     )
 
 
-def _bracket(provider: Provider, base: str) -> tuple[Answer | None, int, str]:
+def _bracket(provider: Provider, base: str, since: int | None) -> tuple[Answer | None, int, str]:
     """The first page and the balance in the book's currency, read so that they agree: the newest row is the same
     before and after the balance is read, so no row came in between and the balance holds exactly the rows the page
     starts from. After BRACKET_TRIES disagreements the step gives up and the next one reads again."""
     for _ in range(BRACKET_TRIES):
-        page = provider.transactions(None)
+        page = _read(provider, None, since)
         if not page.ok:
             return None, 0, error_text(page)
         got = provider.balance()
         if not got.ok:
             return None, 0, error_text(got)
-        again = provider.transactions(None, limit=1)
+        again = _read(provider, None, since, limit=1)
         if not again.ok:
             return None, 0, error_text(again)
         if _newest(again) == _newest(page):
             return page, _sum(got.body, "available", base) + _sum(got.body, "pending", base), ""
     return None, 0, "the Stripe balance changed while it was read: it is read again next time"
+
+
+def _read(provider: Provider, cursor: str | None, since: int | None, limit: int = PAGE) -> Answer:
+    """A page of balance transactions newest first, from `since` on when the history is cut there."""
+    return provider.transactions(cursor, limit=limit, created_gte=since)
 
 
 def _newest(answer: Answer) -> str:
@@ -375,15 +395,17 @@ def _walk(
     stop: str | None,
     backfill: bool,
     first: Answer | None = None,
+    since: int | None = None,
 ) -> list[str]:
     """Up to `pages` pages newest first from `cursor` (None: the top), each taken in and then the walk's place saved.
     The walk ends at `stop` (the boundary: rows from it on are already in), at the list's end, or as complete. A problem
     returns at once and keeps the place the last page saved, so the next step reads the failed page again. A complete
-    walk's head becomes the boundary; a backfill also sets the opening balance. `first` is a page already read."""
+    walk's head becomes the boundary; a backfill also sets the opening balance. `first` is a page already read; `since`
+    cuts a backfill's history at its first moment (created[gte])."""
     page = first
     for _ in range(pages):
         if page is None:
-            page = provider.transactions(cursor)
+            page = _read(provider, cursor, since)
         if not page.ok:
             return [error_text(page)]
         rows = listed(page)

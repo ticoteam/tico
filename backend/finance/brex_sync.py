@@ -92,8 +92,9 @@ def _settings(row: Any) -> dict[str, Any]:
 
 
 def _start(day: str) -> str:
-    """A day as the RFC 3339 date-time Brex's posted_at_start takes."""
-    return f"{day}T00:00:00Z"
+    """A day as the date-time Brex's posted_at_start takes: no zone suffix, since Brex answers 400 to `Z`, `.000Z` or
+    `+00:00` and to a bare date."""
+    return f"{day}T00:00:00"
 
 
 def _days_before(now: str, days: int) -> str:
@@ -229,17 +230,14 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     ):
         raise FinanceError(CONFLICT, "that credential is already connected")
     probed = V.obj(p.get("probe"), "probe")
-    cards = [V.obj(a, "a card account") for a in V.items(probed.get("card"), "probe.card")]
-    cash = [V.obj(a, "a cash account") for a in V.items(probed.get("cash"), "probe.cash")]
+    # A card-only company lists no cash account, and a cash-only one no card account: either list may be empty.
+    cards = [V.obj(a, "a card account") for a in V.opt_items(probed.get("card"), "probe.card")]
+    cash = [V.obj(a, "a cash account") for a in V.opt_items(probed.get("cash"), "probe.cash")]
     if not cards and not cash:
         raise invalid("the token sees no Brex accounts")
     if len(cards) > 1:
         raise invalid("Finance reads one Brex card account per connection")
-    history = V.opt_text(p, "history_from", 10) or f"{ctx.today[:4]}-01-01"
-    try:
-        date.fromisoformat(history)
-    except ValueError:
-        raise invalid("history_from is a day, YYYY-MM-DD") from None
+    history = banking.history_from(ctx, p)
     name = V.opt_text(p, "name", 120) or "Brex"
     base = ctx.book.base_currency
 
