@@ -17,7 +17,11 @@ def up(conn):
         "sort INTEGER NOT NULL DEFAULT 0, owner_ref TEXT, retired_at TEXT, created_at TEXT NOT NULL, "
         "updated_at TEXT NOT NULL)"
     )
-    if "segment_id" not in {row[1] for row in conn.execute("PRAGMA table_info(growth_channels)")}:
+    channels = {row[1] for row in conn.execute("PRAGMA table_info(growth_channels)")}
+    # The Growth line's input_kpi_id first, whichever of these pending migrations runs first: one column order.
+    if "input_kpi_id" not in channels:
+        conn.execute("ALTER TABLE growth_channels ADD COLUMN input_kpi_id TEXT")
+    if "segment_id" not in channels:
         conn.execute("ALTER TABLE growth_channels ADD COLUMN segment_id TEXT")
     have = {row[1] for row in conn.execute("PRAGMA table_info(growth_customers)")}
     for column, kind in (("net_d90", "REAL"), ("net_d180", "REAL"), ("net_d365", "REAL"), ("attribution", "TEXT")):
