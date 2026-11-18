@@ -25,6 +25,8 @@ here is that process's memory: the open question, the bots' states and captions,
 process skips playback for a call it does not hold, and a restart starts the call's voice afresh (the recorder rejoins
 from the sweep). The states readers see (`listening`, `waiting`, `thinking`, `making_voice`, `speaking`) are in the call
 view as `voice.bots`, and each change writes a `call.updated` change so open views read the call again.
+
+Each turn ends in one `call_voice_turn` log line (`_log_turn`): how long each step took, and how it ended. No words.
 """
 
 import logging
@@ -198,7 +200,8 @@ class CallVoice:
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
-        # The question being answered: {"bot", "turn", "asked" (when it was heard), "phase", "reply", "replied_at"}.
+        # The question being answered: {"bot", "turn", "asked" (when it was heard), "stored" (when its text was stored,
+        # for an utterance), "phase", "reply", "replied_at", "handed" (when its reply's commit handed it here)}.
         self.open: dict[str, Any] | None = None
         # bot -> the question (Voice.route) it was asked while another bot answered
         self.waiting: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -372,6 +375,8 @@ class Voice:
         heard ANSWER_SECONDS ago or more (a transcription backlog) is not asked. Returns the bots asked now."""
         if row["ending_at"] or row["state"] != "live":
             return []
+        if question.get("spoken"):
+            question["stored"] = self.clock()  # an utterance's text is stored in the transaction that calls here
         rid = row["live_meeting_id"]
         only = self.answers_all(c, row) if question.get("spoken") else None
         targets = [only] if only else live_meetings._named_bots(c, rid, question["text"])
@@ -411,7 +416,13 @@ class Voice:
         if not selected:
             self._set(voice, bot, "listening")
             return False
-        voice.open = {"bot": bot, "turn": selected[0]["id"], "asked": question["heard"], "phase": "thinking"}
+        voice.open = {
+            "bot": bot,
+            "turn": selected[0]["id"],
+            "asked": question["heard"],
+            "stored": question.get("stored"),
+            "phase": "thinking",
+        }
         self._set(voice, bot, "thinking")
         return True
 
@@ -484,6 +495,7 @@ class Voice:
             if current and current["phase"] == "thinking":
                 turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=?", (current["turn"],)).fetchone()
                 status = turn["status"] if turn else "skipped"
+                ended = ("skipped", None)
                 if status in ("pending", "claimed") and now - current["asked"] >= ANSWER_SECONDS:
                     live_meetings._finish_pass(c, rid, turn, "voice_deadline")
                     self._note(voice, f"{_name(c, current['bot'])} couldn't answer in time")
@@ -492,13 +504,14 @@ class Voice:
                     with voice.lock:
                         replied_at = voice.open.get("replied_at") if voice.open else None
                     if replied_at is not None and now - replied_at >= REPLIED_GRACE_SECONDS:
-                        status = "skipped"
+                        status, ended = "skipped", ("text_only", "not_handed_over")
                 if status == "skipped":
                     with voice.lock:
                         if voice.open and voice.open["turn"] == current["turn"]:
                             voice.open = None
                             self._set(voice, current["bot"], "listening")
                             moved = True
+                            self._log_turn(c, call_id, current, *ended)
             with voice.lock:
                 if voice.open is None:
                     while voice.waiting:
@@ -534,8 +547,11 @@ class Voice:
                 # A reply that is not the open question's (a late one, one to a typed line): it stays text.
                 return
             deadline = voice.open["asked"] + ANSWER_SECONDS
+            voice.open["handed"] = self.clock()
+            timing = dict(voice.open)
             if self.clock() >= deadline:
                 # Stored after its turn's deadline (it reached the writer before the ticker did): it stays text.
+                self.makers.submit(self._log_turn, None, call_id, timing, "text_only", "late")
                 voice.open = None
                 self._set(voice, bot, "listening")
                 self.makers.submit(self._late, call_id, bot)
@@ -543,6 +559,7 @@ class Voice:
                 return
             if self.calls.media is None or not self.calls.media.running(call_id):
                 log.info("A call's reply was not spoken: this process does not hold call %s", call_id)
+                self.makers.submit(self._log_turn, None, call_id, timing, "text_only", "not_held")
                 voice.open = None
                 self._set(voice, bot, "listening")
                 self.makers.submit(self.touch, call_id)
@@ -551,7 +568,7 @@ class Voice:
             self._set(voice, bot, "making_voice")
             epoch = _epoch(voice, bot)
         self.makers.submit(self.touch, call_id)
-        future = self.players.submit(self._speak, call_id, bot, reply_id, text, epoch, deadline)
+        future = self.players.submit(self._speak, call_id, bot, reply_id, text, epoch, deadline, timing)
         with self.lock:
             self.playing = [f for f in self.playing if not f.done()] + [future]
 
@@ -562,12 +579,22 @@ class Voice:
             self._note(voice, f"{_name(c, bot)} couldn't answer in time")
             self.touch(call_id, c)
 
-    def _speak(self, call_id: str, bot: str, reply_id: str, text: str, epoch: tuple[int, int], deadline: float) -> None:
+    def _speak(
+        self,
+        call_id: str,
+        bot: str,
+        reply_id: str,
+        text: str,
+        epoch: tuple[int, int],
+        deadline: float,
+        timing: dict[str, Any] | None = None,
+    ) -> None:
         report: Any = _report()
 
         voice = self._call(call_id)
         media = self.calls.media
         played = 0
+        why = "not_spoken"  # why the reply stayed text, when it did
         made: list[Future[tuple[bytes, int]]] = []
         try:
             with self.store.read() as c:
@@ -576,6 +603,7 @@ class Voice:
             budget = VOICE_CAP_MS - (int(used[0] or 0) if used else 0)
             parts = sentences(spoken(text))
             if not key or not parts or not self._standing(call_id, bot, voice, epoch):
+                why = "no_voice" if not key or not parts else "canceled"
                 return
             names = call_media.cached_voices(base)
             if names is None:
@@ -594,6 +622,7 @@ class Voice:
 
             if not make(0):
                 self._note(voice, "Voice limit reached")
+                why = "voice_limit"
                 return
             for index, sentence in enumerate(parts):
                 if index + 1 < len(parts) and len(made) == index + 1:
@@ -604,23 +633,29 @@ class Voice:
                     log.warning(
                         "call_voice_speech_failed call=%s bot=%s reply=%s status=%s", call_id, bot, reply_id, exc.status
                     )
+                    why = "voice_failed"
                     break
                 mark = (
                     media.mark(call_id) if hasattr(media, "mark") else None
                 )  # before standing: a hush after it counts
                 if not self._standing(call_id, bot, voice, epoch):
+                    why = "canceled"
                     break
                 if index == 0 and self.clock() >= deadline:
                     self.makers.submit(self._late, call_id, bot)  # too late to start: the answer stays text
+                    why = "late"
                     break
                 length = len(pcm) * 1000 // (rate * 2)
                 if played + length > budget:
                     self._note(voice, "Voice limit reached")
+                    why = "voice_limit"
                     break
 
-                def started(caption: str = sentence) -> None:
+                def started(caption: str = sentence, first: bool = index == 0) -> None:
                     # On the media loop: the state is set here, and its change is written off the loop. A bot canceled
                     # since is not shown speaking.
+                    if first and timing is not None:
+                        timing["audio"] = self.clock()
                     with voice.lock:
                         changed = _epoch(voice, bot) == epoch and self._set(voice, bot, "speaking", caption)
                     if changed:
@@ -636,10 +671,14 @@ class Voice:
                     self._note(voice, "Voice limit reached")  # the next sentence would not fit
                     break
         except Exception as exc:  # noqa: BLE001 - a voice failure leaves the posted text as it is
+            why = "voice_failed"
             report("calls_voice", call_id, exc, logger="tico.call_voice")
         finally:
             for future in made:
                 future.cancel()
+            if timing is not None:
+                spoke = timing.get("audio") is not None
+                self._log_turn(None, call_id, timing, "spoken" if spoke else "text_only", None if spoke else why)
             with voice.lock:
                 if voice.open and voice.open.get("reply") == reply_id:
                     voice.open = None
@@ -688,6 +727,9 @@ class Voice:
             else:
                 voice.epochs[bot] = voice.epochs.get(bot, 0) + 1
             answering = voice.open is not None and (bot is None or voice.open["bot"] == bot)
+            if answering and voice.open is not None and voice.open["phase"] == "thinking":
+                # A reply being spoken logs its own line when its playback stops.
+                self.makers.submit(self._log_turn, None, call_id, dict(voice.open), "skipped", "canceled")
             if answering:
                 voice.open = None
             for one in [bot] if bot else list(voice.waiting):
@@ -704,6 +746,56 @@ class Voice:
         self.cancel(call_id)
         with self.lock:
             self.voices.pop(call_id, None)
+
+    # --- timing
+
+    def _log_turn(self, c: Any, call_id: str, timing: dict[str, Any], outcome: str, reason: str | None) -> None:
+        """The `call_voice_turn` line for one turn, at INFO, no words in it (docs/meet.md, Voice). The pause, the stored
+        text, the hand-over and the first audio are this clock's; asked, picked up and replied are the turn's own row.
+        A step the turn never reached is null. `reason` is why it was skipped, or why its reply stayed text."""
+        report: Any = _report()
+
+        def ms(start: Any, end: Any) -> int | None:
+            return None if start is None or end is None else max(0, round((end - start) * 1000))
+
+        def wall(at: Any) -> float | None:
+            parsed = H.parse_ts(at)
+            return parsed.timestamp() if parsed is not None else None
+
+        try:
+            sql = "SELECT created_at,claimed_at,replied_at,skip_reason FROM live_meeting_turns WHERE id=?"
+            if c is not None:
+                turn = c.execute(sql, (timing["turn"],)).fetchone()
+            else:
+                with self.store.read() as read:
+                    turn = read.execute(sql, (timing["turn"],)).fetchone()
+            created, claimed, replied = (
+                (wall(turn[k]) for k in ("created_at", "claimed_at", "replied_at")) if turn else (None,) * 3
+            )
+            if outcome == "skipped" and reason is None:
+                reason = (turn["skip_reason"] if turn else "") or "skipped"
+            heard, audio = timing.get("asked"), timing.get("audio")
+            log.info(
+                "call_voice_turn call_id=%s bot=%s turn=%s outcome=%s skip_reason=%s transcribe_ms=%s queue_ms=%s "
+                "answer_ms=%s speech_ms=%s total_ms=%s",
+                call_id,
+                timing["bot"],
+                timing["turn"],
+                outcome,
+                reason or "null",
+                *(
+                    "null" if v is None else v
+                    for v in (
+                        ms(heard, timing.get("stored")),
+                        ms(created, claimed),
+                        ms(claimed, None if outcome == "skipped" else replied),
+                        ms(timing.get("handed"), audio),
+                        ms(heard, audio) if timing.get("stored") is not None else None,
+                    )
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - a timing line never stops the call's voice
+            report("calls_voice", call_id, exc, logger="tico.call_voice")
 
     def settle(self, timeout: float = 30) -> bool:
         """Wait for the replies being spoken (tests)."""

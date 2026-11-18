@@ -220,6 +220,43 @@ def test_a_voice_that_fails_leaves_the_reply_as_text_and_logs_why(meet, monkeypa
     assert _states(meet, call["id"]) == [("ops", "listening", None)]
 
 
+def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, caplog):
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    voice, now = meet.app.state.calls.voice, [1000.0]
+    voice.clock = lambda: now[0]
+    machine = _machine(meet, "ops")
+
+    def lines():
+        found = [r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn ")]
+        return [dict(part.split("=", 1) for part in line.split()[1:]) for line in found]
+
+    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
+        _speak(meet, call["id"], 0)
+        _answer(meet, machine, "ops", "Ops can take the reliability review.")
+        _speak(meet, call["id"], 10_000)  # the next one is not answered in time
+        _claim(meet, machine, "ops")
+        now[0] += call_voice.ANSWER_SECONDS + 1
+        voice.tick()
+    spoken, skipped = lines()
+    fields = {"call_id", "bot", "turn", "outcome", "skip_reason", "transcribe_ms", "queue_ms", "answer_ms", "speech_ms"}
+    assert set(spoken) == set(skipped) == fields | {"total_ms"}
+    assert (spoken["call_id"], spoken["bot"], spoken["outcome"], spoken["skip_reason"]) == (
+        call["id"],
+        "ops",
+        "spoken",
+        "null",
+    )
+    assert all(spoken[k].isdigit() for k in ("transcribe_ms", "queue_ms", "answer_ms", "speech_ms", "total_ms"))
+    assert (skipped["outcome"], skipped["skip_reason"]) == ("skipped", "voice_deadline")
+    assert (
+        skipped["queue_ms"].isdigit() and skipped["answer_ms"] == skipped["speech_ms"] == skipped["total_ms"] == "null"
+    )
+    assert not any(
+        "reliability" in r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn")
+    )
+
+
 def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypatch):
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"])
