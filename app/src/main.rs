@@ -15,7 +15,6 @@ mod config;
 mod cookies;
 mod hub;
 mod orgs;
-mod recorder;
 mod signin;
 mod timing;
 mod visual_origin;
@@ -682,13 +681,8 @@ fn only_rail(webview: &tauri::Webview) -> Result<(), String> {
 }
 
 // ----------------------------------------------------------------------------- deep links
-// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser. tico://open is Tico
-// Recorder asking to show an org's approval page (recorder.rs).
+// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser.
 fn open_deep_link(app: &App, url: &url::Url) {
-    if url.host_str() == Some("open") {
-        recorder::open_link(app, url);
-        return;
-    }
     let path = format!("{}{}", url.host_str().unwrap_or(""), url.path())
         .trim_matches('/')
         .to_string();

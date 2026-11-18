@@ -89,8 +89,7 @@ async function pageNotes(): Promise<void> {
   // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, the shared filter
   // icon and Live now as tools, Add notes the one filled button, Sources and Settings in its ⋯. No chat button in a top
   // bar (the guide): Meetings' chat is Ask, opened from the Assistant's tab on the right edge or a phone's chat mark
-  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them. The Recorder links stay in
-  // the bar under it.
+  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them..
   $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
     tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
     tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
@@ -98,9 +97,6 @@ async function pageNotes(): Promise<void> {
       + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
     more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
     primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
-    <div class="meet-review-bar">
-      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
-      <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a></div>
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
@@ -121,7 +117,6 @@ async function pageNotes(): Promise<void> {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
-  meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog: HTMLDialogElement = $('#notes-modal');
   const closeNote = () => meetShow(state, false);
@@ -258,26 +253,6 @@ async function meetSettingsOpen(state: MeetState): Promise<void> {
 // The meeting sources Tico takes from, in the order they are offered. `logo` is a key in ui/tool-icons.ts;
 // a source without one is drawn as its first two letters. Close is set up in its tool doc, the
 // rest in a dialog (ui/meeting-importers.ts).
-// Tico Recorder for Mac: the newest release's disk image.
-const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
-// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
-// Elsewhere the download shows until Tico has seen one of the person's copies lately (backend/recorder_installs.py),
-// and one quiet link says when the copy they used last is older than the newest release.
-async function meetRecorderLink() {
-  const hasRecorder = async () => {
-    if (!nativeHas('openRecorder')) return false;
-    try { return await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch { return false; }
-  };
-  const [installed, mine] = await Promise.all([hasRecorder(), get('/v2/meetings/recorder').catch(() => null)]);
-  const link = $('#meet-recorder'), update = $('#meet-recorder-update');
-  if (!link) return;
-  if (update) update.hidden = !mine?.update_available;
-  if (!installed) { link.hidden = !!mine?.recent; return; }
-  const button = document.createElement('button');
-  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
-  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
-  link.replaceWith(button);
-}
 const MEET_SOURCES: MeetSource[] = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -660,8 +635,8 @@ async function meetDetail(state: MeetState, id: string): Promise<void> {
 const IMPORT_SOURCES: Record<string, string> = {upload: 'Upload', zoom: 'Zoom', 'google-meet': 'Google Meet', granola: 'Granola', otter: 'Otter', fireflies: 'Fireflies', other: 'Other'};
 const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Typed', close: 'Close', submitted: 'Imported', api: 'API', tico: 'Tico'})[s || 'tico']
   || String(s).replace(/[-_]+/g, ' ').replace(/^./, c => c.toUpperCase());
-// The source in words; a meeting the Recorder filed says so.
-const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
+// The source in words.
+const meetSourceName = (r: MeetRec) => r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
 const MEET_STATUS_WORD: Record<string, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
 const meetStatusWord = (s: string | undefined) => (s && MEET_STATUS_WORD[s]) || s || '';

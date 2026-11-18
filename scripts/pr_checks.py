@@ -1869,15 +1869,13 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
-# The Rust lint, desktop app and recorder jobs check their own folders, so a merge queue group starts their VMs only when
+# The Rust lint and desktop app jobs check their own folders, so a merge queue group starts their VMs only when
 # its change touches one (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs them all.
 QUEUE_JOB_PATHS = {
     "rust_lint": re.compile(
         r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
     ),
     "desktop": re.compile(r"app/"),
-    # The root npm files pin esbuild, which builds the recorder's window (recorder/build-ui.cjs).
-    "recorder": re.compile(r"recorder/|package(-lock)?\.json$"),
 }
 
 
@@ -1906,7 +1904,7 @@ def queue_jobs(changed):
 # nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
 # (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
 # scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
-# them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
+# them, the contracts, the static checks on its merge commit and the Rust and desktop jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
 # rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
 # hours (scripts/release_increment.py), and a red one holds the release until a fix selects its failure.

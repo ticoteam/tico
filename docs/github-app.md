@@ -456,8 +456,8 @@ An Owner can create an exact product repository without the `bot-` prefix (in a 
 name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
-    tico repo product-create tico-recorder
-    tico repo product-create tico-recorder --confirm <org>/tico-recorder     # a bot's turn: no terminal
+    tico repo product-create tico-mobile
+    tico repo product-create tico-mobile --confirm <org>/tico-mobile     # a bot's turn: no terminal
 
 The command prints the same preview and requires the exact `org/name` before it writes: typed at a terminal,
 or given as `--confirm`, which must match the preview exactly. Both flows
@@ -490,11 +490,11 @@ or the source history does not match the reviewed bundle, stop and have an Owner
 write. If the GitHub App uses selected repositories, an Owner must separately add the new repository in
 GitHub installation settings before Tico can access it; Tico does not change that selection.
 
-The stable API is `GET /api/v2/github/product-repos/preview?name=tico-recorder`, followed after review by
+The stable API is `GET /api/v2/github/product-repos/preview?name=tico-mobile`, followed after review by
 `POST /api/v2/github/product-repos` with an `Idempotency-Key` and this body:
 
 ```json
-{"org":"<connected org>","name":"tico-recorder","visibility":"private","auto_init":false,"confirmed":true}
+{"org":"<connected org>","name":"tico-mobile","visibility":"private","auto_init":false,"confirmed":true}
 ```
 
 The preview reports the exact `org/name` plus one capability state: `available`, `missing`, `unknown`,

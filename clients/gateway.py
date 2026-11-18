@@ -805,12 +805,12 @@ def signals_changes(base, key, since="", limit=200, timeout=TIMEOUT, opener=None
     )
 
 
-# The most an answer the recorder's speech relay passes on may be: a transcript of a clip, never a whole file.
+# The most an answer a speech relay call passes on may be: a transcript of a clip, never a whole file.
 RELAY_LIMIT = 30 * 1024 * 1024
 
 
 def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
-    """(status, body bytes) for a call the recorder's speech relay passes on, the Gateway's answer kept as it is. An
+    """(status, body bytes) for a speech relay call, the Gateway's answer kept as it is. An
     error answer keeps its status and body; status 0 means the Gateway could not be reached. The key goes only where
     `safe_base` allows it, and never through a redirect."""
     try:

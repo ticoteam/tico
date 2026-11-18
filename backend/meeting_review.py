@@ -17,7 +17,7 @@ class Review(M.Contract):
     # A bot to hand the meeting to once it is shared, as Send does ("auto" routes it).
     send_to: str | None = Field(default=None, min_length=1, max_length=200)
     # Who may read it once shared: the Team, or only its participants. Older Ticos refuse
-    # the field, so a recorder asking for participants only never shares it wider by mistake.
+    # the field, so a client asking for participants only never shares it wider by mistake.
     audience: Literal['team', 'participants', 'private'] | None = None
 
 
@@ -111,9 +111,9 @@ def install_meeting_review(app, store, auth, mutate):
             meta['review_send_to'] = send_to
         target = {'approve': 'live', 'dismiss': 'dismissed', 'restore': 'pending'}[action]
         if meta['review_state'] == target:
-            # Approving again with another audience (the Recorder retrying a Save) re-files it for that audience.
+            # Approving again with another audience (a client retrying a Save) re-files it for that audience.
             current = media.effective_audience(meta)
-            # Without an audience (an older Recorder), private:false means the Team; private:true only narrows a
+            # Without an audience, private:false means the Team; private:true only narrows a
             # Team meeting, so it never undoes Participants only.
             wanted = audience or ('team' if private is False else 'private' if private and current == 'team' else None)
             if action == 'approve' and wanted and wanted != current:

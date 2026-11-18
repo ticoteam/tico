@@ -18,13 +18,12 @@ SCHEMAS.update(
                     "description": "The Meet link with authuser=<your Google address> when known; null for Tico Meet",
                 },
                 "live_count": {"type": "integer", "description": "People in the call now, as its status source says"},
-                "status_source": {"enum": ["google", "recorder", None], "description": "Where live status comes from"},
+                "status_source": {"enum": ["google", None], "description": "Where live status comes from"},
                 "seen_at": {"type": ["string", "null"], "description": "When anyone was first seen in the Meet"},
                 "duration_s": {"type": ["integer", "null"], "description": "An ended call's length"},
                 "ring": {"type": "boolean", "description": "The call rings you: rung, not joined, still live"},
                 "card_message_id": "n",
                 "transcript_message_id": "n",
-                "recorder": obj({"source": "n", "installed": "b"}),
             }
         ),
         "CallHold": obj(
@@ -82,9 +81,6 @@ SCHEMAS.update(
             }
         ),
         "CallRinging": obj({"calls": items(ref("Call"))}),
-        "CallRecorderSource": obj(
-            {"source": "b", "meeting_id": "s", "title": "s", "source_actor": "n", "has_transcript": "b"}
-        ),
         "CallJoin": obj(
             {"call": ref("Call"), "url": "n", "expires_in": "i", "token": "s"},
             required=["call", "url"],

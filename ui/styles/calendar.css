@@ -28,12 +28,11 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 @media (prefers-reduced-motion:reduce){.cal-nx.cal-in-r,.cal-nx.cal-in-l{animation:none}}
 /* A phone's side menu is wide: arrows big enough for a thumb. */
 @media (max-width:760px){.cal-step{width:28px;height:32px}}
-.cal-recorder-link{display:none}
 
 /* ----------------------------------------------------------------- the page */
 #main.cal-layout{max-width:none}
 .cal{display:flex;flex-direction:column;min-height:0}
-/* One line: Today, the arrows, the range, the chips and Add, then the search field, the views and ⋯. */
+/* One line: Today, the arrows, the range, the chips and Add, then the search field and the views. */
 .cal-h{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:8px;min-height:44px;margin:0 0 10px}
 .cal-h>*{flex:none}
 .cal-br{display:none}
@@ -57,16 +56,8 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-sr.open .cal-sr-ic{pointer-events:none}
 .cal-ib{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}
 .cal-ib .nav-icon{font-size:20px;margin:0}
-.cal-more{position:relative}
-/* ⋯ is the same quiet icon as on every other page head: no outline. */
-.cal-more>[data-cal-more]{border:0;background:none;color:var(--muted)}
-.cal-more>[data-cal-more]:hover,.cal-more>[data-cal-more][aria-expanded=true]{background:var(--surface2);color:var(--ink)}
-.cal-menu,.cal-addm{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px rgba(0,0,0,.25)}
-.cal-menu[hidden],.cal-addm[hidden]{display:none}
-.cal-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
-.cal-menu button:hover{background:var(--surface2)}
-.cal-menu button::before{content:"";flex:none;width:14px;height:14px;border:1.5px solid var(--g5);border-radius:4px;box-sizing:border-box}
-.cal-menu button[aria-checked="true"]::before{border-color:var(--ink);background:var(--ink);box-shadow:inset 0 0 0 2px var(--surface)}
+.cal-addm{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.cal-addm[hidden]{display:none}
 
 /* Add: find anyone, two quick choices, people and bots with a tick, and what to show */
 .cal-addm{left:0;right:auto;width:280px;padding:6px;font-size:var(--t-sm)}
@@ -206,13 +197,13 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-card-runs button:hover{background:var(--surface2)}
 .cal-card-runs .t{flex:none;width:44px;color:var(--muted);font-variant-numeric:tabular-nums}
 
-/* Phone: two header lines (the date, arrows, search and ⋯, then the views and chips), a week strip and the list. Search
+/* Phone: two header lines (the date, arrows and search, then the views and chips), a week strip and the list. Search
    is an icon on the first line; a tap opens the field on a line of its own, and it stays open while it holds words. The
    closed field is still there to take the cursor (the icon, and "/", focus it), only drawn 1px wide. In the strip today is a filled circle and the selected day a quiet pill, so the two read apart. */
 @media (max-width:760px){
   .cal-h{flex-wrap:wrap;gap:6px}
   .cal-today{order:1}.cal-nav{order:2}.cal-range{order:3;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .cal-more{order:5}.cal-br{display:block;order:6;flex-basis:100%;height:0}
+  .cal-br{display:block;order:6;flex-basis:100%;height:0}
   .cal-views{order:7}.cal-chips{order:8;flex:1 1 0;overflow-x:auto;scrollbar-width:none}.cal-add{order:9}
   .cal-views [data-cal-view="week"],.cal-views [data-cal-view="month"]{display:none}
   .cal-sr.open{order:4;flex:none;min-width:0;width:44px;height:44px;margin:0;padding:0;border-color:transparent;background:none;justify-content:center}

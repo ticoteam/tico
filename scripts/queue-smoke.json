@@ -118,11 +118,6 @@
       "reason": "Settings > People: add by hand or sync a directory; role, sign-in and menu save as they change"
     },
     {
-      "script": "recorder-pending",
-      "seconds": 8.572,
-      "reason": "The Recorder's saved-item regression in the ordinary browser gate"
-    },
-    {
       "script": "recruit-unit",
       "seconds": 0.36,
       "reason": "Submit cancellation, explicit creation and the stale-permission boundary, with no browser"

@@ -102,7 +102,7 @@ def saved_read_sql(actor_sql):
 
 
 def live_read_sql(actor_sql, table='m'):
-    # Recorder grants come from ordinary live rooms, never thread-backed calls.
+    # Live grants come from ordinary live rooms, never thread-backed calls.
     return (
         f"{table}.discarded_at IS NULL AND {table}.thread_id IS NULL AND "
         f"({table}.visibility='team' OR {table}.owner_actor={actor_sql} OR "

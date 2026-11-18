@@ -220,7 +220,7 @@ def _build():
         "meeting.ready",
         "A team meeting with a transcript was imported.",
         "Meeting ready",
-        {"id": "m1", "title": "Acme weekly sync", "source": "recorder", "ended": "2026-03-02T17:30:00Z"},
+        {"id": "m1", "title": "Acme weekly sync", "source": "granola", "ended": "2026-03-02T17:30:00Z"},
         aliases=("recording.ready",),
     )
     add(

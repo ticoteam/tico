@@ -368,7 +368,7 @@ def install_imports(app, store, auth, execution, mutate):
 
         return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
 
-    def file_meeting(c, machine, body, uploads, *, fill_empty=False, live_client=None):
+    def file_meeting(c, machine, body, uploads, *, fill_empty=False):
         person_call = machine.role in ("owner", "human")
         turns = segments_of(body)
         runner = None
@@ -544,8 +544,6 @@ def install_imports(app, store, auth, execution, mutate):
             if meta.get("review_state") == "pending":
                 meta["review_send_to"] = send_to
         transcript = raw_transcript(turns)
-        if live_client is not None:
-            meta["client"] = live_client
         save(
             c,
             meta,

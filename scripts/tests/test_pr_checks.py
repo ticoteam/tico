@@ -1410,7 +1410,6 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "pr-rust-lint",
             "pr-desktop",
             "pr-conformance",
-            "pr-recorder",
             "pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
             "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
@@ -1575,7 +1574,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     # PR checks and the merge queue take no RunsOn label and no repository variable: every job is GitHub-hosted.
     expected = {name: "ubuntu-24.04" for name in jobs}
     expected |= {
-        "recorder": "macos-latest",
         "caddy-linux": "${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
     }
     assert {name: job["runs-on"] for name, job in jobs.items()} == expected
@@ -1585,12 +1583,11 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
         "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
     )
-    for name in ("tests", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+    for name in ("tests", "rust-lint", "desktop-app", "caddy-linux"):
         assert ready in jobs[name]["if"], name
     for name, output in (
         ("rust-lint", "rust_lint"),
         ("desktop-app", "desktop"),
-        ("recorder", "recorder"),
         ("caddy-linux", "caddy"),
     ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
@@ -1610,7 +1607,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "checks",
         "rust-lint",
         "desktop-app",
-        "recorder",
         "caddy-linux",
         "timings",
     }
@@ -1668,7 +1664,7 @@ def test_a_failed_suite_leg_cancels_its_run_and_checks_still_reports():
 
 def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
     """vars.TICO_CI_HOSTED == 'true' moves a RunsOn job to a GitHub-hosted runner. Unset, each RunsOn label is the
-    default, and only a hosted job frees the preinstalled SDKs. The macOS recorder job stays on macos-latest."""
+    default, and only a hosted job frees the preinstalled SDKs."""
     import yaml
 
     for name in RUNSON_WORKFLOWS:
@@ -1687,8 +1683,6 @@ def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default
             for step in job.get("steps", []):
                 if "/opt/ghc" in str(step.get("run", "")):
                     assert step.get("if", "").startswith("vars.TICO_CI_HOSTED == 'true'"), (name, job_name)
-    recorder = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["recorder"]
-    assert recorder["runs-on"] == "macos-latest"
 
 
 def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes(tmp_path):
@@ -1720,7 +1714,7 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
 
     passing = dict.fromkeys(needs, "success")
     assert exit_code(passing) == 0
-    assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
+    assert exit_code({**passing, "tests": "skipped", "caddy-linux": "skipped"}) == 0
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
@@ -2133,21 +2127,16 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
         checks.QUEUE_JOB_PATHS, False
     )
     # The screen relay is a Rust crate the lint checks, and the Caddy image compiles it.
-    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "recorder": False}
+    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False}
     assert checks.selection(["relay-rs/src/main.rs"])["caddy"]
     for name in ("runner-rs/src/sessions.rs", "tools/release-command/src/main.rs", "contracts/runner/schema.json"):
         assert checks.queue_jobs([name])["rust_lint"], name
     assert checks.queue_jobs(["scripts/rust_checks.sh"])["rust_lint"]
-    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "recorder": False}
-    assert checks.queue_jobs(["recorder/src/lib.rs"]) == {"rust_lint": False, "desktop": False, "recorder": True}
-    # esbuild builds the recorder's window: the root npm files run its job, a package.json deeper in the tree does not.
-    for name in ("package.json", "package-lock.json"):
-        assert checks.queue_jobs([name]) == {"rust_lint": False, "desktop": False, "recorder": True}, name
-    assert not checks.queue_jobs(["ui/vendor/x/package.json"])["recorder"]
-    # Anchored at the root: a folder named app/ or recorder/ deeper in the tree is not the desktop app or the recorder.
-    assert checks.queue_jobs(
-        ["backend/app/x.py", "docs/recorder/x.md", "scripts/tests/rust_checks.sh"]
-    ) == dict.fromkeys(checks.QUEUE_JOB_PATHS, False)
+    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True}
+    # Anchored at the root: a folder named app/ deeper in the tree is not the desktop app.
+    assert checks.queue_jobs(["backend/app/x.py", "docs/app/x.md", "scripts/tests/rust_checks.sh"]) == dict.fromkeys(
+        checks.QUEUE_JOB_PATHS, False
+    )
     # A diff that could not be read (or is empty) never skips a job.
     assert checks.queue_jobs([]) == dict.fromkeys(checks.QUEUE_JOB_PATHS, True)
 
@@ -2165,20 +2154,20 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     plan = checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True}
     lines = output.read_text().splitlines()
-    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(lines)
+    assert {"rust_lint=false", "desktop=true"} <= set(lines)
     # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
     # the same outputs from its own diff.
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     output.write_text("")
     plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
-    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(output.read_text().splitlines())
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True}
+    assert {"rust_lint=false", "desktop=true"} <= set(output.read_text().splitlines())
 
     jobs = workflow_jobs()["jobs"]
     outputs = jobs["plan"]["outputs"]
-    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("recorder", "recorder")):
+    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop")):
         assert outputs[output_name] == f"${{{{ steps.plan.outputs.{output_name} }}}}", job
         assert jobs[job]["needs"] == "plan", job
         assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
