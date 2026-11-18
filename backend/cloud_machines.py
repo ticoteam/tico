@@ -82,6 +82,7 @@ machine; a shared machine's facts are its member bots' together:
              nothing worth keeping: it is deleted, and the next want makes a new one with a fresh code. After
              ENROLL_TRIES such machines in a row nothing more is made ("no_enroll") until one enrolls or a person
              explicitly replaces the machine. Each failed id is counted durably before deletion or replacement.
+             HQ's temporary create refusals consume no tries and back off even when HQ lists a failed machine.
     frozen   out of credit (cloud_access.frozen, or HQ's 402): nothing starts and the bot shows "Out of credit". HQ
              stops running machines and keeps their disks. A 402 is asked again once HQ says the company is open.
     errors   HQ not answering or refusing: the bot's queued work says so ("its cloud machine didn't start"), and the
@@ -158,7 +159,7 @@ ENROLL_GRACE = 60  # past its newest code's expiry, a machine not enrolled yet n
 CREATE_HOLD = ENROLL_MINUTES * 60 + ENROLL_GRACE  # give an unanswered create time to enroll before another request
 ENROLL_TRIES = 3  # machines made in a row that never enrolled before it waits for a person
 STOP_HOLD = 120  # a stop's reservation lapses this late: a server that died mid-stop strands no work
-DEAD = ("deleted", "failed")  # HQ's word for a machine that is gone or never got a computer: a want makes a new one
+DEAD = ("deleted", "failed")  # HQ's word for an unusable machine: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
 SIGNIN_WANT = "signin:"  # the shared machine's want while a person signs a plan in with no computer online
 SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked, and last asked (epoch seconds)
@@ -521,14 +522,26 @@ def intend_delete(c, current, reason="manual"):
 
 
 def count_enrollment_failure(c, key, machine_id, last_error=None):
-    """Spend one try per id under the write lock, before any HTTP or adoption can lose this attempt. A machine HQ says
-    failed because the plan cannot run its size (`last_error`, else the row's for this id) spends none: its computer
-    never had a chance to connect, and `Manager.fall_back` starts the next one smaller instead."""
+    """Spend one try per unenrolled id before HTTP or adoption can lose the attempt. Temporary HQ and plan
+    refusals leave the enrollment budget intact."""
+    current = row(c, key)
+    tracked = current if current and current["machine_id"] == machine_id else None
     if last_error is None:
-        current = row(c, key)
-        last_error = current["last_error"] if current and current["machine_id"] == machine_id else ""
-    if plan_refusal(last_error):
-        return row(c, key)
+        last_error = tracked["last_error"] if tracked else ""
+    if last_error in TEMPORARY_REFUSALS:
+        # An older server may already have charged this id and stopped trying. Only the tracked id's error is known.
+        if (
+            tracked
+            and tracked["enroll_fails"]
+            and c.execute(
+                "DELETE FROM cloud_machine_enrollment_failures WHERE machine_id=? AND bot=?", (machine_id, key)
+            ).rowcount
+        ):
+            save(c, key, enroll_fails=tracked["enroll_fails"] - 1)
+            return row(c, key)
+        return current
+    if plan_refusal(last_error) or (tracked and tracked["runner_id"]):
+        return current
     added = c.execute(
         "INSERT OR IGNORE INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES(?,?)", (machine_id, key)
     ).rowcount
@@ -538,6 +551,28 @@ def count_enrollment_failure(c, key, machine_id, last_error=None):
     if current and current["enroll_fails"] >= ENROLL_TRIES:
         save(c, key, problem="no_enroll", problem_at=current["problem_at"] or H.now())
     return row(c, key)
+
+
+def retry_backoff(current, at):
+    failures = current["failures"] + 1
+    return {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** min(failures - 1, 6))}
+
+
+def temporary_create_retry(current, machine, at):
+    """A failed create's list entry can be the only report or follow an HTTP refusal for the same attempt."""
+    code = machine["last_error"]
+    if machine["state"] != "failed" or code not in TEMPORARY_REFUSALS or current["enroll_fails"] >= ENROLL_TRIES:
+        return {}
+    problem = "hq:" + code
+    retry_at = current["next_try_at"]
+    asked_at = current["create_asked_at"] or at
+    if (
+        current["problem"] == problem
+        and retry_at is not None
+        and (current["machine_id"] == machine["id"] or retry_at > asked_at)
+    ):
+        return {field: current[field] for field in ("failures", "next_try_at", "problem", "problem_at")}
+    return {**retry_backoff(current, at), "problem": problem, "problem_at": H.now()}
 
 
 def deletion_retry(c, machine_id, refused=None):
@@ -1766,13 +1801,10 @@ class Manager:
                         continue
                     gone = {"enroll_by": None, "start_asked_at": None} if machine["state"] == "deleted" else {}
                     if machine["state"] == "failed" or machine["state"] == "deleted" and not current["runner_id"]:
-                        # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
-                        # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
-                        # Only HQ's list says so: a refused or unanswered create may be a passing outage. One HQ made
-                        # and then failed because the plan cannot run its size is that refusal, not a stall.
-                        count_enrollment_failure(c, key, machine["id"], machine["last_error"])
+                        counted = count_enrollment_failure(c, key, machine["id"], machine["last_error"])
                         if machine["state"] == "failed" and current["state"] != "failed":
                             self.plan_failed(c, current, machine, at)
+                        gone.update(temporary_create_retry(counted, machine, at))
                         gone.update(enroll_by=None, wake_key=None, start_asked_at=None)
                     elif machine["state"] in ON and current["start_asked_at"] is not None:
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
@@ -1921,6 +1953,12 @@ class Manager:
         dead = machine["state"] in DEAD
         fresh = {**current, **self.described(machine), "runner_id": fresh_runner, "deleting": False}
         woke_for = wake_for({**fresh, "state": "deleted"}, facts(c, self.settings, fresh, at))[0]
+        retry = temporary_create_retry(current, machine, at) or {
+            "failures": 0,
+            "next_try_at": None,
+            "problem": "",
+            "problem_at": None,
+        }
         save(
             c,
             key,
@@ -1933,10 +1971,7 @@ class Manager:
             ttl_s=None,
             wake_key=None if dead else woke_for,
             woke_at=None if dead else at,
-            failures=0,
-            next_try_at=None,
-            problem="",
-            problem_at=None,
+            **retry,
             stop_until=None,
             start_asked_at=None,
             create_asked_at=None,
@@ -2258,10 +2293,12 @@ class Manager:
                 deleted(c, row(c, key), H.TICO_ACTOR)
             return
         else:
-            failures = current["failures"] + 1
-            fields = {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
+            fields = retry_backoff(current, at)
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
+        if action == "heartbeat" and refused.status == 409 and refused.code == "not_running":
+            # HQ can be reporting a stop. Refresh its state before deciding whether to resume the same disk.
+            self.synced = None
         if action == "create":
             self.synced = None  # read HQ's state before the next retry when possible
             if 400 <= refused.status < 500 and refused.status != 408:
@@ -2354,14 +2391,12 @@ class Manager:
         if tried != current["size"]:
             return  # a person chose another size meanwhile: the next machine is made at theirs
         if not self.fall_back(c, current, tried, code, at, "made"):
-            failures = current["failures"] + 1
             save(
                 c,
                 current["bot"],
                 problem="hq:" + code,
                 problem_at=H.now(),
-                failures=failures,
-                next_try_at=at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1)),
+                **retry_backoff(current, at),
             )
 
     def fall_back(self, c, current, refused_size, code, at, action="create", fields=None):
@@ -3105,8 +3140,10 @@ def health(c, settings=None):
         # Out of credit is one account-wide cause Health names once, with Add credit (health.view, task #423).
         and not (machine["problem"] == "out_of_credit" and cloud_access.access(c) == "frozen")
     )
+    machines_by_key = rows(c)
+    shared_stuck = (machines_by_key.get(SHARED) or {}).get("problem") == "no_enroll"
     lines = []
-    for key, current in sorted(rows(c).items()):
+    for key, current in sorted(machines_by_key.items()):
         if current["problem"] == "disk_full" and current["state"] in ON:
             lines.append(f"{machine_name(c, key)}: {current['grow_note'] or PROBLEMS['disk_full']}.")
         elif resizing(current) and current["grow_note"] == STOP_REFUSED:
@@ -3119,7 +3156,7 @@ def health(c, settings=None):
                 f"{machine_name(c, key)}: waiting {int(now() - current['drain_started_at']) // 60} minutes for "
                 f"its turns to finish before it restarts at {cloud_size_name(current['size'])}."
             )
-    for key, current in sorted(rows(c).items()):
+    for key, current in sorted(machines_by_key.items()):
         failed = update_failed(c, current["runner_id"]) if current["runner_id"] and current["mode"] == "cloud" else None
         if failed and (key == SHARED or key in active):
             why = str(failed["update_error"] or "").strip()[:120]
@@ -3127,16 +3164,18 @@ def health(c, settings=None):
                 f"{machine_name(c, key)}: still on Tico {failed['release']}; its update to {failed['update_target']} "
                 f"failed{' (' + why + ')' if why else ''}. It tries again when it next starts."
             )
-    if not stuck and not old and not lines:
+    if not shared_stuck and not stuck and not old and not lines:
         return None
     names = [
         f"{(H.bot(c, bot) or {}).get('slug') or bot}: {problem_words(machines[bot]['problem'])}" for bot in stuck[:5]
     ]
-    summary = (
-        [f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine problem: {'; '.join(names)}"]
-        if stuck
-        else []
-    )
+    summary = []
+    if shared_stuck:
+        summary.append("Shared cloud machine never connected. Its member bots cannot run. Replace it in Computers.")
+    if stuck:
+        summary.append(
+            f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine problem: {'; '.join(names)}"
+        )
     if old:
         names = [
             f"{'shared (_shared)' if r['bot'] == SHARED else r['slug'] or r['bot']}: {r['machine_id']}" for r in old
@@ -3147,7 +3186,7 @@ def health(c, settings=None):
             "Old disks may still cost money."
         )
     summary.extend(lines[:5])
-    return {"status": "warn", "summary": " ".join(summary)}
+    return {"status": "bad" if shared_stuck else "warn", "summary": " ".join(summary)}
 
 
 # ----------------------------------------------------------------------------- routes

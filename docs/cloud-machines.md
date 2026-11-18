@@ -10,6 +10,10 @@ even while a runner still checks in. Enrollment and subsequent heartbeats finish
 pending `starting` transition, so the next heartbeat repairs an old record too. A heartbeat does not cancel a stop
 already reserved by the scheduler.
 
+When HQ refuses a heartbeat because the machine is no longer running, the scheduler refreshes its machine list
+on the next look. If HQ lists the machine as stopped, work can resume the same machine and disk. An HQ report
+that the machine failed or was deleted allows a replacement.
+
 A stopped machine stays asleep while its queued tasks wait for a person, a snooze, a prerequisite or a check.
 Health and Computers show those waits. With no other reason, Computers says **asleep; starts when work can run**.
 Samples and load from the last boot do not mean an asleep machine is failing to report. They still hold new starts
@@ -211,10 +215,14 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
 again (systemd reruns a failed boot step every 30 seconds). A machine has until its code expires (plus a minute) to
 enroll, and is not idle-stopped meanwhile. One that has not by then never can (a resume brings no new code), so the
-server deletes it and the next work makes a new one with a fresh code; after three such machines in a row it makes no
-more ("Made, but it never connected to this server", in Health). A successful enrollment clears the count. Otherwise,
-a person must choose **Replace machine** to try again, or delete the shared machine to replace it. That explicit
-request resets the count once, even if its reply is lost; retrying the same request does not reset it again.
+server deletes it and the next work makes a new one with a fresh code. After three failed attempts in a row, it
+waits for a person to replace the machine. Health names the shared machine when it reaches that limit because
+its member bots cannot run. A successful enrollment clears the count, and a machine that already enrolled uses
+none of its replacement's tries. A temporary HQ create refusal (`busy`, `removing` or `version_conflict`) uses
+the normal retry backoff, even if HQ lists the machine as failed. It uses no enrollment tries.
+
+Choose **Replace machine** to try again after the limit, or delete the shared machine to replace it. That explicit
+request resets the count once, even if its reply is lost. Retrying the same request keeps the new count.
 Changing size, Always on, Pause after or placement keeps the count. The replacement button stays available after
 the failed disk is gone. Without the marker `/etc/tico/cloud-machine.json` the
 boot step does nothing, and without a code it does nothing either: that is the base sandbox itself.

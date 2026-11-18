@@ -549,6 +549,102 @@ def test_an_hq_outage_never_uses_up_the_tries(cloud):
     assert cloud.tick(CM.BACKOFF_MAX) == ["create"] and cloud.row()["machine_id"]
 
 
+def test_shared_create_busy_backs_off_until_a_machine_can_enroll(cloud, monkeypatch):
+    adopt(cloud, place="shared")
+    work(cloud)
+    create = cloud.hq.create
+    tries = CM.ENROLL_TRIES + 1
+
+    def busy(*args):
+        machine = create(*args)
+        if cloud.hq.n <= tries:
+            cloud.hq.machines[machine["id"]].update(state="failed", last_error="busy")
+            raise CM.Refused("busy", 503)
+        return machine
+
+    monkeypatch.setattr(cloud.hq, "create", busy)
+    for attempt in range(tries):
+        assert cloud.tick() == ["create"] * (attempt + 1)
+        delay = CM.BACKOFF * 2**attempt
+        retry_at = cloud.at[0] + delay
+        cloud.tick(delay - 1)
+        failed = cloud.row(CM.SHARED)
+        assert failed["state"] == "failed" and failed["problem"] == "hq:busy"
+        assert failed["enroll_fails"] == 0 and failed["next_try_at"] == retry_at
+        assert len(cloud.hq.actions()) == attempt + 1
+        cloud.at[0] += 1
+
+    assert cloud.tick() == ["create"] * (tries + 1)
+    computer = post(
+        cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"}
+    )
+    enrolled = cloud.row(CM.SHARED)
+    assert enrolled["runner_id"] == computer["runner_id"]
+    assert enrolled["enroll_fails"] == 0 and enrolled["problem"] == ""
+
+
+@pytest.mark.parametrize("already_counted", [False, True])
+def test_a_listed_temporary_failure_backs_off_without_extending_on_each_list(cloud, already_counted):
+    adopt(cloud)
+    work(cloud)
+    assert cloud.tick() == ["create"]
+    machine_id = cloud.row()["machine_id"]
+    code = "removing" if already_counted else "version_conflict"
+    cloud.hq.machines[machine_id].update(state="failed", last_error=code)
+    if already_counted:
+        with cloud.store.transaction() as c:
+            CM.save(c, "ops", state="failed", last_error=code, problem="no_enroll", enroll_fails=CM.ENROLL_TRIES)
+            c.execute("INSERT INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES(?,?)", (machine_id, "ops"))
+    expected_count = CM.ENROLL_TRIES - 1 if already_counted else 0
+    assert cloud.tick(CM.SYNC) == ["create"]
+    failed = cloud.row()
+    assert failed["state"] == "failed" and failed["problem"] == "hq:" + code
+    assert failed["enroll_fails"] == expected_count
+    assert failed["next_try_at"] == cloud.at[0] + CM.BACKOFF
+    cloud.manager.synced = None
+    assert cloud.tick(CM.BACKOFF - 1) == ["create"]
+    assert cloud.row()["next_try_at"] == failed["next_try_at"]
+    assert cloud.tick(1) == ["create", "create"]
+    assert cloud.row()["machine_id"] != machine_id and cloud.row()["enroll_fails"] == expected_count
+
+
+def test_a_failed_machine_that_enrolled_does_not_use_the_replacements_retry_budget(cloud):
+    runner_id = shared_enrolled(cloud, "ops")
+    machine_id = cloud.row(CM.SHARED)["machine_id"]
+    cloud.hq.machines[machine_id].update(state="failed", last_error="not_ready")
+    assert cloud.tick(CM.SYNC) == ["create", "create"]
+    fresh = cloud.row(CM.SHARED)
+    assert fresh["machine_id"] != machine_id and fresh["enroll_fails"] == 0
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (runner_id,)).fetchone()[0]
+
+
+def test_heartbeat_not_running_relists_and_resumes_the_same_shared_machine(cloud, monkeypatch):
+    runner_id = shared_enrolled(cloud, "ops")
+    machine_id = cloud.row(CM.SHARED)["machine_id"]
+    idle(cloud)
+    assert cloud.tick(CM.PAUSE_MINUTES * 60)[-1] == "stop"
+    post(cloud.api, "cloud-machines/shared", {"always_on": True})
+    assert cloud.tick()[-1] == "start"
+    heartbeat = cloud.hq.heartbeat
+
+    def stopped(mid):
+        cloud.hq.machines[mid]["state"] = "stopped"
+        return heartbeat(mid)
+
+    monkeypatch.setattr(cloud.hq, "heartbeat", stopped)
+    cloud.hq.fail["heartbeat"] = [CM.Refused("not_running", 409)]
+    assert cloud.tick(CM.HEARTBEAT)[-1] == "heartbeat"
+    assert cloud.tick(CM.BACKOFF - 1)[-1] == "heartbeat"
+    assert cloud.row(CM.SHARED)["state"] == "stopped"
+    assert cloud.tick(1)[-1] == "start"
+    current = cloud.row(CM.SHARED)
+    assert current["machine_id"] == machine_id and current["runner_id"] == runner_id
+    assert cloud.hq.actions().count("create") == 1
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (runner_id,)).fetchone()[0] is None
+
+
 def test_a_made_machine_boat_then_fails_is_made_again_for_the_same_work(cloud):
     adopt(cloud)
     work(cloud)
@@ -1618,6 +1714,8 @@ def test_shared_settings_and_member_moves_keep_the_failure_limit_until_explicit_
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
     cloud.tick(CM.TICK)
     assert cloud.hq.n == CM.ENROLL_TRIES and cloud.row(CM.SHARED)["problem"] == "no_enroll"
+    waiting = health_of(cloud)["waiting"]
+    assert waiting["status"] == "bad" and "Shared cloud machine" in waiting["summary"]
     response = cloud.api.delete("/api/v2/cloud-machines/shared", headers=headers())
     assert response.status_code == 200, response.text
     assert cloud.row(CM.SHARED)["enroll_fails"] == 0
