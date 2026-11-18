@@ -886,6 +886,17 @@ function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
       return !(DEC === st && st.at === it.id);
     }});
 }
+/** The live view of a ❓'s browser outside Flow (Tools, Tasks › You; an entry of the decide part, ui/parts.json): its Done replies "Done" in the ❓'s chat, which
+    clears it and wakes the bot, as Flow's Done does (decideBrowserMount). Without an ask Done only closes. */
+function decideBrowserOpen(toolId: string, accountId: string, title: string, after?: () => unknown): void {
+  const it = needsBrowserAsk(toolId, accountId), room = it ? it.root_id || it.conversation_id || '' : '';
+  browserView.open({toolId, accountId, title: it?.line || title, onDone: async () => {
+    const r = room ? await post(thvPath(room) + '/messages', {text: 'Done'}) as {held?: RuleHold | null} | undefined : undefined;
+    if (r?.held) throw new Error(decideHeldSaid(r.held));
+    await after?.();
+    return true;
+  }});
+}
 /** Browser asks the person came back from: a phone's forward action is Done, not Open browser. */
 const DEC_BROWSED = new Set<string>();
 const decideBtn = (dc: string, label: string, main = false, extra = '') =>

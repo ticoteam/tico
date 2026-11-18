@@ -725,7 +725,7 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   const asking = browse ? state.needs.find(n => n.id === browse.dataset.needBrowser) : null;
   if (asking) {
     const [toolId = '', accountId = ''] = needsBrowserRef(asking).slice(8).split('/');
-    needsBrowserOpen(toolId, accountId, needsTitle(asking));
+    decideBrowserOpen(toolId, accountId, needsTitle(asking));
     return;
   }
   const row = el?.closest<HTMLElement>('[data-need]');

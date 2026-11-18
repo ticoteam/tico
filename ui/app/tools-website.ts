@@ -325,9 +325,9 @@ async function twChange(ev: Event): Promise<void> {
   catch (e) { box.checked = !box.checked; toast(errorMessage(e, ''), true); }
   finally { if (box.isConnected) box.disabled = false; }
 }
-// Done answers the bot's ❓ when Needs you holds one for this account (needs-you.ts), then the page reads again.
+// Done answers the bot's ❓ when Needs you holds one for this account (decide.ts decideBrowserOpen), then the page reads again.
 function twOpenBrowser(state: TwState, a: TwAccount): void {
-  needsBrowserOpen(state.id, a.id, state.data?.tool.name || '', () => { if (TW === state) void twRedraw(state).catch(() => {}); });
+  decideBrowserOpen(state.id, a.id, state.data?.tool.name || '', () => { if (TW === state) void twRedraw(state).catch(() => {}); });
 }
 async function twRemove(state: TwState, a: TwAccount): Promise<void> {
   if (!await settingsConfirm({title: `Remove ${twAcctName(a) || 'this account'}?`, text: 'Bots and people stop signing in with it.', ok: 'Remove'})) return;

@@ -4,7 +4,7 @@
    X-Page-Height), a box types text, a keys row sends Enter, Tab and Backspace, and the wheel or a drag scrolls.
    Used by a website tool's page (Open browser, ui/app/tools-website.ts), a Needs you row (tasks-page.ts) and the ask
    screen (a `browser:<tool>/<account>` show ref, ui/app/decide.ts); on an ask Done answers it "Done" (needs-you.ts
-   needsBrowserOpen outside Flow).
+   decideBrowserOpen outside Flow).
    browserView.mount(host, {toolId, accountId, full?, title?, onDone?, onClose?}) draws it into `host`; on a phone
    (≤ 760 px) an inline mount is one Open browser button that opens it full screen. browserView.open(...) opens it in a
    dialog over everything (full screen on a phone, 48 px controls). It stops by itself once its host leaves the page.
