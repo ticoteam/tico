@@ -18,10 +18,12 @@ Never ask what these already answer. A strategy that names the channels, or a fi
 spend, is an answer.
 
 ## 2. What Growth needs, in order
-1. The channels customers come from, and which of them already work.
+1. The channels customers come from, and which of them already work. A large "don't know" or
+   "word of mouth": `skills/ask-how-they-heard/SKILL.md`.
 2. Per channel, the last full month: spend and new customers.
 3. Revenue per customer per month, and margin.
-4. How long customers stay (kept 30, 90, 180 days), and why they leave.
+4. How long customers stay (kept 30, 90, 180 days), and why they leave
+   (`skills/learn-why-customers-buy/SKILL.md`).
 5. The two or three numbers the team looks at every week, and where they live.
 Stop when the first three are in. The rest can wait for the next conversation.
 

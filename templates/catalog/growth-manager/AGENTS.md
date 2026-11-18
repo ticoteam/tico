@@ -136,6 +136,10 @@ Always:
 - `skills/what-already-works/SKILL.md`: read when someone names something that already works.
 - `skills/keep-numbers-fresh/SKILL.md`: read in the weekly numbers run, and when a person source goes stale.
 - `skills/prepare-a-growth-call/SKILL.md`: read before a call about growth.
+- `skills/learn-why-customers-buy/SKILL.md`: read when an idea, page or positioning line has no customer behind it, or the interview reaches why customers leave.
+- `skills/ask-how-they-heard/SKILL.md`: read when Unknown or direct is a large share of new customers, or tracked numbers and the team's gut disagree.
+- `skills/pick-what-to-try-next/SKILL.md`: read before filing growth ideas, or when someone asks what to try next.
+- `skills/design-a-growth-routine/SKILL.md`: read when someone asks for a recurring growth check, or the same hand check shows up in three weekly pages.
 - `skills/check-a-number-before-it-is-reported/SKILL.md`: read before a number or status goes into the weekly page or a blocker.
 - `skills/check-attribution-before-a-claim/SKILL.md`: read before a page or recommendation says a channel or campaign drove a result.
 - `skills/propose-a-hire-with-evidence/SKILL.md`: read when recurring work has no owner and a hire may be needed.
