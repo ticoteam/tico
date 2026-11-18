@@ -413,9 +413,9 @@ def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api)
     assert "November product update" not in cara.text and "Figma" not in cara.text
     # Handed to Cara, who reads its task but is no party to the OK: her row is the ask, never what it is about.
     with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (mail["task_id"],))
         version = H.task(c, mail["task_id"])["version"]
         H.task_give(c, "human:ben", mail["task_id"], mail["requirement_id"], "human:cara", version)
-        c.execute("UPDATE tasks SET private=0 WHERE id=?", (mail["task_id"],))
     cara = api.get("/api/v2/needs-you", headers=headers("cara-test"))
     handed = {i.get("requirement_id"): i for i in cara.json()["items"]}
     assert mail["requirement_id"] in handed, cara.text
