@@ -120,7 +120,7 @@
       "notice_seconds": "<volatile>",
       "profile": "doer",
       "repeat_seconds": "<volatile>",
-      "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+      "summary": "News about a task it owns (checks, reviews, a finished request) wakes it at once, on its turn; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
       "warm_window": [
         2700,
         3300
