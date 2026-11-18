@@ -49,28 +49,104 @@ LIVE_DOCUMENT = (
 
 
 def live_documents(conn: "sqlite3.Connection", task_id: str, document: str) -> dict[str, int]:
-    return {
-        str(file_id): int(version)
-        for file_id, version in conn.execute(
-            "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id",
-            ("task:" + task_id, document),
-        )
-    }
+    """{file id: current version} of the task's live pages in the role `document`. Kept for the read snapshot
+    (read_cache) and seeded for many tasks at once by `prime`."""
+    from . import read_cache
+
+    def read() -> dict[str, int]:
+        return {
+            str(file_id): int(version)
+            for file_id, version in conn.execute(
+                "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id",
+                ("task:" + task_id, document),
+            )
+        }
+
+    return read_cache.value(conn, ("live_documents", task_id, document), read)
+
+
+# The submitted pages that count, newest submission first: `%s` picks the visits and requirements.
+_CURRENT_PAGES = (
+    "SELECT rp.* FROM requirement_pages rp JOIN requirements r ON r.id=rp.requirement_id "
+    "JOIN visits v ON v.id=rp.visit_id WHERE %s AND rp.replaced_at IS NULL "
+    "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS (SELECT 1 "
+    + LIVE_DOCUMENT.replace("%", "%%")
+    + "AND l.page_id=rp.file_id AND l.target='task:'||v.task_id AND l.role=json_extract(r.settings,'$.document'))) "
+    "ORDER BY rp.created_at DESC,rp.rowid DESC"
+)
+
+
+def _rows(cursor: Any) -> list[Row]:
+    names = [d[0] for d in cursor.description]
+    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
 
 
 def current_pages(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> list[Row]:
-    """All submitted pages on a requirement, newest submission first."""
-    cursor = conn.execute(
-        "SELECT rp.* FROM requirement_pages rp JOIN requirements r ON r.id=rp.requirement_id "
-        "JOIN visits v ON v.id=rp.visit_id WHERE rp.visit_id=? AND rp.requirement_id=? AND rp.replaced_at IS NULL "
-        "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS (SELECT 1 "
-        + LIVE_DOCUMENT
-        + "AND l.page_id=rp.file_id AND l.target='task:'||v.task_id AND l.role=json_extract(r.settings,'$.document'))) "
-        "ORDER BY rp.created_at DESC,rp.rowid DESC",
-        (visit_id, requirement_id),
+    """All submitted pages on a requirement, newest submission first. Kept for the read snapshot (read_cache: a write
+    discards it) and seeded for many tasks at once by `prime`."""
+    from . import read_cache
+
+    return read_cache.value(
+        conn,
+        ("current_pages", visit_id, requirement_id),
+        lambda: _rows(
+            conn.execute(_CURRENT_PAGES % "rp.visit_id=? AND rp.requirement_id=?", (visit_id, requirement_id))
+        ),
     )
-    names = [d[0] for d in cursor.description]
-    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+
+def prime(conn: "sqlite3.Connection", visits: "dict[str, tuple[str, list[Row]]]") -> None:
+    """Read `current_pages` and `live_documents` for many open visits together, two statements in all, for the page
+    checks of each task that follow in this snapshot. `visits` is {visit id: (its task id, its page requirements)}.
+    Without a read snapshot it reads nothing; a write discards it (read_cache)."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None or not visits:
+        return
+    wanted = {(visit_id, str(r["id"])) for visit_id, (_, requirements) in visits.items() for r in requirements}
+    unread = sorted({v for v, rid in wanted if ("current_pages", v, rid) not in values})
+    if unread:
+        found: dict[tuple[str, str], list[Row]] = {}
+        for row in _rows(
+            conn.execute(_CURRENT_PAGES % "rp.visit_id IN (SELECT value FROM json_each(?))", (json.dumps(unread),))
+        ):
+            found.setdefault((str(row["visit_id"]), str(row["requirement_id"])), []).append(row)
+        for visit_id, rid in wanted:
+            if visit_id in unread:
+                values.setdefault(("current_pages", visit_id, rid), found.get((visit_id, rid), []))
+        from . import page_verdicts
+
+        # Each page's verdict from the decision model (task_requirements._one_page), one statement for them all.
+        page_verdicts.prime(
+            conn,
+            [
+                (str(p["file_id"]), int(p["version"]), str(p.get("rubric_hash") or ""))
+                for ps in found.values()
+                for p in ps
+            ],
+        )
+    documents: set[tuple[str, str]] = set()
+    for task_id, requirements in visits.values():
+        for r in requirements:
+            settings: Row = r.get("settings") or {}
+            if settings.get("document"):
+                documents.add((task_id, str(settings["document"])))
+    documents = {d for d in documents if ("live_documents", *d) not in values}
+    if not documents:
+        return
+    live: dict[tuple[str, str], dict[str, int]] = {d: {} for d in documents}
+    targets = sorted({"task:" + task_id for task_id, _ in documents})
+    for target, role, file_id, version in conn.execute(
+        "SELECT l.target,l.role,f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target IN (SELECT value FROM "
+        "json_each(?)) ORDER BY f.id",
+        (json.dumps(targets),),
+    ):
+        key = (str(target)[len("task:") :], str(role))
+        if key in live:
+            live[key][str(file_id)] = int(version)
+    for key, pages in live.items():
+        values.setdefault(("live_documents", *key), pages)
 
 
 def current(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:

@@ -23,6 +23,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from . import read_cache
+
 if TYPE_CHECKING:
     import sqlite3
 
@@ -53,13 +55,18 @@ def _loaded(row: Row) -> Row:
 
 
 def get(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> Row | None:
-    """One item's saved metadata (an `item_metadata` row with `fields` loaded), or None when Tico has none yet."""
-    found = _rows(
-        conn,
-        "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key=?",
-        (source, item_type, key),
-    )
-    return _loaded(found[0]) if found else None
+    """One item's saved metadata (an `item_metadata` row with `fields` loaded), or None when Tico has none yet. Kept
+    for the read snapshot (read_cache: a write discards it), and seeded for many tasks at once by `prime_of_tasks`."""
+
+    def read() -> Row | None:
+        found = _rows(
+            conn,
+            "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key=?",
+            (source, item_type, key),
+        )
+        return _loaded(found[0]) if found else None
+
+    return read_cache.value(conn, ("item_metadata", source, item_type, key), read)
 
 
 def save(
@@ -125,12 +132,48 @@ def linked(conn: "sqlite3.Connection", source: str, item_type: str, key: str) ->
 def of_task(conn: "sqlite3.Connection", task_id: str, source: str, item_type: str) -> list[Row]:
     """The items of one type linked to a task, oldest link first (links made in one millisecond in the order they were
     made): its `task_links` rows, each with `metadata` (`get`) or None."""
-    links = _rows(
+    links = read_cache.value(
         conn,
-        "SELECT * FROM task_links WHERE task_id=? AND source=? AND item_type=? ORDER BY created_at, rowid",
-        (task_id, source, item_type),
+        ("task_links_of", task_id, source, item_type),
+        lambda: _rows(conn, _OF_TASK % "task_id=?", (task_id, source, item_type)),
     )
     return [{**link, "metadata": get(conn, source, item_type, str(link["item_key"]))} for link in links]
+
+
+_OF_TASK = "SELECT * FROM task_links WHERE %s AND source=? AND item_type=? ORDER BY created_at, rowid"
+
+
+def prime_of_tasks(conn: "sqlite3.Connection", task_ids: "list[str]", source: str, item_type: str) -> None:
+    """Read `of_task` for many tasks together, two statements in all (their links, then those items' metadata), for the
+    reads of each task that follow in this snapshot: a list of tasks that each check their PRs costs what one does.
+    Without a read snapshot it reads nothing; a write discards it (read_cache)."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    unread = sorted({str(t) for t in task_ids if t and ("task_links_of", str(t), source, item_type) not in values})
+    if not unread:
+        return
+    found: dict[str, list[Row]] = {task_id: [] for task_id in unread}
+    for link in _rows(
+        conn, _OF_TASK % "task_id IN (SELECT value FROM json_each(?))", (json.dumps(unread), source, item_type)
+    ):
+        found[str(link["task_id"])].append(link)
+    for task_id, links in found.items():
+        values.setdefault(("task_links_of", task_id, source, item_type), links)
+    keys = sorted({str(link["item_key"]) for links in found.values() for link in links})
+    keys = [key for key in keys if ("item_metadata", source, item_type, key) not in values]
+    if not keys:
+        return
+    saved = {
+        str(row["item_key"]): _loaded(row)
+        for row in _rows(
+            conn,
+            "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key IN (SELECT value FROM json_each(?))",
+            (source, item_type, json.dumps(keys)),
+        )
+    }
+    for key in keys:
+        values.setdefault(("item_metadata", source, item_type, key), saved.get(key))
 
 
 def tasks_of(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> list[str]:
