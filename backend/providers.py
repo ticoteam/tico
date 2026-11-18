@@ -1118,7 +1118,7 @@ def check_order(record):
             rows.append(_check_row(entry, record))
         except ProviderError:
             continue
-    no_gateway = bool(models_preset.of(record)) and not models_preset.spends_gateway(record)
+    no_gateway = never_gateway(record)
     for name in record["enabled"]:
         if no_gateway and (PROVIDER_BY_ID.get(name) or {}).get("gateway"):
             continue
@@ -1134,6 +1134,26 @@ def check_order(record):
             seen.add(row["model"])
             order.append(row)
     return order
+
+
+def never_gateway(record):
+    """Whether the company's models choice never spends the Gateway on bots' work: `subscriptions` or `own-keys`.
+    No choice (as before presets) and the two Gateway choices keep the Gateway in reach."""
+    return bool(models_preset.of(record)) and not models_preset.spends_gateway(record)
+
+
+def gateway_check_refused(record, model):
+    """Whether a review or check may not run on `model`: a Gateway model under a choice that never spends the
+    Gateway, unless the owner lists it in the check-model order."""
+    if not gateway_model(model) or not never_gateway(record):
+        return False
+    for entry in record["check_models"]:
+        try:
+            if _check_row(entry, record)["model"] == model:
+                return False
+        except ProviderError:
+            continue
+    return True
 
 
 def author_provider(author):

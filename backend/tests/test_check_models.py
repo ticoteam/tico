@@ -6,7 +6,7 @@ import json
 import pytest
 
 from backend import check_models
-from backend.store import H
+from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import GROK, company, finish, heartbeat, parent_turn
 
@@ -695,3 +695,47 @@ def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, mo
     with api.app.state.store.read() as c:
         assert maintenance_health.out_of_quota_logins(c, api.app.state.store.settings) == []
         assert "temporary model capacity on a check" in H.status(c, "ops")["focus"]
+
+
+def test_a_check_saved_on_the_gateway_runs_on_the_bots_own_model_once_the_company_keeps_to_subscriptions(
+    api, monkeypatch
+):
+    # Tico Team, Nov 18: reviews filed or moved onto pi:tico-medium-1.0 kept spending the Gateway after the
+    # company chose subscriptions only. A saved Gateway check is ignored then, and a new one is refused.
+    from backend import gateway_connection
+
+    machine, sub, check = codex_check(api)
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE task_check_models SET runtime='pi',model='tico-medium-1.0',harness='pi' WHERE task_id=?",
+            (sub["id"],),
+        )
+
+    def choice(preset, check_models=()):
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "UPDATE registry_metadata SET value=? WHERE key='providers'",
+                (
+                    encode(
+                        {
+                            "revision": 2,
+                            "enabled": ["anthropic", "openai", "tico"],
+                            "runtime": "claude",
+                            "model": "claude-sonnet-5-5",
+                            "preset": preset,
+                            "check_models": list(check_models),
+                        }
+                    ),
+                ),
+            )
+        with api.app.state.store.read() as c:
+            return check_models.of(c, sub["id"], "ops")
+
+    assert choice("gateway")["model"] == "tico-medium-1.0"
+    assert choice("subscriptions") is None
+    assert choice("own-keys") is None
+    assert choice("subscriptions", ["pi:tico-medium-1.0"])["model"] == "tico-medium-1.0", "the owner listed it"
+    choice("subscriptions")
+    with api.app.state.store.transaction() as c, pytest.raises(check_models.CheckModelError, match="Gateway"):
+        check_models.choose(c, api.app.state.store.settings, "ops", "pi:tico-medium-1.0", "review")
