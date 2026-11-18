@@ -76,6 +76,12 @@ shares one concurrency group, so two never start a build or a release at once. O
 waiting job per group, so a hotfix queued behind a running train job can still be replaced by a train job whose
 read-only check ran just before the hotfix was queued; a hotfix that shows as cancelled that way is simply run again.
 
+A validation the train dispatched fires no `workflow_run` (GitHub starts none for a run started by `GITHUB_TOKEN`), so
+Release validation's last job dispatches the train itself with `validation_run` set to its run id. The train's guard
+waits for that run to complete, and it counts as a finished run, not a manual one: `RELEASE_TRAINS` still applies. A
+step that ships a candidate also validates main's head when main has moved past the candidate, without waiting for
+another event. A quiet main has no pushes, and GitHub drops many backstop schedules.
+
 Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
 and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
 (`on` to go live), `RELEASE_HOLD` and `RELEASE_NEEDS_PERSON` (see [Approval](#approval)). The train tags with the
