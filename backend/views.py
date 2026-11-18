@@ -3563,7 +3563,8 @@ def install_views(app, store, auth, mutate, task_view):
         ),
     )
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
-        with store.read() as c:
+        # One snapshot: the page, its run and the per-message checks share read_cache's rows (a plain read keeps none).
+        with store.read_transaction() as c:
             room = auth.conversation(c, request.state.identity, cid)
             snap = conversation_snapshot(
                 c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth, room=room

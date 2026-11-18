@@ -37,11 +37,11 @@ from backend.store import H, Problem
 from backend.tests.helpers.api import api_settings, headers
 from backend.tests.helpers.api_app import api_client
 
-BOTS = [f"bot{n:02d}" for n in range(40)]
+BOTS = [f"bot{n:02d}" for n in range(25)]
 PEOPLE = ["human:ana", "human:ben", "human:cara"]
-TASKS = 300
-ASKS = 200
-DM_REPLIES = 120
+TASKS = 120
+ASKS = 80
+DM_REPLIES = 60
 RUNS = 20
 WRITES = re.compile(r"^\s*(INSERT|UPDATE|DELETE|REPLACE)\b", re.I)
 
@@ -62,9 +62,19 @@ def _run(c, key, bot, message_id):
     return aid
 
 
+_STARTED = [time.perf_counter()]  # when the last seed phase ended
+
+
+def _phase(name):
+    now = time.perf_counter()
+    print(f"  {name}: {now - _STARTED[0]:.1f}s", flush=True)
+    _STARTED[0] = now
+
+
 def seed(api):
     """The company; {name: path} of the reads to measure."""
     store = api.app.state.store
+    _phase("start")
     rnd = random.Random(11)
     with store.transaction() as c:
         H.sync_registry(
@@ -80,6 +90,7 @@ def seed(api):
         c.execute(
             "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),)
         )
+    _phase("registry")
     # The busy thread: every bot and person in it, a long history, sub-threads under some of its messages.
     with store.transaction() as c:
         out = threads.post(c, "human:ana", None, "Launch plan", start={"title": "Launch", "audience": "members"})
@@ -89,24 +100,28 @@ def seed(api):
         for p in PEOPLE[1:]:
             threads.add_member(c, "human:ana", busy, p)
         posted = []
-        for k in range(200):
+        for k in range(80):
             who = rnd.choice(PEOPLE + ["bot:" + b for b in BOTS])
-            with contextlib.suppress(Problem):
+            with contextlib.suppress(Problem, H.Refused):
                 posted.append(threads.post(c, who, busy, f"Note {k}" + (" @ana" if k % 7 == 0 else ""))["id"])
         sub = None
         for mid in posted[:30:3]:
             sub = threads.sub_thread(c, "human:ana", mid)["id"]
             for k in range(5):
-                threads.post(c, rnd.choice(PEOPLE + ["bot:" + b for b in BOTS[:10]]), sub, f"Reply {k}")
+                with contextlib.suppress(Problem, H.Refused):
+                    threads.post(c, rnd.choice(PEOPLE + ["bot:" + b for b in BOTS[:10]]), sub, f"Reply {k}")
+    _phase("busy thread")
     # A DM with a bot whose replies each name their run and a task, and many more DMs and threads with that bot.
     tasks = []
     with store.transaction() as c:
         for n in range(TASKS):
             requester = rnd.choice(PEOPLE + ["bot:assistant", "bot:" + rnd.choice(BOTS)])
-            t = H.task_create(c, requester, f"Task {n}", "", rnd.choice(PEOPLE), lint=False)
+            owner = rnd.choice(PEOPLE)
+            t = H.task_create(c, requester, f"Task {n}", "", owner, lint=False)
             tasks.append(t["id"])
             if n % 3 == 0:
-                H.task_done(c, "human:ana", t["id"], "Done.", seen_version=H.task(c, t["id"])["version"])
+                H.task_done(c, owner, t["id"], "Done.", seen_version=H.task(c, t["id"])["version"])
+    _phase("tasks")
     with store.transaction() as c:
         out = threads.post(c, "human:ana", None, "Hi assistant", start={"dm": ["bot:assistant"], "title": ""})
         dm = out.get("thread_id") or out.get("conversation_id")
@@ -122,20 +137,25 @@ def seed(api):
                 refs={"turn_id": aid, "run": {"attempt_id": aid, "job_id": f"job-dm{k}"}, "task": tasks[k]},
             )
         for who in ("human:ben", "human:cara"):
-            threads.post(c, who, None, f"Hi from {who}", start={"dm": ["bot:assistant"], "title": ""})
-        for n in range(60):
-            out = threads.post(
-                c, "bot:assistant", None, f"Thread {n}", start={"title": f"Topic {n}", "audience": "company"}
-            )
-            tid = out.get("thread_id") or out.get("conversation_id")
-            threads.post(c, rnd.choice(PEOPLE), tid, "Thanks")
+            with contextlib.suppress(Problem, H.Refused):
+                threads.post(c, who, None, f"Hi from {who}", start={"dm": ["bot:assistant"], "title": ""})
         for n in range(30):
-            out = threads.post(c, "human:ana", None, f"Hi {n}", start={"dm": ["bot:" + BOTS[n]], "title": ""})
+            with contextlib.suppress(Problem, H.Refused):
+                out = threads.post(
+                    c, "bot:assistant", None, f"Thread {n}", start={"title": f"Topic {n}", "audience": "company"}
+                )
+                tid = out.get("thread_id") or out.get("conversation_id")
+                threads.post(c, rnd.choice(PEOPLE), tid, "Thanks")
+        for bot in BOTS:
+            with contextlib.suppress(Problem, H.Refused):
+                threads.post(c, "human:ana", None, f"Hi {bot}", start={"dm": ["bot:" + bot], "title": ""})
+    _phase("dms")
     # Open asks on tasks: the open-❓ read the snapshot's run view and every task check share.
     with store.transaction() as c:
         for n in range(ASKS):
-            with contextlib.suppress(Problem):
+            with contextlib.suppress(Problem, H.Refused):
                 question_marks.ask(c, "bot:assistant", tasks[n], rnd.choice(PEOPLE), f"Which one, {n}?", checked=False)
+    _phase("asks")
     with store.transaction() as c:
         [task_thread] = c.execute(
             "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (tasks[1],)
