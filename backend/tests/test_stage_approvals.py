@@ -548,8 +548,8 @@ def test_the_names_migration_gives_proposal_results_and_checked_in_production_th
             ]
 
         assert named("Proposal") == [("Proposal", "Proposal")]
-        assert named("Running") == [("Results page", None)]  # bot-held pages stay plain pages
-        assert named("Validate") == [("Checked in production", None)]
+        assert named("Running") == [("Results", "Results")]
+        assert named("Validate") == [("Checked in production", "Checked in production")]
         assert named("QA") == [("QA report", "QA report")]  # a real QA report stays
         assert named("Review") == [("Results page", None)]  # a review of the newest commit is never a document
         rubric = c.execute(
