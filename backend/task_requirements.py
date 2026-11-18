@@ -387,9 +387,10 @@ def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, s
         "AND data IS NOT NULL ORDER BY created_at, id",
         (review["id"],),
     ).fetchall():
-        heads = (_json_object(data)).get("heads")
+        heads = _json_object(data).get("heads")
         if isinstance(heads, dict):
-            named.extend((str(ref), str(sha).lower()) for ref, sha in heads.items() if sha)
+            saved = cast("dict[str, object]", heads)
+            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
     for (body,) in conn.execute(
         "SELECT body FROM messages WHERE conversation_id=? AND kind='say' "
         "AND deleted_at IS NULL AND superseded_at IS NULL ORDER BY created_at, id",
