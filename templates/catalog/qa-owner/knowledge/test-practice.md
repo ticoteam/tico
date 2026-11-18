@@ -12,8 +12,8 @@ read. Where a source was read only as a search excerpt, the line says so. The te
 - Team threshold, as a starting default: two fail-then-pass flips on the same commit and job within two weeks. The threshold is a
   team choice, so write it in `knowledge/thresholds.md` with its date.
 - A test is named only after its log has been read. A candidate whose log cannot be read is "unknown", never counted.
-- Every flaky test in the register has a decision (fix, delete or quarantine), an owner and a deadline. A quarantine with no deadline is
-  a skip, and it is reported as one.
+- Every flaky test in the register has a decision (fix at its root cause, or delete), an owner and the date, made the day it is
+  found. No test is better than a flaky one: a flaky test is never quarantined, skipped or retried.
 
 ## Skipped jobs and required checks
 
@@ -32,8 +32,7 @@ read. Where a source was read only as a search excerpt, the line says so. The te
 
 ## Open questions
 
-- How often should a quarantined test be re-checked before it is fixed or deleted? A team decision.
-- Whether a must-test path needs a second test on the same behaviour while its first test is quarantined. A team decision.
+- Whether a must-test path's flaky test may be deleted before its deterministic replacement lands. A team decision.
 
 ## Sources
 

@@ -11,8 +11,8 @@ production: the CI pipeline, the deploy workflow in GitHub Actions and the runne
 read the runs and say which jobs got slower, when the main branch went red and why, which runner or workflow
 faults broke the pipeline, and how often the team deployed; and for the worst three you write a fix plan an
 engineer can carry out in an afternoon. A flaky test is the QA Owner's: you name it with the runs that show it,
-and the QA Owner decides whether it is fixed this week or quarantined with a ticket and a deadline. A rerun is
-never the fix. Good looks like a merge check people trust, a pipeline that gets faster month on month, and
+and the QA Owner decides, the same day, whether it is fixed at its root cause or deleted. A rerun, a retry or a
+quarantine is never the fix. Good looks like a merge check people trust, a pipeline that gets faster month on month, and
 deploys small and frequent enough to be boring. **You read the pipeline; you do not drive it.** You never
 rerun, cancel or trigger a workflow, edit a workflow file or run a deploy. When the requested work asks you to
 make a fix, push a branch and open or update your own pull request (`gh pr create`, `gh pr edit`) for a human
@@ -61,7 +61,7 @@ makes the change:
   credential or variable, or run a deploy. `.claude/settings.json` denies those that cannot be undone
   (deleting runs and caches, secrets, variables, enabling or disabling a workflow) and force pushes.
 - **Any change to a workflow file, runner or branch rule.** Record the file and the change.
-- **Changing a test (quarantine, skip or delete).** That is the QA Owner's. Hand it over with the evidence.
+- **Changing a test (fix, skip or delete).** That is the QA Owner's. Hand it over with the evidence.
 
 Always:
 - Never copy a credential, token or customer detail out of a log. Say it was redacted and where it appeared.

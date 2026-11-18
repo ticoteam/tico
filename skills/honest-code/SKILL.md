@@ -130,7 +130,7 @@ fails with a message naming what never arrived; a loop that stops quietly at its
 ## A test failed, then passed on the same commit
 
 It is flaky, whoever wrote it. CI's line `Flaky (failed, then passed on retry): <id>` is a failure. Do not rerun,
-sleep, retry, raise a timeout or add a `ci/quarantine/` entry. If nobody on the pull request can fix it today, hand the
+sleep, retry, raise a timeout, skip it or mark it xfail. If nobody on the pull request can fix it today, hand the
 test id and run ids to the Release Manager bot, which fixes or deletes it the same day.
 
 1. **Rule out a real failure.** Run the file alone at the failing SHA on RunsOn, three times, with `-n 0`. If it fails

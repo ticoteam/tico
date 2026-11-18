@@ -1235,7 +1235,7 @@
   "scripts/tests/test_check_migration_order.py": 0.24,
   "scripts/tests/test_check_ui_strict.py": 0.06,
   "scripts/tests/test_dependency_locks.py": 0.09,
-  "scripts/tests/test_flake_quarantine.py": 1.0,
+  "scripts/tests/test_flake_detect.py": 1.0,
   "scripts/tests/test_freeze_guard.py": 1.34,
   "scripts/tests/test_gate_edge_networks.py": 0.04,
   "scripts/tests/test_google_setup.py": 8.98,

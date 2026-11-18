@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from backend import test_receipts
-from scripts import flake_quarantine as quarantine
+from scripts import flake_detect
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2642,11 +2642,9 @@ def junit(*skips):
     return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
 
 
-def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
-    tmp_path, monkeypatch
-):
-    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
-    which JUnit writes as a skipped element too, and must not make the suite fail."""
+def test_a_suite_whose_only_tests_are_xfail_failures_passes_but_an_all_skipped_one_does_not(tmp_path, monkeypatch):
+    """pr_checks.run fails a Python suite that skipped every test. An xfail test that failed ran: JUnit writes it as a
+    skipped element too, and it must not make the suite fail."""
     plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
     (tmp_path / "fixture_tests").mkdir(parents=True)
     (tmp_path / "fixture_tests/test_x.py").touch()
@@ -2659,12 +2657,12 @@ def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_ski
 
     monkeypatch.setattr(checks.subprocess, "run", fake)
     report["xml"] = junit("pytest.xfail")
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 0
     report["xml"] = junit("pytest.skip", None)
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 0
     report["xml"] = junit("pytest.skip", "pytest.skip")
     with pytest.raises(RuntimeError, match="skip every test"):
-        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True)
 
 
 def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
@@ -2677,17 +2675,17 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
         checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
     )
     assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
-    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
-    assert "--quarantine" in calls[-1] and calls[-1][-1] == "fixture_tests/test_x.py"
+    assert len(calls) == 1  # the release gate's incremental VMs call run() without a retry
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 1
+    assert calls[-1][-1] == "fixture_tests/test_x.py"
     # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
-    assert quarantine.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
+    assert flake_detect.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
     workflows = ROOT / ".github/workflows"
     tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
-    assert "scripts/pr_checks.py run --quarantine" in step["run"]
+    assert "scripts/pr_checks.py run --retry" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "--quarantine" not in (workflows / name).read_text(), name
+        assert not re.search(r"pr_checks\.py run\b[^\n]*--retry", (workflows / name).read_text()), name
 
 
 @pytest.fixture
@@ -2702,7 +2700,7 @@ def python_retry_leg(tmp_path, monkeypatch):
         first,
         retry=None,
         *,
-        quarantine=True,
+        retrying=True,
         suite="python-1",
         first_status=1,
         retry_status=0,
@@ -2738,7 +2736,7 @@ def python_retry_leg(tmp_path, monkeypatch):
             return SimpleNamespace(returncode=status)
 
         monkeypatch.setattr(checks.subprocess, "run", fake)
-        return checks.run(target, suite, root=tmp_path, quarantine=quarantine), calls
+        return checks.run(target, suite, root=tmp_path, retry=retrying), calls
 
     return run
 
@@ -2776,7 +2774,7 @@ def test_a_python_retry_passes_only_the_failed_ids_and_preserves_the_first_repor
     assert "--cov=backend" in initial and env["COVERAGE_FILE"] == str(results / "coverage-python-1.data")
     assert extracted == [(results / "coverage-python-1.data", results / "coverage-python-1.json")]
     assert "-n" in again and again[again.index("-n") + 1] == "0"
-    assert "--quarantine" in again and set(checks.PYTEST_FLAGS) <= set(again)
+    assert set(checks.PYTEST_FLAGS) <= set(again)
     assert not any(arg.startswith("--cov") for arg in again) and retry_env is None
     assert again[-2:] == ["backend/tests/test_x.py::test_a[case one]", "backend/tests/test_x.py::test_b"]
     assert (results / "python-1.xml").read_text() == first
@@ -2836,7 +2834,6 @@ def test_a_python_leg_passes_when_the_base_matches_and_records_a_flaky_retry_pas
         "-o",
         "junit_family=xunit1",
         f"--junitxml={(results / 'python-1-base.xml').resolve()}",
-        "--quarantine",
         test_id,
     ]
     assert (results / "python-1-base.xml").read_text() == base
@@ -2901,7 +2898,7 @@ def test_a_python_retry_that_skips_a_failed_test_leaves_the_leg_red(python_retry
 
 
 def test_a_python_leg_with_more_than_five_failures_does_not_retry(python_retry_leg):
-    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(quarantine.MAX_FAILURES_PER_JOB + 1)])
+    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(flake_detect.MAX_FAILURES_PER_JOB + 1)])
     status, calls = python_retry_leg(first)
     assert status == 1 and len(calls) == 1
 
@@ -2910,9 +2907,8 @@ def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retr
     monkeypatch.setenv("BASE_SHA", "b" * 40)
     first = retry_junit(("test_a", '<failure message="assert False"/>'))
     for suite, enabled in (("python-1", False), ("contracts-1", True), ("conformance", True)):
-        status, calls = python_retry_leg(first, suite=suite, quarantine=enabled)
+        status, calls = python_retry_leg(first, suite=suite, retrying=enabled)
         assert status == 1 and len(calls) == 1
-        assert ("--quarantine" in calls[0][0]) == enabled
 
 
 @pytest.mark.parametrize(
@@ -2939,7 +2935,7 @@ def test_browser_retry_streams_the_log_and_runs_only_the_failed_scripts(tmp_path
 
     monkeypatch.setattr(checks.subprocess, "Popen", popen)
     monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "b" * 40 + "\n")
-    assert checks.run(target, "browser-1", root=tmp_path, quarantine=True) == retry_status
+    assert checks.run(target, "browser-1", root=tmp_path, retry=True) == retry_status
     (initial, env), (again, retry_env) = calls
     assert again == [*initial[:4], "broken.cts", "also-broken.cjs"]
     results = tmp_path / "ci-results"
@@ -3505,9 +3501,9 @@ def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
 
 
 def test_cli_does_not_accept_abbreviated_options(monkeypatch, capsys):
-    # `run --quar` once could silently turn quarantine on in a release workflow.
-    monkeypatch.setattr(sys, "argv", ["pr_checks.py", "run", "unit", "--quar"])
+    # `run --ret` could silently turn the retry on in a release workflow.
+    monkeypatch.setattr(sys, "argv", ["pr_checks.py", "run", "unit", "--ret"])
     with pytest.raises(SystemExit) as stop:
         checks.main()
     assert stop.value.code == 2
-    assert "unrecognized arguments: --quar" in capsys.readouterr().err
+    assert "unrecognized arguments: --ret" in capsys.readouterr().err
