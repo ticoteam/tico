@@ -59,7 +59,7 @@ def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_
     meet, live_media, fake_rtc, monkeypatch
 ):
     cid = thread(meet)
-    call = start_call(meet, cid)
+    call = start_call(meet, cid, speak_replies=False)  # the router's windows decide who answers, as in a Google Meet
     call_id, meeting_id = call["id"], call["meeting_id"]
     room, recorder = "tico-call-" + call_id, call_media.RECORDER_PREFIX + call_id
     assert fake_rtc.rooms[room] == {recorder}

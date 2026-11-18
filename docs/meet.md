@@ -68,7 +68,7 @@ who is in it every 10 s and ends it. It needs no running Tico.
 Status on this branch: the call API, the CLI, the MCP tools, the OpenAPI operations, the server's own recorder, the
 bots' voice and the browser signal path are built. Most tests run against fakes for LiveKit and the Gateway. The live
 tests (`backend/tests/test_call_live.py`) run against a real `livekit-server` in dev mode when `TICO_LIVE_LIVEKIT` names
-one; CI does not start one yet. In the first, a synthetic speaker publishes audio through the LiveKit SDK, the recorder
+one; CI does not start one (no CI job runs a `livekit-server`). In the first, a synthetic speaker publishes audio through the LiveKit SDK, the recorder
 hears it, the Gateway's speech-to-text is the only fake, and the transcript posts into the thread and the LiveKit
 session is closed. In the second, the call's Tico voice speaks into the room and a person subscribed to it hears it.
 No install has run calls yet.
@@ -84,19 +84,23 @@ No install has run calls yet.
 2. **Join.** People who can read the thread join and get a token good for 5 minutes. It grants microphone and screen
    share, never a camera and no data messages. A join sent again with the same idempotency key gets its token back only
    while the person can still read the thread. A joined client refreshes its token with
-   `POST /api/v2/calls/{call_id}/token` before it expires.
-3. **Transcript.** The recorder subscribes to each microphone and screen-share audio track (never Tico voice's). Each
-   speaker's audio is cut where they pause: a clip ends after 700 ms of quiet, keeps 200 ms before the first loud
-   frame and after the last, and is cut at 60 seconds when nobody pauses. A click shorter than 200 ms is not speech.
-   Each clip takes its place in the call's order when it is cut, and goes to the Gateway's speech-to-text
-   (`tico-transcribe-1.1`; when the Gateway answers 400 that it does not know that model, the call falls back once to
-   `elevenlabs/scribe-v2` and logs it). Clips are transcribed on workers, so the recorder never waits on the Gateway,
-   and each is stored only after every clip cut before it, so the transcript is in the order it was heard. The text
-   becomes the call's live meeting chunks. Audio is held in memory until it is sent and is never stored. If the
-   Gateway does not answer, that clip is lost and the call goes on; in a 1:1 call with a bot the call shows
-   `Please repeat that`, and no bot is asked.
+   `POST /api/v2/calls/{call_id}/token` before it expires. Once End is pressed (`ending`) joins and token refreshes are
+   refused (`409 call_ended`), and the thread rail no longer shows the call as live.
+3. **Transcript.** The recorder subscribes to each person's microphone track (never Tico voice's, and not a shared
+   screen's sound). Each speaker's audio is cut where they pause: a clip ends after 700 ms of quiet, keeps 200 ms before
+   the first loud frame and after the last, and is cut at 60 seconds when nobody pauses. A click shorter than 200 ms is
+   not speech. A speaker whose audio stops coming (muted, left) has their clip cut 700 ms after their last frame, by a
+   timer on the recorder's own loop. Each clip goes to the Gateway's speech-to-text (`tico-transcribe-1.1`; when the
+   Gateway answers 400 that it does not know that model, the call falls back once to `elevenlabs/scribe-v2` and logs
+   it). Clips are transcribed on workers, so the recorder never waits on the Gateway, and are stored in the order they
+   start, across people: a clip waits for the clips that start before it and for an utterance someone else began before
+   it and is still saying. The text becomes the call's live meeting chunks. Audio is held in memory until its clip is
+   stored and is never stored itself. At most 4 clips of a call wait for their text at once: past that the oldest is
+   dropped. If the Gateway does not answer, that clip is lost and the call goes on; in a 1:1 call with a bot a lost or
+   dropped clip shows `Please repeat that`, and no bot is asked.
 4. **Bots.** A person who can write to the thread and has joined the call attaches bots (up to 10 in the call, counting
-   the ones already in it; more is `422 bot_limit`). A bot must be one
+   the ones already in it; more is `422 bot_limit`, through the call's route and the live meeting's alike). A bot must
+   be one
    that person can write to. Attached bots get turns on the call's speech and reply in the thread, as they do in a
    live meeting. A reply is a run of the bot's own runner job, so the bot needs a runner that takes private meeting
    turns (`private_lanes_v1`), and it is posted in the thread only through that run. A bot stays attached only while the
@@ -105,11 +109,12 @@ No install has run calls yet.
 5. **Access.** When someone loses read access to the thread, the server removes them from the media session through
    LiveKit's server API and refuses their token refresh. Leaving removes a person the same way, at once. A removal that
    LiveKit does not confirm stays pending, and the background sweep retries it on each pass until it is confirmed.
-6. **End.** The connector ends the call. Listening and the bots' voice stop at once: no audio heard after End is used,
-   and what is playing stops. The open questions are closed. Speech already heard is still transcribed: when it is
-   done within 2 seconds End answers with the call `ended`; otherwise it answers `ending`, and the call becomes
-   `ended` once the clips are stored (up to 45 seconds). A Tico that restarts while a call is `ending` ends it on the
-   sweep. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
+6. **End.** The connector ends the call. The End is checked and stored first: a refused End (no idempotency key, not
+   the connector) leaves the call fully live. Then listening and the bots' voice stop at once: no audio heard after End
+   is used, and what is playing stops. The open questions are closed. Speech already heard is still transcribed by one
+   thread per call, however many Ends arrive: when it is done within 2 seconds End answers with the call `ended`;
+   otherwise it answers `ending` (a second End answers the same), and the call becomes `ended` once the clips are
+   stored (up to 45 seconds). A Tico that restarts while a call is `ending` ends it on the sweep. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
    close, the sweep retries it, and the transcript and action items wait until it does. Then two messages are posted to
    the thread from the connector, each once. Each names the call's meeting, so the meeting's own rules decide who reads
    it, and each is marked `restricted`:
@@ -146,24 +151,32 @@ Tico Meet.
 **Calling a bot.** The call button in a DM with one bot, and Call on a bot's card in the org chart, start a Tico Meet
 call in the viewer's DM with that bot, with the bot in it, and join it.
 
-**Who answers.** In a 1:1 call with a bot (a DM with one bot, and that bot the only one in the call) the bot answers
-every utterance. In any other voice call only a bot whose name was said answers; the router's other windows do not run
-in a voice call. A call has one open question: a bot asked while another answers waits its turn (the latest question
-for it), and a question that waited 30 seconds is dropped with a note (`<bot> missed a question`).
+**Who answers.** In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that
+bot) the bot answers every utterance. In any other voice call, a group DM with two people and a bot among them, only a
+bot whose name was said answers; the router's other windows and its decisions on chat do not run in a voice call. A
+call has one open question: a bot asked while another answers waits its turn (the latest question for it), and a
+question is dropped with a note (`<bot> missed a question`) 30 seconds after it was heard. Lines sent to the meeting's
+own transcript and chat routes ask through the same queue, so they never open a second question. A question heard 30
+seconds or more before it was transcribed (a slow Gateway) is not asked; a 1:1 call shows `Please repeat that`.
 
 **The answer.** The bot answers on its own model (a voice call's meeting model is the bot's own), with an instruction to
 speak: at most about 80 words, no markdown, lists, links, code or emoji. The no-actions rule of a live meeting holds. A
-bot that has not answered in 30 seconds is cut off (`skip_reason: voice_deadline`, note `<bot> couldn't answer in
-time`), and its late answer is neither posted nor heard.
+turn is dead 30 seconds after its question was heard: a bot that has not answered by then is cut off (`skip_reason:
+voice_deadline`, note `<bot> couldn't answer in time`), and its late answer is neither posted nor heard. A reply stored
+after that time, or whose first sentence would start playing after it, is posted as text and not heard.
 
 **Speaking it.** The reply is posted in the thread as text first; the voice is made after the reply's transaction
 commits, never inside it. It goes to the Gateway's text-to-speech (`POST /audio/speech`, model `tico-voice-1.0`, raw
 16-bit PCM; the voice is picked from `GET /audio` by the bot's slug, so a bot keeps its voice) one sentence at a time,
-the next made while one plays, and plays on Tico voice's track. Markdown is taken out and the spoken part is cut to
-about 600 characters. Before each sentence plays, the call must still be live and not ending, and the bot still
-attached by someone who may still use it. A reply is spoken once. Bots speak at most 30 minutes in a call. A voice the
-Gateway does not make leaves the text as it is (the server logs `call_voice_speech_failed` with the Gateway's status).
-Detach, lost access and End stop a bot's voice at once.
+the next made while one plays, and plays on Tico voice's track. The Gateway's voices are read when the call starts and
+kept for an hour, so no reply waits on them. Markdown is taken out and the spoken part is cut to about 600 characters.
+Only a reply to the open question's own turn is spoken. Before any speech is made, and before each sentence plays, the
+call must still be live and not ending, and the bot still attached by someone who may still use it. A reply is spoken
+once. Bots speak at most 30 minutes in a call: a sentence is made only when its length (estimated from its characters)
+fits in what is left. A voice the Gateway does not make leaves the text as it is (the server logs
+`call_voice_speech_failed` with the Gateway's status). Detach (through the call's route or the live meeting's), lost
+access and End stop a bot's voice at once, even a sentence cleared to play a moment before; taking out a bot that is
+only waiting leaves the bot speaking alone.
 
 **What the call shows.** A call's view has `voice`: each attached bot's `state` (`listening`, `waiting`, `thinking`,
 `making_voice` or `speaking`) and `caption` (the sentence being spoken), and `note`, the latest short note for 10

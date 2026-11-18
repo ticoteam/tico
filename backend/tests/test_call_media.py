@@ -10,7 +10,15 @@ import wave
 import pytest
 
 from backend import call_media as media
-from backend.tests.helpers.call_media import CONFIG, KIND_VIDEO, SOURCE_CAMERA, decode, fake_rtc, wait_until
+from backend.tests.helpers.call_media import (
+    CONFIG,
+    KIND_VIDEO,
+    SOURCE_CAMERA,
+    SOURCE_SCREENSHARE_AUDIO,
+    decode,
+    fake_rtc,
+    wait_until,
+)
 
 
 def test_config_needs_all_four_values_and_drops_a_trailing_slash():
@@ -263,6 +271,42 @@ def test_tico_voice_plays_speech_on_its_track_and_a_hush_stops_it(fake_rtc):
     finally:
         live.stop_recorder("call5")
     assert live.say("call5", b"\x10\x00" * 2400, 24000) == 0
+
+
+def test_speech_cleared_before_a_hush_never_plays(fake_rtc):
+    live = media.LiveKitMedia(CONFIG)
+    live.start_recorder("call6", "tico-call-call6", lambda *args: None)
+    try:
+        recorder = live.recorders["call6"]
+        mark = live.mark("call6")  # read when the speech was cleared to play
+        live.hush("call6")  # End, or a detach, lands before it starts
+        assert live.say("call6", b"\x10\x00" * 2400, 24000, None, mark) == 0 and recorder.source.frames == []
+        assert live.say("call6", b"\x10\x00" * 2400, 24000, None, live.mark("call6")) == 100
+        assert live.mark("not-held") is None
+    finally:
+        live.stop_recorder("call6")
+
+
+def test_a_speaker_who_goes_quiet_is_told_on_the_media_loop_and_shared_screen_sound_is_not_heard(fake_rtc, monkeypatch):
+    monkeypatch.setattr(media, "QUIET_SECONDS", 0.05, raising=False)
+    live = media.LiveKitMedia(CONFIG)
+    heard, quiet = [], []
+    live.start_recorder(
+        "call7",
+        "tico-call-call7",
+        lambda identity, pcm, start_ms: heard.append(identity),
+        lambda identity: quiet.append(identity),
+    )
+    try:
+        recorder = media.RECORDER_PREFIX + "call7"
+        frame = b"\x01\x00" * 800
+        fake_rtc.hear(live.loop, recorder, "human:ben", [frame], source=SOURCE_SCREENSHARE_AUDIO)
+        track = fake_rtc.hear(live.loop, recorder, "human:ana", [frame, frame], held=True)  # then muted, still open
+        wait_until(lambda: quiet == ["human:ana"])
+        assert heard == ["human:ana", "human:ana"]
+        track.release.set()
+    finally:
+        live.stop_recorder("call7")
 
 
 def test_the_room_list_leaves_tico_voice_out_and_a_gone_room_is_empty(monkeypatch):

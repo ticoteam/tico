@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import sys
+import threading
 import time
 import types
 from types import SimpleNamespace
@@ -56,15 +57,18 @@ class FakeLiveKit:
     def __init__(self):
         self.rooms, self.joins, self.refuse = {}, [], False
 
-    def hear(self, loop, recorder, speaker, frames, *, kind=KIND_AUDIO, source=SOURCE_MICROPHONE):
-        """Publish a track from `speaker` that the recorder `recorder` subscribes to, on the media loop."""
+    def hear(self, loop, recorder, speaker, frames, *, kind=KIND_AUDIO, source=SOURCE_MICROPHONE, held=False):
+        """Publish a track from `speaker` that the recorder `recorder` subscribes to, on the media loop. A `held` track
+        stays open after its frames (a muted microphone) until the test sets its `release` event. Returns the track."""
         room = [joined for joined in self.joins if joined.identity == recorder][-1]
         track = SimpleNamespace(
             kind=kind,
             frames=[SimpleNamespace(data=memoryview(frame), samples_per_channel=len(frame) // 2) for frame in frames],
+            release=threading.Event() if held else None,
         )
         publication, participant = SimpleNamespace(source=source), SimpleNamespace(identity=speaker)
         asyncio.run_coroutine_threadsafe(room.emit("track_subscribed", track, publication, participant), loop).result(5)
+        return track
 
 
 class FakeLocalParticipant:
@@ -122,12 +126,16 @@ class FakeRoom:
 
 class FakeAudioStream:
     def __init__(self, track, sample_rate=0, num_channels=0):
-        self.frames = list(track.frames)
+        self.track, self.frames = track, list(track.frames)
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        release = getattr(self.track, "release", None)
+        if not self.frames and release is not None:
+            await asyncio.to_thread(release.wait, 10)
+            self.track.release = None
         if not self.frames:
             raise StopAsyncIteration
         return SimpleNamespace(frame=self.frames.pop(0))

@@ -50,6 +50,7 @@ SPEECH_MODEL = "tico-voice-1.0"
 SPEECH_TIMEOUT = 15  # one sentence's speech from the Gateway
 SPEECH_CHARS = 4000  # the Gateway's limit for one request
 VOICES_TTL_SECONDS = 3600  # the Gateway's voice list, kept this long
+QUIET_SECONDS = 0.7  # a speaker whose audio stopped coming this long (muted, left) has what they said sent
 
 
 class MediaUnavailable(Exception):
@@ -192,11 +193,15 @@ def _ws_url(url):
 
 class Recorder:
     """The server's audio participant in one call's room. Its frames arrive on the media loop, so `on_audio` must not
-    block: backend/calls.py hands each clip to a worker. It also speaks: `play` sends 48 kHz mono speech on its
-    microphone track, and `hush` stops whatever is playing at once."""
+    block: backend/calls.py hands each clip to a worker. `on_quiet(identity)`, when given, is called on the media loop
+    once a speaker's audio has stopped coming for QUIET_SECONDS (muted, left), so what they said is sent without waiting
+    for the sweep. It also speaks: `play` sends 48 kHz mono speech on its microphone track, and `hush` stops whatever is
+    playing at once."""
 
-    def __init__(self, sdk, loop, url, token, on_audio):
+    def __init__(self, sdk, loop, url, token, on_audio, on_quiet=None):
         self.sdk, self.loop, self.url, self.token, self.on_audio = sdk, loop, url, token, on_audio
+        self.on_quiet = on_quiet
+        self.quiet = {}  # identity -> the media loop's timer that says the speaker went quiet
         self.room = None
         self.source = None  # the voice track's audio source, once published
         self.hushed = 0  # bumped by hush: a playback that started before it stops
@@ -227,10 +232,10 @@ class Recorder:
         self.source = source
 
     def _subscribed(self, track, publication, participant):
-        speech = (self.sdk.TrackSource.SOURCE_MICROPHONE, self.sdk.TrackSource.SOURCE_SCREENSHARE_AUDIO)
         if is_voice(participant.identity):
             return  # never transcribe a Tico voice, this one's or another server's
-        if track.kind == self.sdk.TrackKind.KIND_AUDIO and publication.source in speech:
+        # Only a microphone is speech: a shared screen's sound (a video, a recording) is not someone asking.
+        if track.kind == self.sdk.TrackKind.KIND_AUDIO and publication.source == self.sdk.TrackSource.SOURCE_MICROPHONE:
             self.loop.create_task(self._listen(track, participant.identity))
 
     async def _listen(self, track, identity):
@@ -244,21 +249,45 @@ class Recorder:
                     base = int((time.monotonic() - self.joined_at) * 1000)
                 self.on_audio(identity, bytes(event.frame.data), base + heard * 1000 // SAMPLE_RATE)
                 heard += event.frame.samples_per_channel
+                self._arm(identity)
         except Exception:  # noqa: BLE001 - one speaker's stream failing must not end the recording
             log.warning("The call recorder stopped hearing one speaker", exc_info=True)
         finally:
+            self._went_quiet(identity)  # their track ended (they left): what they said is sent now
             await stream.aclose()
+
+    def _arm(self, identity):
+        """Start (again) the timer that says a speaker went quiet: each frame they send pushes it back."""
+        if self.on_quiet is None:
+            return
+        handle = self.quiet.pop(identity, None)
+        if handle is not None:
+            handle.cancel()
+        self.quiet[identity] = self.loop.call_later(QUIET_SECONDS, self._went_quiet, identity)
+
+    def _went_quiet(self, identity):
+        handle = self.quiet.pop(identity, None)
+        if handle is not None:
+            handle.cancel()
+        if self.on_quiet is None or self.closed:
+            return
+        try:
+            self.on_quiet(identity)
+        except Exception:  # noqa: BLE001 - the sweep sends it later; the media loop must keep running
+            log.warning("A quiet speaker's speech was not sent at once", exc_info=True)
 
     def _disconnected(self, *_reason):
         self.lost = True  # LiveKit dropped the recorder: the sweep sees it is not running and joins again
 
-    def play(self, pcm, started=None, timeout=120):
+    def play(self, pcm, started=None, timeout=120, mark=None):
         """Send 48 kHz mono speech on the voice track and wait until it has played out; `started()` is called with the
-        first frame sent. Returns the milliseconds sent: less than the whole when `hush` stopped it. Blocks the caller,
-        never the media loop."""
+        first frame sent. Returns the milliseconds sent: less than the whole when `hush` stopped it. `mark` is the hush
+        count the caller read when it decided the speech may play (LiveKitMedia.mark): a hush since then, however soon,
+        means none of it plays. Blocks the caller, never the media loop."""
         if self.source is None or not self.alive():
             return 0
-        future = asyncio.run_coroutine_threadsafe(self._play(pcm, self.hushed, started), self.loop)
+        generation = self.hushed if mark is None else mark
+        future = asyncio.run_coroutine_threadsafe(self._play(pcm, generation, started), self.loop)
         try:
             return future.result(timeout)
         except Exception:  # noqa: BLE001 - a playback that failed or overran is cut; the text is in the thread
@@ -348,11 +377,11 @@ class LiveKitMedia:
     def person_token(self, room, identity, name):
         return person_token(self.config, room, identity, name)
 
-    def start_recorder(self, call_id, room, on_audio):
+    def start_recorder(self, call_id, room, on_audio, on_quiet=None):
         """Join the room as Tico voice and hand each speaker's audio to `on_audio(identity, pcm, start_ms)`:
-        `pcm` is 16 kHz mono signed 16-bit little-endian, and `start_ms` counts from when the recorder joined. Returns
-        once the recorder is in the room. Refuses with MediaUnavailable when it cannot join, or the package is
-        missing."""
+        `pcm` is 16 kHz mono signed 16-bit little-endian, and `start_ms` counts from when the recorder joined.
+        `on_quiet(identity)` is told when a speaker's audio stops coming (Recorder). Returns once the recorder is in the
+        room. Refuses with MediaUnavailable when it cannot join, or the package is missing."""
         sdk = _sdk()
         with self.starting:
             with self.lock:
@@ -364,7 +393,7 @@ class LiveKitMedia:
                     threading.Thread(target=self.loop.run_forever, name="tico-meet-media", daemon=True).start()
                 loop = self.loop
             token = recorder_token(self.config, room, RECORDER_PREFIX + call_id)
-            recorder = Recorder(sdk, loop, _ws_url(self.config.internal_url), token, on_audio)
+            recorder = Recorder(sdk, loop, _ws_url(self.config.internal_url), token, on_audio, on_quiet)
             try:
                 recorder.connect()
             except Exception as exc:
@@ -393,13 +422,22 @@ class LiveKitMedia:
         found = [str(item.get("identity") or "") for item in answer.get("participants") or []]
         return [identity for identity in found if identity and not is_voice(identity)]
 
-    def say(self, call_id, pcm, rate, started=None):
+    def mark(self, call_id):
+        """Where the call's hushes stand now, to hand to `say`: read it before deciding speech may play, and a hush
+        after that (End, a detach) keeps the speech from playing. None when this process does not hold the call."""
+        recorder = self.recorders.get(call_id)
+        return None if recorder is None else (recorder, recorder.hushed)
+
+    def say(self, call_id, pcm, rate, started=None, mark=None):
         """Play speech (16-bit mono at `rate`) on this process's voice track in the call's room, and wait until it has
-        played. Returns the milliseconds played; 0 when this process does not hold the call's recorder."""
+        played. Returns the milliseconds played; 0 when this process does not hold the call's recorder, or when the
+        call was hushed since `mark` was read (or by another recorder than the one it was read from)."""
         recorder = self.recorders.get(call_id)
         if recorder is None or not recorder.alive():
             return 0
-        return recorder.play(resample(pcm, rate, VOICE_RATE), started)
+        if mark is not None and mark[0] is not recorder:
+            return 0
+        return recorder.play(resample(pcm, rate, VOICE_RATE), started, mark=None if mark is None else mark[1])
 
     def hush(self, call_id):
         recorder = self.recorders.get(call_id)
@@ -510,15 +548,21 @@ _VOICES = {}  # Gateway base -> (when read, the voice names)
 _VOICES_LOCK = threading.Lock()
 
 
+def cached_voices(base):
+    """The Gateway's voices as last read (`voices`), without asking it: None when they are not kept, or too old."""
+    with _VOICES_LOCK:
+        kept = _VOICES.get(base)
+    return kept[1] if kept and time.monotonic() - kept[0] < VOICES_TTL_SECONDS else None
+
+
 def voices(base, key):
     """The Gateway's voices (`GET /audio`, `speech.voices`), kept VOICES_TTL_SECONDS. [] when it lists none or does
     not answer: speech then uses the Gateway's own default."""
     from clients import gateway as G
 
-    with _VOICES_LOCK:
-        kept = _VOICES.get(base)
-        if kept and time.monotonic() - kept[0] < VOICES_TTL_SECONDS:
-            return kept[1]
+    kept = cached_voices(base)
+    if kept is not None:
+        return kept
     status, answer = G.relay("GET", base + "/audio", None, {"Authorization": "Bearer " + key}, TWIRP_TIMEOUT)
     names = []
     if status == 200:

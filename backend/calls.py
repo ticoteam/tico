@@ -26,6 +26,7 @@ The thread checks and posts are core's (backend/threads.py, docs/dev/threads-con
 are teammate_access's, as they are everywhere else.
 """
 
+import bisect
 import json
 import logging
 import re
@@ -61,16 +62,17 @@ from .api_contract import api_v2
 log = logging.getLogger("tico.calls")
 
 ROOM_PREFIX = "tico-call-"
-IDLE_SECONDS = call_voice.SILENCE_MS / 1000  # a person who stopped sending audio this long has what they said sent
+IDLE_SECONDS = call_media.QUIET_SECONDS  # a person who stopped sending audio this long has what they said sent
 TRANSCRIPT_BYTES = 12_000
 LIST_LIMIT = 50
 PARTICIPANT_LIMIT = 200
 PCM_BYTES_PER_SECOND = call_media.SAMPLE_RATE * 2
 WORKERS = 4  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
+BACKLOG = 4  # a call's clips waiting for their text at most: past it the oldest is dropped, and a repeat asked for
 DRAIN_SECONDS = call_media.TRANSCRIBE_TIMEOUT + 15  # the longest a call's end waits for its last clips
 END_WAIT_SECONDS = 2  # End answers with the call ended when its last clips are in by then, else with it ending
-BOT_LIMIT = 10  # bots in one call
-REPEAT_NOTE = "Please repeat that"
+BOT_LIMIT = live_meetings.CALL_BOT_LIMIT  # bots in one call
+REPEAT_NOTE = call_voice.REPEAT_NOTE
 CALL_LIST_BYTES = 262_144  # as the audit list: a page stays under 256 KB (backend/audit_log.py)
 START_GRACE_SECONDS = 120  # a call whose room never appeared this long after it started has failed to start
 
@@ -186,8 +188,29 @@ def project_reply(c, rid, reply, who):
         # Never spoken inside this transaction: once the reply has committed, it is handed to the call's voice, which
         # makes the speech and plays it outside any transaction.
         live_meetings._event(c, rid, "meeting.voice", {"reply_id": reply["id"], "bot": bot, "state": "requested"})
-        call_id, reply_id, text = row["id"], reply["id"], reply["text"]
-        c.after_commit.append(lambda: machine.voice.reply(call_id, bot, reply_id, text))
+        call_id, reply_id, text, turn_id = row["id"], reply["id"], reply["text"], reply["turn_id"]
+        c.after_commit.append(lambda: machine.voice.reply(call_id, bot, reply_id, text, turn_id))
+
+
+def route_question(c, rid, question):
+    """A voice call's transcript lines and chat messages ask its bots through its voice, one open question at a time
+    (live_meetings.QUESTION_ROUTERS). Returns whether the meeting is a voice call's."""
+    row = voice_call(c, rid)
+    machine = CALLS
+    if row is None or machine is None:
+        return False
+    heard = question["heard"] if question.get("heard") is not None else machine.voice.clock()
+    machine.voice.route(c, row, {**question, "heard": heard})
+    return True
+
+
+def bot_left(c, rid, bot):
+    """A bot taken out of a call's meeting by any route stops speaking in it once that commits."""
+    row = c.execute("SELECT id FROM calls WHERE live_meeting_id=?", (rid,)).fetchone()
+    machine = CALLS
+    if row is not None and machine is not None:
+        call_id = row["id"]
+        c.after_commit.append(lambda: machine.voice.cancel(call_id, bot))
 
 
 class Empty(Contract):
@@ -201,6 +224,15 @@ class StartCall(Contract):
     speak_replies: bool | None = None
     provider: Literal["auto", "google_meet", "tico"] = "auto"
     bots: list[str] = Field(default_factory=list, max_length=BOT_LIMIT)  # bots in the call from its start
+
+
+def _start_hashed_before_voice(body):
+    """A start as servers before voice calls stored its idempotency hash (speak_replies false by default, no bots), so
+    a retry of a start sent to one of them is answered from its first answer rather than refused as different. None for
+    a start those servers could not have been sent."""
+    if body.bots:
+        return None
+    return {"title": body.title, "speak_replies": bool(body.speak_replies), "provider": body.provider}
 
 
 class CallBots(Contract):
@@ -282,6 +314,14 @@ def _google(row):
     return row["provider"] == "google_meet"
 
 
+def _require_open(row):
+    """Refuse a call that has ended, or whose End was pressed (nothing more is heard in it): nobody joins it then."""
+    if row["state"] != "live":
+        raise Problem("call_ended", "This call has ended", 409)
+    if row["ending_at"]:
+        raise Problem("call_ended", "This call is ending", 409)
+
+
 def _state(row):
     """A call's state as readers see it: `ending` from End until its last speech is in (Tico Meet), then `ended`."""
     return "ending" if row["state"] == "live" and row["ending_at"] else row["state"]
@@ -306,10 +346,10 @@ class Calls:
     def __init__(self, app, store, auth):
         self.app, self.store, self.auth = app, store, auth
         self.buffers = {}  # (call_id, identity) -> call_voice.Segmenter: one speaker's speech, cut at their pauses
-        self.lock = threading.Lock()
-        self.pending = {}  # call_id -> the clips it is still transcribing
-        # call_id -> {"next": the next clip's place, "due": the next place to store, "done": {place: transcribed clip}}:
-        # a clip takes its place when it is cut, so the transcript keeps the order speech was heard in.
+        self.lock = threading.RLock()
+        self.pending = {}  # call_id -> the work still out for it (clips being transcribed), dropped as each is done
+        # call_id -> {"n": clips cut so far, "queue": the clips not yet stored, by where they start}: the transcript keeps
+        # the order speech was said in, across people, whichever clip is transcribed first.
         self.order = {}
         self.settling = {}  # call_id -> the lock held while its clips are stored
         self.closing = set()  # calls whose End stopped their listening; their speech already heard is still stored
@@ -689,15 +729,14 @@ class Calls:
                 self.starting.pop((actor, key), None)
 
     def check_join(self, c, who, call_id):
-        """Whether `who` may join this call now: the thread still lets them read it, and the call is live. It runs before a
-        cached retry is answered, and again before a token is minted."""
+        """Whether `who` may join this call now: the thread still lets them read it, and the call is live and not ending. It
+        runs before a cached retry is answered, and again before a token is minted."""
         human_only(who)
         self.auth.domain(who)
         row = _call(c, call_id)
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
-        if row["state"] != "live":
-            raise Problem("call_ended", "This call has ended", 409)
+        _require_open(row)
         return row
 
     def join(self, c, who, call_id):
@@ -706,8 +745,7 @@ class Calls:
         row = _call(c, call_id)
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
-        if row["state"] != "live":
-            raise Problem("call_ended", "This call has ended", 409)
+        _require_open(row)
         stamp = H.now()
         if _google(row):
             # Opening the Meet from Tico. The row's joined_at stays the first open (or the first time Google saw them).
@@ -829,10 +867,7 @@ class Calls:
     def _attach(self, c, who, row, meeting, slugs):
         """Attach bots `who` may write to, BOT_LIMIT in the call at most: the limit counts the bots already in it."""
         call_id = row["id"]
-        present = {r[0] for r in c.execute("SELECT bot FROM live_meeting_bots WHERE meeting_id=?", (meeting["id"],))}
-        added = set(slugs) - present
-        if len(present) + len(added) > BOT_LIMIT:
-            raise Problem("bot_limit", f"A call has at most {BOT_LIMIT} bots", 422, extra={"limit": BOT_LIMIT})
+        live_meetings.check_call_bot_limit(c, meeting["id"], slugs)
         for slug in slugs:
             live_meetings._active_bot(c, slug)
             access = teammate_access.levels_for(c, who, f"bot:{slug}", self.auth)
@@ -886,8 +921,10 @@ class Calls:
             row = _call(c, call_id)
         if _google(row):
             return  # Google runs a Meet's media; nothing of LiveKit's starts
+        if row["speak_replies"]:
+            self.voice.warm()  # the Gateway's voices are read while the call rings, not when a bot first speaks
         try:
-            self.media.start_recorder(call_id, row["room_name"], self._audio_for(call_id))
+            self.media.start_recorder(call_id, row["room_name"], self._audio_for(call_id), self._quiet_for(call_id))
         except call_media.MediaUnavailable:
             with self.store.transaction() as c:
                 self.finish(c, call_id, "meet_unavailable")
@@ -902,6 +939,12 @@ class Calls:
 
         return on_audio
 
+    def _quiet_for(self, call_id):
+        def on_quiet(identity):
+            self.flush(call_id, identity)  # their audio stopped coming: what they said goes now
+
+        return on_quiet
+
     def ingest(self, call_id, identity, pcm, start_ms):
         """One piece of one person's speech from the recorder. It waits in memory until the person pauses
         (call_voice.Segmenter); each utterance then goes to be transcribed. Nothing is heard once End was pressed."""
@@ -915,39 +958,73 @@ class Calls:
             if segmenter is None:
                 segmenter = self.buffers[key] = call_voice.Segmenter()
             segmenter.at = time.monotonic()
+            was = segmenter.speaking
             clips = segmenter.feed(pcm, start_ms)
             for start, clip in clips:
                 self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
+            if was and not segmenter.speaking and not clips:
+                self._kick(call_id)  # a cough, not speech: a clip it held back may be stored now
 
-    def flush(self, call_id=None, *, idle=False):
-        """Send the speech that is waiting: all of it for the call (or every call), or only a speaker's whose audio
-        stopped coming IDLE_SECONDS ago (muted, or left mid-sentence)."""
+    def flush(self, call_id=None, identity=None, *, idle=False):
+        """Send the speech that is waiting: all of it for the call (or every call, or one speaker of the call), or only a
+        speaker's whose audio stopped coming IDLE_SECONDS ago (muted, or left mid-sentence)."""
         now = time.monotonic()
         with self.lock:
             for key, segmenter in list(self.buffers.items()):
-                if call_id is not None and key[0] != call_id:
+                if call_id is not None and key[0] != call_id or identity is not None and key[1] != identity:
                     continue
                 if idle and now - segmenter.at < IDLE_SECONDS:
                     continue
+                was = segmenter.speaking
                 clip = segmenter.flush()
                 if not segmenter.speaking:
                     self.buffers.pop(key, None)
                 if clip:
                     self._submit(key[0], key[1], {"pcm": clip[1], "start_ms": clip[0]})
+                elif was:
+                    self._kick(key[0])
 
     def _submit(self, call_id, identity, buffer):
-        """Transcribe a clip on a worker, so the recorder's audio never waits on the Gateway. The clip's place in the
-        transcript is taken now, when it is cut (self.lock held)."""
-        order = self.order.setdefault(call_id, {"next": 0, "due": 0, "done": {}})
-        place = order["next"]
-        order["next"] += 1
-        future = self.workers.submit(self._transcribe_clip, call_id, identity, buffer, place)
-        self.pending.setdefault(call_id, []).append(future)
+        """Transcribe a clip on a worker, so the recorder's audio never waits on the Gateway (self.lock held). The clip
+        takes its place in the call's queue by where it starts, and is stamped with when it was heard (the voice's
+        clock), so a question is aged from then. A call has BACKLOG clips waiting for their text at most: past that the
+        oldest is dropped, and in a 1:1 bot call the person is asked to repeat it."""
+        order = self.order.setdefault(call_id, {"n": 0, "queue": []})
+        buffer["heard"] = self.voice.clock()
+        clip = {"n": order["n"], "start": buffer["start_ms"], "identity": identity, "buffer": buffer}
+        clip.update(text=None, ready=False, dropped=False)
+        order["n"] += 1
+        bisect.insort(order["queue"], clip, key=lambda one: (one["start"], one["n"]))
+        out = sorted((one for one in order["queue"] if not one["ready"] and not one["dropped"]), key=lambda x: x["n"])
+        for oldest in out[: max(0, len(out) - BACKLOG)]:
+            oldest["dropped"] = True
+            oldest["buffer"]["pcm"] = b""
+        self._track(call_id, self.workers.submit(self._transcribe_clip, call_id, clip))
+
+    def _track(self, call_id, future):
+        """Keep a call's work until it is done (drain and settle wait on it), and no longer."""
+        self.pending.setdefault(call_id, set()).add(future)
+
+        def done(finished):
+            with self.lock:
+                out = self.pending.get(call_id)
+                if out is not None:
+                    out.discard(finished)
+                    if not out:
+                        self.pending.pop(call_id, None)
+
+        future.add_done_callback(done)
+
+    def _kick(self, call_id):
+        """Store what can be stored now that a speaker stopped (self.lock held): a clip may have been waiting for them."""
+        order = self.order.get(call_id)
+        if order and order["queue"] and order["queue"][0]["ready"]:
+            self._track(call_id, self.workers.submit(self._settle, call_id))
 
     def drain(self, call_id):
         """Wait (up to DRAIN_SECONDS) for the clips a call is still transcribing, so its transcript has them all."""
         with self.lock:
-            waiting = self.pending.pop(call_id, [])
+            waiting = list(self.pending.get(call_id, ()))
         wait(waiting, timeout=DRAIN_SECONDS)
 
     def finish_speech(self, call_id):
@@ -955,16 +1032,20 @@ class Calls:
         self.flush(call_id)
         self.drain(call_id)
 
-    def _transcribe_clip(self, call_id, identity, buffer, place):
+    def _transcribe_clip(self, call_id, clip):
         text = None
         try:
-            text = self._transcribe(call_id, buffer)
+            if not clip["dropped"]:
+                text = self._transcribe(call_id, clip["buffer"])
         except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
 
             report("calls_transcribe", call_id, exc, logger="tico.calls")
         finally:
-            self._settle(call_id, place, identity, buffer, text)
+            with self.lock:
+                clip["text"] = None if clip["dropped"] else text  # dropped while it was out: a repeat is asked for
+                clip["ready"] = True
+            self._settle(call_id)
 
     def _transcribe(self, call_id, buffer):
         """The clip's text: "" for none (the call ended, or nothing was said), None when it could not be transcribed."""
@@ -985,29 +1066,42 @@ class Calls:
             log.warning("call_clip_not_transcribed call=%s status=%s", call_id, getattr(exc, "status", 0))
             return None  # this clip is lost and the call goes on
 
-    def _settle(self, call_id, place, identity, buffer, text):
-        """Store transcribed clips in the order they were cut: a clip waits for the ones before it."""
+    def _held_back(self, call_id, clip):
+        """Whether someone else in the call is still saying something they began before this clip (self.lock held): the
+        clip waits for it, so the transcript is in the order things were said."""
+        return any(
+            key[0] == call_id and key[1] != clip["identity"] and segmenter.speaking and segmenter.start < clip["start"]
+            for key, segmenter in self.buffers.items()
+        )
+
+    def _settle(self, call_id):
+        """Store a call's transcribed clips in the order they start: a clip waits for the ones before it, and for an
+        utterance someone began before it and is still saying. Each clip's audio is let go once it is stored."""
         with self.lock:
-            order = self.order.setdefault(call_id, {"next": place + 1, "due": place, "done": {}})
-            order["done"][place] = (identity, buffer, text)
             gate = self.settling.setdefault(call_id, threading.Lock())
         with gate:
             while True:
                 with self.lock:
-                    item = order["done"].pop(order["due"], None)
-                    if item is None:
+                    order = self.order.get(call_id)
+                    if not order or not order["queue"]:
                         return
-                    order["due"] += 1
+                    clip = order["queue"][0]
+                    if not clip["ready"] or self._held_back(call_id, clip):
+                        return
+                    order["queue"].pop(0)
                 try:
-                    self._store_clip(call_id, *item)
+                    self._store_clip(call_id, clip["identity"], clip["buffer"], clip["text"])
                 except Exception as exc:  # noqa: BLE001 - one clip that cannot be stored must not hold up the rest
                     from .batch_work import report
 
                     report("calls_transcribe", call_id, exc, logger="tico.calls")
+                finally:
+                    clip["buffer"]["pcm"] = b""
 
     def _store_clip(self, call_id, identity, buffer, text):
-        """One transcribed clip in the call's transcript, and in a voice call the bots it asks (call_voice.Voice.route).
-        A clip that could not be transcribed asks for a repeat where every utterance is a question (a 1:1 bot call)."""
+        """One transcribed clip in the call's transcript, and in a voice call the bots it asks (call_voice.Voice.route,
+        through live_meetings.QUESTION_ROUTERS). A clip that could not be transcribed asks for a repeat where every
+        utterance is a question (a 1:1 bot call)."""
         if not text:
             if text is None:
                 with self.store.transaction() as c:
@@ -1018,7 +1112,6 @@ class Calls:
                             self.voice.touch(call_id, c)
             return
         duration_ms = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
-        voiced = False
         with self.store.transaction() as c:
             row = _call(c, call_id)
             meeting = live_meetings._meeting(c, row["live_meeting_id"])
@@ -1035,42 +1128,35 @@ class Calls:
                 "start_ms": start,
                 "end_ms": start + duration_ms,
                 "text": text,
+                "heard": buffer.get("heard"),
+                "spoken": True,
             }
-            live_meetings.append_chunks(c, meeting["id"], meeting, identity, [chunk], route=not voiced)
-            if voiced:
-                self.voice.route(c, row, chunk)
+            live_meetings.append_chunks(c, meeting["id"], meeting, identity, [chunk])
         if not voiced:
             self.app.state.live_meeting_routing.later(meeting["id"])
 
     def stop_listening(self, call_id):
-        """End was pressed: nothing more is heard, and the bots stop speaking now."""
+        """End was pressed (and stored): nothing more is heard, and the bots stop speaking now."""
         with self.lock:
             self.closing.add(call_id)
         self.voice.cancel(call_id)
 
-    def wind_down(self, call_id, by):
-        """After End: the speech already heard goes to be transcribed, and the call is ended once it is in. When that
-        takes more than END_WAIT_SECONDS the call stays `ending` and a thread of its own finishes it. Returns True when
-        the call is ended now."""
+    def wind_down(self, call_id, by, wait_seconds=None):
+        """After End: the speech already heard goes to be transcribed, and the call is ended once it is in, by one thread
+        of its own however many Ends (or sweeps) ask. Each waits for it END_WAIT_SECONDS (or `wait_seconds`), so two
+        Ends pressed together answer alike. Returns True when the call is ended now."""
         with self.lock:
-            if call_id in self.ending:
-                return False  # a second End: the first is finishing it
-        self.flush(call_id)
-        with self.lock:
-            waiting = list(self.pending.get(call_id, []))
-        _done, late = wait(waiting, timeout=END_WAIT_SECONDS)
-        if not late:
-            self._close(call_id, by)
-            return True
-        worker = threading.Thread(target=self._close, args=(call_id, by), name="tico-meet-end", daemon=True)
-        with self.lock:
-            self.ending[call_id] = worker
-        worker.start()
-        return False
+            worker = self.ending.get(call_id)
+            if worker is None:
+                worker = threading.Thread(target=self._close, args=(call_id, by), name="tico-meet-end", daemon=True)
+                self.ending[call_id] = worker
+                worker.start()
+        worker.join(END_WAIT_SECONDS if wait_seconds is None else wait_seconds)
+        return not worker.is_alive()
 
     def _close(self, call_id, by, reason="ended_by_connector"):
         try:
-            self.drain(call_id)
+            self.finish_speech(call_id)
             with self.store.transaction() as c:
                 self.finish(c, call_id, reason, by=by)
             self.after_end(call_id)
@@ -1080,7 +1166,8 @@ class Calls:
             report("calls_end", call_id, exc, logger="tico.calls")
         finally:
             with self.lock:
-                self.ending.pop(call_id, None)
+                if self.ending.get(call_id) is threading.current_thread():
+                    self.ending.pop(call_id, None)
                 self.closing.discard(call_id)
 
     def settle(self, timeout: float = 60):
@@ -1335,11 +1422,13 @@ class Calls:
                 self.after_end(call_id)
             return
         if row["ending_at"]:
+            # One thread ends it: the End that is winding it down here, or (its End pressed in a process that is gone,
+            # whose speech went with it) one started now. The sweep does not wait for it.
             with self.lock:
                 ours = call_id in self.closing
             if not ours:
-                # Its End was pressed in a process that is gone (a restart): what it had heard went with it.
-                self._close(call_id, row["connector_actor"])
+                self.stop_listening(call_id)
+            self.wind_down(call_id, row["connector_actor"], wait_seconds=0)
             return
         with self.store.read() as c:
             people = [
@@ -1389,7 +1478,7 @@ class Calls:
             return
         self.drop_pending(call_id)
         if exists and not self.media.running(call_id):
-            self.media.start_recorder(call_id, room, self._audio_for(call_id))
+            self.media.start_recorder(call_id, room, self._audio_for(call_id), self._quiet_for(call_id))
 
     def _presence(self, c, row, present):
         """Record who LiveKit has in a Tico Meet call's room (Tico voice left out), and say whether that ends the call:
@@ -1687,7 +1776,7 @@ class Calls:
         pattern = "%" + json.dumps(who.actor).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         found = []
         for r in c.execute(
-            "SELECT id,thread_id FROM calls WHERE state='live' AND ring LIKE ? ESCAPE '\\' "
+            "SELECT id,thread_id FROM calls WHERE state='live' AND ending_at IS NULL AND ring LIKE ? ESCAPE '\\' "
             "ORDER BY started_at DESC LIMIT ?",
             (pattern, RINGING_LIMIT * 5),
         ):
@@ -1801,6 +1890,10 @@ def install_calls(app, store, auth, write):
         live_meetings.PROMPT_HOOKS.append(spoken_prompt)
     if voice_call not in live_meetings.WINDOW_GATES:
         live_meetings.WINDOW_GATES.append(voice_call)  # a voice call's bots answer when asked, never on their own
+    if route_question not in live_meetings.QUESTION_ROUTERS:
+        live_meetings.QUESTION_ROUTERS.append(route_question)
+    if bot_left not in live_meetings.BOT_LEFT_HOOKS:
+        live_meetings.BOT_LEFT_HOOKS.append(bot_left)
     if not hasattr(app.state, "call_media"):
         config = call_media.config_from_env()
         app.state.call_media = call_media.LiveKitMedia(config) if config else None
@@ -1886,7 +1979,8 @@ def install_calls(app, store, auth, write):
                 result = write(
                     request,
                     body,
-                    lambda c: calls.start(
+                    retry_body=lambda _c, _result: _start_hashed_before_voice(body),
+                    fn=lambda c: calls.start(
                         c,
                         who,
                         thread_id,
@@ -1969,8 +2063,7 @@ def install_calls(app, store, auth, write):
                 raise Problem("not_tico_meet", "This call is a Google Meet: open its link, no token is needed", 409)
             if not participant or participant["left_at"]:
                 raise Problem("not_joined", "Join the call to get a token", 409)
-            if row["state"] != "live":
-                raise Problem("call_ended", "This call has ended", 409)
+            _require_open(row)
             return calls.token_payload(row, who.actor)
 
     @app.post("/api/v2/calls/{call_id}/leave", **api_v2("Calls", "leaveCall", "Leave a call you joined", "Call"))
@@ -1985,8 +2078,9 @@ def install_calls(app, store, auth, write):
         **api_v2("Calls", "endCall", "End a call you started; its transcript is posted to the thread", "Call"),
     )
     def end_call(request: Request, call_id: str, body: Empty):
-        """End a call. Tico Meet: listening and the bots' voice stop at once; the call answers `ended` when the speech
-        already heard is transcribed within END_WAIT_SECONDS, else `ending`, and it ends on its own once that is in."""
+        """End a call. Tico Meet: the End is checked and stored first, so a refused one leaves the call as it was; then
+        listening and the bots' voice stop at once, and the call answers `ended` when the speech already heard is
+        transcribed within END_WAIT_SECONDS, else `ending`, and it ends on its own once that is in."""
         who = request.state.identity
         with store.read() as c:
             row = calls._connector(c, who, call_id)  # refuses before any speech is sent on the call's behalf
@@ -1996,12 +2090,12 @@ def install_calls(app, store, auth, write):
             result = write(request, body, lambda c: calls.end(c, who, call_id))
             calls.after_end(call_id)
             return result
+        result = write(request, body, lambda c: calls.end(c, who, call_id))
         if row["state"] == "live":
             calls.stop_listening(call_id)
-        result = write(request, body, lambda c: calls.end(c, who, call_id))
-        if row["state"] == "live" and calls.wind_down(call_id, who.actor):
-            with store.read() as c:
-                return calls.view(c, call_id, who)
+            if calls.wind_down(call_id, who.actor):
+                with store.read() as c:
+                    return calls.view(c, call_id, who)
         return result
 
     @app.post(

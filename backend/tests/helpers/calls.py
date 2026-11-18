@@ -35,6 +35,7 @@ class FakeMedia:
     def __init__(self):
         self.rooms, self.removed, self.recorders, self.ended = {}, [], {}, []
         self.said, self.hushed = [], []  # (call_id, pcm, rate) played on the voice track; calls hushed
+        self.quiet = {}  # call_id -> the recorder's on_quiet, which a test calls as the media loop's timer would
         self.down = False  # LiveKit unreachable: every call to it is refused until the test clears this
 
     def _reachable(self):
@@ -49,9 +50,12 @@ class FakeMedia:
         self._reachable()
         return sorted(identity for identity in self.rooms.get(room, set()) if not call_media.is_voice(identity))
 
-    def say(self, call_id, pcm, rate, started=None):
-        if call_id not in self.recorders:
-            return 0
+    def mark(self, call_id):
+        return self.hushed.count(call_id) if call_id in self.recorders else None
+
+    def say(self, call_id, pcm, rate, started=None, mark=None):
+        if call_id not in self.recorders or mark is not None and mark != self.hushed.count(call_id):
+            return 0  # hushed since the speech was cleared to play
         if started is not None:
             started()
         self.said.append((call_id, pcm, rate))
@@ -74,8 +78,9 @@ class FakeMedia:
         self.rooms.pop(room, None)
         self.ended.append(room)
 
-    def start_recorder(self, call_id, room, on_audio):
+    def start_recorder(self, call_id, room, on_audio, on_quiet=None):
         self.recorders[call_id] = on_audio
+        self.quiet[call_id] = on_quiet
         self.rooms.setdefault(room, set()).add(call_media.RECORDER_PREFIX + call_id)
 
     def stop_recorder(self, call_id):
