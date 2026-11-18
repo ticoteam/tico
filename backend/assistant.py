@@ -838,6 +838,11 @@ def describe(c, method, path, body, viewer=None, admins=()):
                 return cid
         return (c.execute("SELECT name FROM credentials WHERE id=?", (cid,)).fetchone() or {"name": cid})["name"]
 
+    def grant_holder(gid):
+        row = c.execute("SELECT subject FROM credential_grants WHERE id=?", (gid,)).fetchone()
+        subject = row["subject"] if row else ""
+        return "every computer" if subject == "computers" else who(subject) if subject else "its holder"
+
     def bot(slug):
         row = H.bot(c, slug) or {}
         return row.get("display_name") or row.get("slug") or slug
@@ -946,7 +951,9 @@ def describe(c, method, path, body, viewer=None, admins=()):
             lambda g: (
                 "Give "
                 + ("every computer" if body.get("subject") == "computers" else who(body.get("subject")))
-                + " a stored credential"
+                + " the stored credential “"
+                + credential_name(g[0])
+                + "”"
             ),
         ),
         (r"/api/v2/bots/([^/]+)/repositories", lambda g: plain_request(bot(g[0]), body)),
@@ -1068,7 +1075,10 @@ def describe(c, method, path, body, viewer=None, admins=()):
                 + ")"
             ),
         ),
-        (r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke", lambda g: "Take a stored credential away from a bot"),
+        (
+            r"/api/v2/credentials/([^/]+)/grants/([^/]+)/revoke",
+            lambda g: "Take the stored credential “" + credential_name(g[0]) + "” away from " + grant_holder(g[1]),
+        ),
         (r"/api/v2/system/update", lambda g: "Update this Tico to the newest version"),
         (
             r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide",
@@ -1196,6 +1206,20 @@ def describe(c, method, path, body, viewer=None, admins=()):
                     if isinstance(body.get("price_micros"), int)
                     else "the price shown"
                 )
+            ),
+        ),
+    )
+    rules += (
+        # Any other route on one key still names it, last so every sentence above wins.
+        (
+            r"/api/v2/credentials/([^/]+)/(.+)",
+            lambda g: (
+                ("Remove something from" if method == "DELETE" else "Make a change to")
+                + " the stored credential “"
+                + credential_name(g[0])
+                + "” ("
+                + spoken(g[1].replace("/", " "))
+                + ")"
             ),
         ),
     )

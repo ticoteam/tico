@@ -358,6 +358,19 @@ def test_health_and_the_assistants_card_never_name_a_hidden_key(api):
         # A change to a key is never described as deleting it.
         said = assistant.describe(c, "PUT", path, {"name": "Renamed"}, ana, admins)[0]
         assert said.startswith("Change the stored credential “Close read_write”"), said
+        # Giving a key, taking it back and any other route on it name which key, and never a hidden one.
+        grant = c.execute("SELECT id FROM credential_grants WHERE credential_id=?", (rw,)).fetchone()["id"]
+        for method, route, body in (
+            ("POST", f"{path}/grants", {"subject": "bot:ops"}),
+            ("POST", f"{path}/grants/{grant}/revoke", {}),
+            ("POST", f"{path}/rotate", {}),
+        ):
+            said = assistant.describe(c, method, route, body, ana, admins)[0]
+            assert "“Close read_write”" in said, said
+            said = assistant.describe(c, method, route, body, ben, admins)[0]
+            assert "Close" not in said and rw in said, said
+        said = assistant.describe(c, "POST", f"{path}/grants/{grant}/revoke", {}, ana, admins)[0]
+        assert said.endswith(" away from ops"), said
 
 
 def sql_targets(api, token):

@@ -196,3 +196,22 @@ def test_a_card_never_shows_a_task_the_person_may_not_read_or_fails_on_a_gone_au
     assert why.startswith("BotOps asked while working for Ana."), why
     assert "Ana's private plan" not in why
     assert said == "Delete the automation gone", said
+
+
+def test_a_card_says_why_by_its_rule_and_never_calls_a_gone_task_a_chat(api, botops):
+    """Two protected changes give their own reasons; a run whose task is gone names that task's id instead of
+    claiming the person asked in the chat."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id, bot_id, task_id, state, created_at) VALUES('a-gone', 'botops', 'gone-task', "
+            "'running', ?)",
+            (H.now(),),
+        )
+        cara = api.app.state.auth.identity_for_actor(c, "human:cara")
+        why = lambda method, path: botops_act.card_why(c, api.app.state.auth, cara, "a-gone", method, path)
+        repo = why("PUT", "/api/v2/bots/ops/repositories")
+        key = why("POST", "/api/v2/credentials/k1/grants")
+        other = why("POST", "/api/v2/somewhere/new")
+    assert repo.startswith("BotOps asked while working on task gone-task, which is no longer there. "), repo
+    assert "repositories" in repo and "stored credential" in key and repo != key != other
+    assert "chat" not in repo

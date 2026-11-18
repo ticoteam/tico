@@ -270,7 +270,7 @@ and path, and a setting's raw value ("all", "own") is never read out as a word: 
 title) shows it, any other only names the field. An automation, task, bot or key is named as the app names it
 ("Delete the automation “Receipts” of Cara (already switched off)"). A card BotOps makes while acting for you adds,
 after the title, the work it was on (the task and who asked for it, or your chat with it; a task you may not read is
-named only by who asked) and why it waits for you. A repository card made before this wording is titled from the request
+named only by who asked; a task that is gone, by its id) and why it waits for you, from the rule that made it a card (deleting an automation, who holds a key, a bot's repositories, spending limits). A repository card made before this wording is titled from the request
 it sends, with its old line under Details. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded
 behind "Show more", never cut). The words a send carries (a message, a comment, a support request) show on the card
 itself, whole, since they are what you approve; for an answer the card shows the ask, and for a task update the exact
