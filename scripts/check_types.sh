@@ -30,6 +30,18 @@ else
     echo "check_types: no .venv-pyright here or in ${main_checkout:-the main checkout}; using $PYTHON_BIN (see the setup line at the top of this script)" >&2
   fi
 fi
+# One basedpyright at a time per computer. Each run holds 2-6 GB, and the pre-push hook starts one on every bot's push,
+# so on a shared cloud machine (16 GB, many bots) three pushes at once filled memory and swapped it offline (Nov 18).
+# A run that finds the lock held waits its turn. Released when this script exits. Where flock is missing (a Mac), or the
+# lock file belongs to another user, no lock.
+lock=/tmp/tico-basedpyright.lock
+if [ -z "${CI:-}" ] && command -v flock >/dev/null 2>&1 && (: >>"$lock") 2>/dev/null; then
+  exec 9>>"$lock"
+  if ! flock -n 9; then
+    echo "check_types: another basedpyright run on this computer; waiting for it" >&2
+    flock 9
+  fi
+fi
 case " $* " in
   *" --writebaseline "*)
     # basedpyright writes .basedpyright/baseline.json; its entries are split into baselines/pyright, one file per module.
