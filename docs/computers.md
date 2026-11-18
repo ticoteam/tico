@@ -43,8 +43,10 @@ Gateway meanwhile. The line under the computer's plan picker says which: "on the
 
 Instead of one plan, the picker can name a person under **People** ("Ana's plans · 3"): the computer then uses every
 plan that person owns for that tool, one at a time. A turn starts on the plan with usage left whose weekly reset comes
-soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan in a
-fresh session (never in the middle of one). A plan with no usage reading yet comes after those with one. When every plan
+soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan
+(never in the middle of one). Claude Code carries on the same conversation there; if it can't, the turn starts a new
+session told what was said since, and says so. Codex starts a fresh session. A plan near its limit (95%) comes last until
+it is back under 90% or that window resets. A plan with no usage reading yet comes after those with one. When every plan
 is at its limit, turns run as for a single plan at its limit: the computer's own login, then the Gateway, else they wait.
 A plan the person adds later joins on its own, and one given to someone else leaves. API keys have no owner and are
 never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its

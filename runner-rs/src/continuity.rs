@@ -185,6 +185,17 @@ pub fn missing(error: &str) -> bool {
     .any(|p| e.contains(p))
 }
 
+/// Whether a turn's error says the provider refused a resumed session's transcript itself (a thinking block signature
+/// it does not accept, as one written under another account could be): that session can never continue here, so the
+/// next turn starts a new one (`refused_key`).
+pub fn transcript_refused(error: &str) -> bool {
+    let e = error.to_lowercase();
+    e.contains("signature") && (e.contains("thinking") || e.contains("invalid_request"))
+}
+
+/// What a session the provider refused is recorded as when the next turn starts a new one in its place.
+pub const TRANSCRIPT_REFUSED: &str = "the provider refused its transcript";
+
 /// A refusal trimmed for the run's record.
 pub fn trim(text: &str) -> String {
     let one: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -223,6 +234,12 @@ pub fn standing_key(thread: &str) -> String {
 /// The key under which the state keeps the id and digest of the task this thread holds, the same way.
 pub fn task_key(thread: &str) -> String {
     format!("standing-task:{thread}")
+}
+
+/// The key under which the state remembers that the provider refused this thread's transcript (`transcript_refused`):
+/// it is not resumed again.
+pub fn refused_key(thread: &str) -> String {
+    format!("refused:{thread}")
 }
 
 /// The key under which the state keeps the size of this thread's context after its last completed turn.
@@ -345,6 +362,12 @@ mod tests {
         assert!(missing("no rollout found for thread id 019f"));
         assert!(missing("No conversation found with session ID: 5b1"));
         assert!(!missing("codex app-server exited"));
+        // The API's refusal of a thinking block's signature is the transcript's, not a passing fault or a limit.
+        assert!(transcript_refused(
+            "API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.1.content.0: Invalid `signature` in `thinking` block\"}}"
+        ));
+        assert!(!transcript_refused("API Error: 500 Internal server error"));
+        assert!(!transcript_refused("You've hit your limit · resets 5pm"));
     }
 
     #[test]
