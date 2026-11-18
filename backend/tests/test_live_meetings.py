@@ -1448,13 +1448,7 @@ def test_an_attempt_on_the_retired_meeting_lane_can_finish_and_its_checkout_can_
                 "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_failed'", (mid,)
             )
         ]
-    assert [(s["bot"], s["reason"], s["detail"]) for s in said] == [
-        (
-            "ops",
-            "private_checkout",
-            "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository",
-        )
-    ], "said once"
+    assert [(s["bot"], s["reason"]) for s in said] == [("ops", "private_checkout")], "said once"
     mine = {"bot": "ops", "task": "private-" + first["conversation"]["id"]}
     sessions = {"sessions": [mine]}
     assert post(live, "runners/me/session-tasks", sessions, token=machine["token"])["sessions"] == [

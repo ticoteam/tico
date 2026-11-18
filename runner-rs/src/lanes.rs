@@ -34,7 +34,7 @@ pub const CAPABILITIES: &[&str] = &[
     // Full Claude logins: a turn's own credentials file, refreshes and usage reads (claude_login.rs).
     crate::claude_login::CAPABILITY,
     "turns_at_once_v1",
-    // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
+    // A previous hub release can still send the retired meeting lane (sessions.rs).
     "private_lanes_v1",
     "model_subscriptions_v1",
     "model_subscription_activation_v1",

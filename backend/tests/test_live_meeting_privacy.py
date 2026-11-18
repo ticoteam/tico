@@ -378,6 +378,18 @@ def test_private_meeting_reply_and_room_file_remain_readable_to_members(live, de
     get(live, f"files/{fid}", expected=404)
 
 
+def test_a_message_linked_to_a_private_meeting_run_keeps_its_audience(live, derived):
+    _mid, attempt = derived
+    refused = post(
+        live,
+        "messages",
+        {"to": "finance", "text": "See the source run.", "refs": {"turn_id": attempt["id"]}},
+        token=attempt["token"],
+        expected=403,
+    )
+    assert refused["error"]["code"] == "privacy"
+
+
 @pytest.mark.parametrize("visibility", ["private", "team"])
 def test_meeting_execution_can_use_its_normal_write_permissions(live, visibility):
     mid = post(live, "live-meetings", {"title": "Synthetic plan", "visibility": visibility}, token="ben-test")["id"]

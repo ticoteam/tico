@@ -1806,7 +1806,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
         ids.update(attempt_tasks(c, who.attempt_id))
     # An explicit meeting reference or quote still has an audience, even when the bot can send ordinary messages.
     meetings = meeting_sources(c)
-    meeting_ids = meetings.references(refs)
+    meeting_ids = meetings.message({"refs": refs}) if refs else set()
     if reply:
         meeting_ids.update(meetings.message(reply))
     restricted_meetings = private_meetings(c, meeting_ids)
