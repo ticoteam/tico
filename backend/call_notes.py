@@ -137,7 +137,7 @@ def notes(c: Any, auth: Any, who: Any, call_id: str) -> Row:
     if not C.readable(c, who.actor, row["thread_id"]):
         raise Problem("not_found", "Call not found", 404)
     done = bool(row["action_items_posted_at"] or row["action_items_given_up_at"] or row["finalized_at"])
-    follow_ups = cast(list[Row], _follow_ups.notes(c, auth, who, call_id))
+    follow_ups = _follow_ups.notes(c, auth, who, call_id)
     out: Row = {
         "pending": row["state"] == "live" or not done,
         "message_id": None,

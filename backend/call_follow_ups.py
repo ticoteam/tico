@@ -1,12 +1,33 @@
+# pyright: strict
 """A call hands work to a normal task and gets its answer back in its own thread."""
 
-from fastapi import Request
+from collections.abc import Iterable
+from sqlite3 import Connection, Row
+from typing import Any
+
+from fastapi import FastAPI, Request
 from pydantic import Field
 
-from . import read_cache, reach, task_caps, task_privacy, threads
+from . import batch_work as _batch_work
+from . import read_cache
+from . import reach as _reach
+from . import task_caps as _task_caps
+from . import task_privacy as _task_privacy
+from . import threads as _threads
 from .api_contract import api_v2
+from .auth import Identity
 from .models import Contract
-from .store import H, Problem
+from .store import H as _H
+from .store import Problem
+
+# Task and thread operations cross into the legacy Hub domain layer.
+H: Any = _H
+batch_work: Any = _batch_work
+reach: Any = _reach
+task_caps: Any = _task_caps
+task_privacy: Any = _task_privacy
+threads: Any = _threads
+Record = dict[str, Any]
 
 TRANSCRIPT_LINES = 5
 NOTES_LIMIT = 20
@@ -18,36 +39,41 @@ class FollowUp(Contract):
     bot: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def source_thread(c, task_id):
+def source_thread(c: Connection, task_id: str) -> str | None:
     if not read_cache.one(c, "SELECT 1 FROM call_follow_ups LIMIT 1"):
         return None
-    return read_cache.one(
+    row = read_cache.one(
         c, "SELECT s.thread_id FROM call_follow_ups f JOIN calls s ON s.id=f.call_id WHERE f.task_id=?", (task_id,)
     )
+    return row[0] if row else None
 
 
-def _viewer(c, actor):
-    from .calls import AUTH
+def _viewer(c: Connection, actor: str) -> _threads.Viewer | None:
+    from . import calls as _calls
 
-    if H.is_human(actor) and AUTH is not None:
+    calls: Any = _calls
+    auth = calls.AUTH
+
+    if H.is_human(actor) and auth is not None:
         try:
-            return threads.viewer(AUTH, AUTH.identity_for_actor(c, actor))
+            return threads.viewer(auth, auth.identity_for_actor(c, actor))
         except Problem:
             return None
     return threads.actor_viewer(c, actor)
 
 
-def thread_reader(c, actor, task_id):
+def thread_reader(c: Connection, actor: str, task_id: str) -> bool:
     source = source_thread(c, task_id)
     v = _viewer(c, actor) if source else None
-    return v is not None and threads.readable(c, v, source[0])
+    return bool(source and v is not None and threads.readable(c, v, source))
 
 
-def reader_sql(c, actor):
+def reader_sql(c: Connection, actor: str) -> str:
     """Use the source thread's current standing, including membership changes after the call."""
-    from .auth import A
+    from . import bot_access as _bot_access
 
-    ids = read_cache.value(
+    bot_access: Any = _bot_access
+    ids: list[str] = read_cache.value(
         c,
         ("follow_up_threads",),
         lambda: [
@@ -61,21 +87,22 @@ def reader_sql(c, actor):
         return "0"
     return (
         "id IN (SELECT f.task_id FROM call_follow_ups f JOIN calls s ON s.id=f.call_id "
-        f"WHERE s.thread_id IN {A.qlist(sorted(visible))})"
+        f"WHERE s.thread_id IN {bot_access.qlist(sorted(visible))})"
     )
 
 
-def may_file(c, auth, who, call_id, bot=None):
-    from . import calls
+def may_file(c: Connection, auth: Any, who: Identity, call_id: str, bot: str | None = None) -> tuple[Record, str]:
+    from . import calls as _calls
 
+    calls: Any = _calls
     auth.domain(who)
-    row = calls._call(c, call_id)
-    attached = {
+    row: Record = calls._call(c, call_id)
+    attached: dict[str, str] = {
         r["bot"]: r["joined_by"]
         for r in c.execute("SELECT bot,joined_by FROM live_meeting_bots WHERE meeting_id=?", (row["live_meeting_id"],))
     }
     if who.role == "bot":
-        chosen = H.actor_id(who.actor)
+        chosen: str = H.actor_id(who.actor)
         if chosen not in attached or not calls.attachment_standing(c, attached[chosen], row["thread_id"], chosen):
             raise Problem("not_found", "Call not found", 404)
         if bot and H.resolve_actor(c, bot) != who.actor:
@@ -97,12 +124,12 @@ def may_file(c, auth, who, call_id, bot=None):
     return row, chosen
 
 
-def file_task(c, auth, who, row, bot, ask):
+def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, ask: str) -> dict[str, str]:
     owner = auth.target(c, who, f"bot:{bot}", need="write")
     task_caps.check(c, who.actor, owner)
     reach.check(c, who, owner, "task")
     auth.require_bot_contact(c, who, owner, kind="task")
-    say = c.execute(
+    say: list[Row] = c.execute(
         "SELECT speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq DESC LIMIT ?",
         (row["live_meeting_id"], TRANSCRIPT_LINES),
     ).fetchall()
@@ -124,7 +151,7 @@ def file_task(c, auth, who, row, bot, ask):
     return {"task_id": task["id"]}
 
 
-def _ready(c):
+def _ready(c: Connection) -> list[Row]:
     # Done can be written by a tool call before its bot's final reply is stored. A terminal run failure is
     # reported only once the job has stopped retrying. Closed tasks are already terminal.
     return c.execute(
@@ -141,7 +168,7 @@ def _ready(c):
     ).fetchall()
 
 
-def _answer(c, row):
+def _answer(c: Connection, row: Row) -> tuple[str, str | None]:
     actor = f"bot:{row['bot_id']}"
     if row["status"] != "done":
         return "", None
@@ -164,14 +191,14 @@ def _answer(c, row):
             else None
         )
         return done["notes"].strip(), aid
-    if run and run["final_text"] and (H._json(run["result"], {}) or {}).get("outcome") == "completed":
-        verdict = H._json(run["result"], {}) or {}
-        if not verdict.get("held_reply"):
+    if run and run["final_text"]:
+        verdict: Record = H._json(run["result"], {}) or {}
+        if verdict.get("outcome") == "completed" and not verdict.get("held_reply"):
             return run["final_text"].strip(), run["id"]
     return "", None
 
 
-def _speakers_read(c, row, message):
+def _speakers_read(c: Connection, row: Row, message: Record) -> bool:
     return all(
         task_privacy.message_readable(c, p[0], message)
         for p in c.execute(
@@ -181,22 +208,22 @@ def _speakers_read(c, row, message):
     )
 
 
-def can_speak(c, call_id, message_id):
+def can_speak(c: Connection, call_id: str, message_id: str) -> bool:
     row = c.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
     message = H.message(c, message_id)
     return bool(row and message and _speakers_read(c, row, message))
 
 
-def _notes_may_keep(c, row, aid):
+def _notes_may_keep(c: Connection, row: Row, aid: str | None) -> bool:
     # The per-bot brief is plain text. Only the thread message can carry narrower run provenance.
     if not aid:
         return True
-    private_tasks = task_privacy.attempt_tasks(c, aid) - {row["task_id"]}
-    meetings = task_privacy.meeting_sources(c).attempt(aid)
+    private_tasks: Iterable[str] = task_privacy.attempt_tasks(c, aid) - {row["task_id"]}
+    meetings: set[str] = task_privacy.meeting_sources(c).attempt(aid)
     return not any(H.task_private(c, H.task(c, tid)) for tid in private_tasks) and meetings <= {row["live_meeting_id"]}
 
 
-def _return(c, calls, row):
+def _return(c: Any, calls: Any, row: Row) -> None:
     from . import call_notes
 
     thread = threads.thread_row(c, row["thread_id"])
@@ -213,7 +240,7 @@ def _return(c, calls, row):
         body = f"The follow-up on {topic} ended without an answer."
     else:
         body = f"The follow-up on {topic} failed before it could answer."
-    refs = {
+    refs: Record = {
         "task": row["task_id"],
         "call": {"id": row["id"], "meeting_id": row["live_meeting_id"]},
         "live_meeting": {"meeting_id": row["live_meeting_id"]},
@@ -242,26 +269,24 @@ def _return(c, calls, row):
         c.after_commit.append(lambda: calls.voice.follow_up(row["id"], row["bot_id"], message["id"], text))
 
 
-def sweep(calls):
+def sweep(calls: Any) -> None:
     """Return terminal work once, even if the task or call survived a server restart."""
     with calls.store.read() as c:
         if not _ready(c):
             return
-    from .batch_work import isolated
-
     with calls.store.transaction() as c:
         for row in _ready(c):
-            with isolated(c, "call_follow_up", row["task_id"], private=True):
+            with batch_work.isolated(c, "call_follow_up", row["task_id"], private=True):
                 _return(c, calls, row)
 
 
-def notes(c, auth, who, call_id):
-    rows = c.execute(
+def notes(c: Connection, auth: Any, who: Identity, call_id: str) -> list[Record]:
+    rows: list[Row] = c.execute(
         "SELECT f.task_id,f.message_id,t.title,t.status FROM call_follow_ups f JOIN tasks t ON t.id=f.task_id "
         "WHERE f.call_id=? ORDER BY f.rowid DESC LIMIT ?",
         (call_id, NOTES_LIMIT),
     ).fetchall()
-    out = []
+    out: list[Record] = []
     for row in rows:
         message = H.message(c, row["message_id"]) if row["message_id"] else None
         if not H.task_private_readable(c, who.actor, dict(row, id=row["task_id"])):
@@ -279,16 +304,19 @@ def notes(c, auth, who, call_id):
     return out
 
 
-def install(app, auth, write):
+def install(app: FastAPI, auth: Any, write: Any) -> None:
     @app.post(
         "/api/v2/calls/{call_id}/follow-ups",
         **api_v2("Calls", "createCallFollowUp", "Hand a live call's question to a bot's normal task", "CallFollowUp"),
     )
-    def follow_up(request: Request, call_id: str, body: FollowUp):
-        who = request.state.identity
+    def follow_up(request: Request, call_id: str, body: FollowUp) -> Any:
+        who: Identity = request.state.identity
 
-        def work(c):
+        def work(c: Connection) -> dict[str, str]:
             row, bot = may_file(c, auth, who, call_id, body.bot)
             return file_task(c, auth, who, row, bot, body.ask)
 
-        return write(request, body, work, check=lambda c: may_file(c, auth, who, call_id, body.bot))
+        def check(c: Connection) -> None:
+            may_file(c, auth, who, call_id, body.bot)
+
+        return write(request, body, work, check=check)
