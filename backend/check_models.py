@@ -124,7 +124,9 @@ def choose(c, settings, bot, spec, role, authors=()):
     }
 
 
-def record(c, actor, task_id, check):
+def record(c, actor, task_id, check, parent_id=None):
+    """Save the subtask's check model. A review keeps, in its history, the newest commit of each PR linked to the task it
+    reviews when it was filed: the commit it reads, which the Review stage's gate matches (task_requirements)."""
     c.execute(
         "INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
         "VALUES(?,?,?,?,?,?,?,?)",
@@ -138,7 +140,18 @@ def record(c, actor, task_id, check):
         None,
         f"{check['runtime']}:{check['model']}",
         check["role"] + (f"; {check['note']}" if check.get("note") else ""),
+        data=_reviewed_heads(c, check, parent_id),
     )
+
+
+def _reviewed_heads(c, check, parent_id):
+    """{"heads": {pr_ref: commit}} for a review filed under a task with read PR heads, else None."""
+    from .item_sources import github as F
+
+    if check["role"] != "review" or not parent_id:
+        return None
+    heads = {ref: sha for ref, sha in F.heads(c, parent_id).items() if sha}
+    return {"heads": heads} if heads else None
 
 
 def prime(c, pairs):

@@ -97,12 +97,6 @@ def _bots(conn: "sqlite3.Connection", template: str, seats: bool) -> list[str]:
     return list(dict.fromkeys([*seated, *rest]))
 
 
-def reviewer_actors(conn: "sqlite3.Connection") -> set[str]:
-    """The review pool's actors (`bot:<id>`): every bot that fills a reviewer seat or is made from the reviewer template.
-    A second review is a task one of these owns (task_requirements._second_review)."""
-    return {f"bot:{bot}" for bot in _bots(conn, TEMPLATES[REVIEWER_1], _has_seats(conn))}
-
-
 def resolve(conn: "sqlite3.Connection") -> dict[str, str | None]:
     """{role: the bot's actor (`bot:<id>`) or None} for every role in ROLES."""
     from . import release_schedule_routes

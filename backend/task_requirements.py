@@ -341,7 +341,7 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     return Standing(requirement, MET, line="Done")
 
 
-# A second review's owner posts "PR <url> at <commit>" (its request text): the PR and the newest commit it read.
+# A second review's request names "PR <url> at <commit>": the PR and the commit it reads.
 REVIEW_NAMES_RE = re.compile(
     r"PR\s+https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)\s+at\s+([0-9a-f]{7,40})\b"
 )
@@ -360,19 +360,52 @@ def _at_head_gate(conn: "sqlite3.Connection", task: Row) -> bool:
     )
 
 
-def _named_commits(conn: "sqlite3.Connection", filed: Row) -> list[tuple[str, str]]:
-    """(PR ref, commit) pairs the filed task's owner named in its messages, oldest first."""
+def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
+    """The filed tasks that are second reviews: subtasks filed with a review check model (`--role review`,
+    backend/check_models.py), whoever owns them. A routing, repair or build task filed on the visit is none."""
+    ids = [f["id"] for f in filed if not f["deleted"]]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    review = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT task_id FROM task_check_models WHERE role='review' AND task_id IN ({marks})", ids
+        ).fetchall()
+    }
+    return [f for f in filed if f["id"] in review]
+
+
+def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, str]]:
+    """(PR ref, commit) pairs the review reads: the PR heads saved when it was filed (check_models.record), then each
+    "PR <url> at <commit>" in its own conversation, whoever wrote it (the filer's request or the owner's notes)."""
     from .item_sources import github as F
 
     named: list[tuple[str, str]] = []
+    for (data,) in conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
+        "AND data IS NOT NULL ORDER BY created_at, id",
+        (review["id"],),
+    ).fetchall():
+        heads = (_json_object(data)).get("heads")
+        if isinstance(heads, dict):
+            named.extend((str(ref), str(sha).lower()) for ref, sha in heads.items() if sha)
     for (body,) in conn.execute(
-        "SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND kind='say' "
+        "SELECT body FROM messages WHERE conversation_id=? AND kind='say' "
         "AND deleted_at IS NULL AND superseded_at IS NULL ORDER BY created_at, id",
-        (filed["conversation_id"], filed["owner_id"]),
+        (review["conversation_id"],),
     ).fetchall():
         for repo, number, sha in REVIEW_NAMES_RE.findall(str(body or "")):
             named.append((F.pr_ref(repo, int(number)), sha.lower()))
     return named
+
+
+def _json_object(text: object) -> dict[str, Any]:
+    try:
+        value = json.loads(str(text))
+    except ValueError:
+        return {}
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
 
 
 def _names_heads(named: list[tuple[str, str]], heads: dict[str, str | None]) -> bool:
@@ -384,35 +417,35 @@ def _names_heads(named: list[tuple[str, str]], heads: dict[str, str | None]) -> 
 
 
 def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, filed: list[Row]) -> Standing:
-    """The Review stage's gate. Only a task a review-pool reviewer owns counts, and only when it is Done and names the
-    newest commit of every PR linked to the task (no PR linked: Done is enough). Any other filed task, a review of an
-    older commit, or a PR whose newest commit is not read yet, leaves the gate not met: it never passes by accident."""
+    """The Review stage's gate. Only a second review counts (`_reviews`), and only when it is Done and reads the newest
+    commit of every PR linked to the task (no PR linked: Done is enough). A Done review of the newest commit meets it
+    even while an older one is open; the gate waits only on an open review of the newest commit (or of no commit it
+    can read). Any other filed task, a review of an older commit, or an unread PR head leaves it not met."""
     from .item_sources import github as F
-    from .pipeline_seats import reviewer_actors
 
-    pool = reviewer_actors(conn)
-    reviews = [f for f in filed if f["owner_id"] in pool]
+    reviews = _reviews(conn, filed)
     if not reviews:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No second review filed yet")
     heads = F.heads(conn, task["id"])
     if any(head is None for head in heads.values()):
         return Standing(requirement, NOT_MET, task.get("owner_id"), "The newest commit of a linked PR is not read yet")
-    still_open = [f for f in reviews if f["status"] == "open"]
-    if still_open:
-        first = still_open[0]
+    named = {f["id"]: _named_commits(conn, f) for f in reviews}
+    at_head = [f for f in reviews if _names_heads(named[f["id"]], heads)]
+    if any(f["status"] == "done" for f in at_head):
+        return Standing(requirement, MET, line="Done")
+    waiting = [f for f in reviews if f["status"] == "open" and (f in at_head or not named[f["id"]])]
+    if waiting:
+        first = waiting[0]
         return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
-    done = [f for f in reviews if f["status"] == "done"]
-    for f in done:
-        if _names_heads(_named_commits(conn, f), heads):
-            return Standing(requirement, MET, line="Done")
-    if done:
-        first = done[0]
+    stale = [f for f in reviews if f["status"] in ("open", "done")]
+    if stale:
+        first = stale[0]
         title = first.get("title") or "The second review"
         return Standing(
             requirement,
             NOT_MET,
             task.get("owner_id"),
-            f"{title} did not name the newest commit: file a second review of it",
+            f"{title} did not read the newest commit: file a second review of it",
             first["id"],
         )
     first = reviews[0]

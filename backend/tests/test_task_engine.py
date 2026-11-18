@@ -8,6 +8,7 @@ import sqlite3
 
 import pytest
 
+from backend import check_models
 from backend import task_delete
 from backend import task_engine as E
 from backend import task_requirements as R
@@ -271,11 +272,11 @@ def test_a_done_replacement_satisfies_linked_work_after_a_filed_task_closes(c, g
     assert E.task(c, parent["id"])["status"] == "done"
 
 
-def test_a_review_gate_counts_only_a_reviewers_second_review_of_the_newest_commit(c, general, monkeypatch):
-    # A Review stage: its page at the newest commit, and the second review it waits on. A task a builder owns, or a
-    # review of an older commit, never passes it; a reviewer's review of the newest commit does.
-    reviewer = X.bot(c, "reviewer-2")
-    c.execute("UPDATE bot_settings SET template='reviewer' WHERE bot_id=?", (reviewer.split(":", 1)[1],))
+REVIEW_CHECK = {"runtime": "codex", "model": "gpt-5", "harness": "codex", "effort": "", "role": "review"}
+
+
+def _review_stage(c):
+    # A Review stage: its page at the newest commit, and the second review it waits on.
     stages = (
         {
             "name": "Review",
@@ -284,36 +285,74 @@ def test_a_review_gate_counts_only_a_reviewers_second_review_of_the_newest_commi
         },
     )
     X.pipeline(c, "product", "Product", stages)
-    parent = X.new_task(c, ANA, "Checkout flow", "product")
-    head = "1" * 40
-    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+    return X.new_task(c, ANA, "Checkout flow", "product")
+
+
+def _says(c, row, sender, commit):
+    body = f"PR https://github.com/acme/app/pull/7 at {commit}."
+    c.execute(
+        "INSERT INTO messages(id, conversation_id, sender_id, kind, body, created_at) VALUES(?,?,?,?,?,?)",
+        (H.new_id(), row["conversation_id"], sender, "say", body, "2026-11-18T04:00:00Z"),
+    )
+
+
+def test_a_review_gate_counts_only_a_second_review_check_of_the_newest_commit(c, general, monkeypatch):
+    # Only a subtask filed as a review check counts. A builder's or a reviewer's routing task never does, even when it
+    # names the newest commit; a review filed at an older commit does not either, and an older review still open does
+    # not hide a finished review of the newest commit.
+    reviewer = X.bot(c, "reviewer-2")
+    c.execute("UPDATE bot_settings SET template='reviewer' WHERE bot_id=?", (reviewer.split(":", 1)[1],))
+    parent = _review_stage(c)
+    old, new = "2" * 40, "1" * 40
+    head = {"sha": old}
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head["sha"]})
 
     def gate():
         return R.standings(c, E.task(c, parent["id"]))[1]
 
-    def review_says(row, commit):
-        # The reviewer's request text, as the review posts it: the PR and the newest commit it read.
-        body = f"PR https://github.com/acme/app/pull/7 at {commit}."
-        c.execute(
-            "INSERT INTO messages(id, conversation_id, sender_id, kind, body, created_at) VALUES(?,?,?,?,?,?)",
-            (H.new_id(), row["conversation_id"], row["owner_id"], "say", body, "2026-11-18T04:00:00Z"),
+    def review():
+        row = X.new_task(
+            c, ANA, f"Second review: acme/app#7 at {head['sha'][:7]}", assignee=reviewer, parent=parent["id"]
         )
+        check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"])
+        return row
 
     builder = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
-    assert (gate().state, gate().line) == (R.NOT_MET, "No second review filed yet")
+    assert (gate().state, gate().on, gate().line) == (R.NOT_MET, "bot:manager", "No second review filed yet")
+    routing = X.new_task(c, ANA, "Route this to Product", assignee=reviewer, parent=parent["id"])
+    _says(c, routing, reviewer, old)
+    X.say_done(c, routing)
+    E.advance(c, routing["id"])
     E.move(c, builder["id"], E.CLOSED, ANA, "Not a review")
-    review = X.new_task(c, ANA, "Second review: acme/app#7", assignee=reviewer, parent=parent["id"])
-    assert (gate().state, gate().on) == (R.WAITING, review["id"])
-    review_says(review, "2" * 40)
-    X.say_done(c, review)
-    E.advance(c, review["id"])
-    assert gate().state == R.NOT_MET and "did not name the newest commit" in gate().line
+    assert (gate().state, gate().line) == (R.NOT_MET, "No second review filed yet")
 
-    again = X.new_task(c, ANA, "Second review: acme/app#7", assignee=reviewer, parent=parent["id"])
-    review_says(again, head)
-    X.say_done(c, again)
-    E.advance(c, again["id"])
+    stale = review()  # filed at the old head, and left open
+    assert (gate().state, gate().on) == (R.WAITING, stale["id"])
+    head["sha"] = new
+    c.execute("UPDATE tasks SET updated_at=updated_at WHERE id=?", (parent["id"],))  # a new head is a write
+    assert gate().state == R.NOT_MET and "did not read the newest commit" in gate().line
+
+    current = review()
+    assert (gate().state, gate().on) == (R.WAITING, current["id"])
+    X.say_done(c, current)
+    E.advance(c, current["id"])
+    assert E.task(c, stale["id"])["status"] == "open"
     assert gate().state == R.MET
+
+
+def test_a_review_gate_reads_the_commit_from_the_filers_request(c, general, monkeypatch):
+    # A review filed for another bot, before the PR head was read: its request, written by the filer, names the
+    # commit, and the review's owner never repeats it.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    head = "1" * 40
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+    row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    check_models.record(c, reviewer, row["id"], REVIEW_CHECK)
+    _says(c, row, ANA, head)
+    X.say_done(c, row)
+    E.advance(c, row["id"])
+    assert R.standings(c, E.task(c, parent["id"]))[1].state == R.MET
 
 
 def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, general):
