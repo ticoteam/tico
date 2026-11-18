@@ -455,7 +455,10 @@ def _history_check(c, withheld):
             + (f" and {len(taken) - 3} more" if len(taken) > 3 else "")
             + ": a repository with the bot's name was already there, made by someone else, so Tico leaves it alone"
         )
-    return _check("bot_history", "Bot history", "info", ". ".join(said) + ".")
+    # The line is the owner's and admins' (`full`): Claim says those repositories are this company's after all, as a
+    # bot moved from another server's are (POST /api/v2/repositories/claim, `tico repo claim`).
+    claim = [{**_fix("Claim"), "claim": True}] if taken else []
+    return _check("bot_history", "Bot history", "info", ". ".join(said) + ".", claim)
 
 
 def _reported(c, prefix, limit=200):

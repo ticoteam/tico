@@ -424,8 +424,19 @@ either way. Tico makes and uses one only when it is this company's to use:
 - **Name already taken.** If `<org>/bot-<slug>` already exists and this company's App did not make it
   (another company connected to the same organization, say), Tico never adopts it or pushes there
   (`github_repo_taken`); a repository GitHub made well before the bot existed is treated the same.
-  The bot keeps working from its computer. If the repository is this company's after all, point the
+  The bot keeps working from its computer. If the repository is this company's after all, tap **Claim**
+  on Health's Bot history line (`tico repo claim`, `POST /api/v2/repositories/claim`), or point the
   bot at it in Settings → Bots (or `manage set-repo`): a person's choice is always used.
+- **A bot moved from another server.** A bot recreated here is younger than the repository it had
+  there. Create it with `moved_from` (`POST /api/v2/bots`, the old server's address) and its
+  repository is this company's from the start, whatever its name (audited as `bot.moved_in`); pause
+  the old copy first, since both would push to it. For a bot moved without it, the daily repository
+  sync gives the repository back by itself (`bot.repository_claimed` by Tico) when every one of these
+  holds: it is listed for the App's organization; its name is one Tico gives the bot unasked
+  (`bot-` or `emp-` with its slug, id or a former slug, or its folder); the bot's record names it in
+  full (`owner/name` or a URL), which Tico's own forms never write; no other bot here has it; the bot
+  is on here; and GitHub has had no push to it since the bot was made here. A push since then came
+  from somewhere else, an old copy perhaps, so that one waits for a person's **Claim**.
 
 ### When the app cannot create repositories
 

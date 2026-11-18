@@ -47,6 +47,12 @@ SCHEMAS.update(
                 "github_installed": "b",
             }
         ),
+        "RepositoryClaim": obj(
+            {
+                "claimed": items(obj({"bot": "s", "repository": "s"})),
+                "left": items(obj({"bot": "s", "repository": "s", "why": {"enum": ["shared", "chosen_only"]}})),
+            }
+        ),
         # The workflow options are present only when on; a request's access defaults to write.
         "RepositoryGrant": obj(
             {"full_name": "s", "access": {"enum": ["read", "write"]}, "run_workflows": "b", "edit_workflows": "b"},
