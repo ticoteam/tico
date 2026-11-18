@@ -60,6 +60,8 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 `init` then adds one tunnel route, `*.<page-domain>`, beside the cell's own. `--page-domain ""` removes it. In Cloudflare,
 the page domain needs the same wildcard record as the cell's, a CNAME to the tunnel, in its own zone.
 
+`--meet-domain HOST` turns on Tico Meet calls for every company on the host ([Tico Meet](#tico-meet)).
+
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
 already have their own DNS record, such as `hub` and `accounts`, are not affected.
@@ -113,7 +115,9 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `snapshot_failed` | `update` could not copy the database; nothing changed and the old release runs again |
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
-| `firewall_failed` | The metadata firewall rule could not be set |
+| `firewall_failed` | The metadata firewall rule, or Tico Meet's `INPUT` rules for 7880, could not be set |
+| `meet_failed` | Tico Meet did not come up within 60 s of `init` (the detail says what is missing), or it is on but its key file holds no key pair |
+| `port_taken` | `init --meet-domain` while a route uses one of Tico Meet's ports |
 | `unhealthy` | `/healthz` did not answer through the router in time (`wake`: on the server's own port), and the detail has the last log lines |
 | `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
 | `updater_failed` | `init` could not install or start the cell updater or the wake service |
@@ -413,15 +417,124 @@ control volume. Run `init` from the new checkout once (it installs the service),
 `update` rewrites the company's files to the new form (token, `control/` mount, `.env`). With the same release it
 takes no snapshot, and it restarts the server only when a file changed, so a second run changes nothing.
 
+## Tico Meet
+
+Tico Meet calls ([meet.md](meet.md)) need a LiveKit media server. A cell runs **one LiveKit for every company on the
+host, with one key pair**. LiveKit OSS lets any key mint a token for any room, so a key pair per company would add no
+isolation, and adding a company would restart LiveKit and drop every call. Rooms are `tico-call-<uuid>`, and each
+server lists and ends only its own rooms by name.
+
+Turn it on with `init --meet-domain <host>`, where `<host>` is the TURN hostname, such as `meet-cell-1.tico.team`. The
+setting is saved in `cell.json` and kept when the flag is left out. `--meet-domain ""` turns it off. `init` then:
+
+- Makes the key pair once, in `/srv/tico-cell/meet/keys/keys.yaml` (0600, `<key>: "<secret>"`, LiveKit's own
+  `key_file`). LiveKit reads it from a read-only mount, so the secret is in neither `docker inspect` nor
+  `docker compose config`. The secret is never printed, and it is scrubbed from every answer and error. Turning Tico
+  Meet off keeps the file, so turning it on again reuses the same pair.
+- Refuses to turn it on while a route (`cell route set`) uses 7880, 7881, 3478 or 8443 (`port_taken`). Routes can never
+  take those ports, whether Tico Meet is on or not.
+- Adds two services to the edge project, both pinned by digest, on the host's network, with all capabilities dropped
+  except `NET_BIND_SERVICE`, `no-new-privileges` and a read-only root filesystem:
+  - `certs` (`tico-cell-certs`): Caddy, the router's image, which only gets and renews the TURN certificate. It uses
+    HTTP-01 on port 80 and nothing else, so no DNS credential is ever on the host. Its admin API is off (the router
+    uses `localhost:2019`), and its own HTTPS port is 8443, which stays closed. Its storage is
+    `/srv/tico-cell/meet/certs` (0700).
+  - `livekit` (`tico-cell-livekit`): `compose.yaml`'s LiveKit image (v1.13.11: TURN credentials that expire, and
+    TURN refuses relays to private addresses and to this host's other ports). Its API and signal are on 7880, media on
+    7881/tcp and 50000-50100/udp, TURN on 3478/udp, and TURN over TLS on **443/tcp** with that certificate. Nothing
+    else on a cell binds 443, because the tunnel is outbound only. It uses `use_external_ip`.
+- Keeps 7880 to this host: the firewall script (the one that blocks the metadata service, run at boot and after every
+  Docker start) puts three rules tagged `tico-cell-meet` first in `INPUT`. They accept 7880/tcp from `127.0.0.0/8` (the
+  router) and from the companies' default networks (`10.208.0.0/12`, their servers), and drop it from anywhere else.
+  The security group also keeps 7880 closed. Turning Tico Meet off removes the rules.
+- Waits up to 60 s for LiveKit's API to answer on `127.0.0.1:7880` and for the TURN certificate to be there. Only then
+  does Tico Meet count as on. If either is missing, `init` fails with `meet_failed`, naming what is missing. A Tico Meet
+  that was off is taken down again (services, firewall rules), and nothing below happens. One that was already on stays
+  on, as it would if LiveKit stopped by itself.
+- Then sends `/rtc` and `/rtc/*` on every running company's hosts to `127.0.0.1:7880`, ahead of the company's server, with
+  the same hold and WebSocket grace as the server. Browsers connect to `wss://<company host>/rtc` through the tunnel,
+  so the signal needs no public port.
+
+Each company's `.env` gets five keys at `add`, or at its next `update`, including one to the release it already runs:
+
+| Key | Value |
+|---|---|
+| `TICO_MEET_URL` | `wss://<company domain>` |
+| `TICO_MEET_INTERNAL_URL` | `http://10.208.<i>.1:7880`: the company's default-network gateway, as for its updater |
+| `TICO_MEET_DOMAIN` | the TURN hostname |
+| `TICO_MEET_API_KEY`, `TICO_MEET_API_SECRET` | the cell's key pair |
+
+While Tico Meet is off, `add` and `update` remove these keys, and calls answer `meet_unavailable`. They are the cell's
+own: an `--env-file` that carries them gets them back in `ignored`. A company on a release older than v0.5.54 (the
+first with calls) ignores them. A company host can never be the TURN host, and the reverse is also refused
+(`domain_taken`).
+
+**Certificate renewal.** LiveKit reads its certificate only when it starts. Every 10 minutes the cell updater
+compares the certificate file with LiveKit's start time. When the file is newer, it asks LiveKit's `ListRooms` with a
+one-minute token that may only list rooms. If no room is open, it restarts LiveKit. When rooms are open or LiveKit does
+not answer, it waits and tries again 10 minutes later. Caddy renews about 30 days before the certificate expires, so
+there is time to find an empty moment. While the certificate LiveKit started with runs out in under 14 days (renewal
+failed, or no empty moment came), each check logs `tico meet: warning: cert_expiring: ... <days> days` to the updater's
+journal (`journalctl -u tico-cell-updater`).
+
+**Restarts.** Each server restarts once, when its `.env` gains or loses the keys. The router holds requests for 30 s
+while it does. A LiveKit restart drops live calls. That happens on a renewal (only when the cell is empty), on a new
+TURN host or LiveKit image (an `init` from a core that changes them), and when Tico Meet is turned off.
+
+**Trust.** All the companies on a host share one key, so a company's server that leaks it could list rooms and join
+another company's call. Each server also has the secret in its own environment (`TICO_MEET_API_SECRET`). Every company
+on cell-1 is ours, so the cell is one trust boundary and that is acceptable. Before untrusted
+sign-ups share a cell, revisit this with a LiveKit per company or a proxy that checks tokens.
+
+### Turning it on in production
+
+The AWS piece is `infra/cell-meet/cell-meet.yaml`: an Elastic IP associated with the host, and the inbound rules
+80/tcp, 443/tcp, 3478/udp, 7881/tcp and 50000-50100/udp on the host's security group. It keeps 22, 7880 and 8443
+closed. It is a stack of its own, so the host's own stack is never redeployed. For cell-1 (`i-027126437a47a24f4`,
+`sg-0ee5245bf7bc7a276`), in this order:
+
+1. **Install the core** for the release that has this, through HQ (`POST /v1/staff/cloud/hosts/cell-1/core`), at a
+   quiet hour, and check that every company is healthy. That install runs a plain `init`. If the host's edge still
+   runs older router or tunnel images than this core pins, the init recreates the router and the tunnel, so every
+   company drops for a few seconds. Keep that apart from the steps below.
+2. **Create the stack** `tico-cloud-cell-1-meet` from `infra/cell-meet/cell-meet.yaml` with a change set
+   (`InstanceId=i-027126437a47a24f4`, `SecurityGroupId=sg-0ee5245bf7bc7a276`). Do not redeploy `tico-cloud-cell-1`.
+   Associating the IP changes the host's public IP, which resets outbound connections once. cloudflared reconnects
+   within seconds. Note the `PublicIp` output.
+3. **Add the DNS record in Cloudflare**, which holds tico.team (not Route53): an A record `meet-cell-1` pointing to
+   that IP, with the proxy **off** (DNS only). The record overrides the proxied `*.tico.team` wildcard. Check that
+   `dig +short meet-cell-1.tico.team` answers the IP, not a Cloudflare 104.21.x or 172.67.x address.
+4. **Run init over SSM**: `cd /opt/tico-cell/core-<vX> && python3 -m setup cell init --meet-domain meet-cell-1.tico.team --json`.
+   It answers only once LiveKit is up with its certificate (or fails with `meet_failed` and leaves Tico Meet off).
+   Check `iptables -S INPUT | head -4` shows the three `tico-cell-meet` rules first.
+5. **Canary on one company**: `python3 -m setup cell update --company co-tico-team --version <its current release>`.
+   This rewrites its `.env` and restarts only that server. On co-tico-team.tico.team, test a two-person call with a bot
+   speaking, one client on a network that blocks UDP (to use TURN over TLS on 443), and that the server's recorder
+   joins.
+6. **Run the same `update`** for each other company, at its own current release. New companies get the keys at `add`.
+
+**Rollback**, from least to most:
+
+- One company: there is no per-company switch. Re-running `update` while Tico Meet is on keeps the keys, so stop that
+  company's calls in Tico.
+- The whole cell: `cell init --meet-domain ""` removes `certs` and `livekit` (`--remove-orphans`), the `/rtc`
+  routes and the `INPUT` rules. Then `cell update --company <slug> --version <its current release>` for each company removes the
+  `TICO_MEET_*` keys, and calls answer `meet_unavailable` again.
+- AWS and DNS: delete the `tico-cloud-cell-1-meet` stack. That removes the rules and releases the IP, and the host
+  gets a new auto-assigned IP, which the tunnel does not mind. Then delete the Cloudflare A record.
+
+No database migration or company data is involved.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
+| `/srv/tico-cell/cell.json` | The cell's domain, the router's address, and the page and Tico Meet domains when set |
 | `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
 | `/etc/systemd/system/tico-cell-wake.service` | The wake service, run from the same checkout, on `127.0.0.1:8082` |
+| `/srv/tico-cell/meet/` (0700): `keys/keys.yaml`, `caddy/Caddyfile`, `certs/`, `livekit-cert.json` | Tico Meet ([Tico Meet](#tico-meet)): the cell's LiveKit key pair (0600), the certificate Caddy's config, its certificates (0700), and the expiry of the certificate LiveKit started with |
 | `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes (owned by 65532, the cloudflared user), and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |

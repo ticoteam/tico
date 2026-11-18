@@ -286,7 +286,7 @@ The `meet` compose profile runs LiveKit (Apache-2.0) on the cell host. It adds n
 - `TICO_MEET_API_KEY` and `TICO_MEET_API_SECRET`: LiveKit's key pair. They go to the LiveKit service and the server only.
 - `TICO_MEET_CERT_DIR`: a folder holding `fullchain.pem` and `privkey.pem` for `TICO_MEET_DOMAIN`. TURN over TLS needs
   them, and the service does not start without them.
-- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.8.4@sha256:621fd87b...c532af`, the tag and
+- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.13.11@sha256:25cd902d...1d3e20`, the tag and
   its digest, both checked on Docker Hub. A new LiveKit version means a new digest in `compose.yaml`.
 
 `TICO_MEET_INTERNAL_URL` defaults to `http://livekit:7880`, the server's own address for LiveKit's server API and for
@@ -315,6 +315,13 @@ imported only when a call starts). With numpy and protobuf, its wheels are 28.9 
 gzip to about 29 MB, the size of the layer it adds to the server image. The recorder stays in-process, because that is
 under the 40 MB at which a separate recorder image would be worth it. These sizes come from the pinned wheels, not from
 a built image.
+
+### On Tico Cloud (a cell)
+
+A cell runs one LiveKit for every company on the host, turned on with `python3 -m setup cell init --meet-domain
+<TURN host>`. `setup cell` then writes the `TICO_MEET_*` keys into each company's `.env`, and its router sends `/rtc`
+on every company host to LiveKit. The design, the production steps in order and the rollback are in
+[cell.md, Tico Meet](cell.md#tico-meet).
 
 ## Not built
 
