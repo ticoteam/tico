@@ -5,6 +5,7 @@ the replay and RunsOn read the real ones."""
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -458,13 +459,18 @@ def test_the_planner_finds_native_test_files_in_the_candidates_checkout(tmp_path
 
 
 def test_the_planner_finds_native_files_with_only_the_files_ci_checks_out_beside_it(tmp_path):
-    # ci.yml's candidate job checks the planner out sparsely (`validation-control`: release_increment.py and
-    # pr_checks.py only), so the native rule must come from those two files; a missing import fails every incremental
-    # validation at its plan step while full-checkout tests stay green.
-    control = tmp_path / "control/scripts"
-    control.mkdir(parents=True)
-    for name in ("release_increment.py", "pr_checks.py"):
-        shutil.copy(Path(ri.__file__).with_name(name), control / name)
+    # ci.yml's candidate job checks the planner out sparsely (`validation-control`, read here from ci.yml), so
+    # everything the planner imports must be in that list; a missing import fails every incremental validation at its
+    # plan step while full-checkout tests stay green.
+    root = Path(ri.__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/ci.yml").read_text()
+    listed = re.search(r"path: validation-control\n\s+sparse-checkout: \|\n((?:\s+scripts/\S+\n)+)", workflow)
+    assert listed, "ci.yml's validation-control checkout no longer has a sparse list this test can read"
+    control = tmp_path / "control"
+    for name in listed.group(1).split():
+        (control / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(root / name, control / name)
+    control = control / "scripts"
     tests = tmp_path / "candidate/backend/tests"
     tests.mkdir(parents=True)
     (tests / "test_native.py").write_text('BIN = "runner-rs/target/' + 'release/tico-runner"\n')
