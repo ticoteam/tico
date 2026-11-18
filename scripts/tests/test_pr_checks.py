@@ -1594,11 +1594,11 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
     # Only the cosmetic timing receipt (nothing waits on it) and the merge commit checks (a pull request's own static
     # checks and types jobs run the same list on its head) run in the merge queue alone.
-    for name in ("timings", "merge-checks"):
+    for name in ("timings", "merge-checks", "release-owner"):
         assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
         assert "github.event_name == 'pull_request'" not in jobs[name]["if"], name
     queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
-    assert queue_only == {"timings", "merge-checks"}
+    assert queue_only == {"timings", "merge-checks", "release-owner"}
     assert set(jobs) == {
         "plan",
         "static",
@@ -1610,6 +1610,7 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "desktop-app",
         "caddy-linux",
         "timings",
+        "release-owner",
     }
 
 
@@ -1690,7 +1691,7 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     gate = workflow_jobs()["jobs"]["checks"]
     assert gate["name"] == "checks" and "always()" in gate["if"]
     needs = set(gate["needs"])
-    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings"}
+    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings", "release-owner"}  # the last two follow it
     env = gate["steps"][0]["env"]
     names = {
         key: found.group(1) for key, value in env.items() if (found := re.search(r"needs\.([\w-]+)\.result", value))

@@ -485,6 +485,21 @@ checks before enqueuing again.
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
 check), set by a maintainer.
 
+### Who fixes a red or flaky test
+
+The Release Owner bot on Tico Team owns the release path. CI hands it three things the moment they happen
+(`scripts/ci/tell_release_owner.sh`, an incoming webhook on Tico Team signed with `TICO_RELEASE_OWNER_HOOK_SECRET`):
+
+- `queue-failed`: a step failed in a merge queue group, so the queue dropped it (the `release-owner` job in
+  `pr-checks.yml`). A group cancelled from outside names no failed step and is not sent.
+- `queue-flaky`: tests in a queue group passed only on their retry (the group still merged).
+- `validation-red`: a release validation of main went red (the `main-red` job in `ci.yml`).
+
+The bot decides what it is and acts the same day. A flaky test is fixed at its cause or deleted, never retried,
+quarantined or given a longer wait. A real break is fixed, or sent to the pull request's author with the failing test
+named. No rule re-queues or blocks a pull request: the owner decides. Without the two `TICO_RELEASE_OWNER_HOOK*`
+secrets (a fork, a copy of the repository) nothing is sent.
+
 ## Hosted release validation
 
 A validation run is full or [incremental](#incremental-validation); its jobs and their checks are the same gate either way.
