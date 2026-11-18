@@ -29,6 +29,12 @@ async function needsReadAll(): Promise<void> {
   }
 }
 
+/** The `browser:<tool>/<account>` a bot's "needs you" ❓ shows (backend/browser_commands.py), '' for any other item. */
+const needsBrowserRef = (it: NeedsEntry): string =>
+  it.kind === 'question' ? (it.ask?.shows || it.shows || []).find(r => r.startsWith('browser:') && r.includes('/')) || '' : '';
+/** The held ❓ that asks the person to sign in on this account's browser, if Needs you holds it. */
+const needsBrowserAsk = (toolId: string, accountId: string): NeedsEntry | undefined =>
+  needsHeld().find(it => needsBrowserRef(it) === `browser:${toolId}/${accountId}`);
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box) goes with Done as the outcome; otherwise nothing extra is sent. Closing never takes one.
 function taskOutcomeNote(task: {owner_id?: string | null | undefined; requester_id?: string | null | undefined} | null | undefined, action: {close?: boolean | undefined}, typed: string | null | undefined) {

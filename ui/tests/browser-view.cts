@@ -7,6 +7,8 @@ import type * as Routes from './support/routes.cts';
 // - Take control (POST …/browser/control {take: true}): a click lands at the page's own pixels, the box types, an empty
 //   box and ⏎ send Enter, ⌫ Backspace, the wheel scrolls; Give back; Done closes and gives control back;
 // - a browser host that is offline: "<label> is offline";
+// - a bot's own account that needs a person who only manages the bot (`can_open`): the Needs you pill and the account's
+//   dot open the view, and Done replies "Done" to the ❓; Tasks › You's row for the ❓ opens it too;
 // - a bot's ❓ that shows it (a `browser:<tool>/<account>` show ref): the view inline at 1440, and Done replies "Done" in
 //   its chat;
 //   at 390 an Open browser button opens it full screen with 48 px controls, no sideways scroll.
@@ -63,7 +65,7 @@ async function frameJpeg(browser: import('playwright').Browser): Promise<Buffer>
   return buf;
 }
 
-async function start(browser: import('playwright').Browser, hash: string, width: number, frame: Buffer, {offline = false} = {}) {
+async function start(browser: import('playwright').Browser, hash: string, width: number, frame: Buffer, {offline = false, tool = TOOL as object} = {}) {
   const page = await browser.newPage({viewport: {width, height: width < 500 ? 844 : 900}, serviceWorkers: 'block', hasTouch: width < 500});
   const errors: string[] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
@@ -84,7 +86,7 @@ async function start(browser: import('playwright').Browser, hash: string, width:
     if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [PIPELINE]});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: 1, items: [NEED], version: '1', next: null});
-    if (p === '/api/v2/website-tools/w1') return json(TOOL);
+    if (p === '/api/v2/website-tools/w1') return json(tool);
     if (p === '/api/v2/website-tools/w1/accounts/a1/browser/frame') {
       state.frames++;
       return route.fulfill({contentType: 'image/jpeg', headers: {'X-Page-Url': 'https://c.tidy.com/login?next=%2Fbookings', 'X-Page-Width': '1280', 'X-Page-Height': '800'}, body: frame});
@@ -192,6 +194,38 @@ async function start(browser: import('playwright').Browser, hash: string, width:
       assert.equal(state.frames, 0, 'no pictures from an offline host');
       await shot(page, 'offline-desktop');
       assert.deepEqual(errors, [], 'offline: no page errors');
+      await page.close();
+    }
+    // A bot's own account that needs Ana, who manages the bot but does not use the account (can_open, not can_use): the
+    // Needs you pill, the account's dot, its ⋯ and Open browser all open the live view, and Done replies "Done" to the
+    // bot's ❓. Tasks › You's row for the ❓ opens it too, without Flow.
+    {
+      const BOT = {subject: 'bot:support-bot', kind: 'bot', id: 'support-bot', name: 'Support Bot', initials: 'SB'};
+      const asking = {...TOOL, status: {label: 'Needs you', tone: 'waiting'}, accounts: [{...TOOL.accounts[0]!, kind: 'own', holder: BOT, access: [],
+        session: {state: 'needs_you', where: 'own', computer: 'Mac mini', by: BOT}, can_use: false, can_manage: true, can_open: true}]};
+      const {page, errors, sent} = await start(browser, '#/tools/website/w1', 1440, frame, {tool: asking});
+      const root = page.locator('#tool-website');
+      await root.locator('button.tw-ses[data-tw-open="a1"]').waitFor();
+      assert.equal(await root.locator('button.ghost[data-tw-open]').count(), 1, 'the header has Open browser');
+      await root.locator('[data-tw-acct-menu="a1"]').click();
+      assert.equal(await page.locator('#tw-menu [data-tw-act="open"]').count(), 1, "the account's ⋯ has Open browser");
+      await page.keyboard.press('Escape');
+      await page.waitForFunction('(S.v2?.needs || []).length > 0');
+      await root.locator('button.tw-ask').click();
+      const view = page.locator('dialog.bv-dialog[open] .bv');
+      await view.locator('[data-bv-img]:visible').waitFor();
+      await shot(page, 'needs-you-tool');
+      await view.locator('[data-bv-done]').click();
+      await page.locator('dialog.bv-dialog').waitFor({state: 'detached'});
+      assert.deepEqual(sent('/api/v2/threads/c-t-r1/messages'), [{text: 'Done'}], 'Done replies to the ❓ from Tools');
+      await page.goto('https://tico-ui.test/#/tasks');
+      await page.locator('[data-need-browser="r1"]').click();
+      await page.locator('dialog.bv-dialog[open] [data-bv-img]:visible').waitFor();
+      assert.equal(await page.locator('#need-card[open]').count(), 0, 'the row opens the browser, not Flow');
+      await page.locator('dialog.bv-dialog [data-bv-done]').click();
+      await page.locator('dialog.bv-dialog').waitFor({state: 'detached'});
+      assert.equal(sent('/api/v2/threads/c-t-r1/messages').length, 2, 'Done replies to the ❓ from Needs you');
+      assert.deepEqual(errors, [], 'needs you: no page errors');
       await page.close();
     }
     // The ❓: inline at 1440; at 390 Open browser is the bottom row's forward action, full screen, and back from it the

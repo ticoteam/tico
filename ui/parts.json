@@ -351,7 +351,8 @@
    "decideGoThrough",
    "decideOpen",
    "decideFlow",
-   "decideBotsFlow"
+   "decideBotsFlow",
+   "decideBrowserOpen"
   ],
   "idle": [
    "decideStop",

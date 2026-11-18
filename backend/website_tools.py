@@ -523,15 +523,32 @@ def picked_account(
         )
     tool = _readable(conn, who, tool_id, admins, auth)
     account = _account(conn, tool_id, account_id)
-    if not (
-        can_use(conn, who.actor, account)
-        or _may_manage(conn, who, account, admins, auth)
-        or (_bot_user_managed(conn, who, account, auth) and _asked(conn, who.actor, tool["id"], account["id"]))
-    ):
+    if not may_view(conn, who, account, admins, auth):
         raise Problem(
             "not_found", "This account is unavailable; choose an account in Tools or ask an admin for access.", 404
         )
     return _picked(tool, account)
+
+
+def may_view(
+    conn: Any,
+    who: Any,
+    account: Any,
+    admins: Iterable[str] | None = None,
+    auth: Any = None,
+    uses: bool | None = None,
+    manages: bool | None = None,
+) -> bool:
+    """The one rule for a person's live view of an account's browser (picked_account, and `can_open` on the tool's
+    page): a signed-in person who uses it or may manage it (a credential administrator, its holder, or one who manages
+    the bot that holds it), or who manages a bot it is granted to while a "needs you" ask for it waits on them."""
+    if not _person(who):
+        return False
+    if can_use(conn, who.actor, account) if uses is None else uses:
+        return True
+    if _may_manage(conn, who, account, admins, auth) if manages is None else manages:
+        return True
+    return _bot_user_managed(conn, who, account, auth) and _asked(conn, who.actor, account["tool_id"], account["id"])
 
 
 def _asked(conn: Any, person: str, tool_id: str, account_id: str) -> bool:
@@ -776,6 +793,7 @@ def _account_view(
                 "session": {"state": "unknown"},
                 "can_use": False,
                 "can_manage": False,
+                "can_open": False,
                 "can_remove": True,
             }
             if removes
@@ -805,6 +823,7 @@ def _account_view(
         "session": _session(c, account["id"]),
         "can_use": uses,
         "can_manage": manages,
+        "can_open": may_view(c, who, account, admins, auth, uses=uses, manages=manages),
         "can_remove": removes,
     }
     if _machine(who):

@@ -278,6 +278,10 @@ SCHEMAS['WebsiteTool'] = obj(
                     ),
                     'can_use': 'b',
                     'can_manage': 'b',
+                    'can_open': {
+                        'type': 'boolean',
+                        'description': "The caller may open the account's live browser (the browser routes' own rule)",
+                    },
                     'can_remove': 'b',
                 },
                 # `username` is left out for a bot, a run or a computer.
@@ -292,6 +296,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'session',
                     'can_use',
                     'can_manage',
+                    'can_open',
                 ],
             )
         ),
