@@ -838,7 +838,9 @@ def main(argv=None):
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--version", required=True)
     parser.add_argument("--state-dir", required=True)
-    parser.add_argument("--pid", type=int, required=True)
+    # The runner process to restart; 0 when none runs yet (a cloud machine's first boot, cloud_machine.py catch_up):
+    # the checkout moves forward only, and nothing is restarted or waited on.
+    parser.add_argument("--pid", type=int, default=0)
     parser.add_argument("--started", default="")  # the commit the runner started on; "" from an older runner
     args = argparse.Namespace()
     try:
@@ -880,6 +882,8 @@ def run_update(args):
         result = defer_update(args.state_dir, args.version, "this computer still has work running", transient=True)
         print(json.dumps(result))
         return 1
+    if not args.pid:
+        return catch_up(args)
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
     result = apply(
         args.root,
@@ -891,6 +895,18 @@ def run_update(args):
         helpers=helpers,
         started=args.started,
     )
+    print(json.dumps(result))
+    return 0 if result["state"] == "healthy" else 1
+
+
+def catch_up(args, run=subprocess.run, **kw):
+    """No runner yet: move the checkout to the release when it is behind it, with the same checks and rollback as any
+    update but no restart and no health wait (the runner starts afterwards, on whatever is checked out)."""
+    have = checkout_release(args.root, run=run)
+    if have and key(have) and key(args.version) and key(have) >= key(args.version):
+        result = {"state": "healthy", "target": args.version.lstrip("v"), "error": ""}
+    else:
+        result = apply(args.root, args.version, args.state_dir, run=run, **kw)
     print(json.dumps(result))
     return 0 if result["state"] == "healthy" else 1
 

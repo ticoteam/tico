@@ -6,7 +6,8 @@
 //! `kind`, `commit`, `update`), so Settings > Computers and Health see a Rust computer as they see a Python one.
 //!
 //! A failed update is tried again after six hours, on the server's next release, or as soon as disk space frees
-//! after one that ran out of it. Deferrals release claims until the status file's not_before time, with growing
+//! after one that ran out of it. A refused (`blocked`) one changed nothing, so it is also tried once on every start of
+//! this runner, and a refusal over changed checkout files as soon as the checkout is clean (#648). Deferrals release claims until the status file's not_before time, with growing
 //! waits capped at an hour. On a server that names no release (a development server) a supervised checkout
 //! follows origin/main instead (service.py checkout_status, self_update), restarting only once the new runner binary
 //! is prepared, and the heartbeat's `checkout` says how it stands against main (backend/models.py Checkout).
@@ -33,6 +34,9 @@ const DEFERRAL_DELAYS_S: &[u64] = &[120, 300, 900, 1800, 3600]; // release_updat
 const MAX_DEFERRALS: u64 = 3;
 const DEFERRAL_LIMIT_S: f64 = 2.0 * 3600.0;
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
+/// How often a refusal over changed checkout files looks at the checkout again: the change can be momentary (a disk
+/// still restoring from its snapshot shows files as changed for a few minutes after boot), so it is retried once clean.
+const CLEAN_CHECK_EVERY: Duration = Duration::from_secs(120);
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
 const PREPARE_RETRY: Duration = Duration::from_secs(3600);
@@ -769,6 +773,8 @@ struct Inner {
     /// The Docker update this process saw changing containers (Follower::unsettled): held here as well as on disk,
     /// so a hold that could not be saved is not forgotten while this process runs.
     docker_hold: Option<String>,
+    /// When a blocked update's changed checkout files were last looked at (CLEAN_CHECK_EVERY).
+    clean_checked_at: Option<Instant>,
 }
 
 pub struct Follower {
@@ -785,6 +791,8 @@ pub struct Follower {
     /// Gets the runner binary for the checkout as it now is (`python -m runner_support.engine prepare`); non-zero on failure.
     prepare: Vec<String>,
     sidecar: Sidecar,
+    /// When this process started (epoch seconds): an update refused before it is tried again once.
+    born: f64,
     inner: Mutex<Inner>,
 }
 
@@ -837,6 +845,7 @@ pub fn init(config: &Map<String, Value>, directory: &Path) {
         ]
         .into(),
         sidecar: Sidecar::from_env(),
+        born: epoch_s(),
         inner: Mutex::new(Inner {
             state: "idle".into(),
             revision: started.clone(),
@@ -986,6 +995,17 @@ impl Follower {
             .or_else(|| text_of(&status["at"]).parse().ok())
             .unwrap_or(0.0);
         let age = epoch_s() - at;
+        // A refusal changed nothing (no checkout, no restart), so trying it again cannot loop: once on every start of
+        // this runner, and as soon as the changed files it named are gone.
+        if status["state"] == "blocked" && at < self.born {
+            return None;
+        }
+        if status["state"] == "blocked"
+            && text_of(&status["error"]).starts_with("the checkout has ")
+            && self.checkout_clean_now().await
+        {
+            return None;
+        }
         if matches!(
             status["state"].as_str(),
             Some("idle" | "waiting" | "busy" | "blocked")
@@ -1035,6 +1055,24 @@ impl Follower {
             }
             _ => None,
         }
+    }
+
+    /// Whether the checkout has no changed tracked files now (release_update.py's own check), looked at no more than
+    /// every CLEAN_CHECK_EVERY; false when unknown or not yet due.
+    async fn checkout_clean_now(&self) -> bool {
+        {
+            let mut s = self.inner.lock().unwrap();
+            if s.clean_checked_at
+                .is_some_and(|t| t.elapsed() < CLEAN_CHECK_EVERY)
+            {
+                return false;
+            }
+            s.clean_checked_at = Some(Instant::now());
+        }
+        matches!(
+            git_in(&self.root, &["status", "--porcelain", "--untracked-files=no"], 30).await,
+            Some((0, out)) if out.trim().is_empty()
+        )
     }
 
     fn no_updater_hint(want: &str) -> String {
@@ -1938,6 +1976,63 @@ scope['main'](sys.argv[1:])
     }
 
     #[tokio::test]
+    async fn a_refused_update_is_tried_again_once_the_checkout_is_clean_and_on_every_start() {
+        // #648: a new cloud machine's disk was still restoring when its first update ran, so git saw changed files for
+        // a few minutes. The refusal held for six hours and a restart read the same status.
+        let mut f = checkout_follower();
+        f.root = f.directory.join("checkout");
+        std::fs::create_dir(&f.root).unwrap();
+        let sh = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&f.root)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@acme.example",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        sh(&["init", "-q"]);
+        std::fs::write(f.root.join("a.txt"), "one").unwrap();
+        sh(&["add", "a.txt"]);
+        sh(&["commit", "-q", "-m", "one"]);
+        std::fs::write(f.root.join("a.txt"), "restoring").unwrap();
+        let refused = json!({"state": "blocked", "target": "0.3.45", "at": epoch_s() + 1.0,
+            "error": "the checkout has 1 changed file; commit or stash them and the runner updates itself: a.txt"});
+        write_status(&f.directory, refused.clone());
+        // Still changed: the refusal holds, and the checkout is not looked at again before CLEAN_CHECK_EVERY.
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "blocked");
+        std::fs::write(f.root.join("a.txt"), "one").unwrap();
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "blocked");
+        // Due again and clean: the update is tried.
+        f.inner.lock().unwrap().clean_checked_at = Some(Instant::now() - CLEAN_CHECK_EVERY);
+        assert!(f.outcome("0.3.45").await.is_none());
+        // Another refusal (a branch) holds while this runner runs, and is tried again once after it restarts.
+        let other = json!({"state": "blocked", "target": "0.3.45", "at": epoch_s(), "error": "cannot inspect the checkout commit"});
+        write_status(&f.directory, other);
+        f.born = epoch_s() - 60.0;
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "blocked");
+        f.born = epoch_s() + 1.0;
+        assert!(f.outcome("0.3.45").await.is_none());
+        // A failed or rolled-back update did restart the runner, so a start alone never retries it (no loop).
+        write_status(
+            &f.directory,
+            json!({"state": "rolled_back", "target": "0.3.45", "at": epoch_s() - 5.0, "error": "x"}),
+        );
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "rolled_back");
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
     async fn saved_branch_blocks_report_current_recovery_safety_without_moving_head() {
         let mut f = checkout_follower();
         f.root = f.directory.join("checkout");
@@ -2336,6 +2431,7 @@ scope['main'](sys.argv[1:])
                 url: String::new(),
                 token_file: dir.join("t"),
             },
+            born: 0.0, // up since before any status a test writes
             inner: Mutex::new(Inner {
                 state: "idle".into(),
                 desired: Some("0.3.45".into()),
@@ -2410,6 +2506,7 @@ scope['main'](sys.argv[1:])
                 url: "http://127.0.0.1:9".into(),
                 token_file: dir.join("t"),
             },
+            born: 0.0, // up since before any status a test writes
             inner: Mutex::new(Inner {
                 state: "waiting".into(),
                 desired: Some("0.3.47".into()),
@@ -2465,6 +2562,7 @@ scope['main'](sys.argv[1:])
                 url: url.into(),
                 token_file: dir.join("t"),
             },
+            born: 0.0, // up since before any status a test writes
             inner: Mutex::new(Inner {
                 state: "idle".into(),
                 desired: Some(release.into()),

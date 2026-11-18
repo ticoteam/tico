@@ -19,9 +19,9 @@ HUB = "https://acme.example"
 class Fake:
     """Stands in for every command: `enroll` writes runner.json the way the Rust runner does, after `fail` failures."""
 
-    def __init__(self, m_home, fail=0, install_ok=True):
+    def __init__(self, m_home, fail=0, install_ok=True, url="", updates=()):
         self.calls, self.home, self.fail, self.install_ok = [], m_home, fail, install_ok
-        self.code_files = []
+        self.code_files, self.url, self.updates = [], url, list(updates)
 
     def __call__(self, command, **kw):
         self.calls.append(command)
@@ -39,7 +39,12 @@ class Fake:
             else:
                 config = Path(command[command.index("--config") + 1])
                 config.parent.mkdir(parents=True, exist_ok=True)
-                config.write_text(json.dumps({"runner_id": "r1", "token": "t"}))
+                config.write_text(
+                    json.dumps({"runner_id": "r1", "token": "t", **({"url": self.url} if self.url else {})})
+                )
+        elif "runner_support.release_update" in command:
+            result = self.updates.pop(0) if self.updates else {"state": "healthy"}
+            out, code = json.dumps(result) + "\n", 0 if result["state"] == "healthy" else 1
         elif command[-1] == "install" and "scripts/tico-computer" in command[-2]:
             if self.install_ok:
                 units = self.home / ".config" / "systemd" / "user"
@@ -326,3 +331,105 @@ def test_the_boot_units_command_runs_through_the_runner_forwarder():
     )
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout and "boot" in old.stdout
+
+
+class Healthz:
+    """urlopen's stand-in for the hub's /healthz."""
+
+    def __init__(self, body):
+        self.body, self.urls = body, []
+
+    def __call__(self, url, timeout):
+        self.urls.append(url)
+        if isinstance(self.body, Exception):
+            raise self.body
+        body = self.body
+
+        class Reply:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n):
+                return json.dumps(body).encode()
+
+        return Reply()
+
+
+DIRTY = {
+    "state": "blocked",
+    "error": "the checkout has 3 changed files; commit or stash them and the runner updates itself: a",
+}
+
+
+def test_a_new_machine_moves_to_the_hubs_release_before_its_runner_first_starts(machine, monkeypatch):
+    """#648: an image built on 0.5.19 enrolled with a server that refuses runners below 0.6; the first boot moves it."""
+    hub = Healthz({"ok": True, "release": "0.6.64"})
+    monkeypatch.setattr("urllib.request.urlopen", hub)
+    m, fake = machine(url=HUB)
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert hub.urls == [HUB + "/healthz"]
+    names = [" ".join(c) for c in fake.calls]
+    update = next(i for i, c in enumerate(names) if "runner_support.release_update" in c)
+    install = next(i for i, c in enumerate(names) if "scripts/tico-computer install" in c)
+    assert update < install, "the checkout moves before the runner's units are installed"
+    command = fake.calls[update]
+    assert command[:3] == ["runuser", "-u", "user"]
+    assert command[command.index("--version") + 1] == "0.6.64"
+    state = machine.home / ".config" / "tico" / "state-r1"
+    assert command[command.index("--state-dir") + 1] == str(state) and state.is_dir()
+    assert "--pid" not in command  # no runner yet: forward only, nothing restarted
+    assert any("on release 0.6.64" in line for line in machine.said)
+    # A later boot never moves the checkout: the running runner follows the hub itself.
+    m2, fake2 = machine(url=HUB)
+    assert cm.boot(m2, {}) == 0 and not fake2.named("--state-dir")
+
+
+def test_a_momentary_dirty_checkout_is_looked_at_again_and_other_refusals_leave_it_to_the_runner(machine, monkeypatch):
+    hub = Healthz({"release": "0.6.64"})
+    monkeypatch.setattr("urllib.request.urlopen", hub)
+    waits = []
+    m, fake = machine(url=HUB, updates=[DIRTY, DIRTY, {"state": "healthy"}])
+    m.sleep = waits.append
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert len(fake.named("--state-dir")) == 3 and waits == [cm.CATCH_UP_WAIT_S] * 2
+    assert fake.named("install")
+
+    m.config.unlink()
+    shutil.rmtree(machine.home / ".config" / "systemd")
+    boat_bashrc(machine.home)
+    m2, fake2 = machine(url=HUB, updates=[{"state": "failed", "error": "release v0.6.64 was not found"}])
+    assert cm.boot(m2, {}) == 0
+    assert len(fake2.named("--state-dir")) == 1 and fake2.named("install")
+    assert any("the runner will try again" in line for line in machine.said)
+
+
+def test_a_dirty_checkout_that_stays_dirty_is_tried_a_bounded_number_of_times(machine, monkeypatch):
+    hub = Healthz({"release": "0.6.64"})
+    monkeypatch.setattr("urllib.request.urlopen", hub)
+    m, fake = machine(url=HUB, updates=[DIRTY] * 99)
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert len(fake.named("--state-dir")) == cm.CATCH_UP_TRIES and fake.named("install")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [OSError("unreachable"), {"release": ""}, {"release": "main; rm -rf /"}, ["0.6.64"], {"ok": True}],
+)
+def test_an_unreadable_hub_release_skips_the_catch_up(machine, monkeypatch, body):
+    hub = Healthz(body)
+    monkeypatch.setattr("urllib.request.urlopen", hub)
+    m, fake = machine(url=HUB)
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert not fake.named("--state-dir") and fake.named("install")
+
+
+def test_hub_release_reads_healthz_and_strips_a_leading_v():
+    assert cm.hub_release(HUB + "/", Healthz({"release": "v0.6.64"})) == "0.6.64"
+    assert cm.hub_release(HUB, Healthz({"release": "0.7.0-rc.1"})) == "0.7.0-rc.1"

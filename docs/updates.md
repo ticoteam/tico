@@ -228,7 +228,9 @@ logs out and do not start at boot. `scripts/tico-computer status`, `restart`, `l
 
 A checkout with uncommitted changes, or on a person's development branch, is refused: nothing is
 stashed, reset or discarded. Settings > General > Health > Details and Computers name the changed files until someone
-commits or stashes them.
+commits or stashes them. The runner looks at the checkout again every two minutes and tries the update as soon as
+it is clean, so a momentary change (a disk still restoring from a snapshot) costs minutes. A refused update changed
+nothing, so every runner start also tries it once more.
 
 If a bot left the install on `tico/<8-character hex id>-<slug>` or `tico-session/<task>`, a release
 update can move it back onto a release. After draining work, under `tico-update.lock`, it checks that tracked

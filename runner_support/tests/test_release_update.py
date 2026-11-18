@@ -547,6 +547,34 @@ def test_update_switches_to_the_servers_tag_not_main(repos):
 
 
 @pytest.mark.slow
+def test_with_no_runner_yet_the_checkout_moves_forward_only_and_nothing_restarts(repos, capsys):
+    """#648: a cloud machine's first boot (cloud_machine.py catch_up) runs the updater with no runner (`--pid 0`)."""
+    public, checkout, state = repos
+    calls = Calls()
+    args = SimpleNamespace(root=checkout, version="0.2.0", state_dir=state, pid=0)
+    assert ru.catch_up(args, install=calls.install, prepare=calls.prepare) == 0
+    assert ru.checkout_release(checkout) == "0.2.0" and calls.restarts == 0 and calls.checks == []
+    assert calls.prepared == [head(checkout)]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["state"] == "healthy"
+    # Never backwards: a checkout already past the hub's release stays where it is.
+    args.version = "0.1.0"
+    assert ru.catch_up(args, install=calls.install, prepare=calls.prepare) == 0
+    assert ru.checkout_release(checkout) == "0.2.0"
+
+
+@pytest.mark.slow
+def test_with_no_runner_yet_a_dirty_checkout_is_refused_as_always(repos, capsys):
+    _, checkout, state = repos
+    (checkout / "app.py").write_text("restoring")
+    args = SimpleNamespace(root=checkout, version="0.2.0", state_dir=state, pid=0)
+    calls = Calls()
+    assert ru.catch_up(args, install=calls.install, prepare=calls.prepare) == 1
+    out = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert out["state"] == "blocked" and out["error"].startswith("the checkout has 1 changed file")
+    assert ru.checkout_release(checkout) == "0.1.0"
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("branch,version", [("tico/b427e9ee-fix-runner", "0.2.0"), ("tico-session/task-123", "0.1.0")])
 def test_bot_branch_recovery_keeps_both_refs_and_detaches_even_on_the_same_commit(repos, capsys, branch, version):
     from runner_support import release_branch
