@@ -243,7 +243,7 @@ let browser: import('playwright').Browser | null = null;
     // The + in front of the field: upload, link a file, link a task, new task.
     await page.locator('.cw .p-attach').click();
     assert.deepEqual(await page.locator('.cw .thv-attach-menu button').evaluateAll(els => els.map(e => [e.querySelector('.nav-icon')?.textContent, e.lastChild?.textContent])),
-      [['upload', 'Upload file'], ['attach_file', 'Link a file'], ['link', 'Link a task'], ['add_task', 'New task']]);
+      [['description', 'Upload file'], ['article', 'Link a file'], ['link', 'Link a task'], ['task_alt', 'New task']]);
     await themed(page, 'plusmenu');
     await page.locator('.cw .p-attach').click();
     // People: who is in the call (you first, as yourself); typing shows only what it finds.
@@ -279,6 +279,10 @@ let browser: import('playwright').Browser | null = null;
     const pill = (await toast.boundingBox())!;
     assert.equal(Math.round(pill.height), 34);
     assert.ok(Math.abs(pill.x + pill.width / 2 - 210) <= 1, 'centred: ' + pill.x);
+    assert.ok(pill.y + pill.height <= (await page.locator('.cw .thv-ask .p-pill').boundingBox())!.y, 'above the chat\'s field');
+    // Every icon the window shows is one the icon font holds (a missing one draws as letters).
+    const icons = fs.readFileSync(path.join(__dirname, '..', 'vendor', 'fonts', 'icons.txt'), 'utf8').split('\n');
+    for (const name of await page.locator('.cw .nav-icon').allTextContents()) assert.ok(icons.includes(name.trim()), 'in the icon font: ' + name);
     await themed(page, 'undo');
     await toast.locator('button', {hasText: 'Undo'}).click();
     await page.waitForFunction(() => document.querySelector('.cw-faces [data-cw-bot="analytics"][data-on="true"]'));
@@ -360,7 +364,9 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.locator('#mobile-nav').isVisible(), false);
     assert.equal(await page.locator('.cw-tools [data-cw="down"]').count(), 1, 'back to the thread');
     const face = (await page.locator('.cw-faces .cw-face .cw-av').first().boundingBox())!;
-    assert.equal(Math.round(face.width), 60);
+    assert.equal(Math.round(face.width), 52);
+    const rows = await page.locator('.cw-faces .cw-face').evaluateAll(els => new Set(els.map(e => Math.round(e.getBoundingClientRect().top))).size);
+    assert.equal(rows, 2, 'six faces and the + in two rows of four');
     await page.locator('.cw-thread .th-msg').first().waitFor();
     await themed(page, 'small', true);
     await page.evaluate(() => {

@@ -1314,6 +1314,8 @@ function thvContextDraw(view: ThvView) {
     + `<button type="button" class="thv-ctx-x" aria-label="${esc(`Don't send ${label}`)}" title="Don't send this">✕</button></span>`;
   (host.querySelector('.thv-ctx-x') as HTMLElement).onclick = () => { view.contextOff = true; thvContextDraw(view); view.composer?.el.querySelector<HTMLTextAreaElement>('.p-text')?.focus(); };
 }
+// The + menu's icons (names the icon font's subset holds: scripts/build-icon-font.py reads *_ICONS maps).
+const ATTACH_ICONS = {upload: 'description', library: 'article'};
 function thvComposerDraw(view: ThvView) {
   const host = view.el.querySelector('.thv-composer') as HTMLElement;
   const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);
@@ -1339,7 +1341,7 @@ function thvComposerDraw(view: ThvView) {
       ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" class="tap-mark" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
       <span class="thv-attach-wrap${plus ? ' thv-attach-plus' : ''}"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${plus ? '<span class="nav-icon" aria-hidden="true">add</span>' : ICON_CLIP}</button>
-        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">${plus ? `${menuIcon('upload')}Upload file` : 'Upload'}</button>${view.opts.send ? '' : `<button type="button" role="menuitem" data-attach="library">${plus ? `${menuIcon('attach_file')}Link a file` : 'Library file'}</button>`}${
+        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">${plus ? `${menuIcon(ATTACH_ICONS.upload)}Upload file` : 'Upload'}</button>${view.opts.send ? '' : `<button type="button" role="menuitem" data-attach="library">${plus ? `${menuIcon(ATTACH_ICONS.library)}Link a file` : 'Library file'}</button>`}${
           (view.opts.attachMore?.items || []).map(([k, label, icon]) => `<button type="button" role="menuitem" data-attach="more:${esc(k)}">${icon ? menuIcon(icon) : ''}${esc(label)}</button>`).join('')}</div></span>
       <input type="file" multiple hidden class="p-file">
       ${bot ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>

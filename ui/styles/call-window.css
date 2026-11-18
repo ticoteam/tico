@@ -3,16 +3,18 @@
    call's notes once it has ended. It covers the app: no sidebar, tab bar or call bar while it shows. */
 body.call-page #side,body.call-page #mobile-nav,body.call-page #call-bar,body.call-page .ask-fab{display:none !important}
 body.call-page{overflow:hidden}
-/* the window's toast: one at a time (call-window.ts cwToast), a centred pill just above the controls */
-html body.call-page .toast{left:50%;right:auto;bottom:61px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;box-sizing:border-box;height:34px;
+/* the window's toast: one at a time (call-window.ts cwToast), a centred pill just above the controls, or above the chat's
+   field while it shows (the selector outweighs layout.css's narrow-screen toast) */
+html:not(.in-setup) body.call-page:not(.bot-page):not(.mobile-composer-focus) .toast{left:50%;right:auto;bottom:61px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;box-sizing:border-box;height:34px;
   max-width:calc(100vw - 32px);padding:0 14px;border:1px solid var(--g4);border-radius:17px;background:var(--g2);color:var(--ink);font-size:12.5px;white-space:nowrap}
-html body.call-page .toast.err{color:var(--ink)}
+html:not(.in-setup) body.call-page:not(.bot-page):not(.mobile-composer-focus) .toast.err{color:var(--ink)}
 html body.call-page .toast button.linkish{color:var(--ink);font-weight:600;text-decoration:none}
+html:not(.in-setup) body.call-page.cw-composer:not(.bot-page):not(.mobile-composer-focus) .toast{bottom:129px}
 
 .cw{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;box-sizing:border-box;width:100%;max-width:440px;margin:0 auto;
   background:var(--surface);color:var(--ink);border-left:1px solid var(--line);border-right:1px solid var(--line)}
 .cw.cw-wide,.cw.cw-ended{max-width:none;border:0}
-.cw button{font:inherit}
+:where(.cw) button{font:inherit}
 .cw .spacer{flex:1}
 .cw .nav-icon{font-size:20px;line-height:1}
 .cw-icon{display:inline-grid;place-items:center;flex:none;width:32px;height:32px;padding:0;border:0;border-radius:var(--r-ctl);background:transparent;color:var(--muted);cursor:pointer;text-decoration:none}
@@ -34,7 +36,7 @@ html body.call-page .toast button.linkish{color:var(--ink);font-weight:600;text-
 button.cw-face{cursor:pointer}
 .cw-av{position:relative;display:grid;place-items:center;width:var(--cw-av,44px);height:var(--cw-av,44px);border-radius:50%}
 .cw-face.cw-speaking .cw-av{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--ok)}
-.cw-face.cw-out .cw-av{opacity:.38}
+.cw-face.cw-out .cw-av{opacity:.5}
 .cw-face.cw-out:hover .cw-av{opacity:.7}
 .cw-name{width:100%;max-width:100%;white-space:normal;overflow-wrap:anywhere;font-size:var(--t-sm);line-height:1.25;text-align:center;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .cw-face.cw-out .cw-name{color:var(--muted)}
@@ -153,7 +155,7 @@ button.cw-face{cursor:pointer}
 .cw-join{height:40px;padding:0 22px}
 
 /* wide: the shared screen with the caption under it, the tabs beside */
-.cw.cw-wide .cw-faces{gap:8px}
+.cw.cw-wide .cw-faces{gap:8px;padding-bottom:4px}
 .cw.cw-wide .cw-face{width:auto}
 .cw.cw-wide .cw-name{display:none}
 .cw.cw-wide .cw-caption-head{display:none}
@@ -219,7 +221,7 @@ button.cw-face{cursor:pointer}
   .cw-title{font-size:20px}
   .cw-faces{gap:10px 0;max-height:none}
   .cw:not(.cw-wide):not(.cw-ended) .cw-faces{display:flex;gap:10px 0}
-  .cw:not(.cw-wide):not(.cw-ended) .cw-face{width:33.33%;max-width:108px}
+  .cw:not(.cw-wide):not(.cw-ended) .cw-face{width:25%;max-width:108px}
   .cw .cw-name{font-size:var(--t-base)}
   .cw-side{margin-top:6px;border-radius:16px 16px 0 0;background:var(--surface);box-shadow:0 -1px 0 var(--line)}
   :root[data-theme="light"] .cw-side{background:#fafafa}
@@ -240,7 +242,8 @@ button.cw-face{cursor:pointer}
   .cw-tab{font-size:15px}
   /* a 44px tap, the same 26px look */
   .cw-create::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
-  html body.call-page .toast{bottom:calc(max(34px,env(safe-area-inset-bottom)) + 69px)}
+  html:not(.in-setup) body.call-page:not(.bot-page):not(.mobile-composer-focus) .toast{bottom:calc(max(34px,env(safe-area-inset-bottom)) + 69px)}
+  html:not(.in-setup) body.call-page.cw-composer:not(.bot-page):not(.mobile-composer-focus) .toast{bottom:calc(max(34px,env(safe-area-inset-bottom)) + 127px)}
   .cw-owner-n{display:none}
   .cw-after{display:flex;flex-direction:column;overflow-y:auto}
   .cw-after-main{overflow:visible;padding:12px 16px}

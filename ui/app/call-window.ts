@@ -40,7 +40,7 @@ let CW: CwState | null = null;
 const CW_LIVE = '/v2/live-meetings/';
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CW_ICONS = {add: 'add', search: 'search', close: 'close', copy: 'content_copy', team: 'groups', check: 'check', link: 'link',
-  down: 'expand_more', open: 'open_in_new', mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share'};
+  down: 'expand_more', open: 'open_in_new', mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', task: 'task_alt'};
 // The sound the browser held back until a tap (autoplay): a speaker, crossed out.
 const CW_SOUND_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/></svg>';
 // The shared screen on the whole phone: four corners.
@@ -129,7 +129,7 @@ function callWindowStop(): void {
   const bar = $('#call-bar .call-screen');
   for (const v of st.el.querySelectorAll('#cw-screen video')) bar?.append(v);
   st.el.remove();
-  document.body.classList.remove('call-page', 'cw-wide-page');
+  document.body.classList.remove('call-page', 'cw-wide-page', 'cw-composer');
   if (CALL) callScreenSync();
 }
 async function cwLoad(st: CwState): Promise<void> {
@@ -226,7 +226,7 @@ function cwChatMount(st: CwState): void {
   st.chat = threadMount(host, {id: st.threadId, header: false, reach: false, placeholder: () => 'Message',
     // The call's own posts (its card, transcript and notes) are not part of its chat: they are the tabs and the notes.
     hide: m => !!m.refs?.call && !(m.refs as {live_meeting?: {chat_id?: string}}).live_meeting?.chat_id,
-    attachMore: {plus: true, items: [['link', 'Link a task', 'link'], ['new', 'New task', 'add_task']], pick: k => { st.task = k === 'new' ? 'new' : 'link'; cwTaskDraw(st); }}});
+    attachMore: {plus: true, items: [['link', 'Link a task', CW_ICONS.link], ['new', 'New task', CW_ICONS.task]], pick: k => { st.task = k === 'new' ? 'new' : 'link'; cwTaskDraw(st); }}});
 }
 
 // ----------------------------------------------------------------- reading the call
@@ -325,6 +325,8 @@ function cwDraw(st: CwState): void {
   if (facesEl) patchHTML(facesEl, cwFacesHTML(st, faces, live, ended));
   const caption = live ? cwCaptionHTML(st, v) : '';
   for (const c of el.querySelectorAll<HTMLElement>('.cw-caption')) { patchHTML(c, caption); c.hidden = !caption; }
+  // A toast sits above the chat's field while it shows (ui/styles/call-window.css).
+  document.body.classList.toggle('cw-composer', !ended && st.tab === 'chat' && !st.wide);
   if (ended) {
     for (const part of el.querySelectorAll<HTMLElement>('.cw-tabs, .cw-bar')) part.replaceChildren();
     cwAfterDraw(st); return;
@@ -339,7 +341,7 @@ function cwDraw(st: CwState): void {
 }
 // The header's faces, two rows at most: the rest are "+N", which opens People.
 function cwFacesHTML(st: CwState, faces: CwFace[], live: boolean, ended: boolean): string {
-  const small = !st.wide && !ended, size = small ? cwPhone() ? 60 : 44 : 32;
+  const small = !st.wide && !ended, size = small ? cwPhone() ? 52 : 44 : 32;
   const cap = cwPhone() && small ? CW_FACES.phone : small ? CW_FACES.small : CW_FACES.wide;
   const on = faces.filter(f => f.on), out = faces.filter(f => !f.on);
   const fit = faces.length <= cap + 1 ? faces : [...on.slice(0, cap), ...out.slice(0, Math.max(0, cap - on.length))];
