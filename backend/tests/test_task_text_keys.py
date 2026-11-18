@@ -352,8 +352,12 @@ def test_a_note_with_a_page_or_a_file_a_many_task_why_and_a_task_from_a_message_
     version = _shown(api, task["id"])["version"]
     _refused(api, f"tasks/{task['id']}/pages", {"requirement": "Spec", "page": "page:file-x", "note": "key " + KEY})
     _refused(api, f"tasks/{task['id']}/files", {"name": "a.txt", "text": "ordinary", "note": "token " + KEY})
-    _refused(api, "task-bulk", {"filter": {"ids": [task["id"]]}, "action": "close", "why": "it used " + KEY})
+    other = post(api, "tasks", {"owner": "ops", "title": "Check the logs", "body": "Please check."})
+    ids = [task["id"], other["id"]]
+    _refused(api, "task-bulk", {"filter": {"ids": ids}, "action": "close", "why": "it used " + KEY})
     assert _shown(api, task["id"])["version"] == version and _shown(api, task["id"])["status"] == "open"
+    # A many-task change's refusal names each task it would have gone on (Review on d08fdc0).
+    assert _shown(api, other["id"])["status"] == "open" and len(_rows(api, other["id"])) == 1
     # A task made from a message copies the message: one in a chat outside any task holds a key.
     dm = post(api, "threads/dm", {"members": ["bot:ops"]})
     said = post(api, f"threads/{dm['id']}/messages", {"text": "for github " + KEY})
@@ -367,7 +371,7 @@ def test_a_note_with_a_page_or_a_file_a_many_task_why_and_a_task_from_a_message_
             "SELECT 1 FROM events WHERE action<>? AND detail LIKE ?", (K.ACTION, "%" + KEY + "%")
         ).fetchone()
         made = [r[0] for r in c.execute("SELECT target FROM events WHERE action=? AND target=''", (K.ACTION,))]
-    assert len(_rows(api, task["id"])) == 2 and len(made) == 2, "a many-task change and a new task name no one task"
+    assert len(_rows(api, task["id"])) == 3 and len(made) == 1, "only a new task names no one task"
 
 
 def test_a_bot_s_turn_reply_with_a_key_no_grant_covers_is_stored_as_a_mark(api):
@@ -381,7 +385,8 @@ def test_a_bot_s_turn_reply_with_a_key_no_grant_covers_is_stored_as_a_mark(api):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "keys-start"}, token=r["token"])
     done_note = {"note": "Reviewed.", "version": _shown(api, task["id"])["version"]}
     post(api, f"tasks/{task['id']}/done", done_note, token=attempt["token"])
-    reply = "Reviewed. The diff hard-codes " + KEY + ", so rotate it."
+    # Characters NFKC would change (an ellipsis, a superscript, a ligature) stay as the bot wrote them (Review on d08fdc0).
+    reply = "Reviewed. The diff hard-codes " + KEY + "\u2026 so rotate it \u00b2 \ufb01x."
     post(
         api,
         f"attempts/{attempt['id']}/complete",
@@ -394,9 +399,79 @@ def test_a_bot_s_turn_reply_with_a_key_no_grant_covers_is_stored_as_a_mark(api):
         posted = [
             r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops' AND body LIKE 'Reviewed.%'")
         ]
-    assert kept == "Reviewed. The diff hard-codes " + K.MARK + ", so rotate it."
+    assert kept == "Reviewed. The diff hard-codes " + K.MARK + "\u2026 so rotate it \u00b2 \ufb01x."
     assert posted == [kept], "the reply is posted with the mark, the rest as written"
     [row] = _rows(api, task["id"])
     assert (
         row["actor"] == "bot:ops" and json.loads(row["detail"])["outcome"] == "masked" and KEY[4:] not in row["detail"]
     )
+
+
+# ---- Review on d08fdc0: a streamed file's note, a Needs you batch's answers, and masking that keeps the rest.
+
+
+def test_a_file_s_note_sent_as_a_streamed_form_is_refused_and_nothing_is_stored(api):
+    # The CLI attaches a file as multipart, which streams past the request guard's body check.
+    task = _task(api)
+    version = _shown(api, task["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/files",
+        data={"note": "deploy token " + KEY},
+        files={"file": ("keyed-note.txt", b"plain words")},
+        headers=headers(),
+    )
+    assert r.status_code == 422 and r.json()["error"]["code"] == "looks_like_key", r.text
+    assert KEY not in r.text
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM blobs WHERE name='keyed-note.txt'").fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM events WHERE action<>? AND detail LIKE ?", (K.ACTION, "%" + KEY[4:] + "%")
+        ).fetchone()
+    assert _shown(api, task["id"])["version"] == version and len(_rows(api, task["id"])) == 1
+    # The same file with an ordinary note is attached.
+    ok = api.post(
+        f"/api/v2/tasks/{task['id']}/files",
+        data={"note": "max_tokens: 4096"},
+        files={"file": ("keyed-note.txt", b"plain words")},
+        headers=headers(),
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def test_a_needs_you_answer_holding_a_key_is_refused_before_the_batch_keeps_it(api):
+    from backend.tests.helpers import engine as X
+
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops", lint=False)
+        H.task_ask(
+            c,
+            "bot:ops",
+            made["id"],
+            "human:ana",
+            "Spend it?",
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=made["version"],
+        )
+    version = _shown(api, made["id"])["version"]
+    bid = post(api, "batch", {})["id"]
+    for said in ({"text": "No, it leaks " + KEY}, {"text": "No", "heard": "no it leaks " + KEY}):
+        _refused(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "send_back", **said})
+    done = post(api, f"batch/{bid}/commit", {})
+    assert done["applied"] == [] or all("Sent back" not in line for line in done["applied"])
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM batches WHERE responses LIKE ?", ("%" + KEY[4:] + "%",)).fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY[4:] + "%",)).fetchone()
+    assert _shown(api, made["id"])["version"] == version
+    rows = _rows(api, made["id"])
+    assert len(rows) == 2 and all(KEY[4:] not in r["detail"] for r in rows)
+
+
+def test_masking_changes_only_the_key_and_keeps_every_other_character_as_written():
+    # Compatibility characters, superscripts, an ellipsis and zero-width joiners around a key stay as they came.
+    before, after = "Plan\u2026 x\u00b2 \ufb01le \u2460 caf\u0065\u0301 \u200d", " \u2014 done\u200b \u00bd"
+    text, rules = K.masked(before + KEY + after)
+    assert text == before + K.MARK + after and rules == ["github"]
+    # A zero-width character inside the key is part of the key.
+    text, _ = K.masked("use " + KEY[:6] + "\u200b" + KEY[6:] + " now")
+    assert text == "use " + K.MARK + " now"

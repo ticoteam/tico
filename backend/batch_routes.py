@@ -2,7 +2,7 @@
 
 import json
 from fastapi import Request
-from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, views
+from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, task_text_keys, views
 from .store import H, Problem
 from .api_contract import api_v2
 
@@ -172,6 +172,13 @@ def register(app, auth, mutate, send, store, task_view):
         views.human_only(who)
         if body.until and (not H.parse_ts(body.until) or H.parse_ts(body.until).tzinfo is None):
             raise Problem("date", "until must be an ISO-8601 date/time with a timezone", 422)
+        # Words on an item that is a task (an answer, a done or close note, an instruction recorded on a private task)
+        # are task text: a key in them is refused before the batch keeps them (backend/task_text_keys.py).
+        if task_text_keys.found(body.text) or task_text_keys.found(body.heard):
+            with store.read() as c:
+                on = batch.item_task(c, who.actor, bid, body.item)
+            if on:
+                task_text_keys.refuse_text(store, str(who.actor), on, {"text": body.text, "heard": body.heard})
         return mutate(
             request,
             body,

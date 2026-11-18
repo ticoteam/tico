@@ -28,6 +28,7 @@ Suspect-tier matches are out (spec): they stay as typed.
 
 import json
 import re
+import unicodedata
 from email import policy as email_policy
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -49,11 +50,11 @@ OUTSIDE = ("slack", "email", "mail")
 METHODS = ("POST", "PATCH", "PUT")
 # Every write under /api/v2/tasks says something on a task, except a file's or a page's own bytes (a file is not task
 # text, spec Scope). Questions and messages carry a ❓'s line and its answer.
-# A many-task change says its `why` on every task it selects, and a task made from a message carries its title here
-# (the message's own text is checked by the route, thread_tasks.message_task, which copies it: `refuse_text`).
-TASK_WRITES = re.compile(
-    r"/api/v2/(?:tasks(?:/.*)?|questions(?:/.*)?|uploads/tasks|task-bulk|threads/messages/[^/]+/task)"
-)
+# A task made from a message carries its title here (the message's own text is checked by the route,
+# thread_tasks.message_task, which copies it: `refuse_text`). A many-task change (task_bulk_routes), a Needs you batch's
+# answers (batch_routes) and a file's note sent as a streamed form (media.task_attach) are checked by their routes,
+# which know the tasks: `refuse_text`.
+TASK_WRITES = re.compile(r"/api/v2/(?:tasks(?:/.*)?|questions(?:/.*)?|uploads/tasks|threads/messages/[^/]+/task)")
 # A file's or a page's own bytes are not task text; what the bot says with it (`NOTE_FIELDS`) is.
 NOT_TEXT = re.compile(r"/api/v2/tasks/[^/]+/(?:files|pages)(?:/.*)?")
 NOTE_FIELDS = ("note", "changed", "answered")
@@ -377,9 +378,11 @@ def refusal(store: Any, author: str, method: str, path: str, raw: bytes, content
     raise Problem(CODE, REFUSED, 422, extra={"fields": sorted({field for field, _ in hits if field})})
 
 
-def refuse_text(store: Any, author: str, task: str, texts: dict[str, str]) -> None:
-    """`refusal` for task text a route builds itself rather than reads from the request (a task made from a message
-    copies that message): 422 `looks_like_key` and its audit row, before anything is stored."""
+def refuse_text(store: Any, author: str, task: "str | list[str]", texts: dict[str, str]) -> None:
+    """`refusal` for task text a route checks itself rather than the request guard: a task made from a message copies
+    that message, a many-task change says its `why` on every task it selects, a file's note sent as a streamed form.
+    422 `looks_like_key` and an audit row for each task the text was going on (`task`: one, or the tasks a many-task
+    change selected), before anything is stored."""
     from .store import Problem
 
     if not any(found(t) for t in texts.values()):
@@ -388,23 +391,50 @@ def refuse_text(store: Any, author: str, task: str, texts: dict[str, str]) -> No
         hits = [(f, h["rule"]) for f, t in texts.items() for h in found(t, lambda value: known_id(c, value))]
         if not hits:
             return
-        audit(c, author, task, [rule for _, rule in hits], "refused")
+        for each in ([task] if isinstance(task, str) else task) or [""]:
+            audit(c, author, each, [rule for _, rule in hits], "refused")
     raise Problem(CODE, REFUSED, 422, extra={"fields": sorted({field for field, _ in hits})})
 
 
+def _spans(text: str) -> tuple[str, list[tuple[int, int]]] | None:
+    """`secret_drop.normalize(text)` and, for each of its characters, the span of `text` it came from: a character
+    with the combining marks after it is normalized on its own. None when that does not give the same text (a
+    sequence NFKC joins across those pieces): the caller keeps the whole normalized text then."""
+    starts = [i for i, ch in enumerate(text) if i == 0 or not unicodedata.combining(ch)]
+    pieces = list(zip(starts, [*starts[1:], len(text)], strict=True))
+    flat: list[str] = []
+    origin: list[tuple[int, int]] = []
+    for start, end in pieces:
+        out = secret_drop.normalize(text[start:end])
+        flat.append(out)
+        origin.extend([(start, end)] * len(out))
+    joined = "".join(flat)
+    return (joined, origin) if joined == secret_drop.normalize(text) else None
+
+
 def masked(text: str, known: "Callable[[str], bool] | None" = None) -> tuple[str, list[str]]:
-    """`text` with each certain-tier key replaced by MARK, and the rules that matched. The text is normalized first
-    (the detector's offsets are in the normalized text) only when a key is found."""
+    """`text` with each certain-tier key replaced by MARK, and the rules that matched. Only the key's own characters
+    change: the detector's offsets are in the normalized text, so each is mapped back to the characters it came from
+    (`_spans`) and the rest stays as written (an ellipsis, a superscript, a zero-width joiner). Text whose
+    normalization cannot be mapped back is kept normalized, as before."""
     hits = found(text, known)
     if not hits:
         return text, []
-    flat = secret_drop.normalize(text)
+    mapped = _spans(text)
+    if mapped is None:
+        flat = secret_drop.normalize(text)
+        cuts = [(h["start"], h["end"]) for h in hits]
+    else:
+        flat, origin = text, mapped[1]
+        cuts = [(origin[h["start"]][0], origin[h["end"] - 1][1]) for h in hits if h["end"] > h["start"]]
     out: list[str] = []
     at = 0
-    for hit in hits:
-        out.append(flat[at : hit["start"]])
+    for start, end in cuts:
+        if start < at:  # two hits in one source character: one mark covers both
+            continue
+        out.append(flat[at:start])
         out.append(MARK)
-        at = hit["end"]
+        at = end
     out.append(flat[at:])
     return "".join(out), [h["rule"] for h in hits]
 
