@@ -968,27 +968,88 @@ fn publish_current() -> &'static Mutex<std::collections::HashMap<String, String>
 }
 
 /// What `publish_history`'s answer depends on, read from files without running git: the checkout, the repository, the
-/// placement generation, the checked-out branch (`.git/HEAD`) and the config that holds its remote and upstream
-/// (`.git/config`, by modification time and size). None for a checkout whose `.git` is not a folder.
+/// placement generation, the checked-out branch (`.git/HEAD`), the config that holds its remote and upstream
+/// (`.git/config`, by modification time and size) and the remote-tracking ref `@{u}` resolves to (its loose file and
+/// `.git/packed-refs`): a `fetch --prune` after the branch was deleted on GitHub removes it, and the checkout is
+/// checked again. None, so nothing is cached, for a checkout whose `.git` is not a folder, a detached HEAD, a branch
+/// with no remote upstream in the config, a remote with another fetch refspec, or refs not kept as files.
 fn publish_stamp(path: &Path, repository: &str, generation: &Value) -> Option<String> {
     let git = path.join(".git");
     if !git.symlink_metadata().ok()?.is_dir() {
         return None;
     }
     let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
-    let config = std::fs::metadata(git.join("config")).ok()?;
-    let modified = config
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
+    let branch = head.trim().strip_prefix("ref: refs/heads/")?;
+    let config_path = git.join("config");
+    let config = std::fs::metadata(&config_path).ok()?;
+    let text = std::fs::read_to_string(&config_path).ok()?;
+    let (remote, upstream) = tracked_upstream(&text, branch)?;
+    let tracking = std::fs::read_to_string(
+        git.join("refs")
+            .join("remotes")
+            .join(&remote)
+            .join(&upstream),
+    )
+    .map(|sha| sha.trim().to_string())
+    .unwrap_or_else(|_| "-".into());
+    let packed = std::fs::metadata(git.join("packed-refs"))
+        .ok()
+        .map(|m| format!("{}:{}", file_nanos(&m).unwrap_or_default(), m.len()))
+        .unwrap_or_else(|| "-".into());
     Some(format!(
-        "{}\n{repository}\n{generation}\n{}\n{modified}:{}",
+        "{}\n{repository}\n{generation}\n{}\n{}:{}\n{remote}/{upstream} {tracking}\n{packed}",
         path.display(),
         head.trim(),
+        file_nanos(&config)?,
         config.len()
     ))
+}
+
+fn file_nanos(meta: &std::fs::Metadata) -> Option<u128> {
+    Some(
+        meta.modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos(),
+    )
+}
+
+/// The remote and branch name `branch`'s upstream is, read from the text of `.git/config`, when its remote-tracking
+/// ref is the plain `refs/remotes/<remote>/<name>` file: None for a local upstream, a remote with another fetch
+/// refspec, or refs kept in a reftable.
+fn tracked_upstream(config: &str, branch: &str) -> Option<(String, String)> {
+    let values = |header: &str| -> Vec<(String, String)> {
+        let mut inside = false;
+        let mut out = vec![];
+        for line in config.lines().map(str::trim) {
+            if line.starts_with('[') {
+                inside = line == header;
+            } else if let Some((key, value)) = line.split_once('=').filter(|_| inside) {
+                out.push((key.trim().to_ascii_lowercase(), value.trim().to_string()));
+            }
+        }
+        out
+    };
+    if config.to_ascii_lowercase().contains("refstorage") {
+        return None;
+    }
+    let mine = values(&format!("[branch \"{branch}\"]"));
+    let last = |key: &str| {
+        mine.iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    let remote = last("remote").filter(|r| !r.is_empty() && r != "." && !r.contains('/'))?;
+    let upstream = last("merge")?.strip_prefix("refs/heads/")?.to_string();
+    let default = format!("+refs/heads/*:refs/remotes/{remote}/*");
+    let fetches: Vec<String> = values(&format!("[remote \"{remote}\"]"))
+        .into_iter()
+        .filter(|(k, _)| k == "fetch")
+        .map(|(_, v)| v)
+        .collect();
+    (fetches == [default]).then_some((remote, upstream))
 }
 
 /// The per-turn signals the renewer, the drive loop and the flusher share.
@@ -5179,7 +5240,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_checkout_found_current_is_not_checked_again_until_its_branch_or_config_changes() {
+    async fn a_checkout_found_current_is_checked_again_when_its_branch_config_or_upstream_ref_changes(
+    ) {
         let _controls = RunControls;
         let (runner, dir) = lease_runner("http://127.0.0.1:9", "publish-current");
         let bare = dir.join("ops.git");
@@ -5223,13 +5285,36 @@ mod tests {
             ("current", 1),
             "an unchanged current checkout ran git again"
         );
+        // The branch is deleted on GitHub and a `fetch --prune` removes its remote-tracking ref: HEAD and the config
+        // stay the same, `@{u}` no longer resolves, and the checkout is checked again.
+        let tracking = main.join(".git/refs/remotes/origin/main");
+        assert!(tracking.is_file(), "the push left a loose tracking ref");
+        repo_git(&main, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let (state, detail) = runner
+            .publish_before_start(&turn, &flags, &bot, &main, &env)
+            .await
+            .unwrap();
+        assert_eq!(
+            checks() - before,
+            2,
+            "a deleted upstream was taken as current"
+        );
+        assert_ne!(state, "current", "{detail}");
+        assert!(publish_current().lock().unwrap().get(&bot).is_none());
+        // Fetched again, it is current again; then its upstream goes from the config.
+        repo_git(&main, &["fetch", "-q", "origin"]);
+        let (state, _) = runner
+            .publish_before_start(&turn, &flags, &bot, &main, &env)
+            .await
+            .unwrap();
+        assert_eq!((state, checks() - before), ("current", 3));
         // Its upstream goes: the config changes, and the next turn checks again.
         repo_git(&main, &["branch", "--unset-upstream"]);
         let (state, detail) = runner
             .publish_before_start(&turn, &flags, &bot, &main, &env)
             .await
             .unwrap();
-        assert_eq!(checks() - before, 2);
+        assert_eq!(checks() - before, 4);
         assert_eq!(state, "failed", "{detail}");
         assert!(publish_current().lock().unwrap().get(&bot).is_none());
         std::fs::remove_dir_all(dir).ok();
