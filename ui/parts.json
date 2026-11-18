@@ -875,10 +875,28 @@
   "pages": [],
   "calls": [
    "callJoin",
-   "callHangUp"
+   "callHangUp",
+   "callHandOff"
   ],
   "idle": [
-   "callBarDraw"
+   "callBarDraw",
+   "callDone"
+  ]
+ },
+ "call-window": {
+  "files": [
+   "app/call-window.ts"
+  ],
+  "deps": [
+   "thread-call-live"
+  ],
+  "pages": [
+   "pageCallWindow"
+  ],
+  "calls": [],
+  "idle": [
+   "callWindowDraw",
+   "callWindowStop"
   ]
  }
 }

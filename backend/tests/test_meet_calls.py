@@ -11,12 +11,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import call_ring, google_meet, threads
+from backend import call_items, call_ring, google_meet, threads
 from backend import calls as calls_module
 from backend import google_workspace as W
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post
-from backend.tests.helpers.calls import join, meet, thread, thread_texts  # noqa: F401
+from backend.tests.helpers.calls import PCM_EIGHT_SECONDS, SYNTHETIC_SPEECH, join, meet, thread, thread_texts  # noqa: F401
 from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
 
 MEET = "https://meet.googleapis.com/v2/"
@@ -113,6 +113,11 @@ def start(api, cid, token="ana-test", key=None, expected=200, **body):
     return r.json()
 
 
+def meet_start(api, cid, **body):
+    """A start that asks for Google Meet by name: `auto` picks Tico Meet first."""
+    return start(api, cid, provider="google_meet", **body)
+
+
 def row(api, call_id):
     with api.app.state.store.read() as c:
         return dict(c.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone())
@@ -140,11 +145,19 @@ def backdate(api, call_id, seconds, *columns):
 # ----------------------------------------------------------------------------- start
 
 
-def test_auto_starts_a_google_meet_with_its_card_and_a_retry_makes_no_second_space(google, meet):
+def test_auto_starts_tico_meet_even_with_google_meet_offered(google, meet):
+    cid = thread(meet)
+    assert get(meet, f"threads/{cid}/calls")["providers"] == ["tico", "google_meet"]
+    call = start(meet, cid)
+    assert call["provider"] == "tico" and call["join_url"] is None
+    assert not [c for c in google.calls if c[0] == "POST"]
+
+
+def test_a_google_meet_starts_with_its_card_and_a_retry_makes_no_second_space(google, meet):
     cid = thread(meet)
     key = str(uuid.uuid4())
-    call = start(meet, cid, key=key, title="Acme sync")
-    again = start(meet, cid, key=key, title="Acme sync")
+    call = meet_start(meet, cid, key=key, title="Acme sync")
+    again = meet_start(meet, cid, key=key, title="Acme sync")
     assert again["id"] == call["id"]
     creates = [c for c in google.calls if c[0] == "POST" and c[1] == MEET + "spaces"]
     assert len(creates) == 1 and creates[0][2] == {"config": {"accessType": "TRUSTED"}}
@@ -221,7 +234,7 @@ def test_a_dm_rings_the_other_person_never_a_bot_and_a_big_thread_rings_nobody(g
 
 def test_a_non_reader_cannot_see_ring_or_join_a_call_or_its_mark(google, meet):
     cid = thread(meet)
-    call = start(meet, cid)
+    call = meet_start(meet, cid)
     for method, path in (("get", f"calls/{call['id']}"), ("post", f"calls/{call['id']}/join")):
         r = getattr(meet, method)(
             "/api/v2/" + path, **({} if method == "get" else {"json": {}}), headers=headers("cara-test")
@@ -236,7 +249,7 @@ def test_a_non_reader_cannot_see_ring_or_join_a_call_or_its_mark(google, meet):
 
 
 def test_a_meet_call_has_no_token(google, meet):
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     answer = join(meet, call["id"], "ben-test")
     assert answer["url"] == URI + "?authuser=ben%40acme.example" and "token" not in answer
     r = meet.post(f"/api/v2/calls/{call['id']}/token", headers=headers("ben-test"))
@@ -250,7 +263,7 @@ def test_a_meet_call_has_no_token(google, meet):
 
 def test_polls_set_who_is_in_the_call_and_write_one_update_per_change(google, meet):
     cid = thread(meet)
-    call = start(meet, cid)
+    call = meet_start(meet, cid)
     space = row(meet, call["id"])["meet_space"]
     calls = meet.app.state.calls
     google.now(space, "conferenceRecords/c1")  # the pre-join page opens a conference with nobody in it
@@ -282,7 +295,7 @@ def test_polls_set_who_is_in_the_call_and_write_one_update_per_change(google, me
 
 def test_a_drop_and_rejoin_within_a_minute_keeps_the_call_and_a_minute_empty_ends_it(google, meet):
     cid = thread(meet)
-    call = start(meet, cid)
+    call = meet_start(meet, cid)
     space = row(meet, call["id"])["meet_space"]
     calls = meet.app.state.calls
     google.now(space, "conferenceRecords/c1", "Ana Alvarez")
@@ -311,7 +324,7 @@ def test_a_drop_and_rejoin_within_a_minute_keeps_the_call_and_a_minute_empty_end
 
 
 def test_nobody_seen_in_two_minutes_is_no_answer_even_with_a_conference_open(google, meet):
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     space = row(meet, call["id"])["meet_space"]
     google.now(space, "conferenceRecords/c1")
     meet.app.state.calls.poll(call["id"])
@@ -322,7 +335,7 @@ def test_nobody_seen_in_two_minutes_is_no_answer_even_with_a_conference_open(goo
 
 
 def test_google_refusing_leaves_no_status_and_eight_hours_on_the_call_is_stale(google, meet):
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     space = row(meet, call["id"])["meet_space"]
     google.now(space, "conferenceRecords/c1", "Ana Alvarez")
     meet.app.state.calls.poll(call["id"])
@@ -336,7 +349,7 @@ def test_google_refusing_leaves_no_status_and_eight_hours_on_the_call_is_stale(g
 
 
 def test_the_connector_s_end_ends_google_s_conference(google, meet):
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     space = row(meet, call["id"])["meet_space"]
     google.now(space, "conferenceRecords/c1", "Ana Alvarez")
     r = meet.post(f"/api/v2/calls/{call['id']}/end", json={}, headers=headers("ben-test"))
@@ -350,7 +363,7 @@ def test_the_connector_s_end_ends_google_s_conference(google, meet):
 
 
 def test_a_space_google_will_not_lock_still_ends_the_call(google, meet, caplog):
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     google.lock_fail = True
     ended = post(meet, f"calls/{call['id']}/end", {})
     assert ended["state"] == "ended" and ended["end_reason"] == "ended_by_connector"
@@ -422,7 +435,10 @@ def test_the_declared_meet_call_answers_match_the_live_ones(google, meet):
 def test_a_hanging_google_does_not_hold_up_the_sweep_or_the_other_calls(google, meet, monkeypatch):
     monkeypatch.setattr(calls_module, "POLL_BUDGET_SECONDS", 0.3)
     calls = meet.app.state.calls
-    slow, quick = start(meet, thread(meet, subject="Acme ops")), start(meet, thread(meet, subject="Acme sales"))
+    slow, quick = (
+        meet_start(meet, thread(meet, subject="Acme ops")),
+        meet_start(meet, thread(meet, subject="Acme sales")),
+    )
     slow_space, quick_space = row(meet, slow["id"])["meet_space"], row(meet, quick["id"])["meet_space"]
     google.now(slow_space, "conferenceRecords/c1", "Ana Alvarez")
     google.now(quick_space, "conferenceRecords/c2", "Ana Alvarez", "Ben Brown")
@@ -444,7 +460,7 @@ def test_a_hanging_google_does_not_hold_up_the_sweep_or_the_other_calls(google, 
 
 def test_short_google_failures_keep_the_status_and_never_count_as_nobody(google, meet):
     calls = meet.app.state.calls
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     space = row(meet, call["id"])["meet_space"]
     google.now(space, "conferenceRecords/c1", "Ana Alvarez", "Ben Brown")
     calls.poll(call["id"])
@@ -473,7 +489,7 @@ def test_short_google_failures_keep_the_status_and_never_count_as_nobody(google,
 
 def test_a_failing_read_eight_hours_on_ends_stale_only_once_google_has_been_quiet(google, meet):
     calls = meet.app.state.calls
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     space = row(meet, call["id"])["meet_space"]
     google.now(space, "conferenceRecords/c1", "Ana Alvarez")
     calls.poll(call["id"])
@@ -488,7 +504,7 @@ def test_a_failing_read_eight_hours_on_ends_stale_only_once_google_has_been_quie
 
 def test_a_failing_read_backs_off_1_2_4_passes_and_a_good_one_resets_it(google, meet):
     calls = meet.app.state.calls
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     space = row(meet, call["id"])["meet_space"]
     google.fail = 503
     pattern = []
@@ -507,17 +523,79 @@ def test_a_failing_read_backs_off_1_2_4_passes_and_a_good_one_resets_it(google, 
 
 
 def test_a_call_nobody_was_seen_in_has_no_duration_and_says_whether_google_watched_it(google, meet):
-    call = start(meet, thread(meet))
+    call = meet_start(meet, thread(meet))
     backdate(meet, call["id"], 121, "started_at")
     meet.app.state.calls.poll(call["id"])  # Google answers: nobody in it
     view = get(meet, f"calls/{call['id']}")
     assert view["end_reason"] == "no_answer" and view["duration_s"] is None
     assert view["status_source"] == "google"  # watched and nobody came: a missed call
     # Nothing watched this one (Google refused every read): it ends with no source, a plain ended call.
-    unwatched = start(meet, thread(meet, subject="Acme ops"))
+    unwatched = meet_start(meet, thread(meet, subject="Acme ops"))
     google.refuse = True
     meet.app.state.calls.poll(unwatched["id"])
     google.refuse = False
     post(meet, f"calls/{unwatched['id']}/end", {})
     view = get(meet, f"calls/{unwatched['id']}")
     assert view["state"] == "ended" and view["duration_s"] is None and view["status_source"] is None
+
+
+# ----------------------------------------------------------------------------- the meeting window (backend/call_notes.py)
+
+
+def test_the_notes_are_this_call_s_own_summary_and_items_with_who_took_each_on(meet, monkeypatch):
+    monkeypatch.setattr(
+        call_items,
+        "draft",
+        lambda base, key, model, rows: {
+            "summary": ["Signups are up 14% week over week.", "Post again on Thursday."],
+            "items": [{"title": "Draft Thursday's post", "quote": SYNTHETIC_SPEECH, "owner": "human:ana"}],
+        },
+    )
+    cid = thread(meet)
+    call_id = start(meet, cid)["id"]
+    join(meet, call_id)
+    assert get(meet, f"calls/{call_id}/notes") == {"pending": True, "message_id": None, "summary": [], "items": []}
+    meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
+    settle(meet)
+    post(meet, f"calls/{call_id}/end", {})
+    notes = get(meet, f"calls/{call_id}/notes")
+    assert notes["pending"] is False and notes["message_id"]
+    assert notes["summary"] == ["Signups are up 14% week over week.", "Post again on Thursday."]
+    assert notes["items"] == [{"title": "Draft Thursday's post", "owner": "human:ana", "owner_name": "Ana"}]
+    with meet.app.state.store.read() as c:
+        body = H.message(c, notes["message_id"])["body"]
+    assert body.endswith(
+        "\n- Draft Thursday's post\n\nSummary:\n- Signups are up 14% week over week.\n- Post again on Thursday."
+    )
+    # A later call in the same thread has notes of its own, not this one's.
+    later = start(meet, cid)["id"]
+    assert get(meet, f"calls/{later}/notes")["items"] == []
+    assert meet.get(f"/api/v2/calls/{call_id}/notes", headers=headers("cara-test")).status_code == 404
+
+
+def test_ringing_a_thread_owner_keeps_their_role_and_a_newcomer_joins_the_thread_first(meet, monkeypatch):
+    rung = []
+    monkeypatch.setattr(call_ring, "HOOKS", [lambda app, call_id, actors, payload: rung.append(actors)])
+    cid = thread(meet)  # Ana owns it; Ben starts the call and Ana is not in it
+
+    def role(actor):
+        with meet.app.state.store.read() as c:
+            found = c.execute("SELECT role FROM thread_members WHERE thread_id=? AND actor=?", (cid, actor)).fetchone()
+        return found[0] if found else None
+
+    before = role("human:ana")
+    call_id = start(meet, cid, token="ben-test")["id"]
+    rung.clear()
+    assert post(meet, f"calls/{call_id}/ring", {"actor": "human:ana"}, token="ben-test") == {
+        "actor": "human:ana",
+        "added": False,
+        "actor_name": "Ana",
+    }
+    assert role("human:ana") == before and rung == [["human:ana"]]
+    assert get(meet, f"calls/{call_id}")["ring"] is True
+    # Someone who cannot read the thread yet is added to it, as the thread's Add people does, then rung.
+    assert post(meet, f"calls/{call_id}/ring", {"actor": "human:cara"}, token="ben-test")["added"] is True
+    assert role("human:cara") == "member" and get(meet, f"calls/{call_id}", token="cara-test")["ring"] is True
+    assert post(meet, f"calls/{call_id}/ring", {"actor": "bot:ops"}, token="ben-test", expected=422)
+    post(meet, f"calls/{call_id}/end", {}, token="ben-test")
+    assert post(meet, f"calls/{call_id}/ring", {"actor": "human:ana"}, token="ben-test", expected=409)

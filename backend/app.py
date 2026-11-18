@@ -2456,6 +2456,9 @@ def _install_features(
     from .calls import install_calls
 
     install_calls(app, store, auth, mutate)  # Tico Meet calls in threads (backend/calls.py)
+    from .call_notes import install_call_notes
+
+    install_call_notes(app, store, auth, mutate)  # the meeting window's notes and ringing (backend/call_notes.py)
     from .mail import install_mail
 
     install_mail(app, store, auth)

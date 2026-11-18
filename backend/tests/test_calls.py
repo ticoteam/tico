@@ -140,7 +140,10 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
         drafts.append(len(rows))
         if not gateway_up:
             raise call_items.ItemsUnavailable("The Gateway answered 0")
-        return [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH}]
+        return {
+            "summary": [],
+            "items": [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH, "owner": ""}],
+        }
 
     monkeypatch.setattr(call_items, "draft", draft)
     cid = thread(meet)
@@ -199,7 +202,10 @@ def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold
     monkeypatch.setattr(
         call_items,
         "draft",
-        lambda base, key, model, rows: [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH}],
+        lambda base, key, model, rows: {
+            "summary": [],
+            "items": [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH, "owner": ""}],
+        },
     )
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
@@ -314,10 +320,11 @@ def test_a_call_with_bots_or_voice_is_tico_meet_whatever_the_default_provider(me
     assert quiet["speak_replies"] is False and quiet["voice"] is None
     post(meet, f"calls/{quiet['id']}/end", {}, token="ana-test")
 
-    # Google Meet is the caller's default here, as `auto` would pick it.
+    # Google Meet is ready for the caller too: `auto` still picks Tico Meet first, and Google Meet asked for by name
+    # with a bot is refused.
     monkeypatch.setattr(google_workspace, "meet_ready", lambda c: True)
     monkeypatch.setattr(google_workspace, "workspace_mailbox", lambda c, actor: "ana@acme.example")
-    assert get(meet, f"threads/{cid}/calls")["providers"] == ["google_meet", "tico"]
+    assert get(meet, f"threads/{cid}/calls")["providers"] == ["tico", "google_meet"]
     refused = post(meet, f"threads/{cid}/calls", {"provider": "google_meet", "bots": ["ops"]}, expected=422)
     assert refused["error"]["code"] == "voice_needs_tico_meet"
     with_bot = start_call(meet, cid, bots=["ops"])
