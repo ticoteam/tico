@@ -11,8 +11,12 @@ modification time, not the key or anything derived from it.
 
 One more key file beside it seals secrets the vault does not hold, and gets the same handling: /data/github-app.key (the
 GitHub App's private key, client secret and webhook secret, and the directory sync credentials; backend/github_app.py).
-It is copied whenever it exists, KMS or not: it may still seal secrets saved before KMS was set, which open with it until
-their first read re-seals them with the vault's key. /data/slack.key is no longer copied (the Slack tokens are in the
+It is copied whenever it exists while the key files are in use: it may still seal secrets saved before KMS was set,
+which open with it until their first read re-seals them with the vault's key. Once TICO_CREDENTIAL_KMS_KEY is set and
+the database records that the key files were retired (registry_metadata 'vault:rotated-at' and
+'vault:key-files-retired', written by `python -m backend.manage vault-rotate`), neither key file is copied any more and
+the status does not ask for a copy: every secret is sealed under a fresh KMS-wrapped data key, and the copies already in
+the backup location are deleted by the cell step (delete_key_copies, run with the cell host's role). /data/slack.key is no longer copied (the Slack tokens are in the
 vault now), but an older backup's copy is still restored: the database restored with it moves its Slack tokens into the
 vault on the first start (backend/migrations/20261117075941_slack_tokens_into_vault.py), which needs it.
 /data/tico-session-secret (backend/oidc.py) is not copied: it signs only the few minutes of a sign-in round trip (the
@@ -78,10 +82,16 @@ MARKER = "environment.json"
 LOCAL_MARKER = ".tico-environment"
 # The local credential key and where its copy goes in the backup location (beside files/, not inside a replica level).
 CREDENTIAL_KEY = "credential.key"
-CREDENTIAL_KEY_COPY = "credential-key/" + CREDENTIAL_KEY
+KEY_COPY_PREFIX = "credential-key/"
+CREDENTIAL_KEY_COPY = KEY_COPY_PREFIX + CREDENTIAL_KEY
 CREDENTIAL_KEY_BYTES = 32
 # The other key files, copied to the same place: credential-key/<name>.
 KEY_FILES = ("github-app.key",)
+# The database's record that the key files were replaced by KMS and deleted (backend/credentials.py key_files_retired).
+ROTATED_AT = "vault:rotated-at"
+KEY_FILES_RETIRED = "vault:key-files-retired"
+# S3 DeleteObjects takes at most this many keys a call.
+DELETE_BATCH = 1000
 # An older server's Slack key: restored from an older backup, and copied only while the row it opens is left
 # (old_key_files).
 OLD_KEY_FILES = ("slack.key",)
@@ -115,7 +125,7 @@ SWITCH_RETRY_MAX = 300
 
 
 def key_copy(name):
-    return "credential-key/" + name
+    return KEY_COPY_PREFIX + name
 
 
 def rehearsal_on(env=None):
@@ -224,10 +234,41 @@ def old_key_files(db):
     return OLD_KEY_FILES if left else ()
 
 
+def key_files_retired(db):
+    """True when the database at `db` records both 'vault:rotated-at' and 'vault:key-files-retired': every secret is
+    sealed under a fresh KMS-wrapped data key and the key files were deleted. Read-only, like old_key_files; a database
+    that cannot be read is not retired, so the key files keep being copied (copying costs nothing, losing one may)."""
+    try:
+        with closing(sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True)) as c:
+            found = {
+                key
+                for (key,) in c.execute(
+                    "SELECT key FROM registry_metadata WHERE key IN (?,?) AND coalesce(value,'')!=''",
+                    (ROTATED_AT, KEY_FILES_RETIRED),
+                )
+            }
+    except sqlite3.Error:
+        return False
+    return found == {ROTATED_AT, KEY_FILES_RETIRED}
+
+
+def kms_key_set(env):
+    return bool((env.get("TICO_CREDENTIAL_KMS_KEY") or "").strip())
+
+
+def key_files_off(env, db=None):
+    """No key file is copied or carried any more: AWS KMS holds the data key and the database records the key files as
+    retired. `db` defaults to the install's database (TICO_DB)."""
+    return kms_key_set(env) and key_files_retired(db or env.get("TICO_DB") or "/data/hub.sqlite")
+
+
 def key_files_state(env, recorded):
-    """{name: {present, copied_at, current}} for the key files that exist, like credential_key_state."""
+    """{name: {present, copied_at, current}} for the key files that exist, like credential_key_state. Empty once the key
+    files are retired (key_files_off): a leftover file then seals nothing, and a missing copy is not a problem."""
     recorded = recorded if isinstance(recorded, dict) else {}
     found = {}
+    if key_files_off(env):
+        return found
     for name in KEY_FILES:
         stamp = credential_key_stamp(key_file_path(env, name))
         if not stamp:
@@ -415,14 +456,82 @@ def _first_level(levels):
     return None, None
 
 
+def parse_backup_url(url):
+    """(bucket, prefix) of a TICO_BACKUP_URL `s3://bucket/prefix`; the prefix has no slash at either end ("" for the
+    bucket's root). Anything else is a ValueError."""
+    parsed = urlparse(url or "")
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError("TICO_BACKUP_URL must be s3://bucket/prefix")
+    return parsed.netloc, parsed.path.strip("/")
+
+
+def _key_copy_root(prefix):
+    prefix = (prefix or "").strip("/")
+    return (prefix + "/" if prefix else "") + KEY_COPY_PREFIX
+
+
+def delete_key_copies(s3, bucket, prefix):
+    """Deletes every version and delete marker under `<prefix>credential-key/` in `bucket` (the key file copies this
+    loop made, older versions included) and returns how many it deleted. `prefix` is the backup location's prefix ("",
+    "tico" or "tico/"); nothing outside credential-key/ is touched. On an unversioned bucket each object is listed once
+    with VersionId "null", which deletes it. Only listings are read, never an object's bytes. Run with the cell host's
+    role (a company's own backup key may lack s3:DeleteObjectVersion). A key that S3 refuses to delete is an error."""
+    root = _key_copy_root(prefix)
+    pending, deleted = [], 0
+
+    def flush():
+        nonlocal deleted
+        if not pending:
+            return
+        answer = s3.delete_objects(Bucket=bucket, Delete={"Objects": list(pending), "Quiet": True})
+        errors = answer.get("Errors") or []
+        if errors:
+            first = errors[0]
+            raise RuntimeError(
+                "could not delete %d key copy version(s) under s3://%s/%s: %s"
+                % (len(errors), bucket, root, first.get("Code") or "error")
+            )
+        deleted += len(pending)
+        pending.clear()
+
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=root):
+        for item in (page.get("Versions") or []) + (page.get("DeleteMarkers") or []):
+            if not item["Key"].startswith(root):
+                continue
+            pending.append({"Key": item["Key"], "VersionId": item.get("VersionId") or "null"})
+            if len(pending) >= DELETE_BATCH:
+                flush()
+    flush()
+    return deleted
+
+
+PUBLIC_ACCESS_FLAGS = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
+
+
+def bucket_blocks_public_access(s3, bucket):
+    """(True, "") when the bucket's public access block has all four flags on; else (False, the reason). A bucket with
+    no such block at all is (False, ...). Any other error (no right to read it, no such bucket) is raised: unknown is
+    not safe. Read-only (GetPublicAccessBlock)."""
+    from botocore.exceptions import ClientError
+
+    try:
+        config = s3.get_public_access_block(Bucket=bucket).get("PublicAccessBlockConfiguration") or {}
+    except ClientError as exc:
+        if str(exc.response.get("Error", {}).get("Code")) == "NoSuchPublicAccessBlockConfiguration":
+            return False, "bucket " + bucket + " has no public access block"
+        raise
+    off = [flag for flag in PUBLIC_ACCESS_FLAGS if config.get(flag) is not True]
+    if off:
+        return False, "bucket " + bucket + " does not block public access: " + ", ".join(off) + " off"
+    return True, ""
+
+
 def mirror_from_env(env=None):
     env = os.environ if env is None else env
     url = env.get("TICO_BACKUP_URL", "")
     if not url:
         return LocalMirror(env.get("TICO_BACKUP_DIR", "/backups"))
-    parsed = urlparse(url)
-    if parsed.scheme != "s3" or not parsed.netloc:
-        raise ValueError("TICO_BACKUP_URL must be s3://bucket/prefix")
+    bucket, prefix = parse_backup_url(url)
     import boto3
     from botocore.config import Config
 
@@ -436,7 +545,7 @@ def mirror_from_env(env=None):
         aws_access_key_id=env.get("LITESTREAM_ACCESS_KEY_ID") or None,
         aws_secret_access_key=env.get("LITESTREAM_SECRET_ACCESS_KEY") or None,
     )
-    return S3Mirror(client, parsed.netloc, parsed.path)
+    return S3Mirror(client, bucket, prefix)
 
 
 def _blob_files(blob_dir):
@@ -1411,7 +1520,9 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None, 
                 "tico: warning: could not copy the credential key to the backup location: " + type(exc).__name__,
                 flush=True,
             )
-        for name in KEY_FILES + old_key_files(db):
+        # Once the key files are retired under KMS neither is copied again (read each round: the vault-rotate step can
+        # run while this loop does). credential.key already stops with KMS (local_key_in_use).
+        for name in (() if key_files_off(env, db) else KEY_FILES) + old_key_files(db):
             try:
                 done_copy = sync_credential_key(key_file_path(env, name), mirror, file_states[name], key_copy(name))
                 if done_copy is not None:

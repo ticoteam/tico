@@ -1500,3 +1500,158 @@ def test_local_txids_that_go_back_start_the_lag_over(tmp_path, locals_seen):
     saved = json.loads(path.read_text())
     assert saved["behind_since"] == replication._stamp(start + 60 * (len(locals_seen) - 1))
     assert saved["pending_txid"] == f"{locals_seen[-1]:016x}"
+
+
+def retire_key_files(db, markers=(replication.ROTATED_AT, replication.KEY_FILES_RETIRED)):
+    """What `vault-rotate` leaves in the database once the key files are gone (synthetic times)."""
+    Path(db).parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        c.executemany(
+            "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", [(m, "2026-11-18T10:00:00Z") for m in markers]
+        )
+    c.close()
+
+
+def test_the_key_files_count_as_retired_only_when_the_database_records_both_markers(tmp_path):
+    db = tmp_path / "data" / "hub.sqlite"
+    assert not replication.key_files_retired(db)  # no database: keep copying
+    retire_key_files(db, markers=(replication.ROTATED_AT,))
+    assert not replication.key_files_retired(db)
+    retire_key_files(db)
+    assert replication.key_files_retired(db)
+    other = tmp_path / "other.sqlite"
+    sqlite3.connect(other).close()  # a database without the table
+    assert not replication.key_files_retired(other)
+
+
+def test_the_loop_stops_copying_the_key_files_once_kms_holds_the_key_and_they_are_retired(tmp_path):
+    env = key_env(tmp_path, TICO_CREDENTIAL_KMS_KEY="arn:aws:kms:eu-west-1:000000000000:key/synthetic")
+    data, copies = tmp_path / "data", tmp_path / "backups" / "credential-key"
+    (data / "github-app.key").write_bytes(KEY)
+    (data / "credential.key").write_bytes(KEY)
+    # KMS set, not retired yet: github-app.key may still seal secrets, so it is copied (credential.key is not, as before).
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert (copies / "github-app.key").read_bytes() == KEY and not (copies / "credential.key").exists()
+    assert set(replication.status(env)["key_files"]) == {"github-app.key"}
+    (copies / "github-app.key").unlink()
+    retire_key_files(data / "hub.sqlite")
+    # Retired without KMS (a key moved off KMS again) still copies: the file is what opens the secrets then.
+    plain = {k: v for k, v in env.items() if k != "TICO_CREDENTIAL_KMS_KEY"}
+    replication.loop(plain, sleep=lambda s: None, rounds=1)
+    assert (copies / "github-app.key").exists() and (copies / "credential.key").exists()
+    for name in ("github-app.key", "credential.key"):
+        (copies / name).unlink()
+    (data / "github-app.key").write_bytes(bytes(32))  # changed, so a copying loop would send it again
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert not any(copies.iterdir())
+    # A leftover file is not reported as a missing copy, and neither is the credential key.
+    state = replication.status(env)
+    assert state["key_files"] == {} and state["credential_key"]["present"] is False
+
+
+class VersionedS3:
+    """list_object_versions (paged), delete_objects and get_public_access_block over a dict of (key, version) pairs.
+    It never serves an object's bytes: delete_key_copies must not ask for them."""
+
+    def __init__(self, page_size=2, versioned=True):
+        self.versions, self.markers, self.page_size, self.versioned = [], [], page_size, versioned
+        self.delete_calls, self.public_access = [], None
+
+    def add(self, key, count=1, markers=0):
+        for n in range(count):
+            self.versions.append((key, "v%d-%s" % (n, key) if self.versioned else "null"))
+        for n in range(markers):
+            self.markers.append((key, "m%d-%s" % (n, key)))
+
+    def get_paginator(self, name):
+        assert name == "list_object_versions"
+        outer = self
+
+        class Pages:
+            def paginate(self, Bucket, Prefix):
+                rows = [("v", k, v) for k, v in outer.versions if k.startswith(Prefix)]
+                rows += [("m", k, v) for k, v in outer.markers if k.startswith(Prefix)]
+                for start in range(0, len(rows), outer.page_size):
+                    chunk = rows[start : start + outer.page_size]
+                    page = {
+                        "Versions": [{"Key": k, "VersionId": v} for kind, k, v in chunk if kind == "v"],
+                        "DeleteMarkers": [{"Key": k, "VersionId": v} for kind, k, v in chunk if kind == "m"],
+                    }
+                    yield {name: items for name, items in page.items() if items}
+
+        return Pages()
+
+    def delete_objects(self, Bucket, Delete):
+        objects = Delete["Objects"]
+        assert len(objects) <= replication.DELETE_BATCH
+        self.delete_calls.append(len(objects))
+        gone = {(o["Key"], o["VersionId"]) for o in objects}
+        self.versions = [pair for pair in self.versions if pair not in gone]
+        self.markers = [pair for pair in self.markers if pair not in gone]
+        return {"Deleted": [{"Key": k, "VersionId": v} for k, v in gone]}
+
+    def get_object(self, **kw):
+        raise AssertionError("an object's bytes were read")
+
+    def get_public_access_block(self, Bucket):
+        from botocore.exceptions import ClientError
+
+        if isinstance(self.public_access, str):
+            raise ClientError({"Error": {"Code": self.public_access}}, "GetPublicAccessBlock")
+        return {"PublicAccessBlockConfiguration": self.public_access}
+
+
+@pytest.mark.parametrize("prefix", ["tico", "tico/", ""])
+def test_deleting_the_key_copies_removes_every_version_and_delete_marker_and_nothing_else(prefix, monkeypatch):
+    monkeypatch.setattr(replication, "DELETE_BATCH", 3)
+    s3, root = VersionedS3(), ("tico/" if prefix else "")
+    s3.add(root + "credential-key/credential.key", count=3, markers=2)
+    s3.add(root + "credential-key/github-app.key", count=2, markers=1)
+    s3.add(root + "credential-key/slack.key")
+    others = [root + "db/0000/0000000000000001-0000000000000001.ltx", root + "files/blobs/ab/abcd", "credential-key-x"]
+    for key in others:
+        s3.add(key, count=2, markers=1)
+    assert replication.delete_key_copies(s3, "bucket", prefix) == 9
+    assert s3.delete_calls == [3, 3, 3]
+    assert {k for k, _ in s3.versions + s3.markers} == set(others)
+    assert len(s3.versions) == 6 and len(s3.markers) == 3
+    assert replication.delete_key_copies(s3, "bucket", prefix) == 0  # idempotent
+    assert s3.delete_calls == [3, 3, 3]
+
+
+def test_deleting_the_key_copies_works_on_an_unversioned_bucket_and_stops_on_a_refused_key(tmp_path):
+    s3 = VersionedS3(versioned=False)
+    s3.add("company/credential-key/credential.key")
+    s3.add("company/files/blobs/ab/abcd")
+    assert replication.delete_key_copies(s3, "bucket", "company/") == 1
+    assert s3.versions == [("company/files/blobs/ab/abcd", "null")]
+    s3.add("company/credential-key/github-app.key")
+    s3.delete_objects = lambda Bucket, Delete: {"Errors": [{"Key": "company/credential-key/x", "Code": "AccessDenied"}]}
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        replication.delete_key_copies(s3, "bucket", "company")
+
+
+def test_a_bucket_blocks_public_access_only_with_all_four_flags_on():
+    from botocore.exceptions import ClientError
+
+    s3 = VersionedS3()
+    s3.public_access = dict.fromkeys(replication.PUBLIC_ACCESS_FLAGS, True)
+    assert replication.bucket_blocks_public_access(s3, "bucket") == (True, "")
+    s3.public_access = {**s3.public_access, "RestrictPublicBuckets": False}
+    ok, reason = replication.bucket_blocks_public_access(s3, "bucket")
+    assert not ok and "bucket" in reason and "RestrictPublicBuckets" in reason
+    s3.public_access = "NoSuchPublicAccessBlockConfiguration"
+    ok, reason = replication.bucket_blocks_public_access(s3, "bucket")
+    assert not ok and "no public access block" in reason
+    s3.public_access = "AccessDenied"  # unknown is not safe: the caller sees the error
+    with pytest.raises(ClientError):
+        replication.bucket_blocks_public_access(s3, "bucket")
+
+
+def test_the_backup_url_gives_its_bucket_and_prefix():
+    assert replication.parse_backup_url("s3://bucket/cell-1/acme/") == ("bucket", "cell-1/acme")
+    assert replication.parse_backup_url("s3://bucket") == ("bucket", "")
+    for bad in ("", "file:///backups", "s3:///prefix"):
+        with pytest.raises(ValueError):
+            replication.parse_backup_url(bad)

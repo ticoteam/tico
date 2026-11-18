@@ -148,6 +148,12 @@ def main(argv=None):
     p.add_argument("database", type=Path)
     p.add_argument("--to", required=True, help="The owner's new sign-in address")
     p.add_argument("--apply", action="store_true", help="Change it; without it nothing changes")
+    p = sub.add_parser(
+        "vault-rotate",
+        help="With the server stopped: move every stored secret to a fresh KMS data key, check each opens, then "
+        "delete credential.key and github-app.key (backend/vault_rotate.py). Exit 0 done, 3 stopped, 2 config",
+    )
+    p.add_argument("--json", action="store_true", help="Print the report on one line")
     p = sub.add_parser("backup")
     p.add_argument("database", type=Path)
     p.add_argument("--bucket", required=True)
@@ -156,6 +162,18 @@ def main(argv=None):
     storage.add_argument("--blob-dir", type=Path)
     storage.add_argument("--blob-bucket")
     args = parser.parse_args(argv)
+    if args.command == "vault-rotate":
+        from .vault_rotate import run
+
+        # The environment's settings, as the server reads them (TICO_DB, TICO_CREDENTIAL_KMS_*). Never a secret printed.
+        try:
+            settings = Settings.from_env()
+        except (RuntimeError, KeyError, ValueError) as exc:
+            report, code = {"status": "stopped", "reason": str(exc), "failed": {}, "resealed": {}, "deleted": []}, 2
+        else:
+            report, code = run(settings)
+        print(json.dumps(report, sort_keys=True) if args.json else json.dumps(report, indent=2, sort_keys=True))
+        return code
     if args.command == "inspect":
         report = inspect(args.database)
     elif args.command == "snapshot":
@@ -309,7 +327,8 @@ def main(argv=None):
         s3 = boto3.client("s3")
         settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
         # A hand-run bundle carries the key files beside the database (credential.key, github-app.key):
-        # restore_bundle (python -m backend.backup) puts them back beside the restored database.
+        # restore_bundle (python -m backend.backup) puts them back beside the restored database. Once KMS holds the
+        # data key and `vault-rotate` retired the key files, it carries none (backup.read_key_files).
         from .company_storage import for_backup
 
         report = upload_bundle(
@@ -324,4 +343,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

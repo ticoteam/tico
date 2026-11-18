@@ -191,7 +191,19 @@ def secret_file(tmp_path, name, text, mode=0o600):
     return str(p)
 
 
-def add_args(host, slug="boatyard", *extra):
+KMS_ARN = "arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+KMS_KEY_ID, KMS_SECRET = "AKIA" + "K" * 16, "km/" + "y" * 37  # synthetic, never a real key
+
+
+def kms_args(host, arn=KMS_ARN):
+    """--kms-key and --kms-credentials-file, which a new company needs (a synthetic access key in a 0600 file)."""
+    creds = secret_file(
+        host.tmp, "kms-credentials", f"AWS_ACCESS_KEY_ID={KMS_KEY_ID}\nAWS_SECRET_ACCESS_KEY={KMS_SECRET}"
+    )
+    return ["--kms-key", arn, "--kms-credentials-file", creds]
+
+
+def add_args(host, slug="boatyard", *extra, kms=True):
     return [
         "add",
         "--company",
@@ -210,6 +222,7 @@ def add_args(host, slug="boatyard", *extra):
         secret_file(host.tmp, "client-secret", SECRET),
         "--version",
         "v1.2.3",
+        *(kms_args(host) if kms else []),
         *extra,
         "--json",
     ]
