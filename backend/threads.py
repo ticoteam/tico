@@ -4057,7 +4057,7 @@ def prime_checks(c, rows):
     from . import provenance_clock, task_privacy
 
     ancestry = H.prime_message_rows(c, rows) or rows
-    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in ancestry]
+    runs, every = set(), [H._json(r["refs"], {}) or {} for r in ancestry]
     for refs in every:
         run = refs.get("run") if isinstance(refs, dict) else None
         aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
