@@ -4,6 +4,10 @@
 given their prep tasks, so the prep sweep gives them once. `calls.state` gains 'scheduled' and
 `calendar_event_links.link_type` gains 'call'; both CHECKs are rebuilt with the table. `calls_scheduled` indexes the
 scheduled calls by start. Each step checks first, so a second run changes nothing.
+
+An install may still have 20261118081646_call_voice and 20261118140542_call_stage pending, and pending files run in any
+order: this adds their columns first, with the same definitions, so the columns end in one order whichever runs first
+(those migrations skip a column already there). The CHECK rebuilds copy the columns in the order they are in.
 """
 
 import re
@@ -11,6 +15,9 @@ import re
 FOREIGN_KEYS_OFF = True
 
 ADDS = (
+    ("calls", "ending_at", "TEXT"),
+    ("calls", "voice_ms", "INTEGER NOT NULL DEFAULT 0"),
+    ("calls", "stage", "TEXT"),
     ("calls", "scheduled_start", "TEXT"),
     ("calls", "scheduled_end", "TEXT"),
     ("calls", "prepped_at", "TEXT"),
