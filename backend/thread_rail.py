@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 
-from . import task_privacy
+from . import read_cache, task_privacy
 from . import threads as T
 from .store import H, Problem
 
@@ -382,6 +382,7 @@ def _unread_items(c, v, found, kind, args, marks):
     off = [it for it in found if it["row"]["id"] not in held]
     _count_exact(c, v, off)
     with_dm = T.dm_with(c, v, [it["row"] for it in off])
+    _prime_names(c, v, [it["row"] for it in off])
     out = []
     for it in off:
         r = it["row"]
@@ -405,6 +406,18 @@ def _unread_items(c, v, found, kind, args, marks):
             }
         )
     return out
+
+
+def _prime_names(c, v, rows):
+    """Read together the names `T._name` gives these rows one at a time: each untitled root's members and each Home's
+    owner, so naming them reads no bot or person again (names.lookup keeps them for the snapshot)."""
+    from . import names
+
+    homes = [r for r in rows if T.audience_of(r) == "home"]
+    members = T._member_rows(c, v, [r["id"] for r in rows if T.audience_of(r) != "home"])
+    actors = {a for r in homes if (a := T.home_owner(r))}
+    actors.update(a for found in members.values() for a in found)
+    names.lookup(c, [a for a in actors if str(a).startswith(("human:", "bot:"))])
 
 
 # ----------------------------------------------------------------------------- browse
@@ -872,14 +885,19 @@ def _walk(c, v, flags, after=None):
             if position:
                 cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
                 at = {"at_seq": position[0], "at_id": position[1]}
-            found = [
-                T.thread_row(c, dict(r))
+            stored = [
+                dict(r)
                 for r in c.execute(
                     f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
                     f"{' AND '.join([*where, phase])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                     {**args, **at, "batch": batch},
                 )
             ]
+            # These are the rooms' stored rows: prime_rooms reads them from here, not in a second query.
+            read_cache.prime(
+                c, H.CONVERSATION_SQL, {(r["id"],): {k: x for k, x in r.items() if k != "activity"} for r in stored}
+            )
+            found = [T.thread_row(c, dict(r)) for r in stored]
             ids = [r["id"] for r in found if r]
             T.prime_members(c, v, ids, roots=ids)
             task_privacy.prime_rooms(c, ids)  # their meeting provenance too, not one room at a time
