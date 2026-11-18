@@ -1,4 +1,7 @@
+import os
+import tempfile
 import unittest
+from unittest import mock
 
 from scripts import company_app_publisher as publisher
 
@@ -33,12 +36,7 @@ class CompanyPublisherSubject(unittest.TestCase):
                 publisher.oidc_subject(settings)
 
     def test_discovery_failure_does_not_guess_legacy(self):
-        from unittest.mock import patch
-
-        def failed(*args, **kwargs):
-            raise OSError("gh is unavailable")
-
-        with patch.object(publisher.subprocess, "run", failed):
+        with tempfile.TemporaryDirectory() as empty, mock.patch.dict(os.environ, {"PATH": empty}):  # no gh on PATH
             with self.assertRaisesRegex(ValueError, "could not discover"):
                 publisher.discover_oidc_subject()
 

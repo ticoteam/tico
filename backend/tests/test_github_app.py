@@ -382,7 +382,7 @@ def test_per_call_token_reuses_cache_without_writes_but_turn_start_keeps_45_minu
     runner_token(api, "cpo")
     clock = [time.time()]
     gh.clock = lambda: clock[0]
-    monkeypatch.setattr(G.time, "time", lambda: clock[0])
+    monkeypatch.setattr(G, "_now", lambda: clock[0])
 
     started = turn_token(api)
     assert started.status_code == 200, started.text

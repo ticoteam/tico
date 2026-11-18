@@ -35,6 +35,16 @@ def _sleep(seconds):
     time.sleep(seconds)
 
 
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
@@ -73,7 +83,7 @@ def rate_limit_wait():
     reset = subprocess.run(
         ['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True, text=True
     ).stdout.strip()
-    seconds = int(reset) - int(time.time()) if reset.isdigit() else 0
+    seconds = int(reset) - int(_now()) if reset.isdigit() else 0
     return min(seconds, 900) if seconds > 0 else 60
 
 
@@ -139,7 +149,7 @@ def setup_for(command):
 def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
     _sleep(5)  # the dispatched run takes a few seconds to reach the list
-    while time.monotonic() < deadline:
+    while _monotonic() < deadline:
         runs = json.loads(
             gh(
                 'run',
@@ -164,7 +174,7 @@ def find_run(run_id, deadline):
 
 def wait(run):
     last = None
-    deadline = time.monotonic() + RUN_LIMIT
+    deadline = _monotonic() + RUN_LIMIT
     while True:
         view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion', poll=True))
         if view['status'] != last:
@@ -172,7 +182,7 @@ def wait(run):
             last = view['status']
         if view['status'] == 'completed':
             return view['conclusion']
-        if time.monotonic() >= deadline:
+        if _monotonic() >= deadline:
             fail(
                 EX_NO_RESULT,
                 f'run {run["databaseId"]} was still {view["status"]} after {RUN_LIMIT // 3600} hours; giving up on it',
@@ -214,13 +224,13 @@ def wait_for_capacity(cap):
     minutes exits without dispatching."""
     if not cap:
         return True
-    started = time.monotonic()
+    started = _monotonic()
     failing_since, retry = None, 5
     while True:
         try:
             busy = busy_remote_runs()
         except RuntimeError as error:
-            now = time.monotonic()
+            now = _monotonic()
             failing_since = now if failing_since is None else failing_since
             left = CHECK_LIMIT - (now - failing_since)
             if left <= 0:
@@ -241,7 +251,7 @@ def wait_for_capacity(cap):
         failing_since, retry = None, 5
         if busy < cap:
             return True
-        waited = time.monotonic() - started
+        waited = _monotonic() - started
         if waited >= WAIT_LIMIT:
             fail(
                 EX_NOT_DISPATCHED,
@@ -333,7 +343,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
         f'minutes={minutes}',
         failure=EX_NOT_DISPATCHED,
     )
-    found = find_run(run_id, time.monotonic() + 120)
+    found = find_run(run_id, _monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
     logs = ROOT / '.remote-runs' / run_id

@@ -11,7 +11,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -1254,7 +1253,7 @@ def test_deletion_cleanup_is_bounded_and_continues_without_sizes_or_a_readable_l
             mid = f"old-{n}"
             CM.intend_delete(c, {"bot": "ops", "machine_id": mid, "runner_id": None})
             cloud.hq.machines[mid] = {"id": mid, "key": f"ops:superseded:{n}", "state": "deleted"}
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("unreachable")))
+    cloud.hq.fail["list"] = CM.Refused("unreachable")
     cloud.manager.synced = None
     for left in (3, 1, 0):
         cloud.tick(CM.TICK)
@@ -1273,7 +1272,7 @@ def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old
     cloud.hq.fail["delete"] = CM.Refused("unreachable")
     assert delete_target(cloud, target).status_code == 502
     cloud.hq.machines[old_id].update(key="ops:superseded:old", pending="delete")
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     create = cloud.hq.create
 
     def lost(*args):
@@ -1475,7 +1474,7 @@ def test_expiry_is_counted_before_delete_and_old_settlement_cannot_spend_it_agai
         raise CM.Refused("unreachable")
 
     monkeypatch.setattr(cloud.hq, "delete", lost)
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
     assert cloud.row()["enroll_fails"] == 1 and cloud.row()["deleting"]
     cloud.tick(CM.TICK)
@@ -1551,10 +1550,14 @@ def test_an_ambiguous_create_has_bounded_recovery_across_restarts(cloud, monkeyp
     target = deletion_target(cloud, kind)
     old_id = cloud.row(target.key)["machine_id"]
     assert delete_target(cloud, target).status_code == 200
-    listed = cloud.hq.list
-    monkeypatch.setattr(cloud.hq, "delete", Mock(return_value={"ok": True}))
+
+    def accepted(mid):  # HQ takes the delete but does not settle it: the intent stays until a later reply does
+        cloud.hq.calls.append(("delete", mid))
+        return {"ok": True}
+
+    monkeypatch.setattr(cloud.hq, "delete", accepted)
     cloud.hq.fail["create"] = [refusal]
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick(CM.TICK)
     asked = cloud.row(target.key)["create_asked_at"]
     assert asked == cloud.at[0]
@@ -1567,7 +1570,7 @@ def test_an_ambiguous_create_has_bounded_recovery_across_restarts(cloud, monkeyp
         assert delete_target(cloud, target).status_code == 200
         assert cloud.row(target.key)["create_asked_at"] is None
     elif recover == "list":
-        monkeypatch.setattr(cloud.hq, "list", listed)
+        cloud.hq.fail.pop("list")
         cloud.manager.synced = None
     else:
         cloud.at[0] = asked + CM.CREATE_HOLD - 1
@@ -1587,7 +1590,7 @@ def test_an_ambiguous_first_create_retries_at_the_deadline_without_a_readable_li
     adopt(cloud)
     work(cloud)
     cloud.hq.fail["create"] = [CM.Refused("http_503", 503)]
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick()
     asked = cloud.row()["create_asked_at"]
     cloud.tick(CM.CREATE_HOLD - 1)
@@ -1734,18 +1737,22 @@ def test_delete_retries_without_a_per_id_read_and_only_its_settlement_clears_int
     target = deletion_target(cloud, "replace")
     old_id = cloud.row()["machine_id"]
     assert delete_target(cloud, target).status_code == 200
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
-    delete = Mock(return_value={"ok": True})
+    cloud.hq.fail["list"] = CM.Refused("oversized")
+
+    def answer(mid):  # HQ's reply to a delete: final (state deleted) or only accepted
+        cloud.hq.calls.append(("delete", mid))
+        return {"id": mid, "state": "deleted"} if settled == "deleted" else {"ok": True}
+
     if settled == "404":
-        delete.side_effect = CM.Refused("http_404", 404)
+        cloud.hq.fail["delete"] = CM.Refused("http_404", 404)
     elif settled == "not_found":
-        delete.side_effect = CM.Refused("not_found", 400)
-    elif settled == "deleted":
-        delete.return_value = {"id": old_id, "state": "deleted"}
-    monkeypatch.setattr(cloud.hq, "delete", delete)
+        cloud.hq.fail["delete"] = CM.Refused("not_found", 400)
+    else:
+        monkeypatch.setattr(cloud.hq, "delete", answer)
+    cloud.hq.calls.clear()
     cloud.at[0] += CM.SYNC
     cloud.manager.sync(cloud.hq, cloud.at[0])
-    delete.assert_called_once_with(old_id)
+    assert [c for c in cloud.hq.calls if c[0] == "delete"] == [("delete", old_id)]
     with cloud.store.read() as c:
         assert CM.deleting(c, old_id) == (not settled)
 

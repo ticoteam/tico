@@ -389,7 +389,7 @@ def helper(monkeypatch, tmp_path, image_after):
     (tmp_path / ".env").write_text("TICO_TAG=v0.2.0\nTICO_UPDATER_TAG=v0.1.0\n")
     monkeypatch.setattr(updater, "_sleep", lambda s: None)
     clock = iter(range(0, 10000, 5))
-    monkeypatch.setattr(updater.time, "time", lambda: next(clock))
+    monkeypatch.setattr(updater, "_now", lambda: next(clock))
     docker = Fake(updater, monkeypatch, container=lambda ref: {"Image": image_after, "State": {"Running": True}})
     return updater, docker
 

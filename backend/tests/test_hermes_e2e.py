@@ -97,7 +97,7 @@ class Connector:
             contextlib.redirect_stderr(err),
             mock.patch.object(H.subprocess, "run", self._run_command),
             mock.patch.object(H.shutil, "which", which),
-            mock.patch.object(H.time, "sleep", (lambda seconds: sleep(out.getvalue())) if sleep else REAL_SLEEP),
+            mock.patch.object(H, "_sleep", (lambda seconds: sleep(out.getvalue())) if sleep else REAL_SLEEP),
         ):
             code = H.main(list(argv))
         self.printed += out.getvalue() + err.getvalue()

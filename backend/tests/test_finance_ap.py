@@ -165,7 +165,7 @@ def test_a_scheduled_bills_payment_reaches_mercury_on_commit_without_waiting_for
     connect(books, fake)
     sync.start(books, Vault(books), make=lambda _token: fake)
     try:
-        time.sleep(0.5)  # the worker's first pass, then its doorbell
+        assert sync.FIRST_PASS.wait(10), "the bank worker never finished its first pass"  # then its doorbell
         rung = sync.BELL.rung
         with books.transaction() as c:
             bid = _scheduled_today(c)

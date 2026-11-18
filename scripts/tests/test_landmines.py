@@ -42,12 +42,30 @@ def hits(path, text):
         ),
         ("no-unittest-mock", PY, "m = MagicMock()\n", "m = FakeGitHub()\n"),
         (
-            "no-global-sleep-patch",
+            "no-unittest-mock",
+            PY,
+            "with mock.patch.dict(os.environ, {}), mock.patch.object(H, 'run'):\n    pass\n",
+            "with mock.patch.dict(os.environ, {'PATH': ''}):\n    pass\n",
+        ),
+        (
+            "no-global-time-patch",
             PY,
             "monkeypatch.setattr(apps.time, 'sleep', lambda s: None)\n",
             "monkeypatch.setattr(store, '_sleep', lambda s: None)\n",
         ),
-        ("no-global-sleep-patch", PY, "monkeypatch.setattr('clients.tico.time.sleep', f)\n", "x = 1\n"),
+        ("no-global-time-patch", PY, "monkeypatch.setattr('clients.tico.time.sleep', f)\n", "x = 1\n"),
+        (
+            "no-global-time-patch",
+            PY,
+            "with mock.patch.object(H.time, 'time', lambda: 1):\n    pass\n",
+            "with mock.patch.object(H, '_now', lambda: 1):\n    pass\n",
+        ),
+        (
+            "no-global-time-patch",
+            PY,
+            "with mock.patch('clients.tico.time.monotonic'):\n    pass\n",
+            "with time_machine.travel(0, tick=False):\n    pass\n",
+        ),
     ],
 )
 def test_each_rule_finds_its_bad_case_and_not_its_good_one(rule, path, bad, good):

@@ -493,7 +493,7 @@ def test_opening_the_page_asks_the_gateway_at_most_once_a_minute(api, monkeypatc
     from backend import gateway_connection
 
     clock = [1000.0]
-    monkeypatch.setattr(gateway_connection.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gateway_connection, "_monotonic", lambda: clock[0])
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)  # the save's own check

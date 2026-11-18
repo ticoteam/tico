@@ -34,6 +34,7 @@ class FakeHQ:
 
     def list(self):
         self.calls.append(("list",))
+        self._check("list")
         sizes = SIZES if self.sizes is None else self.sizes
         return {"machines": [dict(m) for m in self.machines.values()], "sizes": sizes, "caps": {"machines": 10}}
 

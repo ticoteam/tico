@@ -344,7 +344,7 @@ class Pair(Base):
             {"state": "pending"},
             {"state": "approved", "bot": "scout", "token": TOKEN},
         ]
-        with mock.patch.object(H.time, "sleep", lambda s: None):
+        with mock.patch.object(H, "_sleep", lambda s: None):
             code, out, err = self.run_cli("pair", "--profile", "scout", "--url", self.hub.url)
         self.assertEqual(code, 0, err)
         self.assertIn("Tell BotOps", out)
@@ -372,7 +372,7 @@ class Pair(Base):
 
     def test_an_expired_code_stops_cleanly_and_changes_nothing(self):
         self.hub.pair_states = [{"state": "pending"}, {"state": "expired"}]
-        with mock.patch.object(H.time, "sleep", lambda s: None):
+        with mock.patch.object(H, "_sleep", lambda s: None):
             code, out, err = self.run_cli("pair", "--profile", "scout", "--url", self.hub.url)
         self.assertEqual(code, 1)
         self.assertIn("expired", err)
@@ -516,19 +516,19 @@ class Backoff(Base):
         self.assertEqual(err.strip(), "Bot scout is archived in Tico: restore it (ask BotOps) or run uninstall")
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 1)
         # The next minute is skipped without calling the hub.
-        now = H.time.time()
-        with mock.patch.object(H.time, "time", lambda: now + 60):
+        now = H._now()
+        with mock.patch.object(H, "_now", lambda: now + 60):
             self.assertEqual(self.beat()[0], 0)
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 1)
         self.assertIn("backoff", self.credential())
         # After an hour it tries once more, still archived, and waits another hour.
-        with mock.patch.object(H.time, "time", lambda: now + 3601):
+        with mock.patch.object(H, "_now", lambda: now + 3601):
             code, out, err = self.beat()
         self.assertEqual(code, 1)
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 2)
         # Restored: the next attempt after the wait succeeds and normal service resumes.
         self.hub.heartbeat = (200, {"server_time": "t", "bot": "scout", "waiting": {"messages": 0, "tasks": 0}})
-        with mock.patch.object(H.time, "time", lambda: now + 3601 + 3601):
+        with mock.patch.object(H, "_now", lambda: now + 3601 + 3601):
             code, out, err = self.beat()
         self.assertEqual(code, 0, err)
         self.assertIn("answers again", out)

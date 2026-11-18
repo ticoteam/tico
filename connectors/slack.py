@@ -30,6 +30,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 HUB = Path(__file__).resolve().parent.parent  # .../tico
 MAX_FILE_BYTES = 50 * 1024 * 1024
 FILES_DIR = Path(tempfile.gettempdir()) / (f"slack-files-{os.getuid()}" if hasattr(os, "getuid") else "slack-files")
@@ -122,7 +128,7 @@ def until_sent(mid):
         state = hub("GET", f"slack/posts/{mid}")
         if state.get("state") not in ("queued", "ready", "sending", "rate_limited"):
             break
-        time.sleep(1)
+        _sleep(1)
     if state.get("state") in ("failed", "canceled", "uncertain"):
         why = f"{state['state']}: {state.get('error') or 'no reason given'}"
         kind = Refused if state["state"] == "canceled" else Failure

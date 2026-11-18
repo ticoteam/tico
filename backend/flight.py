@@ -40,6 +40,12 @@ import traceback
 
 from . import hubdb
 
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 LOG = logging.getLogger("tico.flight")
 
 SLOW_MS = 1000  # a request this slow is logged on its own
@@ -1255,7 +1261,7 @@ class Flight(threading.Thread):
     def record_start(self):
         try:
             event = start_event(self.settings)
-            at = time.time()  # a write the lock defers keeps the time it happened
+            at = _now()  # a write the lock defers keeps the time it happened
             self.write_db(lambda c: _event(c, "start", event, at))
         except Exception as exc:
             LOG.warning("Flight recorder start event failed: %s", type(exc).__name__)
@@ -1319,7 +1325,7 @@ class Flight(threading.Thread):
                 "usage": usage,
                 "threads": record["threads"],
             }
-            at = time.time()
+            at = _now()
             self.write_db(lambda c: _event(c, "stall", detail, at))
         return record
 

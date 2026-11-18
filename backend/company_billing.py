@@ -58,8 +58,12 @@ SERVER_ID = re.compile(r"pv-[0-9a-f]{16}")
 KINDS = ("tico", "bot_computer")
 PAUSED = "Paused: out of credit. Add credit to start this computer."
 PAUSE_TTL = 60  # seconds a pause bit is reused: the bot page asks on every refresh
-CLOCK = time.monotonic  # tests replace it
 _pause = {}  # (sha256 of the gateway key, base) -> (expires, paused)
+
+
+def CLOCK():
+    """Monotonic seconds for the pause cache. Tests replace this, not time.monotonic for the whole process."""
+    return time.monotonic()
 
 
 def _no_float(text):

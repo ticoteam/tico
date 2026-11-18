@@ -87,7 +87,11 @@ def _prefix(address, relay_id):
 
 WAKE_URL_MAX = 2000
 NO_KEY = "Connect the Tico Gateway in Settings > Models first: an address through Tico Gateway needs its key."
-now = time.time  # tests' controlled clock
+
+
+def now():
+    """Epoch seconds: the tests' controlled clock. A test replaces this, not time.time for the whole process."""
+    return time.time()
 
 
 class RelayWake(Contract):

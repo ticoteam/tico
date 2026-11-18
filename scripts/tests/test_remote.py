@@ -84,7 +84,7 @@ def fake_gh(monkeypatch, replies):
 def fake_clock(monkeypatch):
     """Time stands still at 1,000,000 s, and sleep() only records how long it was asked to wait."""
     sleeps = []
-    monkeypatch.setattr(remote.time, 'time', lambda: 1_000_000)
+    monkeypatch.setattr(remote, '_now', lambda: 1_000_000)
     monkeypatch.setattr(remote, '_sleep', sleeps.append)
     return sleeps
 
@@ -170,7 +170,7 @@ def fake_timeline(monkeypatch):
         sleeps.append(seconds)
         now[0] += seconds
 
-    monkeypatch.setattr(remote.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(remote, '_monotonic', lambda: now[0])
     monkeypatch.setattr(remote, '_sleep', sleep)
     return sleeps
 

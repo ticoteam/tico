@@ -6,6 +6,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
+from clients import tico
 from clients.tico import APIError, Client, gmail_read_timeout
 
 CLOUDFLARE_530 = {
@@ -52,10 +53,11 @@ class Retries(unittest.TestCase):
 
     def test_a_cloudflare_530_is_retried_and_keeps_its_title(self):
         client = self.client([(502, {}), (530, CLOUDFLARE_530), (530, CLOUDFLARE_530)])
-        with mock.patch("clients.tico.time.sleep") as sleep, self.assertRaises(APIError) as caught:
+        pauses = []
+        with mock.patch.object(tico, "_sleep", pauses.append), self.assertRaises(APIError) as caught:
             client.post("jobs/claim", {})
         self.assertEqual(len(client.opener.calls), 3)
-        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(len(pauses), 2)
         self.assertTrue(caught.exception.retryable)
         self.assertEqual(caught.exception.status, 530)
         self.assertEqual(caught.exception.code, "http_error")
@@ -67,10 +69,11 @@ class Retries(unittest.TestCase):
 
     def test_a_404_is_not_retried(self):
         client = self.client([(404, {"error": {"code": "not_found", "detail": "No such attempt"}})])
-        with mock.patch("clients.tico.time.sleep") as sleep, self.assertRaises(APIError) as caught:
+        pauses = []
+        with mock.patch.object(tico, "_sleep", pauses.append), self.assertRaises(APIError) as caught:
             client.post("attempts/x/renew", {})
         self.assertEqual(len(client.opener.calls), 1)
-        self.assertFalse(sleep.called)
+        self.assertEqual(pauses, [])
         self.assertFalse(caught.exception.retryable)
         self.assertEqual((caught.exception.code, caught.exception.detail), ("not_found", "No such attempt"))
 
