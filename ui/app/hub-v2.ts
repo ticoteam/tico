@@ -459,6 +459,8 @@ document.addEventListener('click', async ev => {
 function pausedNotice(slug: string) {
   const s: Partial<V2BotState> = v2StatusOf(slug) || {};
   // Tico's own words for the stop, as the server sends them: what happened and what to check.
+  // Stopped for credit: adding credit starts its machine again; Release would not.
+  if (s.stopped === 'out_of_credit') return `${esc(s.focus || 'Out of credit')}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   if (s.stopped) return `${esc(s.focus || `Tico stopped ${empName(slug)}`)}${botReleaseButton(slug)}`;
   if (s.backoff) return esc(s.backoff);
   const when = (since: string | null | undefined) => since ? ` since ${clockTime(since)}` : '';

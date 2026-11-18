@@ -649,7 +649,7 @@ def warning(c: Any, actor: str | None) -> str | None:
     from . import cloud_machines
 
     if cast(Any, cloud_machines).out_of_credit(c, bot):
-        # Its cloud machine is stopped for credit (Nov 17: bots read idle with turns queued, and nobody was told).
+        # Its cloud machine is stopped for credit: say so, or it reads idle with turns queued.
         return CREDIT_WARNING
     return None
 

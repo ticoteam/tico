@@ -360,7 +360,7 @@ def _blocked(c, bot, location, refusal):
 
         cloud = cloud_machine_wait(c, bot)
         if cloud == OUT_OF_CREDIT_WAIT:
-            # Not "starting for this turn": nothing starts until credit lands, so the chat says so (Nov 17).
+            # Not "starting for this turn": nothing starts until credit lands, so the chat says so.
             return OUT_OF_CREDIT, _fix(BILLING)
         if computer and cloud:
             if asleep:

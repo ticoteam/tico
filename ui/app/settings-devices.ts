@@ -522,8 +522,9 @@ async function settingsTurnsAtOnceSave(input: HTMLInputElement): Promise<void> {
 function machineOutOfCredit(machine: DeviceMachine): boolean {
   const cloud = machine.cloud_machine;
   if (!cloud || machineOnline(machine)) return false;
-  // cloud-access.ts may not be loaded (a page or test with only this file): then only the machine's own word counts.
-  return cloud.problem === 'Out of credit' || (typeof CLOUD_ACCESS !== 'undefined' && CLOUD_ACCESS?.access === 'frozen');
+  // The machine's own word only: a frozen company marks each of its machines, and one machine refused for credit says
+  // nothing about another that is only asleep.
+  return cloud.problem === 'Out of credit';
 }
 // What a computer is doing now: "1 running · 55 queued", idle, asleep (a cloud computer stopped to save), or offline.
 function machineNowWords(machine: DeviceMachine) {

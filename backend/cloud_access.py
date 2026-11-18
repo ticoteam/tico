@@ -28,7 +28,7 @@ Low credit: HQ's answer carries the balance but not the spend, so each answer ke
 (the balance rising) starts the samples again and keeps the last spend. While open with under LOW_DAYS days of spend
 left, `view` says `days_left` and every page shows "Low credit · about N days left · Add credit" (one `cloud.low_credit`
 audit event as it starts). A machine HQ refused for credit (its 402) is out of credit too, whatever `access` says
-(`shown`): HQ's billing stopped both machines on Nov 17 while its answer here still said open.
+(`shown`): HQ's billing can stop machines while its answer here still says open.
 
 Until HQ has answered, a Tico Cloud cell (TICO_CELL=1, which `setup cell` sets) is asked every SYNC too, not every
 UNKNOWN: its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
@@ -200,6 +200,15 @@ def days_left(found):
     return max(0, balance // rate)
 
 
+def recovered(before, kept):
+    """Whether HQ's new word says credit came back: open after frozen or locked, or open with a higher balance."""
+    if not kept or kept.get("access") != "open" or not before:
+        return False
+    if before.get("access") in ("frozen", "locked"):
+        return True
+    return (kept.get("balance_micros") or 0) > (before.get("balance_micros") or 0)
+
+
 def apply(store, cloud, at=None):
     """Keep HQ's word (`parse`d, or None for not a cloud company), with the spend read from its balances (`spend`).
     `at`: when HQ answered (ISO), now by default. Returns the state."""
@@ -224,6 +233,12 @@ def apply(store, cloud, at=None):
                 "cloud.access",
                 "company",
                 {"from": was, "to": now, "reason": (cloud or {}).get("reason")},
+            )
+        if recovered(before, kept):
+            # HQ took credit (its word went back to open, or the balance rose): every machine it refused for credit
+            # may start now, a stopped one with no bot wanting it included, so no page keeps saying out of credit.
+            c.execute(
+                "UPDATE cloud_machines SET problem='', problem_at=NULL, next_try_at=NULL WHERE problem='out_of_credit'"
             )
         low = days_left(kept)
         if kept is not None and low is not None and days_left(before) is None:

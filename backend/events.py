@@ -2148,7 +2148,7 @@ CREDIT_FOCUS = "Its cloud machine is stopped: add credit to start it"
 
 def credit_overlay(c, row):
     """A cloud-mode bot whose machine is stopped for credit (cloud_machines.out_of_credit) reads stopped, out of
-    credit, not idle with its turns queued (Nov 17). A running turn, a quarantine and Tico's own stops keep theirs."""
+    credit, not idle with its turns queued. A running turn, a quarantine and Tico's own stops keep theirs."""
     if not row or row.get("state") in ("running", "quarantined") or row.get("stopped"):
         return row
     from . import cloud_machines

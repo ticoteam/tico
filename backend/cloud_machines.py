@@ -2436,8 +2436,8 @@ OUT_OF_CREDIT_WAIT = "out of credit: its cloud machine can't start"
 
 def credit_refused(c):
     """Whether HQ refused any of the company's cloud machines for credit (a 402 on a start or a create), whatever its
-    company-wide word says: HQ's billing can stop machines while its `cloud` answer still says open (Nov 17: a trial
-    with no card at -$0.02 stopped both machines for two hours while every page showed nothing)."""
+    company-wide word says: HQ's billing can stop machines while its `cloud` answer still says open, and
+    then every page would show nothing while the machines cannot start."""
     return bool(
         c.execute("SELECT 1 FROM cloud_machines WHERE problem='out_of_credit' AND mode='cloud' LIMIT 1").fetchone()
     )
