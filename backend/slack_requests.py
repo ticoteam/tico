@@ -7,8 +7,9 @@ workers, checking before each Slack call that the API still waits (`alive`). It 
 deletes the row once it has read it. A file's bytes go to a folder beside the database, which the API and the gateway
 share (the `tico-data` volume), never into the database: the API streams them and deletes them.
 
-What a bot may read is decided by the API before it asks (backend/slack_bots.py). The gateway checks what only Slack
-can tell: that a channel is not shared outside the workspace (Slack Connect), and where a file was shared.
+What a bot may read is decided by the API before it asks (backend/slack_bots.py): its channels, or with `channels: all`
+any channel. The gateway checks what only Slack can tell: that a channel is not shared outside the workspace (Slack
+Connect), that Slack can see the channel at all, and where a file was shared.
 """
 
 import asyncio
@@ -376,19 +377,23 @@ def file_conversations(info: dict[str, Any]) -> tuple[list[str], list[str]]:
 
 
 def _file_allowed(gateway: Any, info: dict[str, Any], params: dict[str, Any]) -> bool:
-    """A file is readable where its message is: a channel the bot may read (by id or name, not Slack Connect), or a DM
-    unless the bot's DMs are off."""
+    """A file is readable where its message is: a channel the bot may read (by id or name, or any channel when the bot's
+    `channels` is all, `all_channels`; never Slack Connect, nor a channel Slack cannot show), or a DM unless the bot's
+    DMs are off."""
+    from .slack_gateway import SlackError
+
     shared, ims = file_conversations(info)
     if ims and params.get("dms"):
         return True
+    everywhere = bool(params.get("all_channels"))
     wanted: list[Any] = params.get("channels") or []
     allowed = {str(a).lower().lstrip("#") for a in wanted}
     for cid in shared:
         try:
             channel = _channel(gateway, cid)
-        except Refused:
+        except (Refused, SlackError):  # Slack Connect, or a channel the app cannot see: not one the bot may read
             continue
-        if {cid.lower(), str(channel.get("name") or "").lower()} & allowed:
+        if everywhere or {cid.lower(), str(channel.get("name") or "").lower()} & allowed:
             return True
     return False
 

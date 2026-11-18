@@ -50,6 +50,11 @@ The channel's name in Tools > Slack channels opens that thread. A channel alread
 and its readers follow that thread. A bot's own `history` reads through `connectors/slack.py` follow the same
 list and its `tools:` entry, checked by Tico and answered by the gateway. Channels shared outside the workspace are always refused, whatever the list says.
 
+A bot's `service: slack` entry can instead read every channel the gateway can see: `channels: all`, or `channels: "*"`
+(quoted, since a bare `*` is YAML syntax). Its history and file reads then need no list entry, and Slack Connect
+channels are still refused. A channel named all is written `#all`. `all` widens reads only: a post still needs its
+channel on the list with posting on.
+
 ## Link a channel to a thread
 
 A channel can be linked to a Tico thread, and the two carry each other's messages.
