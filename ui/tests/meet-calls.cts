@@ -496,11 +496,13 @@ let browser: import('playwright').Browser | null = null;
     await page.route(u => u.hostname === 'tico-ui.test' && mine.has(u.pathname), route => {
       const req = route.request(), url = new URL(req.url()), json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.pathname === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true, config});
-      const bot = (name: string, display_name: string) => ({name, display_name, status: 'active', can_chat: true, schedules: []});
-      if (url.pathname === '/api/employees') return json([bot('ops', 'Ops'), bot('ledger', 'Ledger'), bot('scout', 'Scout')]);
-      // The Ops team: its three bots, and one the viewer does not have (never added).
+      const bot = (name: string, display_name: string, team: string) => ({id: '0192f0c4-7b1e-7cc2-9d1a-' + name.padEnd(12, '0'), name, display_name, team, status: 'active', can_chat: true, schedules: []});
+      // The Ops team: two bots in it, one in Field, a team inside it; Desk's bot is no one of Ops'.
+      if (url.pathname === '/api/employees') return json([bot('ops', 'Ops', 'ops'), bot('ledger', 'Ledger', 'ops'), bot('scout', 'Scout', 'field'), bot('clerk', 'Clerk', 'desk')]);
+      // Team rows as the server sends them: no members (each bot says its team), a team inside another by `parent`.
       if (url.pathname === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
-        {id: 'cy', name: 'Cy', email: 'cy@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', bots: ['ops', 'ledger', 'scout', 'gone'], my_access: {see: true, read: true, write: true}}]});
+        {id: 'cy', name: 'Cy', email: 'cy@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', parent: '', my_access: {see: true, read: true, write: true}},
+        {id: 'field', name: 'Field', parent: 'ops', my_access: {see: true, read: true, write: true}}]});
       if (url.pathname === '/api/v2/meetings') return json({meetings: [], pending_count: 0});
       if (url.pathname === '/api/meetings/sources') return json({sources: []});
       if (url.pathname === '/api/v2/threads') {
@@ -514,7 +516,12 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/meetings');
     const call = page.locator('.ph #meet-call-now');
     await call.waitFor();
-    assert.ok(await call.evaluate(b => !!b.nextElementSibling?.matches('#notes-manual')), 'beside Add notes');
+    assert.ok(await call.evaluate(b => !!b.nextElementSibling?.matches('#notes-manual')), 'beside Log a meeting');
+    // The phone mark alone, named for a screen reader and on hover; no words, no filled button on the row.
+    assert.deepEqual(await call.evaluate(b => ({words: (b as HTMLElement).innerText.trim(), name: b.getAttribute('aria-label'), tip: b.getAttribute('title'), svg: !!b.querySelector('svg')})),
+      {words: '', name: 'Call', tip: 'Call', svg: true});
+    assert.equal(await page.locator('.ph .primary').count(), 0, 'no filled button in the header');
+    assert.equal(await page.locator('#meet-live-now').count(), 0, 'no Live now');
     assert.equal(await sideways(page), phone ? 390 : 1280, 'nothing sideways');
     await themed(page, 'call-now-button', phone);
     await call.click();
@@ -525,9 +532,10 @@ let browser: import('playwright').Browser | null = null;
     await dialog.locator('.who-pick-q').click();
     const ops = page.locator('.who-pick-list [role="option"][data-who="bot:ops"]');
     await ops.waitFor();
-    // The team first: its mark, its name, a few of its faces and how many.
+    // Teams first, by name (Field, inside Ops, has its own row): a team's mark, its name, a few of its faces and how many.
     const team = page.locator('.who-pick-list [role="option"][data-who="group:ops"]');
-    assert.equal(await page.locator('.who-pick-list [role="option"]').first().getAttribute('data-who'), 'group:ops');
+    assert.deepEqual(await page.locator('.who-pick-list [role="option"]').evaluateAll(os => os.slice(0, 2).map(o => o.getAttribute('data-who'))), ['group:field', 'group:ops']);
+    assert.equal(await page.locator('.who-pick-list [role="option"][data-who="group:field"] .meet-team-n .tnum').innerText(), '1');
     assert.equal(await team.locator('.settings-combo-n').innerText(), 'Ops team');
     assert.equal(await team.locator('.meet-stack .av, .meet-stack img, .meet-stack > *').count(), 3);
     assert.equal(await team.locator('.meet-team-n .tnum').innerText(), '3');

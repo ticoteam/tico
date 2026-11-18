@@ -442,6 +442,19 @@ def _spoken(name):
     return re.sub(r"\s+", " ", str(name or "")).strip().casefold()
 
 
+def bot_ids(c, refs):
+    """The bots a request names, each by its id or its slug (H.resolve_bot), as their ids: each once, in order. A call
+    stores and checks bots by id; a name that is no bot is 404."""
+    ids: list[str] = []
+    for ref in refs or ():
+        bot = H.resolve_bot(c, ref)
+        if not bot:
+            raise Problem("not_found", f"Org-chart bot {ref} was not found", 404)
+        if bot["id"] not in ids:
+            ids.append(bot["id"])
+    return ids
+
+
 class Calls:
     """The call operations. Writes run inside the caller's transaction (`c`) and record their audit row and threads change
     together with the change; the calls that reach LiveKit or the Gateway run outside any transaction."""
@@ -873,12 +886,14 @@ class Calls:
 
     def schedule_plan(self, c, who, thread_id, title, when, bots, key):
         """What a scheduled start brings into its write, made before it (`start`'s `scheduled`): the call's id, its
-        times and where its one calendar event goes. Everything the write would refuse is checked first, so a calendar
-        is never written for a call that cannot be stored. The event invites the thread's people who can read it; its
-        location and notes hold the call's link."""
+        times, its bots as ids (named once here, so a slug renamed while Google is asked names no other bot), and where
+        its one calendar event goes. Everything the write would refuse is checked first, so a calendar is never written
+        for a call that cannot be stored. The event invites the thread's people who can read it; its location and notes
+        hold the call's link."""
         self._may_start(c, who, thread_id, scheduled=True)
         if self.media is None:
             raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
+        bots = bot_ids(c, bots)
         self._may_attach(c, who, bots)
         call_id = self.schedule_id(who, thread_id, key)
         if c.execute("SELECT 1 FROM calls WHERE id=?", (call_id,)).fetchone():
@@ -893,7 +908,7 @@ class Calls:
             invited=self._invited(c, who.actor, thread_id),
             link=link,
         )
-        return {"call_id": call_id, "start": when[0], "end": when[1], "event": event}
+        return {"call_id": call_id, "start": when[0], "end": when[1], "event": event, "bots": bots}
 
     def schedule_event(self, plan):
         """Write a scheduled call's Google event before its write (Google is asked outside any transaction). A Tico
@@ -1342,7 +1357,7 @@ class Calls:
 
     def _may_attach(self, c, who, slugs):
         """Each bot is on the team and active, and `who` may write to it."""
-        for slug in slugs:
+        for slug in bot_ids(c, slugs):
             live_meetings._active_bot(c, slug)
             access = teammate_access.levels_for(c, who, f"bot:{slug}", self.auth)
             if not access["see"]:
@@ -1353,6 +1368,7 @@ class Calls:
     def _attach(self, c, who, row, meeting, slugs):
         """Attach bots `who` may write to, BOT_LIMIT in the call at most: the limit counts the bots already in it."""
         call_id = row["id"]
+        slugs = bot_ids(c, slugs)
         live_meetings.check_call_bot_limit(c, meeting["id"], slugs)
         self._may_attach(c, who, slugs)
         for slug in slugs:
@@ -1374,6 +1390,7 @@ class Calls:
     def detach_bot(self, c, who, call_id, slug):
         human_only(who)
         self.auth.domain(who)
+        slug = (H.resolve_bot(c, slug) or {}).get("id", slug)  # a bot since deleted still leaves by its id
         row = _call(c, call_id)
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
@@ -2534,7 +2551,7 @@ def install_calls(app, store, auth, write):
                             body.title,
                             body.speak_replies,
                             provider="tico",
-                            bots=body.bots,
+                            bots=plan["bots"] if plan else body.bots,
                             scheduled=plan,
                         ),
                     )

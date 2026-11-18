@@ -89,48 +89,28 @@ async function foldedProblems(page: Page, acts: string[]) {
   return bad;
 }
 
-// Internal's search folded into ⋯ (at the widest width where it is: five tabs leave it room at 1280 now): typing keeps ⋯ open and the box focused (the header refits as the results
-// draw), and once ⋯ closes with text still in the box, ⋯ shows a dot, since that text still filters the map.
-async function foldedSearchProblems(page: Page, width: number) {
+// Internal's search keeps the row at every width, folded tools or not (Chris, Nov 18: "search should not be in the
+// dropdown"): it is in view and on top at its centre, and typing in it keeps the box focused and the words in it while
+// the header fits again as the results draw.
+async function searchProblems(page: Page, width: number) {
   const bad: string[] = [];
-  const box = page.locator('.ru-ph .ph-menu .rr-q'), more = page.locator('.ru-ph > .ph-more');
-  if (!await box.count()) return ['the search is not folded into ⋯'];
-  await more.click({timeout: t(3000)});
+  const box = page.locator('.ru-ph .rr-q');
+  if (await page.locator('.ru-ph .ph-menu .rr-q').count()) return ['the search is in ⋯'];
+  if (!await page.locator('.ru-ph > .ph-tools .rr-q').count()) return ['the search is not on the row'];
+  // A narrow header shows the search as its magnifier (.ph-find), which opens over the title line when tapped.
+  const find = await page.locator('.ru-ph.ph-find').count() > 0;
+  const onTop = await box.evaluate((el, min) => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return r.width >= min && r.right <= document.documentElement.clientWidth + 0.5 && !!top && el.contains(top); }, find ? 28 : 100);
+  if (!onTop) bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}`);
   await box.click({timeout: t(3000)});
+  if (find && await box.evaluate(el => el.getBoundingClientRect().width) < 200) bad.push('the magnifier did not open to a search box');
   await page.keyboard.type('abc', {delay: 30});
-  await page.waitForTimeout(t(200));   // a frame or two for the header to fit again
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));  // the header fits again
   const state = await page.evaluate(() => ({val: document.querySelector<HTMLInputElement>('.ru-ph .rr-q')?.value,
-    focus: document.activeElement?.matches('.rr-q'), open: !!document.querySelector('.ru-ph .ph-menu:popover-open')}));
-  if (state.val !== 'abc' || !state.focus || !state.open) bad.push(`typing in the folded search: ${JSON.stringify(state)}`);
-  await page.locator('.ru-ph > .ph-t').click();   // a click outside closes ⋯ and keeps the text
-  await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
-  if (!await more.evaluate(b => b.classList.contains('ph-held') && b.getAttribute('aria-label') === 'More, a search is applied')) bad.push('⋯ shows no dot while the folded search holds text');
-  await more.click({timeout: t(3000)});
+    focus: document.activeElement?.matches('.rr-q'), row: !!document.querySelector('.ru-ph > .ph-tools .rr-q')}));
+  if (state.val !== 'abc' || !state.focus || !state.row) bad.push(`typing in the search at ${width}px: ${JSON.stringify(state)}`);
   await box.fill('');
-  await page.keyboard.press('Escape');
-  await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
-  if (await more.evaluate(b => b.classList.contains('ph-held'))) bad.push('⋯ keeps its dot once the search is empty');
-  // Escape clears the box without an input event (rrKey), a second one closes ⋯: no dot left behind.
-  await more.click({timeout: t(3000)});
-  await box.click({timeout: t(3000)});
-  await page.keyboard.type('abc', {delay: 30});
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
-  await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
-  // the menu hides at once; its toggle event, which reads the box again, comes a task later
-  try {
-    await page.waitForFunction(() => !document.querySelector('.ru-ph > .ph-more')?.classList.contains('ph-held'), null, {timeout: t(2000)});
-  } catch { bad.push('⋯ keeps its dot after Escape cleared the search'); }
-  // Widened while ⋯ is open: the tools stay put until ⋯ closes, then go back to the row.
-  await more.click({timeout: t(3000)});
-  await page.setViewportSize({width: 1440, height: 800});
-  await page.waitForTimeout(t(200));
-  await page.keyboard.press('Escape');
-  try {
-    await page.waitForFunction(() => !!document.querySelector('.ru-ph > .ph-tools .rr-q'), null, {timeout: t(3000)});
-  } catch { bad.push('the search stays in ⋯ after ⋯ closes at 1440'); }
-  await page.setViewportSize({width, height: 800});
-  await page.waitForFunction(() => !!document.querySelector('.ru-ph .ph-menu .rr-q'), null, {timeout: t(3000)});
+  await box.blur();   // an open magnifier lies over the title, so leave the box without a click
   return bad;
 }
 
@@ -214,9 +194,9 @@ function tabProblems(page: Page, tab: string) {
             for (const p of await tabProblems(page, from)) problems.push(`${width}px on ${from}: ${p}`);
           }
           for (const p of await foldedProblems(page, ACTS[from]!)) problems.push(`${width}px on ${from}: ${p}`);
-          if (!phone && from === 'internal' && !searchChecked && await page.locator('.ru-ph .ph-menu .rr-q').count()) {
+          if (from === 'internal') {
             searchChecked = true;
-            for (const p of await foldedSearchProblems(page, width)) problems.push(`${width}px on internal: ${p}`);
+            for (const p of await searchProblems(page, width)) problems.push(`${width}px on internal: ${p}`);
           }
           if (!phone) {
             // One row at every width: what does not fit waits in ⋯.
@@ -274,7 +254,7 @@ function tabProblems(page: Page, tab: string) {
         await page.context().close();
       }
     }
-    if (!searchChecked) problems.push('Internal\'s search never folded into ⋯ at 1100, 1024 or 900');
+    if (!searchChecked) problems.push('Internal\'s search was never checked');
     assert.deepEqual(problems, [], 'Rules header problems:\n' + problems.join('\n'));
     console.log('org-rules-header: every tab clickable (five on the row, the rest from ⋯) with its actions in view at 1440, 1280, 1100, 1024 and 390; one row at every width, the title still');
   } finally {

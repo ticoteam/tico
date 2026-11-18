@@ -69,11 +69,10 @@
 /* notes page: one card, list on the left, the open note on the right; below 900px the two swap
    in and out like a phone mail app (the .detail class on .notes shows the open note) */
 /* The page's header is the one page header (ui/app/page-head.ts, hook .notes-head); only its own pieces are styled here. */
-#meet-live-now{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-#meet-live-now .pill{line-height:16px}   /* the Beta pill sits inside without growing the button */
-/* Call now beside Add notes: the phone mark and the verb; on a phone the mark alone, a square the row's height. */
-#meet-call-now{display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:var(--ctl);white-space:nowrap}
-@media (max-width:760px){#meet-call-now{justify-content:center;width:var(--ctl);padding:0}#meet-call-now>span{display:none}}
+/* Call and Log a meeting: quiet squares the row's height (the header's .ph-add), their marks muted until hovered. */
+.ph #meet-call-now{color:var(--muted)}
+.ph #meet-call-now:hover{color:var(--ink)}
+.ph #meet-call-now svg{width:18px;height:18px}
 /* The Call now dialog: the meeting window's look (the dialog on --g1, its fields on --g2, a 1px muted border on focus),
    the picker's list in the dialog's flow under its field (who-picker.ts inline), and the chosen as chips a tap removes. */
 dialog.meet-call-dialog{background:var(--g1)}
@@ -130,7 +129,8 @@ dialog.meet-call-dialog{background:var(--g1)}
   .meet-call-when select{height:44px}
   .meet-call-dialog .who-pick-list .settings-combo-opt{min-height:44px}
 }
-.ph #notes-search{width:240px;flex:0 1 240px}
+.ph .meet-q{width:240px;flex:0 1 240px}
+.ph>.ph-tools>.meet-q input[type=search]{min-width:0}   /* the box keeps its own least width (.tl-search), the field none */
 /* Sources in the ⋯ menu carries a dot when a source needs a look; the closed ⋯ carries it too. */
 .ph-more.meet-src-trouble{position:relative}
 .ph-more.meet-src-trouble::after{content:"";position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--fail)}
@@ -406,7 +406,6 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-join{margin:12px 0}.live-finalized{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:var(--t-base)}
 .live-status{min-height:1.5em;margin-top:8px;color:var(--muted);font-size:var(--t-sm)}
 @media(max-width:760px){
-  .ph #notes-search{flex:1 1 0;width:auto;min-width:0}
   .live-layout{grid-template-columns:1fr}.live-list{max-height:220px}
   .live-connect{align-items:stretch;flex-direction:column}.live-connect input{max-width:none}
   .live-card{padding:12px}.live-card-head{flex-direction:column}.live-controls{justify-content:flex-start}

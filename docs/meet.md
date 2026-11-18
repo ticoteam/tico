@@ -209,8 +209,8 @@ Tico Meet.
 **Calling a bot.** The call button in a DM with one bot, and Call on a bot's card in the org chart, start a Tico Meet
 call in the viewer's DM with that bot, with the bot in it, and join it.
 
-**Call now.** The Meetings page's **Call now** (only where the server runs Tico Meet, `features.tico_meet` in the config)
-picks people and bots (a team, listed first with a few of its faces and how many, adds its bots in one pick) and
+**Call now.** The Meetings page's call icon (only where the server runs Tico Meet, `features.tico_meet` in the config)
+picks people and bots, each named by its id or its slug, (a team, listed first with a few of its faces and how many, adds its bots in one pick) and
 starts a Tico Meet call with the bots in it: in the viewer's DM when one teammate is picked,
 else in a new thread with them all, named for the call's title or, without one, for who is in it. Its meeting window
 opens and joins it.

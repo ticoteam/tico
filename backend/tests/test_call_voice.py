@@ -26,6 +26,7 @@ from backend.tests.helpers.calls import (
     thread_texts,
 )
 from backend.tests.helpers.live_meetings import live  # noqa: F401
+from backend.tests.helpers.new_bot_flows import create_bot
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
@@ -270,6 +271,29 @@ def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypat
     _speak(meet, call["id"], 0)
     _answer(meet, _machine(meet, "ops"), "ops", "Ops can take it.")
     assert "Ops can take it." in thread_texts(meet, cid) and meet.app.state.call_media.said == []
+
+
+def test_a_bot_named_by_its_slug_joins_by_its_id_and_answers_everything_in_its_dm(meet):
+    """Call now names bots by slug (the roster's `bot:<slug>`): a bot made through the API has a UUIDv7 id, and the call
+    holds that id, so the DM's 1:1 rule finds it. Adding it again by either name is no second bot; it leaves by its
+    slug; a name that is no bot is 404."""
+    bot = create_bot(meet, "field-helper")
+    assert bot != "field-helper"
+    dm = get(meet, "threads/dm?with=" + "bot:field-helper")
+    cid = (dm.get("thread") or dm)["id"]
+    call = start_call(meet, cid, bots=["field-helper"])
+    assert call["bots"] == [bot]
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM calls WHERE id=?", (call["id"],)).fetchone()
+        assert call_voice.Voice.answers_all(c, row) == bot
+    join(meet, call["id"])
+    again = post(meet, f"calls/{call['id']}/bots", {"bots": ["field-helper", bot, "bot:field-helper"]})
+    assert again["bots"] == [bot]
+    missing = post(meet, f"calls/{call['id']}/bots", {"bots": ["no-such-bot"]}, expected=404)
+    assert "no-such-bot" in str(missing)
+    left = meet.request("DELETE", f"/api/v2/calls/{call['id']}/bots/field-helper", json={}, headers=headers("ana-test"))
+    assert left.status_code == 200, left.text
+    assert left.json()["bots"] == []
 
 
 # --- stopping the voice
