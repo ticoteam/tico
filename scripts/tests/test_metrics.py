@@ -664,12 +664,18 @@ def test_queue_merges_time_from_first_and_last_enqueue_and_count_throw_outs():
             ("2026-11-16T11:15:00Z", "merged"),
             merged="2026-11-16T11:15:00Z",
         ),
-        2: timeline(2, ("2026-11-16T10:00:00Z", None), merged="2026-11-16T10:12:00Z"),
+        2: timeline(
+            2, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:12:00Z", "merged"), merged="2026-11-16T10:12:00Z"
+        ),
         # Merged without the queue, into a release branch, or before the window: not counted.
         3: timeline(3, merged="2026-11-16T10:00:00Z"),
         4: timeline(4, ("2026-11-16T10:00:00Z", None), merged="2026-11-16T10:05:00Z", base="release"),
         5: timeline(5, ("2026-11-15T10:00:00Z", None), merged="2026-11-15T10:05:00Z"),
         6: timeline(6, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:05:00Z", "manual")),
+        # Taken out of the queue by hand, then merged directly: queue events, but the queue did not merge it.
+        7: timeline(
+            7, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:05:00Z", "manual"), merged="2026-11-16T11:00:00Z"
+        ),
     }
     merges = {row["number"]: row for row in metrics.queue_merges(timelines, since, now)}
     assert set(merges) == {1, 2}
@@ -688,6 +694,8 @@ def test_queue_report_rows_give_weekly_shares_and_nearest_rank_p90():
         i: timeline(i, ("2026-11-16T10:00:00Z", None), (merged[i], "merged"), merged=merged[i]) for i in range(1, 10)
     }
     timelines[10] = timeline(10, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:03:00Z", "failed_checks"))
+    # A release branch queue's removal stays out of main's removal counts.
+    timelines[12] = timeline(12, ("2026-11-16T10:00:00Z", None), ("2026-11-16T10:04:00Z", "manual"), base="release")
     lines = metrics.queue_report(runs, timelines, since, now)
     rows = [line for line in lines if line.startswith("| 2026-W")]
     # Merge minutes 5, 10, 15, 20, 25, 90, 95, 100, 105: p50 is the 5th of 9, p90 the 9th (nearest rank).
@@ -705,7 +713,7 @@ def test_unread_queue_is_named_and_the_rest_of_the_report_stands(monkeypatch):
 
     monkeypatch.setattr(metrics, "GitHub", Refused)
     now = metrics.timestamp("2026-11-18T12:00:00Z")
-    queue = metrics.queue_health(REPO, now - metrics.timedelta(weeks=12), now, 4)
+    queue = metrics.queue_health(REPO, now, 4)
     assert queue == "GitHub read failed: actions/runs"
     markdown = metrics.report(REPO, [], [], set(), now - metrics.timedelta(weeks=1), now, queue=queue)
     assert "## Red → green episodes on main" in markdown

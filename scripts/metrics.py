@@ -37,6 +37,8 @@ RELATION = re.compile(
 FIX_SHA = re.compile(r"\b(?:fixes commit|regression from commit) ([0-9a-f]{7,40})\b", re.IGNORECASE)
 QUEUE_REF = re.compile(r"^gh-readonly-queue/(?P<base>[^/]+)/pr-(?P<pr>\d+)-[0-9a-f]{40}$")
 QUEUE_OUTCOMES = ("passed", "failed", "superseded", "removed")
+# The workflow whose run on a queue group decides it; other workflows may run on the same group.
+QUEUE_WORKFLOW = "pr-checks.yml"
 # GraphQL aliases per query; each pull request reads its last TIMELINE_EVENTS queue events.
 TIMELINE_BATCH, TIMELINE_EVENTS = 50, 50
 
@@ -103,7 +105,7 @@ class GitHub:
             end = min(now, start + timedelta(days=1) - timedelta(seconds=1))
             result.extend(
                 self.pages(
-                    "actions/runs",
+                    f"actions/workflows/{QUEUE_WORKFLOW}/runs",
                     "workflow_runs",
                     event="merge_group",
                     created=f"{start:%Y-%m-%dT%H:%M:%SZ}..{end:%Y-%m-%dT%H:%M:%SZ}",
@@ -456,13 +458,19 @@ def queue_outcomes(runs, timelines):
 
 
 def queue_merges(timelines, since, now):
-    """Pull requests merged into main through the queue in the window: minutes from first and last enqueue."""
+    """Pull requests the queue merged into main in the window: minutes from first and last enqueue.
+
+    The queue's own "merged" removal is the proof: a pull request taken out of the queue and then merged
+    directly has queue events but no such removal, and is left out.
+    """
     result = []
     for pr in timelines.values():
         if not pr.get("mergedAt") or pr.get("baseRefName") != "main":
             continue
         merged = timestamp(pr["mergedAt"])
         adds, removals = queue_events(pr)
+        landed = next((when for when, why in removals if why == "merged"), None)
+        adds = [when for when in adds if landed and when <= landed]
         if not adds or not since <= merged <= now:
             continue
         result.append(
@@ -471,7 +479,7 @@ def queue_merges(timelines, since, now):
                 merged=merged,
                 first=(merged - adds[0]).total_seconds() / 60,
                 last=(merged - adds[-1]).total_seconds() / 60,
-                thrown_out=any(why != "merged" and adds[0] <= when < merged for when, why in removals),
+                thrown_out=any(why != "merged" and adds[0] <= when < landed for when, why in removals),
             )
         )
     return result
@@ -494,6 +502,7 @@ def queue_report(runs, timelines, since, now):
     removals = [
         (when, why)
         for pr in timelines.values()
+        if pr.get("baseRefName") == "main"
         for when, why in queue_events(pr)[1]
         if why != "merged" and since <= when <= now
     ]
@@ -501,7 +510,8 @@ def queue_report(runs, timelines, since, now):
         "",
         "## Merge queue on main",
         "",
-        "Goal: under 10% of queue runs fail for a week, and enqueue to merge p90 is 20 min or less.",
+        "Goal: under 10% of queue runs fail for a week, and enqueue to merge p90 is 20 min or less, read from the "
+        "first enqueue (what the author waits, removals included).",
         "",
         "Each finished run of a merge queue group on main, in the week it started. Failed: the queue removed its "
         "pull request for failed checks (fail-fast ends most of these cancelled), or the run ended failure. Removed: "
@@ -509,7 +519,8 @@ def queue_report(runs, timelines, since, now):
         "with no removal, such as when a group ahead failed. Enqueue to merge runs from a merged pull request's first "
         "enqueue (time lost to removals included) and from its last one (the queue's own time); thrown out counts "
         "merged pull requests removed at least once. Removals count every removal of a pull request with a queue run "
-        "in the window.",
+        "in the window. A run cancelled only because a group ahead failed is "
+        "superseded, not failed.",
         "",
         "| ISO week | Queue runs | Passed | Failed | Superseded | Removed | Merged | Enqueue to merge p50 / p90 (min) "
         "| Last enqueue to merge p90 (min) | Merged PRs thrown out | Removals by reason |",
@@ -687,9 +698,10 @@ def html_page(markdown):
     return "\n".join(lines) + ("</table>" if table else "") + "</body></html>\n"
 
 
-def queue_health(repo, since, now, weeks):
+def queue_health(repo, now, weeks):
     """(runs, timelines, since) for the queue section, or why it could not be read: the rest of the report stands."""
-    since = max(since, (now - timedelta(days=now.weekday(), weeks=weeks - 1)).replace(hour=0, minute=0, second=0))
+    # Its own window: --queue-weeks, whatever --weeks is.
+    since = (now - timedelta(days=now.weekday(), weeks=weeks - 1)).replace(hour=0, minute=0, second=0)
     try:
         api = GitHub(repo, budget=400)
         # A day before the window: a pull request merged early in it may have started its queue runs then.
@@ -717,7 +729,7 @@ def main(argv=None):
         history = History(ROOT, api.pages("releases"))
         runs = [run for run in validation_runs(api, born, since, now) if timestamp(run["updated_at"]) <= now]
         post_release, unresolved = collect(api, history, pulls)
-        queue = queue_health(api.repo, since, now, args.queue_weeks)
+        queue = queue_health(api.repo, now, args.queue_weeks)
         markdown = report(api.repo, episodes(runs), post_release, unresolved, since, now, pulls.values(), queue)
         print(markdown, end="")
         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
