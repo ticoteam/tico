@@ -97,8 +97,6 @@ def seed(api):
                 )
             elif n % 6 == 4:
                 T.restrict(c, slug, people=["ana"])
-            if n % 15 == 7:
-                c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot=?", (slug,))
             if n % 20 == 19:
                 c.execute("UPDATE bots SET state='archived' WHERE id=?", (slug,))
         X.pipeline(c, "eng", "Engineering", STAGES, manager="bot:" + BOTS[0])
@@ -113,6 +111,8 @@ def seed(api):
                     X.ok_ask(c, row["id"], row["owner_id"], X.ANA, f"OK {k}")
     with store.transaction() as c:
         for n, slug in enumerate(BOTS):
+            if n % 15 == 7:  # onboarding, after its tasks: an onboarding bot takes none
+                c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot=?", (slug,))
             mine = tasks.get("bot:" + slug) or []
             if mine:
                 H.status_set(c, "bot:" + slug, slug, state="idle", focus="Working", task_id=mine[0])
