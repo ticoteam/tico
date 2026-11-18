@@ -397,14 +397,22 @@ def refuse_text(store: Any, author: str, task: "str | list[str]", texts: dict[st
 
 
 def _spans(text: str) -> tuple[str, list[tuple[int, int]]] | None:
-    """`secret_drop.normalize(text)` and, for each of its characters, the span of `text` it came from: a character
-    with the combining marks after it is normalized on its own. None when that does not give the same text (a
-    sequence NFKC joins across those pieces): the caller keeps the whole normalized text then."""
+    """`secret_drop.normalize(text)` and, for each of its characters, the span of `text` it came from. A piece is a
+    character with the combining marks after it, joined to the piece before it when NFKC composes across the two
+    (Hangul conjoining jamo, as macOS writes Korean file names: U+1100 U+1161 become one syllable). None when that
+    still does not give the same text: the caller keeps the whole normalized text then."""
     starts = [i for i, ch in enumerate(text) if i == 0 or not unicodedata.combining(ch)]
-    pieces = list(zip(starts, [*starts[1:], len(text)], strict=True))
+    groups: list[list[int]] = []
+    for start, end in zip(starts, [*starts[1:], len(text)], strict=True):
+        if groups:
+            a, b = text[groups[-1][0] : groups[-1][1]], text[start:end]
+            if secret_drop.normalize(a) + secret_drop.normalize(b) != secret_drop.normalize(a + b):
+                groups[-1][1] = end
+                continue
+        groups.append([start, end])
     flat: list[str] = []
     origin: list[tuple[int, int]] = []
-    for start, end in pieces:
+    for start, end in groups:
         out = secret_drop.normalize(text[start:end])
         flat.append(out)
         origin.extend([(start, end)] * len(out))

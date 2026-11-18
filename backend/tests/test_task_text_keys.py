@@ -475,3 +475,36 @@ def test_masking_changes_only_the_key_and_keeps_every_other_character_as_written
     # A zero-width character inside the key is part of the key.
     text, _ = K.masked("use " + KEY[:6] + "\u200b" + KEY[6:] + " now")
     assert text == "use " + K.MARK + " now"
+
+
+def test_masking_keeps_korean_written_as_separate_jamo_and_the_punctuation_around_it():
+    # Conjoining jamo compose across characters that are not combining marks (U+1100 U+1161 -> U+AC00); macOS
+    # writes Korean file names this way. They and an ellipsis next to them stay as written; only the key changes.
+    before = "\u1100\u1161\u2026 \u1111\u1161\u110b\u1175\u11af.txt "
+    after = " \u1101\u1173\u11c0\u2026"
+    text, rules = K.masked(before + KEY + after)
+    assert text == before + K.MARK + after and rules == ["github"]
+    # A key followed straight by a jamo: the jamo stays.
+    text, _ = K.masked("use " + KEY + "\u1100\u1161")
+    assert text == "use " + K.MARK + "\u1100\u1161"
+
+
+def test_a_needs_you_answer_to_an_item_named_by_number_is_refused_on_that_item_s_task(api):
+    # The refusal and its audit follow item n, not the batch's cursor (QA, E-645).
+    from backend.tests.helpers import engine as X
+
+    with api.app.state.store.transaction() as c:
+        tasks = []
+        for title in ("Run the ads", "Pay the invoice"):
+            t = H.task_create(c, "human:ana", title, "Q4.", "bot:ops", lint=False)
+            H.task_ask(
+                c, "bot:ops", t["id"], "human:ana", title + "?", kind="ok", shows=X.shown(c), seen_version=t["version"]
+            )
+            tasks.append(t)
+    bid = post(api, "batch", {})["id"]
+    post(api, f"batch/{bid}/next", {})
+    post(api, f"batch/{bid}/next", {})  # the cursor is past the end
+    _refused(
+        api, f"batch/{bid}/respond", {"kind": "decide", "decision": "send_back", "text": "leaks " + KEY, "item": 2}
+    )
+    assert [len(_rows(api, t["id"])) for t in tasks] == [0, 1]
