@@ -98,7 +98,7 @@ jobs:
           [[ -z "$CARRIED" || "$CARRIED" == \[*\] ]] || { echo "::error::carried failures are a JSON list"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
       # Controls from the reviewed workflow commit: the gate's VMs are the full validation's, or the incremental plan's.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: validation-control
@@ -110,7 +110,7 @@ jobs:
           persist-credentials: false
       # An incremental validation makes its plan from the candidate's history (the anchor is an ancestor of main).
       - if: inputs.anchor != ''
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.candidate_sha }}
           path: candidate
@@ -148,7 +148,7 @@ jobs:
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
         if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
@@ -194,7 +194,7 @@ jobs:
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runner-${{ matrix.name }}
           path: dist/*.gz
@@ -223,7 +223,7 @@ jobs:
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
         if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
@@ -251,7 +251,7 @@ jobs:
           done
           echo "::error::The release Linux binaries were not built within 12 minutes."; exit 1
       - if: matrix.image != 'tico-updater'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: runner-${{ matrix.platform == 'arm64' && 'linux-arm64' || 'linux-x86_64' }}
           path: ${{ runner.temp }}/native
@@ -285,7 +285,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/digest"
           echo "$DIGEST" > "$RUNNER_TEMP/digest/$NAME"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-${{ matrix.image }}-${{ matrix.platform }}
           path: ${{ runner.temp }}/digest/*
@@ -361,12 +361,12 @@ jobs:
               stream.write(f'TICO_HOSTED_ENVIRONMENT={kind}\n')
           PY
       # Controls come from the reviewed workflow commit; builds/tests come only from the candidate.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: validation-control
           persist-credentials: false
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           path: candidate
@@ -376,7 +376,7 @@ jobs:
         run: python3 validation-control/scripts/hosted_release_check.py prepare
       # Caches hold downloads only (npm tarballs, browsers, compiled Cargo dependencies); every job still
       # installs from the candidate's pinned lock files and builds the candidate's own crates from source.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.15'
       - name: Install Python test prerequisites
@@ -410,7 +410,7 @@ jobs:
           then needed=true; fi
           echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - if: steps.browsers.outputs.needed == 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.3'
           cache: npm
@@ -467,7 +467,7 @@ jobs:
           done
           echo "::error::The release Linux binaries were not built within 25 minutes."; exit 1
       - if: steps.binaries.outputs.needed == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: runner-linux-x86_64
           path: ${{ runner.temp }}/native
@@ -514,7 +514,7 @@ jobs:
           echo "::error::The images were not built within 20 minutes."
           exit 1
       - if: matrix.part == 'product'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-*-amd64
           path: ${{ runner.temp }}/digests
@@ -555,14 +555,14 @@ jobs:
           if [ -f validation-control/scripts/hosted_release_check.py ]; then
             python3 validation-control/scripts/hosted_release_check.py collect
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
           path: ${{ runner.temp }}/release-validation-report
           retention-days: 3
           if-no-files-found: warn
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && (matrix.part == 'python' || matrix.part == 'browser')
         with:
           name: release-junit-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
@@ -580,7 +580,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           sparse-checkout: |
@@ -588,13 +588,13 @@ jobs:
             scripts/flake_quarantine.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-junit-${{ github.run_id }}-*
           path: ci-results
           merge-multiple: true
       - run: python3 scripts/pr_checks.py durations
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-timings
           path: durations.json
@@ -611,7 +611,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
@@ -620,7 +620,7 @@ jobs:
         run: |
           if [ -x scripts/cli_contract.sh ]; then echo "check=true" >> "$GITHUB_OUTPUT"
           else echo "::notice::this candidate predates scripts/cli_contract.sh; the real CLIs were not checked"; fi
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.has.outputs.check == 'true'
         with:
           node-version: '24.22.3'

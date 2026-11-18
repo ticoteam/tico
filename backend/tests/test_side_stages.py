@@ -282,7 +282,9 @@ def test_only_work_stages_can_be_side_stages(c):
     record = _record(_stage("In progress"), _stage("Rejected", side=True, kind="closed"))
     record["done"] = {"side": True}
 
-    assert len(PS.check(c, record)) == 2
+    problems = PS.check(c, record)
+    # One problem for the closed side stage and one for the side done stage, no more and no fewer.
+    assert len(problems) == 2, f"expected 2 problems (a closed side stage, a done side stage); got {problems}"
     with pytest.raises(H.Refused, match="task_settings"):
         PS.save(c, ANA, record)
 
