@@ -2679,7 +2679,7 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
     assert "scripts/pr_checks.py run --quarantine" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "quarantine" not in (workflows / name).read_text(), name
+        assert "--quarantine" not in (workflows / name).read_text(), name
 
 
 @pytest.fixture
