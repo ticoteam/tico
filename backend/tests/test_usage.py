@@ -583,3 +583,82 @@ def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tm
         k: before[k] for k in ("input_tokens", "cached_tokens", "output_tokens", "est_cost_usd", "usage_reason")
     }
     assert kept["usage_reason"] is None
+
+
+# --------------------------------------------------------------------------- hours and exact windows
+def seed_hours(api):
+    """Runs on DAY at 09:30, 10:00, 10:45 and 11:00 (UTC), each a whole cent so the sums read plainly."""
+    with api.app.state.store.transaction() as c:
+        c.executemany(
+            "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, input_tokens, cached_tokens, output_tokens, "
+            "usage_model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', 100, 0, 10, ?, ?, ?)",
+            [
+                (tid, bot, DAY + "T" + at + "Z", DAY + "T" + at + "Z", model, cost, billing)
+                for tid, bot, at, model, cost, billing in (
+                    ("h1", "ops", "09:30:00.000000", "gpt-6-sol", 0.01, "api"),
+                    ("h2", "ops", "10:00:00.000000", "gpt-6-sol", 0.02, "api"),
+                    ("h3", "cpo", "10:45:00.000000", "claude-opus-5", 0.04, "subscription"),
+                    ("h4", "cpo", "11:00:00.000000", "claude-opus-5", 0.08, "api"),
+                )
+            ],
+        )
+
+
+def test_group_hour_lists_each_utc_hour_of_the_window_with_empty_ones_as_zeros(api):
+    seed_hours(api)
+    got = usage(api, group="hour", **{"from": DAY + "T09:00:00Z", "to": DAY + "T13:00:00Z"})
+    assert (got["group"], got["from"], got["to"]) == ("hour", DAY + "T09:00:00Z", DAY + "T13:00:00Z")
+    assert [(r["hour"], r["runs"], r["est_cost_usd"], r["subscription_equiv_usd"]) for r in got["rows"]] == [
+        (DAY + "T09:00:00Z", 1, 0.01, 0),
+        (DAY + "T10:00:00Z", 2, 0.02, 0.04),
+        (DAY + "T11:00:00Z", 1, 0.08, 0),
+        (DAY + "T12:00:00Z", 0, 0, 0),
+    ]
+    assert got["totals"]["runs"] == 4 and got["rows"][3]["share"] == 0
+    # Whole days still mean whole days: 24 hours of DAY, the same four runs.
+    whole = usage(api, group="hour", **{"from": DAY, "to": DAY})
+    assert len(whole["rows"]) == 24 and whole["rows"][0]["hour"] == DAY + "T00:00:00Z"
+    assert sum(r["runs"] for r in whole["rows"]) == 4 and (whole["from"], whole["to"]) == (DAY, DAY)
+    # An offset is turned to UTC, and a `+` sent unescaped (a space) reads as one.
+    shifted = usage(api, group="hour", **{"from": DAY + "T11:30:00+02:00", "to": DAY + "T12:00:00 02:00"})
+    assert shifted["from"] == DAY + "T09:30:00Z" and [r["runs"] for r in shifted["rows"]] == [1]
+
+
+def test_an_exact_window_sums_only_its_runs_in_every_group_and_a_bots_detail(api):
+    seed_hours(api)
+    hour = {"from": DAY + "T10:00:00Z", "to": DAY + "T11:00:00Z"}  # from included, to excluded
+    models = usage(api, group="model", **hour)
+    assert [(r["value"], r["runs"]) for r in models["rows"]] == [("claude-opus-5", 1), ("gpt-6-sol", 1)]
+    assert models["totals"]["est_cost_usd"] == pytest.approx(0.02)
+    assert models["totals"]["subscription_equiv_usd"] == pytest.approx(0.04)
+    assert [(r["bot"], r["runs"]) for r in usage(api, **hour)["rows"]] == [("cpo", 1), ("ops", 1)]
+    detail = usage(api, bot="cpo", **{"from": DAY + "T10:30:00Z", "to": DAY + "T11:00:00.000001Z"})
+    assert detail["totals"]["runs"] == 2 and [d["day"] for d in detail["daily"]] == [DAY]
+    # A time and a date together: from 10:00 to the end of DAY.
+    rest = usage(api, group="day", **{"from": DAY + "T10:00:00Z", "to": DAY})
+    assert [(r["day"], r["runs"]) for r in rest["rows"]] == [(DAY, 3)]
+
+
+def test_dates_still_mean_whole_days(api):
+    seed(api)
+    got = usage(api, group="day")
+    assert (got["from"], got["to"]) == (DAY, "2026-09-21")
+    assert [(r["day"], r["runs"]) for r in got["rows"]] == [(DAY, 2), ("2026-09-21", 3)]
+    assert [d["day"] for d in usage(api, bot="ops")["daily"]] == [DAY, "2026-09-21"]
+
+
+@pytest.mark.parametrize(
+    "params, detail",
+    [
+        ({"group": "hour", "from": "2026-09-01", "to": "2026-09-08"}, "group=hour covers at most 7 days"),
+        ({"group": "hour", "from": DAY + "T00:00:00Z", "to": "2026-09-27T00:00:01Z"}, "group=hour covers at most 7"),
+        ({"from": DAY + "T25:00:00Z"}, "UTC times"),
+        ({"from": "yesterday"}, "UTC times"),
+        ({"from": DAY + "T10:00:00Z", "to": DAY + "T10:00:00Z"}, "from must be before to"),
+        ({"from": "2026-09-21", "to": DAY}, "from is after to"),
+        ({"from": "2025-01-01", "to": "2026-09-21"}, "at most 366 days"),
+    ],
+)
+def test_a_bad_window_is_a_422_that_says_why(api, params, detail):
+    r = api.get("/api/v2/usage", params=params, headers=headers("ana-test"))
+    assert r.status_code == 422 and detail in r.text, r.text

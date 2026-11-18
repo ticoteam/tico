@@ -394,6 +394,12 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("setUsageDefault", "put", "/api/v2/usage/limits", json={"monthly_usd": 500, "count_subscription": False})
     call("setBotUsageLimit", "put", "/api/v2/usage/limits/ops", json={"daily_usd": 20})
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
+    call(
+        "getUsage",
+        "get",
+        "/api/v2/usage",
+        params={"group": "hour", "from": "2026-01-01T17:00:00Z", "to": "2026-01-01T20:00:00Z"},
+    )
     call("getHealth", "get", "/api/v2/health")
     from datetime import datetime, timezone
     from backend import heartbeat

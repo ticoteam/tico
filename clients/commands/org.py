@@ -518,18 +518,19 @@ def human_remove(api, args):
 
 
 # ----------------------------------------------------------------------------- usage and billing
-USAGE_GROUPS = ("bot", "day", "routine", "task", "harness", "model", "effort", "subscription")
+USAGE_GROUPS = ("bot", "day", "hour", "routine", "task", "harness", "model", "effort", "subscription")
 
 
 @tool(
     "tico_usage_show",
-    "Estimated model spend over a window (default the last 7 days), grouped by bot, day, routine, task, harness, model, "
-    "effort or subscription, with totals; `bot` gives one bot's daily series and top routines. People only: each sees "
+    "Estimated model spend over a window (default the last 7 days), grouped by bot, day, hour (at most 7 days), "
+    "routine, task, harness, model, effort or subscription, with totals; from/to take UTC days or exact UTC times "
+    "(the last 3 hours: --group hour --from 2026-11-18T15:00:00Z); `bot` gives one bot's daily series and top routines. People only: each sees "
     "the bots whose usage they may read (their own, those they manage; the owner and admins: all).",
     {
         "group": _s("How to group the rows (default bot)", enum=list(USAGE_GROUPS)),
-        "from": _s("First UTC day, YYYY-MM-DD"),
-        "to": _s("Last UTC day, YYYY-MM-DD"),
+        "from": _s("First UTC day, YYYY-MM-DD, or a UTC time, YYYY-MM-DDTHH:MM:SSZ (included)"),
+        "to": _s("Last UTC day, YYYY-MM-DD (included), or a UTC time, YYYY-MM-DDTHH:MM:SSZ (excluded)"),
         "bot": _s("One bot's slug: its daily series"),
         "bots": _s("Only these bots: slugs, comma-separated"),
     },
