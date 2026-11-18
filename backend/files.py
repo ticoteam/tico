@@ -2462,6 +2462,7 @@ class Files:
             "bot": row["bot_id"],
             "title": row["title"],
             "kind": row["kind"],
+            "library_kind": file_library.library_kind(row["kind"], self.is_page(c, row)),
             "mime": row["mime"],
             "locator": row["locator"],
             "scope": row["scope"].partition(":")[0],
@@ -2502,6 +2503,14 @@ class Files:
         }
         return value
 
+    @staticmethod
+    def is_page(c, row):
+        """Whether the file is a page, as the `kind=page` filter reads it (a pages row), from the listing's join when
+        it has one."""
+        if "is_page" in row.keys():
+            return bool(row["is_page"])
+        return c.execute("SELECT 1 FROM pages WHERE file_id=?", (row["id"],)).fetchone() is not None
+
     def github_url(self, c, bot, version, caches):
         if not version or not version["commit_sha"] or not version["repo_path"]:
             return None
@@ -2541,7 +2550,8 @@ class Files:
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
             rows = c.execute(
-                "SELECT f.*,v.repo_path AS repo_path FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+                "SELECT f.*,v.repo_path AS repo_path,p.file_id IS NOT NULL AS is_page FROM bot_files f "
+                "LEFT JOIN pages p ON p.file_id=f.id "
                 "LEFT JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
                 "WHERE f.bot_id=? AND f.archived=0 AND (" + kind_sql + ") "
                 "AND (f.identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions o "
@@ -2856,7 +2866,7 @@ def install_files(app, store, auth, blobs, mutate):
         **api_v2(
             "Files",
             "listBotFiles",
-            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) narrow the same list",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) narrow the same list",
             "BotFileList",
         ),
     )

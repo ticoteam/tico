@@ -90,3 +90,43 @@ def test_the_files_a_bot_names_resolve_to_one_file_or_none(api):
     assert found == {said[0]: pack, said[1]: pack, said[2]: pack, said[3]: paiva}, "two of a name is no guess"
     other = api.get("/api/v2/bots/ops/files/mentions?" + query, headers=headers("cara-test"))
     assert other.status_code == 200 and other.json()["files"] == {}, "only files the reader sees"
+
+
+def test_each_file_says_the_kind_its_filter_takes(api):
+    """A file's stored kind and the list's `kind` filter used different words, so an agent filtering with the word it
+    was shown missed files (a page stored as "document" only matches kind=page) or was refused (kind=spreadsheet)."""
+    from backend.tests.helpers.pages import page as publish_page
+
+    _, attempt = turn(api)
+    sheet = put(api, attempt, "reports/traffic.csv", "page,visits\n/home,1\n")
+    note = put(api, attempt, "reports/plan.md", "# Plan")
+    made = publish_page(api, attempt)
+    assert made.status_code == 200, made.text
+    weekly = made.json()["page"]["file_id"]
+    listed = {f["id"]: f for f in page(api)["files"]}
+    assert (listed[weekly]["kind"], listed[weekly]["library_kind"]) == ("document", "page"), "stored kind unchanged"
+    assert (listed[sheet]["kind"], listed[sheet]["library_kind"]) == ("spreadsheet", "data")
+    assert listed[note]["library_kind"] == "document"
+    for fid, f in listed.items():
+        assert fid in {g["id"] for g in page(api, "kind=" + f["library_kind"])["files"]}, f
+    total = sum(page(api, "kind=" + k)["total"] for k in ("page", "document", "image", "data", "media", "other"))
+    assert total == page(api)["total"], "each file is under exactly one library_kind"
+    info = api.get(f"/api/v2/files/{weekly}/info", headers=headers("ben-test"))
+    assert info.status_code == 200 and info.json()["file"]["library_kind"] == "page"
+    named = api.get("/api/v2/bots/ops/files/mentions?m=reports/traffic.csv", headers=headers("ben-test")).json()
+    assert named["files"]["reports/traffic.csv"]["library_kind"] == "data"
+    refused = api.get("/api/v2/bots/ops/files?kind=spreadsheet", headers=headers("ben-test"))
+    assert refused.status_code == 422 and "filter with data" in refused.text
+
+
+def test_the_agent_file_list_tool_passes_the_kind_filter():
+    from clients.commands.content import files_list
+
+    class Api:
+        def get(self, path, **params):
+            self.call = (path, params)
+            return {}
+
+    api = Api()
+    files_list(api, {"bot": "ops", "kind": "page"})
+    assert api.call == ("bots/ops/files", {"limit": None, "cursor": None, "kind": "page"})
