@@ -1982,8 +1982,8 @@ def test_thread_delete_runs_the_message_delete_route(monkeypatch):
 
 
 def test_thread_upload_sends_the_file_as_multipart_to_the_thread_message_route(monkeypatch, tmp_path):
-    """`tico thread upload` runs `tico_thread_upload`: the file goes as multipart to the thread's upload route, with the
-    text and reply target as form fields."""
+    """`tico thread upload` runs `tico_thread_upload`: the file goes as multipart to the thread's upload route, in the
+    `files` part the route reads, with the text and reply target as form fields."""
     from clients import remotecli
 
     path = tmp_path / "report.pdf"
@@ -2004,8 +2004,22 @@ def test_thread_upload_sends_the_file_as_multipart_to_the_thread_message_route(m
         "text": "Q3 numbers",
         "to": "human:ben",
         "parent_message_id": "m7",
-        "file": {"filename": "report.pdf", "content": b"%PDF-1.4 test"},
+        "files": {"filename": "report.pdf", "content": b"%PDF-1.4 test"},
     }
+
+
+def test_thread_post_attaches_files_already_in_tico(monkeypatch):
+    """`tico thread post --file ID@VERSION` (repeatable) sends them as the post's attachments, which the thread's
+    readers open from the message (backend/thread_api.py shared_files)."""
+    from clients import remotecli
+
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "bot:legal"}, "POST threads/T1/messages": {"id": "m9"}})
+    remotecli.run(hubcli.parser().parse_args(["thread", "post", "T1", "The draft", "--file", "f1@2", "--file", "f2@1"]))
+    (sent,) = wire.writes()
+    assert (sent.path, sent.body) == (
+        "/api/v2/threads/T1/messages",
+        {"text": "The draft", "kind": "say", "attachments": ["f1@2", "f2@1"]},
+    )
 
 
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):

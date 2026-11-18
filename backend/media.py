@@ -228,6 +228,7 @@ async def form(request, model, blobs, store, admit=None):
                     else:
                         fields[name] = data.decode("utf-8")
                 for field in (
+                    "attachments",
                     "calendar",
                     "refs",
                     "acceptance_criteria",

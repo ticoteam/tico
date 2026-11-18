@@ -534,6 +534,13 @@ def _head(blobs, digest):
         return b""
 
 
+# A visual is a file of this conversation; any other file one may open is shared in its thread (thread_api.shared_files).
+NOT_IN_ROOM = (
+    "File version not found in this conversation. To share another file you can open, post it in the thread: "
+    "tico thread post <thread> <text> --file <file id>@<version>"
+)
+
+
 def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     """The stored attachments for a message, in the order given, and what each page left unembedded.
 
@@ -559,12 +566,12 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
                 or row["archived"]
                 or not files.visible(c, who, row, {})
             ):
-                raise Problem("not_found", "File version not found in this conversation", 404)
+                raise Problem("not_found", NOT_IN_ROOM, 404)
             version = c.execute(
                 "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
             ).fetchone()
             if not version:
-                raise Problem("not_found", "File version not found in this conversation", 404)
+                raise Problem("not_found", NOT_IN_ROOM, 404)
             version = dict(version)
         digest = version.get("digest")
         mime = (version.get("mime") or "").split(";", 1)[0].strip().lower()

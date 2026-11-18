@@ -126,7 +126,7 @@ def test_local_files_reach_the_api_through_the_lazily_imported_helpers(tmp_path,
     attachments, local = hubtools._visuals(api, [{"path": "chart.svg", "title": "Chart"}], upload)
     assert api.calls == [
         ("multipart", "tasks/t1/files", {"file": "notes.txt"}, {"name": "notes.txt"}),
-        ("multipart", "uploads/threads/th%201/messages", {"file": "notes.txt"}, {"text": "see"}),
+        ("multipart", "uploads/threads/th%201/messages", {"files": "notes.txt"}, {"text": "see"}),
     ]
     assert attachments == [{"ref": "f0@1", "title": "Chart"}] and uploads == [("0", "chart.svg", b"<svg")]
     assert local == [{"path": "chart.svg", "unembedded": []}]
