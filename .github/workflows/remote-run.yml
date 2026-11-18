@@ -93,7 +93,7 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - if: inputs.setup == 'rust' || inputs.setup == 'all'
         name: Install Rust
-        run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92
+        run: rustup toolchain install 1.99 --profile minimal && rustup default 1.99
       - name: Run the command
         env:
           COMMAND: ${{ inputs.command }}

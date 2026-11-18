@@ -67,7 +67,7 @@ pub fn configured_url(raw: &str) -> Result<Url, String> {
 pub async fn validate_server(raw: &str) -> Result<Url, String> {
     let hub = validate_url(raw)?;
     // No credentials, redirects or cookies: a health check must not leave the chosen server.
-    let http = reqwest::Client::builder()
+    let http = crate::tls::http_builder()
         .timeout(std::time::Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()

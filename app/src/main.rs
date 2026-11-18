@@ -17,6 +17,7 @@ mod hub;
 mod orgs;
 mod signin;
 mod timing;
+mod tls;
 mod visual_origin;
 mod windows;
 
@@ -125,6 +126,7 @@ fn opener_plugin<R: tauri::Runtime>() -> impl tauri::plugin::Plugin<R> {
 
 fn main() {
     applog::init();
+    tls::install_default_provider();
     // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
     let context = tauri::generate_context!();
     let identifier = context.config().identifier.clone();

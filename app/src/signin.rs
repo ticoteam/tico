@@ -309,7 +309,7 @@ async fn remove_store(app: &App, store: Uuid) -> bool {
 /// with a GET, as the hub serves and exempts only GET there; no redirect is followed, no cookie is sent and the body
 /// is never read (the hub's answer starts a sign-in only by a signed cookie, which is dropped).
 async fn has_login(hub: Url, issuer: Url) -> bool {
-    let Ok(http) = reqwest::Client::builder()
+    let Ok(http) = crate::tls::http_builder()
         .timeout(std::time::Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()

@@ -520,8 +520,8 @@ jobs:
         timeout-minutes: 3
       - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 40
-      - name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
-        run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
+      - name: Rust 1.99.1 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
       - name: Linux build dependencies (the ones app.yml installs)
         run: |
           sudo sed -i \
@@ -538,10 +538,10 @@ jobs:
           cache-on-failure: true
       - name: rustfmt
         working-directory: app
-        run: cargo +1.92.0 fmt --check
+        run: cargo +1.99.1 fmt --check
       - name: clippy
         working-directory: app
-        run: cargo +1.92.0 clippy --locked --all-targets -- -D warnings
+        run: cargo +1.99.1 clippy --locked --all-targets -- -D warnings
       - name: Python for the updater test (the hub backend it serves from, installed as the Python suites install it)
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
@@ -550,7 +550,7 @@ jobs:
         working-directory: app
         env:
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        run: cargo +1.92.0 test --locked
+        run: cargo +1.99.1 test --locked
 
   caddy-linux:
     # Merge queue groups, and a ready pull request from this repository, when the plan selects the Caddy image.

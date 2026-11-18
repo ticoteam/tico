@@ -305,7 +305,7 @@ jobs:
       - name: Install Rust
         env:
           TARGET: ${{ matrix.target }}
-        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+        run: rustup toolchain install 1.99 --profile minimal --target "$TARGET" && rustup default 1.99
       - name: Build tico-runner and tico-screen-relay
         env:
           TARGET: ${{ matrix.target }}

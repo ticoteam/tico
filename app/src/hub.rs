@@ -3,9 +3,8 @@
 //! to the hub into each request, so the badge shares the signed-in Cloudflare Access session without
 //! persisting or exposing it elsewhere.
 
-use reqwest::header::{HeaderMap, HeaderName, LOCATION, WWW_AUTHENTICATE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, LOCATION, WWW_AUTHENTICATE};
 use reqwest::StatusCode;
-use reqwest_updater::header::HeaderValue;
 use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
@@ -129,7 +128,7 @@ impl Client {
 /// Redirects are followed, except to Cloudflare Access's login page: that one is the answer (signed out), and
 /// following it would read the login page as a failed hub reply.
 fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::tls::http_builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if is_access_login(attempt.url()) {
@@ -262,9 +261,9 @@ impl CompanyUpdatePolicy {
 
     fn redirect_attempt(
         &self,
-        attempt: reqwest_updater::redirect::Attempt<'_>,
-    ) -> reqwest_updater::redirect::Action {
-        let allowed = attempt.status() == reqwest_updater::StatusCode::FOUND
+        attempt: reqwest::redirect::Attempt<'_>,
+    ) -> reqwest::redirect::Action {
+        let allowed = attempt.status() == reqwest::StatusCode::FOUND
             && attempt.previous().len() == 1
             && attempt
                 .previous()
@@ -283,18 +282,18 @@ impl CompanyUpdatePolicy {
     // the redirect changes origin. A configured public runner feed gets no hub credentials.
     pub(crate) fn configure_client(
         &self,
-        builder: reqwest_updater::ClientBuilder,
-    ) -> reqwest_updater::ClientBuilder {
+        builder: reqwest::ClientBuilder,
+    ) -> reqwest::ClientBuilder {
         if !same_origin(&self.hub, &self.endpoint) {
             return builder;
         }
         let redirect_policy = self.clone();
-        let builder = builder.redirect(reqwest_updater::redirect::Policy::custom(move |attempt| {
+        let builder = builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
             redirect_policy.redirect_attempt(attempt)
         }));
         if let Some(cookie) = &self.cookie {
-            let mut headers = reqwest_updater::header::HeaderMap::new();
-            headers.insert(reqwest_updater::header::COOKIE, cookie.clone());
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(reqwest::header::COOKIE, cookie.clone());
             builder.default_headers(headers)
         } else {
             builder
@@ -343,6 +342,12 @@ mod updater_auth_tests {
     use std::net::TcpListener;
     use std::thread;
 
+    /// The builder tauri-plugin-updater hands `configure_client`: a plain one, under the ring provider it installs.
+    fn updater_client_builder() -> reqwest::ClientBuilder {
+        crate::tls::install_default_provider();
+        reqwest::Client::builder()
+    }
+
     #[test]
     fn company_update_endpoint_keeps_public_runner_and_maps_default_feed_to_selected_hub() {
         let hub = Url::parse("https://tico.example.test/team/").unwrap();
@@ -390,7 +395,7 @@ mod updater_auth_tests {
             Some("CF_Authorization=synthetic"),
         );
         let client = policy
-            .configure_client(reqwest_updater::Client::builder())
+            .configure_client(updater_client_builder())
             .build()
             .unwrap();
         for path in ["download/latest.json", "download/file/0.3.21/Tico.tar.gz"] {
@@ -400,7 +405,7 @@ mod updater_auth_tests {
                 url.path().contains("/download/file/")
             );
             let response = client.get(url).send().await.unwrap();
-            assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
         }
         let foreign = Url::parse("https://files.example.test/download/app.tar.gz").unwrap();
         assert!(!policy.allows_download(&foreign));
@@ -427,11 +432,11 @@ mod updater_auth_tests {
         let policy =
             CompanyUpdatePolicy::new(base, feed.clone(), Some("CF_Authorization=synthetic"));
         let client = policy
-            .configure_client(reqwest_updater::Client::builder())
+            .configure_client(updater_client_builder())
             .build()
             .unwrap();
         let response = client.get(feed).send().await.unwrap();
-        assert_eq!(response.status(), reqwest_updater::StatusCode::FOUND);
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
         assert!(server
             .join()
             .unwrap()
@@ -461,7 +466,7 @@ mod updater_auth_tests {
         let policy = CompanyUpdatePolicy::new(hub.clone(), feed.clone(), None);
         assert!(!policy.has_cookie());
         let client = policy
-            .configure_client(reqwest_updater::Client::builder())
+            .configure_client(updater_client_builder())
             .build()
             .unwrap();
         for url in [feed, hub.join("download/file/0.3.21/Tico.tar.gz").unwrap()] {
@@ -471,7 +476,7 @@ mod updater_auth_tests {
             );
             assert_eq!(
                 client.get(url).send().await.unwrap().status(),
-                reqwest_updater::StatusCode::OK
+                reqwest::StatusCode::OK
             );
         }
         assert!(server
@@ -509,12 +514,12 @@ mod updater_auth_tests {
         .unwrap();
         assert!(policy.allows_download(&artifact));
         let client = policy
-            .configure_client(reqwest_updater::Client::builder())
+            .configure_client(updater_client_builder())
             .build()
             .unwrap();
         for url in [endpoint, artifact] {
             let response = client.get(url).send().await.unwrap();
-            assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
         }
         let seen = server.join().unwrap();
         assert!(seen[0].starts_with("GET /download/latest.json "));
