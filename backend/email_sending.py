@@ -907,7 +907,7 @@ def reviewed(found, snap, why=None):
     if found["review"] is True:
         return {**found, "review_reason": ""}
     if found["review"] is False:
-        return {**found, "review_reason": STOPPED.get(why) or NO_REASON}
+        return {**found, "review_reason": STOPPED.get(why or "") or NO_REASON}
     return {**found, "review_reason": UNANSWERED.get(found["status"], UNANSWERED["unavailable"])}
 
 
