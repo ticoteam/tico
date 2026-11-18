@@ -12,6 +12,7 @@ import pytest
 
 from backend import events
 from backend import migrations
+from backend.tests.helpers.migrations import at_floor
 
 NAME = "20261117094959_no_structured_questions"
 MIGRATION = importlib.import_module(f"backend.migrations.{NAME}")
@@ -19,13 +20,12 @@ NOW = "2026-11-17T00:00:00.000000Z"
 
 
 def _directory(directory, *, through):
-    """This code's migrations up to and including `through`, with the baseline and the floor."""
+    """This code's migrations up to and including `through`, with the floor's list."""
     directory.mkdir(exist_ok=True)
     for migration in migrations.files():
         if migration.version <= through:
             shutil.copy(migration.path, directory / migration.path.name)
-    for name in (migrations.BASELINE, migrations.RETIRED_LIST):
-        shutil.copy(migrations.DIRECTORY / name, directory / name)
+    shutil.copy(migrations.DIRECTORY / migrations.RETIRED_LIST, directory / migrations.RETIRED_LIST)
 
 
 def _requirement(c, rid, kind, *, visit="v1", stage=None, person="human:ana", choices=None, withdrawn=None):
@@ -55,8 +55,9 @@ def _just_before(tmp_path):
     directory = tmp_path / "migrations"
     before = max(m.version for m in migrations.files() if m.version < NAME)
     _directory(directory, through=before)
-    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
+    conn = at_floor(tmp_path / "hub.sqlite")
     migrations.apply(conn, directory)
+    conn.execute("DELETE FROM requirements")  # the floor company's own stage requirements: these tests make theirs
     assert "choices" in [row[1] for row in conn.execute("PRAGMA table_info(requirements)")]
     return conn, directory
 

@@ -164,12 +164,12 @@ def test_the_live_stream_brings_a_person_neither_the_notice_nor_a_quote_of_it(ap
 
 # ----------------------------------------------------------------------------- what was already written
 MIGRATION = "backend.migrations.20261116234549_run_notices_out_of_chats"
-BASELINE = Path(__file__).resolve().parents[1] / "migrations" / "baseline.sql"
+FLOOR = Path(__file__).resolve().parent / "fixtures" / "schema_floor.sql"  # v0.6.0, from before the migration
 
 
 def _old_stamp(c):
     """The stamp trigger as it was before the migration: every message but a carrier gets a seq."""
-    line = next(x for x in BASELINE.read_text().splitlines() if x.startswith("CREATE TRIGGER threads_messages_stamp "))
+    line = next(x for x in FLOOR.read_text().splitlines() if x.startswith("CREATE TRIGGER threads_messages_stamp "))
     c.execute("DROP TRIGGER threads_messages_stamp")
     c.execute(line)
 

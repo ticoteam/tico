@@ -8,6 +8,7 @@ from backend.store import Store
 
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
+FLOOR = FIXTURES / "schema_floor.sql"
 
 
 def boot(path, **kw):
@@ -37,3 +38,12 @@ def forget_from(c, version):
 
     current = [m.version for m in migrations.files() if m.version >= version]
     c.executemany("DELETE FROM schema_migrations WHERE version=?", [(v,) for v in current])
+
+
+def at_floor(path):
+    """A database as the compatibility floor left it (fixtures/schema_floor.sql), for a test of a migration written
+    after the floor: the baseline already holds and records every current file, so it cannot stand for the file before
+    one of them ran."""
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.executescript(FLOOR.read_text())
+    return conn
