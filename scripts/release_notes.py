@@ -362,6 +362,20 @@ def high_risk(text: str) -> bool:
     return any(line.strip() == HIGH_RISK_HEADING for line in text.splitlines())
 
 
+def high_risk_prs(text: str) -> set[int]:
+    """The pull requests listed in the generated High risk section of the notes."""
+    in_section = False
+    numbers = set()
+    for line in text.splitlines():
+        if line.startswith("## ") or line == "---":
+            if in_section:
+                break
+            in_section = line == HIGH_RISK_HEADING
+        if in_section and (match := re.match(r"^### #([0-9]+) ", line)):
+            numbers.add(int(match[1]))
+    return numbers
+
+
 def cut_short(text: str) -> bool:
     """Whether the notes stopped before the end of their range, so a High risk item may be missing from them."""
     return CUT_SHORT in text
