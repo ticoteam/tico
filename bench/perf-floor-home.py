@@ -185,6 +185,25 @@ def sizes(api):
         }
 
 
+STACKS = bool(os.environ.get("STACKS"))  # name the backend call sites each repeated statement shape comes from
+HELPERS = ("read_cache.py", "store.py", "hubdb.py:_one", "task_engine.py:_h")
+
+
+def site():
+    """The innermost three backend frames that issue a statement, past the shared row helpers: where to batch."""
+    if not STACKS:
+        return ""
+    import traceback
+
+    frames = [
+        f"{Path(f.filename).name}:{f.name}:{f.lineno}"
+        for f in traceback.extract_stack(limit=40)[:-1]
+        if "/backend/" in f.filename and "/tests/" not in f.filename
+    ]
+    frames = [f for f in frames if not any(f.startswith(h) for h in HELPERS)]
+    return " < ".join(reversed(frames[-3:]))
+
+
 @contextlib.contextmanager
 def tracing(store, seen):
     """Each statement the request runs on a borrowed connection, as (perf_counter, sql)."""
@@ -195,7 +214,7 @@ def tracing(store, seen):
         @contextlib.contextmanager
         def borrowed():
             with opened() as c:
-                c.set_trace_callback(lambda sql: record((time.perf_counter(), sql)))
+                c.set_trace_callback(lambda sql: record((time.perf_counter(), sql, site())))
                 try:
                     yield c
                 finally:
@@ -312,15 +331,18 @@ def one(api, path, token):
         times.append((time.perf_counter() - began) * 1000)
     costs = collections.Counter()
     counts = collections.Counter()
-    for (at, sql), nxt in zip(seen, [s[0] for s in seen[1:]] + [ended], strict=True):
+    sites = collections.defaultdict(collections.Counter)
+    for (at, sql, where), nxt in zip(seen, [s[0] for s in seen[1:]] + [ended], strict=True):
         counts[shape(sql)] += 1
         costs[shape(sql)] += (nxt - at) * 1000
+        sites[shape(sql)][where] += 1
     return {
         "statements": len(seen),
         "median_ms": statistics.median(times),
         "spans": spans,
         "counts": counts,
         "costs": costs,
+        "sites": sites,
         "traced_ms": (ended - started) * 1000,
     }
 
@@ -340,6 +362,9 @@ def report(api):
             print("    top statement shapes (calls, ms to the next statement):")
             for sql, n in out["counts"].most_common(12):
                 print(f"    {n:5d} {out['costs'][sql]:8.1f} ms  {sql[:190]}")
+                if STACKS and n > 2:
+                    for where, k in out["sites"][sql].most_common(3):
+                        print(f"          {k:4d} from {where}")
             slowest = sorted(out["costs"].items(), key=lambda kv: -kv[1])[:6]
             print("    slowest shapes:")
             for sql, ms in slowest:
