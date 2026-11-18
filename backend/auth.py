@@ -844,7 +844,7 @@ class Auth:
             return False
         if self.bot_admin(who):
             return True
-        row = c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = read_cache.bot_owners(c, slug)
         pid = H.actor_id(who.actor)
         if row and (row["owner_id"] == pid or pid in A.owner_ids(row["bot_owners"])):
             return True

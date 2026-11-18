@@ -402,7 +402,9 @@ def _bot_manage(c, viewer, slug, ctx):
         return False
     if ctx.admin:
         return True
-    row = c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    from . import read_cache
+
+    row = read_cache.bot_owners(c, slug)
     if row and (row["owner_id"] == ctx.me or ctx.me in A.owner_ids(row["bot_owners"])):
         return True
     return P.manages(ctx.me, "bot", slug, ctx.roster, ctx.entries, ctx.archived, True)

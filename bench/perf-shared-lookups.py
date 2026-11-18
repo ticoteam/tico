@@ -195,7 +195,7 @@ def costs(api):
         (
             "owners",
             "SELECT owner_id,bot_owners FROM bot_config WHERE bot=?",
-            "SELECT owner_id,bot_owners,bot FROM bot_config",
+            ("SELECT owner_id,bot_owners FROM bot_config ORDER BY bot", "SELECT bot FROM bot_config ORDER BY bot"),
         ),
         (
             "cloud",
@@ -209,9 +209,10 @@ def costs(api):
     with api.app.state.store.read() as c:
         for name, alone, whole in pairs:
             timed = {}
-            for label, sql, args in (("alone", alone, (BOTS[7],)), ("whole", whole, ())):
-                best = min(_timed(c, sql, args) for _ in range(200))
-                plan = "; ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args))
+            for label, sqls, args in (("alone", alone, (BOTS[7],)), ("whole", whole, ())):
+                sqls = (sqls,) if isinstance(sqls, str) else sqls
+                best = min(sum(_timed(c, sql, args) for sql in sqls) for _ in range(200))
+                plan = " | ".join("; ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args)) for sql in sqls)
                 timed[label] = best
                 print(f"{name:7s} {label:5s} {best * 1e6:8.1f} us  plan: {plan}")
             print(f"{name:7s} whole/alone {timed['whole'] / timed['alone']:.1f}x")

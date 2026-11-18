@@ -91,6 +91,63 @@ def one(c: Any, statement: str, args: Iterable[Any] = ()) -> Any:
     return values[key]
 
 
+def keyed(
+    c: Any,
+    name: Hashable,
+    key: Hashable,
+    one: Callable[[Any], T],
+    every: Callable[[], Mapping[Any, T]],
+    alone: int = 1,
+) -> T | None:
+    """`one(key)`, the stored row for `key` (None when there is none), from a table read whole once per snapshot.
+    The first `alone` keys a snapshot asks for are read one at a time, so a request that needs a row or two pays for
+    those rows only; the next different key reads every row with `every()`, {key: row}, and the snapshot's later keys
+    come from that copy. `alone` is about how many one-row reads cost what the whole read costs. `one` and `every` must
+    answer the same row for a key. Outside a snapshot each call reads its row alone. The value is the snapshot's, so a
+    caller that changes it copies it first."""
+    values = cache(c)
+    if values is None:
+        return one(key)
+    whole = values.get(("keyed", name))
+    if whole is not None:
+        return whole.get(key)
+    read = values.setdefault(("keyed-one", name), {})
+    if key in read:
+        return read[key]
+    if len(read) < alone:
+        read[key] = one(key)
+        return read[key]
+    whole = values[("keyed", name)] = every()
+    return whole.get(key)
+
+
+OWNERS_SQL = "SELECT owner_id,bot_owners FROM bot_config WHERE bot=?"
+# Every bot's OWNERS_SQL row, then the bots in the same order (`bot` is the key), so each row is exactly the row
+# OWNERS_SQL answers: the same columns by name and by position, and nothing more.
+ALL_OWNERS_SQL = "SELECT owner_id,bot_owners FROM bot_config ORDER BY bot"
+ALL_OWNERS_KEYS_SQL = "SELECT bot FROM bot_config ORDER BY bot"
+
+
+def _all_owners(c: Any) -> dict[Any, Any]:
+    bots = [row[0] for row in c.execute(ALL_OWNERS_KEYS_SQL)]
+    return dict(zip(bots, c.execute(ALL_OWNERS_SQL).fetchall(), strict=True))
+
+
+def bot_owners(c: Any, bot: str) -> Any:
+    """A bot's `bot_config` row with `owner_id` and `bot_owners`, or None: what OWNERS_SQL answers. The "can manage
+    this bot" check asks it per bot (`Auth.bot_manager`), and a page of bots asks it for every one."""
+    return keyed(
+        c,
+        OWNERS_SQL,
+        bot,
+        lambda key: c.execute(OWNERS_SQL, (key,)).fetchone(),
+        lambda: _all_owners(c),
+        # At 150 bots the two whole reads cost about 30 one-row reads; reading 8 alone first keeps a request that
+        # needs a few bots at most 8 cheap reads, and one that needs many at most 8 more than the whole read.
+        alone=8,
+    )
+
+
 def prime(c: Any, statement: str, found: Mapping[tuple[Any, ...], Any]) -> None:
     """Seed `one` with rows read together in this snapshot, {args: row or None}, so a loop of one-row lookups that
     follows reads none of them again. A row already cached stays as it is."""
