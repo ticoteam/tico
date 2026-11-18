@@ -51,6 +51,8 @@ All existing routes keep working for `tico` calls. Changes:
   mailbox, scope `https://www.googleapis.com/auth/meetings.space.created`), stores the call, posts the card message and
   rings. A retried request (same idempotency key) must not make a second space.
 - `GET /api/v2/threads/{thread_id}/calls`: `available` stays; adds `providers` (what the viewer could start, in order).
+  Calling a bot needs Tico Meet, so the UI shows a bot call (a one-bot DM's phone, the org chart's Call) only when
+  `providers` has `tico`, or, with no thread to ask, when `GET /api/v2/config` says `features.tico_meet`.
 - Call view (`GET /api/v2/calls/{id}`, the start/join answers, list items) adds:
   `provider`, `meet_uri`, `join_url` (meet_uri + `?authuser=<viewer's Google address>` when known, else meet_uri; null for
   `tico`), `live_count`, `status_source`, `seen_at` (= meet_seen_at), `duration_s` (ended calls only. Google Meet: meet_active_at
