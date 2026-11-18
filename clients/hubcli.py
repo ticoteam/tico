@@ -151,7 +151,7 @@ def private_readers_line(args, body):
     pipeline = getattr(args, "pipeline", None)
     if not pipeline:
         return
-    from clients.tico import Client
+    from clients.tico import APIError, Client
 
     fields = {
         "title": args.title,
@@ -165,7 +165,7 @@ def private_readers_line(args, body):
     try:
         client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), retries=0)
         said = client.post("tasks/dry-run", {k: v for k, v in fields.items() if v is not None})
-    except Exception:  # a notice: the dry run still answers from its own checks
+    except (APIError, OSError, ValueError):  # a notice: the dry run still answers from its own checks
         return
     if isinstance(said, dict) and said.get("private_readers"):
         print("tico: " + str(said["private_readers"]), file=sys.stderr)
