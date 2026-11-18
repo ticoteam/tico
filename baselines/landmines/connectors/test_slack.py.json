@@ -1,5 +1,5 @@
 {
   "connectors/test_slack.py": {
-    "no-unittest-mock": 25
+    "no-unittest-mock": 23
   }
 }

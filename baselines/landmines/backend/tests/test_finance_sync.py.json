@@ -1,5 +1,5 @@
 {
   "backend/tests/test_finance_sync.py": {
-    "no-fixed-sleep-py": 2
+    "no-fixed-sleep-py": 1
   }
 }

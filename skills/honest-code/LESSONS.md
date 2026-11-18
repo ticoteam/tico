@@ -92,7 +92,7 @@ Seeded 2026-11-18 from merged pull requests and commits on `origin/main` at `7e7
 | L28 | A failure that depends on which batch ran is a selection gap or a product bug until the file alone, with `-n 0`, passes. | 2026-11-17 #3980 | judgment | 1 | open | - |
 | L29 | A test that flips can be showing a race in the product. Fix the product, and have the test hold one side until the other lands. | 2026-11-17 #3891; 2026-11-17 #3894 | judgment | 2 | example | `ui/health.ts` |
 | L30 | A Rust test never holds a script open for writing while another test forks. Write it with `crate::util::write_script`. | 2026-10-15 #609; 2026-11-09 3210df2026 | script | 2 | proposed rust-test-script-write | `runner-rs/src/util.rs` |
-| L31 | A module's test seam is a `def` that calls the stdlib (`def _sleep(seconds): time.sleep(seconds)`), not an assignment (`_sleep = time.sleep`) that binds the real function at import. | 2026-11-18 #4172 (an assignment seam hung a test that swaps the module's `time` for a fake clock) | script | 1 | encoded no-global-sleep-patch | `clients/tico.py` |
+| L31 | A module's test seam is a `def` that calls the stdlib (`def _sleep(seconds): time.sleep(seconds)`), not an assignment (`_sleep = time.sleep`) that binds the real function at import. | 2026-11-18 #4172 (an assignment seam hung a test that swaps the module's `time` for a fake clock) | script | 1 | encoded no-global-time-patch | `clients/tico.py` |
 | L32 | An assertion passes on one outcome. An `or` between two expectations hides which one the code produced, and that one can be wrong. | 2026-11-18 #4172 (`test_stage_rule_timers` expected the wrong text; the `or` passed it) | script | 1 | proposed or-assert | `backend/tests/test_stage_rule_timers.py` |
 
 ## Ids not used

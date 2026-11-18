@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_bot_ids.py": {
-    "no-unittest-mock": 2
-  }
-}

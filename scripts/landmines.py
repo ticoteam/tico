@@ -137,14 +137,20 @@ RULES = [
         ],
         "Do not replace our own code in a test. Run the real code. For something outside Tico use a fake "
         "(skills/honest-code/references/examples.md lists them) or pass the dependency in.",
+        # environment values are not a double: this is what a unittest.TestCase has for monkeypatch.setenv
+        skip=[re.compile(r"^(?!.*mock\.patch(?!\.dict\(\s*os\.environ)).*mock\.patch\.dict\(\s*os\.environ")],
     ),
     Rule(
-        "no-global-sleep-patch",
+        "no-global-time-patch",
         "ban",
         py_test,
-        [re.compile(r"setattr\(\s*(?:[\w.]*\btime\s*,\s*['\"]sleep['\"]|['\"][\w.]*\btime\.sleep['\"])")],
-        "This removes sleep from the time module for the whole process. Give the module its own seam "
-        "(def _sleep(seconds): time.sleep(seconds), as in clients/tico.py) and patch that.",
+        [
+            re.compile(r"\b(?:setattr|patch\.object)\(\s*[\w.]*\btime\s*,\s*['\"]\w+['\"]"),
+            re.compile(r"\b(?:setattr|patch)\(\s*['\"][\w.]*\btime\.\w+['\"]"),
+        ],
+        "This replaces sleep, time or monotonic on the time module for the whole process, so every thread sees it. "
+        "Give the module its own seam (def _sleep(seconds): time.sleep(seconds); def _now(): return time.time()), "
+        "as in clients/tico.py and docker/updater.py, and patch that, or use time_machine for the wall clock.",
         "L31",
         view="raw",
     ),

@@ -180,7 +180,9 @@ monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
 ```
 
 Bad: `sleep` removed from the `time` module for the whole process. `company_apps.time` is the `time` module itself,
-so every thread in the run stops sleeping. There were 17 such lines in 8 files; `no-global-sleep-patch` now bans them.
+so every thread in the run stops sleeping. The same goes for `time.time` and `time.monotonic`: a frozen `monotonic`
+stops every deadline in the process. `no-global-time-patch` bans all of them, in every spelling (`setattr`,
+`patch.object`, `patch("x.time.sleep")`).
 
 ```python
 monkeypatch.setattr(company_apps.time, "sleep", lambda seconds: None)

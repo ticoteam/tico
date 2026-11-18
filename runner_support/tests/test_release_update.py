@@ -126,7 +126,7 @@ def test_only_persistent_causes_become_blocked_and_transient_work_resets_them(tm
 def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_path, monkeypatch, policy, expected):
     monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
     now = [0.0]
-    monkeypatch.setattr(ru.time, "time", lambda: now[0])
+    monkeypatch.setattr(ru, "_now", lambda: now[0])
     monkeypatch.setattr(ru, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(ru, "in_flight", lambda directory: True)
     monkeypatch.setattr(ru, "apply", lambda *a, **kw: pytest.fail("drain timeout must not start Git work"))
@@ -1311,7 +1311,7 @@ def test_alternating_deferrals_release_old_runners_without_changing_the_checkout
                 patch.setattr(ru, "lock_path", lambda *a: None)
             elif cause == "checkout_lock":
                 held = hold(checkout)
-                patch.setattr(ru.time, "time", lambda: now[0])
+                patch.setattr(ru, "_now", lambda: now[0])
                 patch.setattr(ru, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
             try:
                 result, calls = run_apply(
