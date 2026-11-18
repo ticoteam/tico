@@ -451,7 +451,8 @@ pub async fn prepare(client: &Client, state_dir: &Path, aid: &str, bot: &str) ->
 /// which change nothing; staging and the receipt still happen in `prepare_with`, once the turn's host is up.
 pub struct Early {
     began: Instant,
-    task: tokio::task::JoinHandle<Result<Option<Bundles>, String>>,
+    /// When the read finished, and what it read.
+    task: tokio::task::JoinHandle<(Instant, Result<Option<Bundles>, String>)>,
 }
 
 impl Drop for Early {
@@ -474,14 +475,15 @@ pub fn early(client: &Client, state_dir: &Path, aid: &str, bot: &str) -> Early {
     Early {
         began: Instant::now(),
         task: tokio::spawn(async move {
-            tokio::time::timeout(DEADLINE, read_skills(&client, &state_dir, &aid, &bot))
-                .await
-                .unwrap_or_else(|_| Err(format!("reading took over {}s", DEADLINE.as_secs())))
+            let read = read_skills(&client, &state_dir, &aid, &bot).await;
+            (Instant::now(), read)
         }),
     }
 }
 
-/// `prepare`, using an early read when it is recent and succeeded; otherwise the skills are read now, as before.
+/// `prepare`, using an early read when it succeeded and is still recent once awaited; otherwise the skills are read
+/// now, as before. One DEADLINE covers the reading and staging: the time the early read ran counts against it, so a
+/// stalled early read and the read after it never take longer than one.
 pub async fn prepare_with(
     client: &Client,
     state_dir: &Path,
@@ -489,12 +491,20 @@ pub async fn prepare_with(
     bot: &str,
     early: Option<Early>,
 ) -> Option<PathBuf> {
+    let mut spent = Duration::ZERO;
     let mut read = None;
     if let Some(mut e) = early {
-        if e.began.elapsed() < EARLY_FRESH {
-            if let Ok(Ok(bundles)) = (&mut e.task).await {
-                read = Some(bundles);
+        let limit = tokio::time::Instant::from_std(e.began + DEADLINE);
+        match tokio::time::timeout_at(limit, &mut e.task).await {
+            Ok(Ok((at, result))) => {
+                spent = at.saturating_duration_since(e.began);
+                // Its age is taken once it is awaited: an older read, or a failed one, is done again.
+                if at.elapsed() < EARLY_FRESH {
+                    read = result.ok();
+                }
             }
+            // Stalled past the deadline, or lost: all its time counts.
+            _ => spent = e.began.elapsed().min(DEADLINE),
         }
     }
     let work = async {
@@ -507,7 +517,7 @@ pub async fn prepare_with(
             None => Ok(None),
         }
     };
-    match tokio::time::timeout(DEADLINE, work).await {
+    match tokio::time::timeout(DEADLINE.saturating_sub(spent), work).await {
         Ok(Ok(dir)) => dir,
         Ok(Err(e)) => {
             log(&format!(

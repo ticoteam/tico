@@ -359,7 +359,8 @@ fn task_repository(attempt: &Value) -> Option<String> {
 }
 
 /// The turn's environment, and the vault values it carries. Its credentials are read over `hub`'s connections, with
-/// the turn's own token, so a turn opens no new connection of its own to the hub.
+/// the turn's own token, so a turn opens no new connection of its own to the hub; `hub`'s read timeout applies
+/// (Runner::credentials keeps the 15 s a turn's own client had).
 pub async fn turn_environment(
     ctx: &EnvContext<'_>,
     attempt: &Value,
