@@ -274,7 +274,8 @@ def _title_page(c, v, where, args, after, limit):
             f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM conversations r "
             f"WHERE {where}){cond} ORDER BY t_blank, t_key, id LIMIT :fetch"
         )
-        found = [T.thread_row(c, dict(r)) for r in c.execute(sql, {**args, **at, "fetch": fetch})]
+        page = c.execute(sql, {**args, **at, "fetch": fetch})
+        found = [row for r in page if (row := T.thread_row(c, dict(r))) is not None]  # never None: a stored row
         T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
         task_privacy.prime_rooms(c, [r["id"] for r in found])  # each readable check's room and meeting provenance
         dms, members = [r["id"] for r in found if T.audience_of(r) in ("personal", "participants")], {}

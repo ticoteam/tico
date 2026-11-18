@@ -868,7 +868,7 @@ def can_manage(c, v, thread):
     row = thread_row(c, thread)
     if row is None or denial(c, v, row) is not None:
         return False
-    root = root_of(c, row)
+    root = root_of(c, row) or row  # a thread's root is never None
     if v.is_person and v.admin(c):
         return True
     if root.get("owner_id") == v.actor and audience_of(root) != "home":
