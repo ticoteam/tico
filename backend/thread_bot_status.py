@@ -71,11 +71,11 @@ _NEWEST_STEP_SQL = (
     "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought')) ORDER BY seq DESC LIMIT 1"
 )
 _LAST_STATUS_SQL = "SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?"
-_QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds')"
+_QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')"
 
 
 def trailing_roots(c):
-    """The roots whose running turn took a step after their last `bot_status` change, once that one is 5 s old: a step
+    """The roots whose running turn took a step after their last `bot_status` change, once that one is 1 s old: a step
     the throttle (events.py changes_threads_bot_status_steps) held back. A read: a few indexed lookups per running
     turn, whatever its length."""
     quiet = c.execute(f"SELECT {_QUIET}").fetchone()[0]
@@ -100,7 +100,7 @@ def send_trailing(c, roots=None):
     roots = trailing_roots(c) if roots is None else roots
     wrote = 0
     for root in roots:
-        # The triggers' own clock (events._NOW), and again quiet for 5 s: a trigger may have sent one since the read.
+        # The triggers' own clock (events._NOW), and again quiet for 1 s: a trigger may have sent one since the read.
         wrote += c.execute(
             "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
             "SELECT 'threads','bot_status',?1,?1,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
