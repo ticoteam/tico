@@ -33,6 +33,32 @@ TRANSCRIPT_LINES = 5
 NOTES_LIMIT = 100
 ANSWER_CHARS = 8000
 
+# A completion note is final even when a job that ran on the task still needs recovery. Without a note,
+# an unsettled run may still provide the answer, and only a terminal job disposition establishes failure.
+_READY_SQL = (
+    "SELECT f.task_id,f.bot_id,t.status,t.title AS topic,s.*,"
+    "n.id AS answer_id,n.notes AS answer_notes,n.by_id AS answer_author,n.created_at AS answered_at "
+    "FROM call_follow_ups f JOIN tasks t ON t.id=f.task_id JOIN calls s ON s.id=f.call_id "
+    "LEFT JOIN answers n ON n.id=("
+    "SELECT a.id FROM visits v JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
+    "WHERE t.status='done' AND v.task_id=t.id AND a.by_id IN ('bot:' || f.bot_id,t.requester_id) "
+    "AND a.answer='done' AND r.kind='owner_done' AND a.undone_at IS NULL AND trim(a.notes,char(9,10,13,32))<>'' "
+    "ORDER BY a.created_at DESC,a.rowid DESC LIMIT 1) "
+    "WHERE f.returned_state IS NULL AND (n.id IS NOT NULL OR ("
+    "NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.state IN ('leased','running','input')) "
+    "AND NOT EXISTS (SELECT 1 FROM messages m CROSS JOIN jobs j ON j.message_id=m.id "
+    "WHERE m.conversation_id=t.conversation_id AND j.state IN ('queued','leased','running','input','uncertain')) "
+    "AND (t.status IN ('done','closed') OR (SELECT j.state FROM messages m CROSS JOIN jobs j ON j.message_id=m.id "
+    "WHERE m.conversation_id=t.conversation_id AND j.bot_id=f.bot_id "
+    "ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) IN ('failed','canceled')))) "
+    "ORDER BY f.rowid LIMIT 20"
+)
+_QUEUE_SPEECH_SQL = (
+    "SELECT f.bot_id,f.message_id,m.body FROM call_follow_ups f "
+    "CROSS JOIN messages m ON m.id=f.message_id AND m.deleted_at IS NULL "
+    "WHERE f.call_id=? AND f.speech_pending=1 ORDER BY f.rowid LIMIT 20"
+)
+
 
 class FollowUp(Contract):
     ask: str = Field(min_length=1, max_length=4000)
@@ -153,49 +179,32 @@ def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, as
 
 
 def _ready(c: Connection) -> list[Row]:
-    # A run can still write its final reply after the task ends. An uncertain job can still accept a late reply
-    # or be queued again by recovery, so the job's disposition decides when its failure is final.
-    return c.execute(
-        "SELECT f.task_id,f.bot_id,t.status,t.requester_id,t.title AS topic,s.* FROM call_follow_ups f "
-        "JOIN tasks t ON t.id=f.task_id JOIN calls s ON s.id=f.call_id "
-        "WHERE f.returned_state IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id "
-        "AND a.state IN ('leased','running','input')) "
-        "AND NOT EXISTS (SELECT 1 FROM messages m JOIN jobs j ON j.message_id=m.id "
-        "WHERE m.conversation_id=t.conversation_id AND j.state IN ('queued','leased','running','input','uncertain')) "
-        "AND (t.status IN ('done','closed') OR (SELECT j.state FROM messages m JOIN jobs j ON j.message_id=m.id "
-        "WHERE m.conversation_id=t.conversation_id AND j.bot_id=f.bot_id "
-        "ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) IN ('failed','canceled')) "
-        "ORDER BY f.rowid LIMIT 20"
-    ).fetchall()
+    return c.execute(_READY_SQL).fetchall()
 
 
 def _answer(c: Connection, row: Row) -> tuple[str, str, Record]:
     actor = f"bot:{row['bot_id']}"
     if row["status"] != "done":
         return "", actor, {}
-    done = c.execute(
-        "SELECT a.id,a.notes,a.by_id,a.created_at,(SELECT e.via FROM history_events e WHERE e.subject_type='task' "
-        "AND e.subject_id=v.task_id AND e.kind='answer' AND json_extract(e.data,'$.answer_id')=a.id LIMIT 1) AS via "
-        "FROM answers a JOIN visits v ON v.id=a.visit_id "
-        "JOIN requirements r ON r.id=a.requirement_id WHERE v.task_id=? AND a.by_id IN (?,?) AND a.answer='done' "
-        "AND r.kind='owner_done' AND a.undone_at IS NULL AND trim(a.notes)<>'' "
-        "ORDER BY a.created_at DESC,a.rowid DESC LIMIT 1",
-        (row["task_id"], actor, row["requester_id"]),
-    ).fetchone()
-    if done:
-        refs: Record = {"answer_id": done["id"]}
-        if done["via"]:
-            refs["via"] = done["via"]
-        if done["by_id"] == actor:
+    if row["answer_id"]:
+        via = c.execute(
+            "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='answer' "
+            "AND json_extract(data,'$.answer_id')=? LIMIT 1",
+            (row["task_id"], row["answer_id"]),
+        ).fetchone()
+        refs: Record = {"answer_id": row["answer_id"]}
+        if via and via[0]:
+            refs["via"] = via[0]
+        if row["answer_author"] == actor:
             run = c.execute(
-                "SELECT id FROM attempts WHERE task_id=? AND bot_id=? AND started_at<=? AND finished_at>=? "
+                "SELECT id FROM attempts WHERE task_id=? AND bot_id=? AND started_at<=? "
+                "AND (finished_at IS NULL OR finished_at>=?) "
                 "ORDER BY started_at DESC,rowid DESC LIMIT 1",
-                (row["task_id"], row["bot_id"], done["created_at"], done["created_at"]),
+                (row["task_id"], row["bot_id"], row["answered_at"], row["answered_at"]),
             ).fetchone()
             if run:
                 refs["turn_id"] = run["id"]
-        return done["notes"].strip(), done["by_id"], refs
+        return row["answer_notes"].strip(), row["answer_author"], refs
     run = c.execute(
         "SELECT id,final_text,result FROM attempts WHERE task_id=? AND bot_id=? "
         "ORDER BY created_at DESC,rowid DESC LIMIT 1",
@@ -291,12 +300,7 @@ def sweep(calls: Any) -> None:
 def queue_speech(calls: Any, call_id: str) -> None:
     """Pick up durable answers when a live call has a recorder, including after a server restart."""
     with calls.store.read() as c:
-        rows: list[Row] = c.execute(
-            "SELECT f.bot_id,f.message_id,m.body FROM call_follow_ups f "
-            "JOIN messages m ON m.id=f.message_id AND m.deleted_at IS NULL "
-            "WHERE f.call_id=? AND f.speech_pending=1 ORDER BY f.rowid LIMIT 20",
-            (call_id,),
-        ).fetchall()
+        rows: list[Row] = c.execute(_QUEUE_SPEECH_SQL, (call_id,)).fetchall()
     for row in rows:
         body = row["body"].rsplit("\n\n", 1)[0]
         calls.voice.follow_up(call_id, row["bot_id"], row["message_id"], " ".join(body.split()[:80]))

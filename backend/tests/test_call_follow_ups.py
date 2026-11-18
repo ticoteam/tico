@@ -153,7 +153,10 @@ def test_a_task_answer_waits_for_speech_and_an_open_question_then_returns_once(m
         worker["token"],
     )
     calls.sweep()
-    assert _messages(meet, thread_id, task_id) == []
+    [answer] = _messages(meet, thread_id, task_id)
+    assert answer["sender_id"] == "bot:ops"
+    assert answer["refs"]["turn_id"] == worker["id"]
+    assert answer["body"] == f"{answer_text}\n\n[Open task](#/task/{task_id})"
     post(
         meet,
         f"attempts/{worker['id']}/complete",
@@ -161,9 +164,9 @@ def test_a_task_answer_waits_for_speech_and_an_open_question_then_returns_once(m
         machine["token"],
     )
     calls.sweep()
-    [answer] = _messages(meet, thread_id, task_id)
-    assert answer["sender_id"] == "bot:ops"
-    assert answer["body"] == f"{answer_text}\n\n[Open task](#/task/{task_id})"
+    [settled_answer] = _messages(meet, thread_id, task_id)
+    assert settled_answer["id"] == answer["id"]
+    answer = settled_answer
     calls.voice.tick()
     assert synthesized == []  # a question is still open
     turn = _claim(meet, machine)
@@ -332,9 +335,6 @@ def test_requester_note_survives_recorder_recovery_with_its_author(meet):
     worker = _claim(meet, machine)
     post(meet, f"tasks/{task_id}/done", {"note": "Friday", "version": worker["task"]["version"]})
     calls, media = meet.app.state.calls, meet.app.state.call_media
-    calls.sweep()
-    assert _messages(meet, thread_id, task_id) == []
-    post(meet, f"attempts/{worker['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     media.stop_recorder(call_id)
     media.down = True
     calls.sweep()
@@ -347,6 +347,7 @@ def test_requester_note_survives_recorder_recovery_with_its_author(meet):
             c.execute("SELECT notes FROM answers WHERE id=?", (answer["refs"]["answer_id"],)).fetchone()[0] == "Friday"
         )
         assert call_notes.text(c, call_id, "ops").endswith("Back on Check the rollout date: Friday")
+    post(meet, f"attempts/{worker['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     calls.voice.tick()
     assert media.said == []
 
@@ -363,6 +364,34 @@ def test_requester_note_survives_recorder_recovery_with_its_author(meet):
     assert calls.settle()
     assert _messages(meet, thread_id, task_id) == [answer]
     assert len(media.said) == 1
+
+
+def test_requester_note_posts_while_an_unrelated_job_is_uncertain(meet):
+    thread_id = thread(meet)
+    call = start_call(meet, thread_id, bots=["ops"])
+    join(meet, call["id"])
+    task_id = _follow_up(meet, call, "Check the delivery date")["task_id"]
+    store = meet.app.state.store
+    with store.transaction() as c:
+        task = H.task(c, task_id)
+        room = H.conversation(c, task["conversation_id"])
+        msg = H._write_message(c, "human:ana", None, "A separate finance question.", room, "say", {}, None, None)
+        job_id = H.new_id()
+        c.execute(
+            "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES (?,?,?,'uncertain',?)",
+            (job_id, msg["id"], "finance", H.now()),
+        )
+    post(meet, f"tasks/{task_id}/done", {"note": "Friday", "version": task["version"]})
+
+    meet.app.state.calls.sweep()
+    meet.app.state.calls.sweep()
+    [answer] = _messages(meet, thread_id, task_id)
+    assert (answer["sender_id"], answer["body"].splitlines()[0]) == (
+        "human:ana",
+        "Back on Check the delivery date: Friday",
+    )
+    with store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "uncertain"
 
 
 def test_follow_up_access_follows_thread_membership(meet):
