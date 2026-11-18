@@ -276,14 +276,18 @@ impl Drop for Screen {
 }
 
 /// The code the runner typed never leaves this computer, whether the CLI masks it or draws it (Claude Code 2.1.327
-/// draws `auth login`'s pasted code): not in the lines a Connect reports (`parse` with the code hidden), and not in
+/// draws `auth login`'s pasted code): not in the lines or the code `parse` reads with the code hidden, and not in
 /// the screen it logs after the code (`login::screen_digest`). The message names the command, never the screen.
 fn typed_code_stays_here(raw: &str, command: &str) {
     let pieces = ["not-a-code", "not-a-state"];
-    let (_, _, lines, _) = parse(raw, MADE_UP_CODE);
+    let (_, code, lines, _) = parse(raw, MADE_UP_CODE);
     assert!(
         !lines.iter().any(|l| pieces.iter().any(|p| l.contains(p))),
-        "the code typed into `{command}` is in the lines a Connect reports"
+        "the code typed into `{command}` is in the lines a sign-in reports"
+    );
+    assert!(
+        !pieces.iter().any(|p| code.contains(p)),
+        "the code typed into `{command}` is in the code a sign-in reports"
     );
     let digest = crate::login::screen_digest(raw, MADE_UP_CODE);
     assert!(
