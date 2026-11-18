@@ -10,9 +10,9 @@ from . import harnesses as _harnesses
 from . import live_meetings as _live_meetings
 from . import model_subscriptions as _model_subscriptions
 from . import providers as _providers
+from . import shared_bots as _shared_bots
 from . import task_models as _task_models
 from .auth import Identity
-from .shared_bots import follow as _follow
 from .store import H as _H
 from .store import Problem
 
@@ -22,8 +22,8 @@ harnesses: Any = _harnesses
 live_meetings: Any = _live_meetings
 model_subscriptions: Any = _model_subscriptions
 providers: Any = _providers
+shared_bots: Any = _shared_bots
 task_models: Any = _task_models
-follow: Any = _follow
 
 CAPABILITY = "voice_sessions_v1"
 
@@ -54,7 +54,11 @@ def choice(
         model = record["meeting_model"]
     else:
         raw = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-        model = providers.bot_choice(c, settings, follow(c, bot, json.loads(raw[0])), record=record)[1] if raw else None
+        model = (
+            providers.bot_choice(c, settings, shared_bots.follow(c, bot, json.loads(raw[0])), record=record)[1]
+            if raw
+            else None
+        )
     spec = model_spec(model)
     if not spec:
         return None
@@ -101,7 +105,7 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
         return False
     from . import call_voice
 
-    profile = H.bot(c, bot) or {}
+    profile: dict[str, Any] = H.bot(c, bot) or {}
     identity = " ".join(f"You are {profile.get('name') or bot}. {profile.get('description') or ''}".split())[:500]
     rules = call_voice.SPOKEN_PROMPT.format(call_id=row["id"])
     recorded = notes(c, row["id"], bot)
@@ -193,7 +197,8 @@ def inputs(c: Any, attempt: Any, call_id: str, auth: Any, *, if_idle: bool = Fal
 def output(c: Any, attempt: Any, origin: dict[str, Any], events: list[tuple[str, dict[str, Any]]]) -> None:
     from . import calls
 
-    ref = (origin.get("refs") or {}).get("live_meeting") or {}
+    refs: dict[str, Any] = origin.get("refs") or {}
+    ref: dict[str, Any] = refs.get("live_meeting") or {}
     call_id = ref.get("voice_call")
     bot, aid = attempt["bot_id"], attempt["id"]
     if not call_id or not events or not standing(c, call_id, bot, attempt["job_id"]):
