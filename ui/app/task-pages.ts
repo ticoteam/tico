@@ -6,7 +6,7 @@
 'use strict';
 
 // The Files tab's host: the task dialog, which keeps the tab's counter and its last read's order.
-interface TftHost extends TaskPagesHost, TfDialog { tftSeq?: number; }
+interface TftHost extends TaskPagesHost, TfDialog { tftSeq?: number; taskDocs?: TaskDoc[] | null; }
 // A page or file in GET /api/v2/tasks/{id}/files?all=1: the task's files, and every page linked to the task in any role
 // (a page carries its `links`, and usually `writers` and `title`).
 interface TftLink { target: string; role: string; name?: string | null; }
@@ -21,6 +21,8 @@ const TASK_FILES_TAB = 'files';
 const TFT_COUNT = new Map<string, number>();   // the pages and files linked to the task: "Files N"
 const TFT_ROWS = new Map<string, string>();     // the list as it was last drawn, so a redraw draws it at once
 const TFT_TITLES = new Map<string, string>();
+const TFT_ITEMS = new Map<string, TftItem[]>();  // the task's last read, before what shows elsewhere is left out
+const TFT_PAGES = new Map<string, TaskDoc>();   // a page row as a document, so it opens in the task window, by page id
 /** The Files tab's label on the tab row: "Files", or "Files N" once the task's count is read. */
 const taskFilesLabel = (n: number | null | undefined): string => n ? `Files ${n}` : 'Files';
 
@@ -77,7 +79,7 @@ function taskPagesAdopt(d: TftHost, task: {id?: unknown}) {
           : (await get<{files?: {id: string; title?: string | null; may_write?: boolean}[]}>('/v2/files?' + new URLSearchParams({kind: 'page', limit: '6'}), {fresh: true})).files || [];
         if (d.tpEl !== slot || seq !== search) return;
         // A page already on the task (a row of its Files list) is not offered again.
-        const have = new Set([...d.querySelectorAll<HTMLElement>('[data-tft-page]')].map(a => a.dataset.tftPage));
+        const have = new Set((TFT_ITEMS.get(id) || []).map(f => f.id));
         results.innerHTML = rows.filter(p => !have.has(p.id) && p.may_write !== false).map(row).join('') || `<p class="muted">${q ? 'No pages' : 'No other pages'}</p>`;
       } catch (e) { if (d.tpEl === slot && seq === search) results.innerHTML = `<p class="err">${esc(errorMessage(e, ''))}</p>`; }
     }, wait);
@@ -161,8 +163,27 @@ async function taskFilesTabLoad(d: TftHost, id: string | number): Promise<void> 
   if (!d.open || String(d.dataset.task) !== key || d.tftSeq !== seq) return;
   if (!data) return;                       // a failed read keeps what the last one found
   const items = (data.files || []).filter(f => !f.archived);
-  for (const f of items) TFT_TITLES.set(f.id, f.title || f.name || '');
-  const plain = new Map(items.flatMap<[string, TfFile]>(f => !Array.isArray(f.links) && f.versions?.length ? [[f.id, tfNorm({
+  for (const f of items) {
+    TFT_TITLES.set(f.id, f.title || f.name || '');
+    if (Array.isArray(f.links)) TFT_PAGES.set(f.id, tftPageDoc(f));
+  }
+  TFT_ITEMS.set(key, items);
+  taskFilesPaint(d, key);
+  // the Spec cards' titles, now that the pages are read
+  for (const card of d.querySelectorAll<HTMLElement>('[data-task-spec]')) {
+    const title = TFT_TITLES.get(card.dataset.taskSpec ?? '');
+    const text = card.querySelector<HTMLElement>('.task-spec-t');
+    if (title && text) { text.textContent = title; card.title = title; }
+  }
+}
+/** Draws the Files list from the last read. What the task shows elsewhere, a Spec card or a document's tab, is left
+    out, so nothing shows twice; "Files N" counts what is listed. Drawn again when the task's documents change. */
+function taskFilesPaint(d: TftHost, key: string) {
+  const all = TFT_ITEMS.get(key);
+  if (!all || String(d.dataset.task) !== key) return;
+  const elsewhere = new Set((d.taskDocs || []).map(x => x.page_id || x.file_id));
+  const items = all.filter(f => !elsewhere.has(f.id));
+  const plain = new Map(all.flatMap<[string, TfFile]>(f => !Array.isArray(f.links) && f.versions?.length ? [[f.id, tfNorm({
     id: f.id, name: f.name || 'file', current_version: f.current_version ?? f.version ?? 0,
     ...(f.mime ? {mime: f.mime} : {}), versions: f.versions,
   })]] : []));
@@ -179,12 +200,14 @@ async function taskFilesTabLoad(d: TftHost, id: string | number): Promise<void> 
   if (tab) tab.textContent = label;
   const btn = d.querySelector<HTMLElement>(`.tw-tabs [data-task-tab="${TASK_FILES_TAB}"]`);
   if (btn) btn.title = label;
-  // the Spec cards' titles, now that the pages are read
-  for (const card of d.querySelectorAll<HTMLElement>('[data-task-spec]')) {
-    const title = TFT_TITLES.get(card.dataset.taskSpec ?? '');
-    const text = card.querySelector<HTMLElement>('.task-spec-t');
-    if (title && text) { text.textContent = title; card.title = title; }
-  }
+}
+/** A page row as a document (task-docs.ts), so it opens in the task window with its version line, newest first. */
+function tftPageDoc(f: TftItem): TaskDoc {
+  const v = f.current_version ?? f.version ?? 1;
+  const versions = (f.versions || []).map(x => ({n: x.n, by: x.by || '', at: x.created_at || ''})).sort((a, b) => b.n - a.n);
+  const newest = versions[0] || {n: v, by: '', at: f.updated_at || ''};
+  return {name: f.title || f.name || 'Page', title: f.title ?? null, file_id: f.id, page_id: f.id, version: v,
+    by: newest.by, at: newest.at, versions: versions.length ? versions : [newest], kind: 'html'};
 }
 /** The list's rows: a page (a file carrying its `links`) or a file, in the order the task's files read gives them. */
 function taskFilesRowsHTML(id: string, items: TftItem[], plain: Map<string, TfFile>): string {

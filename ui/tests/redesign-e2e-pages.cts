@@ -220,7 +220,8 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await replaced.click();
   await page.waitForFunction((id: string) => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
 
-  // Files lists the pages on the task. A page row opens its page and the link chip returns to the task.
+  // Files lists the pages on the task. A page row opens the page in the task window; the page's own view (a new tab)
+  // has a link chip back to the task.
   await go(page, '#/task/' + launch.task_id);
   await page.locator('#task-modal[open] [data-task-tab="files"]').click();
   const card = page.locator(`[data-tft-page="${launch.file_id}"]`);
@@ -229,7 +230,9 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   assert.equal(await card.locator('.tft-chip').innerText(), 'related');
   await shot(page, `${tag}-04-task`);
   await card.click();
-  await page.waitForFunction((id: string) => location.hash === '#/page/' + id, launch.file_id, {timeout: t(5000)});
+  await page.locator('#task-modal[open] .task-doc .doc-view iframe').waitFor({timeout: t(5000)});
+  assert.equal(await page.evaluate(() => location.hash), '#/task/' + launch.task_id, 'the page opens in the task');
+  await go(page, '#/page/' + launch.file_id);
   const linked = page.locator(`#pg-view .pg-chip-link[href="#/task/${launch.task_id}"]`);
   await linked.waitFor({timeout: t(5000)});
   assert.match(await linked.innerText(), /Q3 launch/);
