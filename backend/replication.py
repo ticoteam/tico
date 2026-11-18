@@ -548,9 +548,9 @@ def delete_bundle_key_copies(s3, bucket, digests):
     for key, found in sorted(copies.items()):
         mine = 0
         for version in found["Versions"]:
-            ask = {"Bucket": bucket, "Key": key, "ChecksumMode": "ENABLED"}
-            if version != "null":
-                ask["VersionId"] = version
+            # The listed version, always named ("null" included): without VersionId, HeadObject reads the current
+            # version, which for a copy deleted after versioning came on is a delete marker (404), not this version.
+            ask = {"Bucket": bucket, "Key": key, "ChecksumMode": "ENABLED", "VersionId": version}
             if wanted and s3.head_object(**ask).get("ChecksumSHA256") in wanted:
                 doomed.append({"Key": key, "VersionId": version})
                 mine += 1

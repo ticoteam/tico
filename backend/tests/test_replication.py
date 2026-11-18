@@ -1561,8 +1561,10 @@ class VersionedS3:
     def add(self, key, count=1, markers=0):
         for n in range(count):
             self.versions.append((key, "v%d-%s" % (n, key) if self.versioned else "null"))
+            self._wrote(self.versions[-1])
         for n in range(markers):
             self.markers.append((key, "m%d-%s" % (n, key)))
+            self._wrote(self.markers[-1])
 
     def get_paginator(self, name):
         assert name == "list_object_versions"
@@ -1594,18 +1596,30 @@ class VersionedS3:
     def get_object(self, **kw):
         raise AssertionError("an object's bytes were read")
 
-    def head_object(self, Bucket, Key, ChecksumMode, VersionId="null"):
+    def head_object(self, Bucket, Key, ChecksumMode, VersionId=None):
+        """As S3: with no VersionId it reads the key's current (newest written) entry, and a delete marker there is a
+        404."""
+        from botocore.exceptions import ClientError
+
         assert ChecksumMode == "ENABLED"
         self.heads = getattr(self, "heads", 0) + 1
-        return (
-            {"ChecksumSHA256": getattr(self, "checksums", {}).get((Key, VersionId))}
-            if (
-                Key,
-                VersionId,
-            )
-            in self.versions
-            else {}
-        )
+        if VersionId is None:
+            written = [pair for pair in self.order if pair in self.versions or pair in self.markers]
+            current = [pair for pair in written if pair[0] == Key]
+            if not current or current[-1] in self.markers:
+                raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+            VersionId = current[-1][1]
+        if (Key, VersionId) not in self.versions:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        return {"ChecksumSHA256": getattr(self, "checksums", {}).get((Key, VersionId))}
+
+    @property
+    def order(self):
+        """Every (key, version) in the order it was written (versions and markers alike)."""
+        return getattr(self, "_order", [])
+
+    def _wrote(self, pair):
+        self._order = [*self.order, pair]
 
     def add_copy(self, key, data, versions=1, markers=0):
         """A bundle key copy as upload_bundle writes it: each version with its stored SHA-256."""
@@ -1616,9 +1630,11 @@ class VersionedS3:
         for n in range(versions):
             version = "c%d-%s" % (len(self.versions), key) if self.versioned else "null"
             self.versions.append((key, version))
+            self._wrote((key, version))
             self.checksums[(key, version)] = base64.b64encode(hashlib.sha256(data).digest()).decode()
         for n in range(markers):
             self.markers.append((key, "m%d-%s" % (n, key)))
+            self._wrote(self.markers[-1])
 
     def get_public_access_block(self, Bucket):
         from botocore.exceptions import ClientError
@@ -1689,6 +1705,28 @@ def test_deleting_bundle_key_copies_takes_only_this_companys_copies_with_every_v
     # With no digests (nothing to tell this company's copies by) nothing is deleted.
     s3.add_copy("backups/2026-11-02.sqlite.keys/credential.key", mine)
     assert replication.delete_bundle_key_copies(s3, "bucket", set()) == (0, 3)
+
+
+def test_deleting_bundle_key_copies_retires_a_null_version_hidden_by_a_delete_marker(tmp_path):
+    # Second review on #617: a bundle written before versioning came on is version "null"; deleted afterwards, it
+    # stays under a current delete marker, and a HeadObject without VersionId reads that marker (404), so every run
+    # stopped before deleting it. Another company's version under the same name is kept, and so is the marker.
+    mine, theirs = os.urandom(32), os.urandom(32)
+    (tmp_path / "credential.key").write_bytes(mine)
+    digests = replication.key_file_digests(tmp_path)
+    key = "backups/2026-06-01.sqlite.keys/credential.key"
+    s3 = VersionedS3(versioned=False)
+    s3.add_copy(key, mine)  # unversioned bucket: version null
+    s3.versioned = True
+    s3.add_copy(key, theirs)  # after versioning came on, the same name in a shared bucket
+    s3.add_copy("backups/2026-06-02.sqlite.keys/credential.key", mine, markers=1)
+    s3.markers.append((key, "m-current"))  # the current entry: a delete marker
+    s3._wrote((key, "m-current"))
+    assert replication.delete_bundle_key_copies(s3, "bucket", digests) == (3, 1)
+    assert (key, "null") not in s3.versions
+    assert [v for k, v in s3.versions if k == key] and s3.markers == [(key, "m-current")]
+    assert not any(k.startswith("backups/2026-06-02") for k, _ in s3.versions + s3.markers)
+    assert replication.delete_bundle_key_copies(s3, "bucket", digests) == (0, 1)  # a re-run finds nothing of ours
 
 
 def test_deleting_bundle_key_copies_stops_on_a_refused_key(tmp_path):
