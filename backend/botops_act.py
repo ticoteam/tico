@@ -735,6 +735,33 @@ SUMMARIES = [
 ]
 
 
+def card_why(c, auth, person, attempt_id, method, path, body=None):
+    """The line after a BotOps card's title, from server facts only (never BotOps' words): the work its run was on, by
+    the task and who asked for it, and why the change waits for this person. A task the person may not read is named
+    only by who asked for it; a run on no task was asked in the person's chat."""
+    row = (
+        c.execute("SELECT task_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+        if attempt_id and H._has_table(c, "attempts")
+        else None
+    )
+    task = H.task(c, row["task_id"]) if row and row["task_id"] else None
+    if not task:
+        work = "BotOps asked in your chat with it."
+    else:
+        asker = task.get("requester_id") or ""
+        by = "you" if asker == person.actor else H.actor_name(c, asker) if asker else ""
+        try:
+            auth.task(c, person, task["id"])
+            work = f"BotOps asked while working on “{task['title']}”" + (f", which {by} asked for." if by else ".")
+        except Problem:
+            work = f"BotOps asked while working for {by}." if by else "BotOps asked while working on a task."
+    if automation_deleted(method, path):
+        need = "Deleting an automation always needs your own OK."
+    else:
+        need = "This change needs your own OK, so nothing has changed yet."
+    return work + " " + need
+
+
 def card_summary(method, path, body=None):
     path, method = normalize(path) or "", str(method or "").upper()
     found = next((text for m, p, text in SUMMARIES if m == method and p.fullmatch(path)), None)
@@ -1768,7 +1795,17 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
 
             automations.deletable(c, acting, aid)  # refused at once (404, 403, a built-in 409)
         with store.transaction() as w:
-            card = propose_card(w, acting, method, path, body, card_summary(method, path, body), what=what, shown=shown)
+            card = propose_card(
+                w,
+                acting,
+                method,
+                path,
+                body,
+                card_summary(method, path, body),
+                what=what,
+                shown=shown,
+                run=getattr(request.state.identity, "attempt_id", ""),
+            )
         return JSONResponse(card)
 
     def destination_card(c, acting, method, path, body):
@@ -1872,13 +1909,27 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
 
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary, what=None, shown=None):
+    def propose_card(c, acting, method, path, body, summary, what=None, shown=None, run=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
         and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
-        route that asks already said in plain words what confirming does (never a bot's words)."""
+        route that asks already said in plain words what confirming does (never a bot's words). `run`: BotOps' attempt,
+        where the request's own run (H.RUN) is not set, as on act_for_requester's executor thread."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
+        why = card_why(c, auth, acting, run or H.RUN.get(), method, path, body)
         card = create_proposal(
-            c, settings, acting, room, BOTOPS, summary, method, path, body, what=what, routes=app.routes, shown=shown
+            c,
+            settings,
+            acting,
+            room,
+            BOTOPS,
+            summary,
+            method,
+            path,
+            body,
+            what=what,
+            routes=app.routes,
+            shown=shown,
+            why=why,
         )
         return {
             "proposed": True,

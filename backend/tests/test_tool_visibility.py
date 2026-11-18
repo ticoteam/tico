@@ -355,6 +355,9 @@ def test_health_and_the_assistants_card_never_name_a_hidden_key(api):
         assert "Close read_write" in assistant.describe(c, "DELETE", path, {}, ana, admins)[0]
         said = assistant.describe(c, "DELETE", path, {}, ben, admins)[0]
         assert "Close" not in said and rw in said
+        # A change to a key is never described as deleting it.
+        said = assistant.describe(c, "PUT", path, {"name": "Renamed"}, ana, admins)[0]
+        assert said.startswith("Change the stored credential “Close read_write”"), said
 
 
 def sql_targets(api, token):
