@@ -788,15 +788,20 @@ def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(clo
 
 
 def silent_with_waiting_work(cloud):
-    """An enrolled own machine still running at HQ, silent for 30 minutes, with a fresh runnable job."""
+    """An enrolled own machine still running at HQ, silent for 30 minutes, with a fresh runnable job.
+
+    Both times are on the manager's clock (`cloud.at[0]`), which starts at the real time and then moves only by ticks.
+    A job's created_at and a heartbeat are stamped with the real time, which has moved on by however long setup took:
+    on a slow runner over a second, so OFFLINE_RESTART_DELAY + 1 after the post was not yet the delay after it."""
     computer = enrolled(cloud)
     idle(cloud)
     work(cloud, text="Please run after the machine restarts.")
     with cloud.store.transaction() as c:
         CM.save(c, "ops", state="running")
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (CM.stamp(cloud.at[0]),))
         c.execute(
             "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-            (H.shift(H.now(), minutes=-30), computer["runner_id"]),
+            (CM.stamp(cloud.at[0] - 30 * 60), computer["runner_id"]),
         )
     cloud.hq.machines["m1"]["state"] = "running"
     cloud.hq.calls.clear()
