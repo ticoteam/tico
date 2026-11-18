@@ -255,11 +255,10 @@ def slow_marks(path):
 
 
 def native_test_files(files, root):
-    """The files of `files` that run the release's native binaries, read in `root` (release_checks decides it for the
-    full gate's shards too, so both pick the same files)."""
-    import release_checks  # beside this module; stdlib only, imported only when a plan is made
-
-    return release_checks.native_test_files(files, root)
+    """The files of `files` that run the release's native binaries, read in `root` (pr_checks holds the rule
+    release_checks uses for the full gate's shards, so both pick the same files; CI checks this module out with only
+    pr_checks.py beside it)."""
+    return pr_checks.native_test_files(files, root)
 
 
 def has_slow_tests(path):
@@ -372,7 +371,7 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
     for the native-linux build and places them; the others say binaries "no" and start their tests at once, as the
     full matrix's python shards 3+ do. The python lane packs its native files on their own VMs, so one native file
     does not hold a whole VM of other tests; `native` None (unknown) keeps every python VM waiting."""
-    native_files = set(python) | set(contract_files) if native is None else set(native([*python, *contract_files]))
+    native_files = (set(python) | set(contract_files)) if native is None else set(native([*python, *contract_files]))
 
     def binaries(files):
         return {} if native_files.intersection(files) else {"binaries": "no"}

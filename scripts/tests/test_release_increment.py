@@ -4,6 +4,10 @@ the replay and RunsOn read the real ones."""
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -451,3 +455,30 @@ def test_the_planner_finds_native_test_files_in_the_candidates_checkout(tmp_path
     (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
     names = ["backend/tests/test_native.py", "backend/tests/test_plain.py"]
     assert ri.native_test_files(names, tmp_path) == {"backend/tests/test_native.py"}
+
+
+def test_the_planner_finds_native_files_with_only_the_files_ci_checks_out_beside_it(tmp_path):
+    # ci.yml's candidate job checks the planner out sparsely (`validation-control`: release_increment.py and
+    # pr_checks.py only), so the native rule must come from those two files; a missing import fails every incremental
+    # validation at its plan step while full-checkout tests stay green.
+    control = tmp_path / "control/scripts"
+    control.mkdir(parents=True)
+    for name in ("release_increment.py", "pr_checks.py"):
+        shutil.copy(Path(ri.__file__).with_name(name), control / name)
+    tests = tmp_path / "candidate/backend/tests"
+    tests.mkdir(parents=True)
+    (tests / "test_native.py").write_text('BIN = "runner-rs/target/' + 'release/tico-runner"\n')
+    (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import release_increment as ri; "
+        "print(sorted(ri.native_test_files(['backend/tests/test_native.py', 'backend/tests/test_plain.py'], sys.argv[2])))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(control), str(tmp_path / "candidate")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "['backend/tests/test_native.py']"

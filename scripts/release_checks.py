@@ -320,56 +320,21 @@ def python_tests(workers, files):
 TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 
 
-# Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
-# gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
-NATIVE_TEST = re.compile(
-    r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
-    r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
-    # scripts/tico-computer runs the checkout's runner (install, status: runner_support/engine.py finds
-    # the binary).
-    r'"scripts" / "tico(?:-computer)?"\)|scripts/tico(?:-computer)?"'
-)
+# The rule for which test files run the release's own native binaries lives in pr_checks.py (NATIVE_TEST,
+# native_test_files) so the incremental planner, which CI checks out with pr_checks.py alone beside it, applies the
+# same rule. The release gate gives those files python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for
+# the native-linux build; the rest start at once.
+if __package__:
+    from .pr_checks import NATIVE_TEST, TEST_IMPORT, native_test_files as _native_test_files
+else:
+    from pr_checks import NATIVE_TEST, TEST_IMPORT, native_test_files as _native_test_files  # noqa: F401
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
-# A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
-TEST_IMPORT = re.compile(
-    r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
-    r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)'
-)
 
 
 def native_test_files(names, root=None):
-    """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
-    named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
-    reading every test, and run the whole suite for any test change). `root`: the checkout they are read from (this
-    one when None; the incremental plan reads the candidate's)."""
-    root = ROOT if root is None else Path(root)
-    texts, verdicts = {}, {}
-
-    def text(name):
-        if name not in texts:
-            try:
-                texts[name] = (root / name).read_text(errors='replace')
-            except OSError:  # not a file here (a test's stand-in name, a package): nothing to run natively
-                texts[name] = ''
-        return texts[name]
-
-    def imports(source):
-        for package, members, module in TEST_IMPORT.findall(source):
-            if module:
-                yield module.replace('.', '/') + '.py'
-            else:
-                yield package.replace('.', '/') + '.py'
-                yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
-
-    def native(name, seen=()):
-        if name not in verdicts:
-            source = text(name)
-            verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
-                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name
-            )
-        return verdicts[name]
-
-    return {name for name in names if native(name)}
+    """The files of `names` that run the native binaries (pr_checks.native_test_files), read in `root` (this
+    checkout when None)."""
+    return _native_test_files(names, ROOT if root is None else root)
 
 
 # Release python shards 1..NATIVE_SHARDS hold the native test files (ci.yml: only those python VMs wait for binaries).
