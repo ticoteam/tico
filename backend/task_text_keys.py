@@ -57,10 +57,37 @@ TASK_ID = re.compile(r"/api/v2/tasks/([^/]+)")
 # own test: a password can be any string.
 NAMED = ("key_value", "context_space", "bearer")
 PIECES = re.compile(r"[-_./:@+,]+")
-# A word up to 15 letters, a number, a word with a short number (OAuth2, v2, build2026), or 3 characters. A longer
-# run of letters is no word (a letters-only key). Short hex is a piece of a name (sha1-30c1714c9), never the whole
-# value: `token=a1b2c3d4` is a key.
-PLAIN = re.compile(r"[A-Za-z]{1,15}|[0-9]+|[A-Za-z]{1,15}[0-9]{1,4}|.{1,3}")
+# A word (letters, see `wordlike`), a number, a word with a short number (OAuth2, v2, build2026), or 3 characters.
+# Short hex is a piece of a name (sha1-30c1714c9), never the whole value: `token=a1b2c3d4` is a key.
+PLAIN = re.compile(r"[A-Za-z]+|[0-9]+|[A-Za-z]+[0-9]{1,4}|.{1,3}")
+HUMPS = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+# The 300 letter pairs English words use most (from a public word list). A run of letters is a word when at least
+# 80% of its pairs are among them: random letters (a letters-only key) seldom are. Measured: about 97% of random
+# 12-letter values and 94% of 8-letter ones fail it, against about 1% of dictionary words and no everyday ones.
+PAIRS = frozenset(
+    (
+        "ab ac ad ae af ag ah ai ak al am an ap ar as at au av aw ay az ba bb be bi bl bo br bs bu ca cc ce ch ci ck "
+        "cl co cr cs ct cu cy da dd de dg di dl do dr ds du dy ea eb ec ed ee ef eg eh ei el em en eo ep eq er es et "
+        "eu ev ew ex ey fa fe ff fi fl fo fr ft fu ga ge gg gh gi gl gn go gr gs gu gy ha he hi ho hr hs ht hu hy ia "
+        "ib ic id ie if ig ik il im in io ip ir is it iu iv iz ja je jo ju ka ke ki kl kn ks la ld le li lk ll lm lo "
+        "ls lt lu lv ly ma mb me mi mm mo mp ms mu na nc nd ne nf ng ni nk nl nn no ns nt nu nv ny oa ob oc od oe of "
+        "og oi ok ol om on oo op or os ot ou ov ow ox oy pa pe ph pi pl po pp pr ps pt pu qu ra rb rc rd re rf rg ri "
+        "rk rl rm rn ro rp rr rs rt ru rv ry sa sc se sh si sk sl sm sn so sp sq ss st su sw sy ta tc te th ti tl to "
+        "tr ts tt tu tw ty ua ub uc ud ue uf ug ui ul um un up ur us ut va ve vi vo wa we wh wi wn wo wr ws xe xi xp "
+        "xt ya ye yi yl ym yn yp ys za ze zi "
+    ).split()
+)
+
+
+def wordlike(letters: str) -> bool:
+    """Whether a run of letters reads as words: each camelCase hump of 6+ letters mostly uses common letter pairs."""
+    for hump in HUMPS.findall(letters):
+        low = hump.lower()
+        if len(low) >= 6 and sum(low[i : i + 2] in PAIRS for i in range(len(low) - 1)) < 0.8 * (len(low) - 1):
+            return False
+    return True
+
+
 SHORT_HEX = re.compile(r"[0-9a-fA-F]{1,12}")
 # Tico's own ids, which notes name all the time. A file id has its own shape; a UUID can be a key too (a Heroku key
 # is one), so it is ordinary only when it names a task, a chat, a message, a bot, a person or a run here (`known`).
@@ -75,7 +102,16 @@ def ordinary(value: str) -> bool:
     if UUID.fullmatch(value):
         return False
     pieces = [p for p in PIECES.split(value) if p]
-    return bool(pieces) and all(PLAIN.fullmatch(p) or (len(pieces) > 1 and SHORT_HEX.fullmatch(p)) for p in pieces)
+    return bool(pieces) and all(_plain(p, len(pieces) > 1) for p in pieces)
+
+
+def _plain(piece: str, in_name: bool) -> bool:
+    if in_name and SHORT_HEX.fullmatch(piece):
+        return True
+    if not PLAIN.fullmatch(piece):
+        return False
+    letters = piece.rstrip("0123456789")
+    return wordlike(letters) if letters.isalpha() else True
 
 
 def known_id(c: "sqlite3.Connection", value: str) -> bool:

@@ -46,12 +46,18 @@ ORDINARY = [
     "api key: file-8d19d6b6a8e1db42533c3cd7",
     "token: gpt-4o-mini",
     "auth: sha256",
+    # Words after a key word, camelCase names included.
+    "token: unknown",
+    "auth: authentication",
+    "cache key: taskListByOwnerCache",
 ]
+LETTERS_12 = "qzhvkrtw" + "mxbn"  # 12 synthetic random letters (Review 1 on 8968b9f)
 # Synthetic keys a word in front of them names, which ordinary text never holds: letters only, short hex, mixed.
 # Built from pieces, so this file holds no key-shaped literal.
 NAMED_KEYS = [
     "api key: " + "qzhvkrtw" * 4 + "mxbn",  # 36 lowercase letters
     "token: " + "XKQWZPTRVB" * 2,  # 20 uppercase letters
+    "token: " + LETTERS_12,
     "token=" + "a1b2" + "c3d4",
     "api_key=" + "Xk29fLq8" + "Zr7Tn3Wd",
     "secret: " + "dGhpcyBp" + "cyBhIGtleQ==",
@@ -176,6 +182,13 @@ def test_a_named_key_is_refused_however_it_is_spelled(api):
         assert K.found(line), line
         _refused(api, f"tasks/{task['id']}/comments", {"text": line})
     assert len(_rows(api, task["id"])) == len(NAMED_KEYS)
+
+
+def test_a_short_letters_only_key_from_slack_is_stored_as_a_mark(api):
+    task = _task(api)
+    with api.app.state.store.transaction() as c:
+        posted = threads.post(c, "human:ana", task["conversation_id"], "token: " + LETTERS_12, kind="say", via="slack")
+    assert LETTERS_12 not in posted["body"] and K.MARK in posted["body"]
 
 
 def test_this_team_s_own_ids_after_a_key_word_are_stored_unchanged(api):
