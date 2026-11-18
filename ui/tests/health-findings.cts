@@ -89,7 +89,7 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
     // A setup problem is BotOps's, with its task linked. A Tico bug with a ticket says it was reported; no button.
     assert.match(await row('setup:node').locator('.muted').innerText(), /^being fixed by BotOps · seen 3 times/);
     assert.equal(await row('setup:node').locator('[data-hl-report]').count(), 0, 'a setup problem gets no report button');
-    assert.match(await row('tico:ticket').locator('.muted').innerText(), /^Tico bug, reported to the Tico team/);
+    assert.match(await row('tico:ticket').locator('.muted').innerText(), /^Tico bug, reported to Tico support/);
     assert.equal(await row('tico:ticket').locator('[data-hl-report]').count(), 0);
     // A Tico bug nobody reported gets Report to Tico, and only that one.
     assert.equal(await section.locator('[data-hl-report]').count(), 1);
@@ -98,7 +98,7 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 
     // The team rule is a switch an owner can change; it saves and shows back as on.
     const rule = section.locator('label.hl-monitor-row');
-    assert.match(await rule.innerText(), /^Report Tico bugs to the Tico team without asking/);
+    assert.match(await rule.innerText(), /^Report Tico bugs to Tico support without asking/);
     assert.equal(await section.locator('[data-hl-report-rule]').isChecked(), false);
     await section.locator('[data-hl-report-rule]').check();
     await page.waitForFunction(() => (document.querySelector('[data-hl-report-rule]') as HTMLInputElement | null)?.checked === true);
@@ -106,7 +106,7 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 
     // Report to Tico POSTs the finding with an empty body, then shows it reported.
     await row('disk_full:server').locator('[data-hl-report]').click();
-    await page.waitForFunction(() => document.querySelector('[data-hl-finding="disk_full:server"]')?.textContent.includes('reported to the Tico team'));
+    await page.waitForFunction(() => document.querySelector('[data-hl-finding="disk_full:server"]')?.textContent.includes('reported to Tico support'));
     assert.deepEqual(requests.at(-1), {path: '/api/v2/health/findings/disk_full%3Aserver/report', body: {}});
     assert.equal(await row('disk_full:server').locator('[data-hl-report]').count(), 0);
 

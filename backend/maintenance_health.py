@@ -1033,7 +1033,7 @@ def report(c_factory, support, auth, settings, who, key):
             # A setup finding is this install's to fix (BotOps), and its text names local bots and computers: it never
             # goes to HQ, not even as an approval a person could send.
             raise Problem(
-                "not_a_tico_bug", "Only a Tico bug is reported to the Tico team; BotOps fixes a setup finding.", 409
+                "not_a_tico_bug", "Only a Tico bug is reported to Tico support; BotOps fixes a setup finding.", 409
             )
         filed = c.execute("SELECT * FROM health_reports WHERE signature=?", (row["signature"],)).fetchone()
         filed = dict(filed) if filed else None

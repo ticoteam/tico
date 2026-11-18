@@ -18,8 +18,8 @@ a send, a spend or a publish, by when they were asked. What waits on you stays i
 when you ask ("anything need me?"): one plain line per item, or per group of alike items.
 
 The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
-phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
-reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
+phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message Tico support"
+reply, opens it ([Support](support.md)). Nothing from the DM goes to Tico support.
 
 Nothing speaks up beside the dot. Confirm cards wait in the panel, and the dot never carries a sound or a count.
 

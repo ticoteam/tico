@@ -67,7 +67,7 @@ Setup checks (each problem is one BotOps task): `runner_outdated`, `runner_resta
 `worktree_error`, `push_stuck`, `cannot_fetch`. While a computer is silent with work queued, its `computer_silent` task is the
 one task for that outage. The Health page's `computers` and `waiting` checks file only for the computers no silent-computer finding reports: a silent computer's outage is that one task, and those two checks are held (not cleared) while it lasts.
 
-Tico-bug checks (each problem is also reported to the Tico team): `queue_idle`, `worktree_fallback`, `event_stream`,
+Tico-bug checks (each problem is also reported to Tico support): `queue_idle`, `worktree_fallback`, `event_stream`,
 `readiness_403`, `runner_route_latency`, `server_cpu`.
 
 Runner checks read the error lines each runner already sends with its heartbeat (`recent_errors`).
@@ -94,7 +94,7 @@ where, the same on every install). Tico bug reports group by signature.
 
 ## Tico bugs
 
-A Tico-bug problem files one ticket to the Tico team: one per problem, and at most 5 new tickets a day. The message is
+A Tico-bug problem files one ticket to Tico support: one per problem, and at most 5 new tickets a day. The message is
 written from the check alone (what it means, the fix in fixed words, the signature, the version and how often it
 happened), with the redacted [diagnostics bundle](support.md). A finding's own text (which names computers and bots),
 task text, message text and people's words are never sent. A busy process is named only when it is one of Tico's own;
@@ -108,7 +108,7 @@ withdrawn clears the report, so the next report of that problem asks again. `TIC
 A copy run from source (version `dev`: a checkout, a test, the never-stuck rig) files nothing unless
 `TICO_HQ_URL` is set; Maintenance's run details say `source_copy`.
 
-## On the Tico team's side
+## On Tico support's side
 
 A ticket starting `[Health Monitor]` carries its signature. HQ keeps the signature with each ticket, so the staff list
 groups by it (`GET /v1/staff/tickets?signature=hm-...`). The Support bot groups tickets by signature: one engineering

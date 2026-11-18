@@ -310,7 +310,7 @@ def _build():
     )
     add(
         "tico.notice",
-        "A notice from the Tico team reached this install.",
+        "A notice from Tico support reached this install.",
         "Tico notice",
         {
             "id": "tn1",

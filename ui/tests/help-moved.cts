@@ -100,7 +100,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     // Health redraws its list every minute; the result is not part of it and stays.
     await v.page.evaluate(() => hlMount());
     assert.equal(await v.page.locator('[data-hl-setup-row]').count(), 2);
-    // Send to Tico team opens the Tico team chat with the result attached (a new conversation goes as kind setup).
+    // Send to Tico support opens the Tico team chat with the result attached (a new conversation goes as kind setup).
     await v.page.locator('[data-hl-setup-send]').click();
     await v.page.locator('[data-report]').waitFor();
     assert.match(await v.page.locator('[data-report]').innerText(), /Setup check/);
