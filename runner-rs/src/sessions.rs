@@ -808,12 +808,6 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
                 }
             }
         }
-        // Never beside a chat turn's background fetch of the same repository (crate::fetch_fresh).
-        let upstream = crate::fetch_fresh::upstream(path, &env).await;
-        let one = match &upstream {
-            Some(u) => Some(u.one_at_a_time().await),
-            None => None,
-        };
         let began = Instant::now();
         if !g(path, &env, &["fetch", "--quiet", "--no-tags"], timeout)
             .await?
@@ -821,10 +815,7 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
         {
             return Ok("fetch failed".into());
         }
-        drop(one);
-        if let Some(u) = &upstream {
-            u.fetched(began);
-        }
+        crate::fetch_fresh::note(path, &env, began).await;
         if g(path, &env, &["rev-list", "@{u}..HEAD"], 15)
             .await?
             .stdout
@@ -1073,13 +1064,8 @@ pub async fn sync_shared(path: &Path, turn: &Env) -> String {
         // A task's worktree shares the bot checkout's repository, fetched a moment ago by the same turn (crate::fetch_fresh).
         let upstream = crate::fetch_fresh::upstream(path, &env).await;
         if !upstream.as_ref().is_some_and(|u| u.fresh()) {
-            let one = match &upstream {
-                Some(u) => Some(u.one_at_a_time().await),
-                None => None,
-            };
             let began = Instant::now();
             let fetched = g(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await?;
-            drop(one);
             if !fetched.ok() {
                 return Ok(format!("fetch failed: {}", git_reason(&fetched)));
             }
@@ -1169,22 +1155,13 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
         if !dirty.ok() {
             return Ok(format!("git status failed: {}", git_reason(&dirty)));
         }
-        // Always fetched: the push was refused because the remote has moved on. Never beside a chat turn's
-        // background fetch of the same repository (crate::fetch_fresh).
-        let upstream = crate::fetch_fresh::upstream(path, &env).await;
-        let one = match &upstream {
-            Some(u) => Some(u.one_at_a_time().await),
-            None => None,
-        };
+        // Always fetched: the push was refused because the remote has moved on.
         let began = Instant::now();
         let fetched = g(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await?;
-        drop(one);
         if !fetched.ok() {
             return Ok(format!("the remote refused the push as behind, and fetching it failed: {}", git_reason(&fetched)));
         }
-        if let Some(u) = &upstream {
-            u.fetched(began);
-        }
+        crate::fetch_fresh::note(path, &env, began).await;
         let up = Some(g(path, &env, &["rev-parse", "--abbrev-ref", "@{u}"], 15).await?.stdout.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| "its upstream".into());
         let behind = Some(g(path, &env, &["rev-list", "--count", "HEAD..@{u}"], 15).await?.stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "some".into());
         let missing = format!("{up} has {behind} commits this checkout doesn't");
@@ -1713,8 +1690,14 @@ impl Place {
 /// Whether the turn may start on the runner's recent fetch of its checkout (crate::fetch_fresh): a person waits for it,
 /// on the bot's main lane, in the bot's own repository. A task turn (it builds and pushes from its worktree), a shared
 /// checkout (others push to it all day), a private meeting's copy and a turn no person waits for fetch first, as before.
-pub fn chat_refresh(place: &Place, config: &Value) -> bool {
-    chat_turn(&place.task, place.person, place.disposable, config)
+/// A task's turn on the main lane (`session: bot`) is a task's all the same.
+pub fn chat_refresh(place: &Place, attempt: &Value) -> bool {
+    let task = if place.task.is_empty() {
+        text_of(&attempt["task"]["id"])
+    } else {
+        place.task.clone()
+    };
+    chat_turn(&task, place.person, place.disposable, &attempt["config"])
 }
 
 fn chat_turn(task: &str, person: bool, disposable: bool, config: &Value) -> bool {
@@ -1820,7 +1803,8 @@ impl Runner {
                 }
             }
         }
-        ensure_reads(&self.config.projects_dir(), path).await?;
+        // A chat turn's own checkout may start on the runner's recent fetch; its `reads:` siblings fetch first.
+        crate::fetch_fresh::fetching_first(ensure_reads(&self.config.projects_dir(), path)).await?;
         // A templated bot's files follow the release (crate::product_files); a task lane pushes them at once.
         if crate::product_files::refresh_due(&place.bot, &attempt["config"]) {
             let _git = self.lanes.git_lock(path).lock_owned().await;

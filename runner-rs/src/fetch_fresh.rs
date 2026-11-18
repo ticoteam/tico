@@ -3,17 +3,19 @@
 //! Inside a turn (`in_turn`), a fetch of a repository and upstream the same turn already fetched, or pushed to, within
 //! FRESH_FOR is skipped; the merge or rebase onto it still runs.
 //!
-//! A chat turn (a person waiting in the bot's own checkout, `in_turn` with `chat`) also starts on this runner's last
-//! fetch or push of the repository from any turn, when it began less than CHAT_FRESH_FOR ago: the fast-forward onto
-//! what that fetch brought still runs, and the fetch itself runs in the background beside the model's start
-//! (`Upstream::refresh_behind`), so the next turn starts on what the remote holds now. Every other turn, and a chat
-//! turn with no recent fetch (the first after a pause, a restart or a placement, or after a background fetch failed),
-//! fetches before it starts, as before.
+//! A chat turn (a person waits for it in the bot's own checkout, `in_turn` with `chat`) also starts on this runner's
+//! last fetch or push of the repository from any turn, when it began less than CHAT_FRESH_FOR ago. The turn moves the
+//! remote-tracking ref to what the last background fetch brought (`Upstream::take_behind`), fast-forwards onto it, and
+//! then fetches again in the background beside the model's start (`Upstream::refresh_behind`), so the next chat turn
+//! starts on what the remote holds now. That fetch writes only its own ref, refs/tico/fetched/<remote>/<branch>, never
+//! FETCH_HEAD or the remote-tracking ref the running turn and its git see. Every other turn, and a chat turn with no
+//! recent fetch (the first after a pause, a restart or a placement, after a background fetch failed, or when the
+//! remote's branch was rewritten), fetches before it starts, as before.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::env::Env;
@@ -24,6 +26,8 @@ const FRESH_FOR: Duration = Duration::from_secs(15);
 const CHAT_FRESH_FOR: Duration = Duration::from_secs(300);
 /// The background fetch's limit, the same as a turn's own fetch.
 const BEHIND_TIMEOUT_S: u64 = 45;
+/// Where a background fetch leaves what it brought, beside the remote-tracking ref it stands for.
+const BEHIND: &str = "refs/tico/fetched/";
 
 #[derive(Clone)]
 struct Scope {
@@ -63,7 +67,8 @@ fn seen() -> &'static Mutex<HashMap<(String, String), Instant>> {
     SEEN.get_or_init(Default::default)
 }
 
-/// Repository and upstream -> when this runner's last successful fetch or push of it began, from any turn.
+/// Repository and upstream -> when this runner's last successful fetch or push of it began, from any turn: the
+/// remote-tracking ref, or the background fetch's ref beside it, is at least as new as the remote was then.
 fn synced() -> &'static Mutex<HashMap<String, Instant>> {
     static SYNCED: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
     SYNCED.get_or_init(Default::default)
@@ -78,17 +83,10 @@ fn note_synced(key: &str, began: Instant) {
     }
 }
 
-/// Repository (its git common directory) -> the runner's fetches of it, one at a time: a fetch moves every
-/// remote-tracking ref, so a turn's fetch waits for a background one of any upstream in the same repository.
-fn gate(repo: &str) -> Arc<tokio::sync::Mutex<()>> {
-    static GATES: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
-    GATES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .entry(repo.to_string())
-        .or_default()
-        .clone()
+/// Repository and upstream -> a background fetch of it is running: one at a time.
+fn running() -> &'static Mutex<HashSet<String>> {
+    static RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    RUNNING.get_or_init(Default::default)
 }
 
 /// Runs `work` as turn `aid`'s: its fetches and pushes count for each other. `chat`: a person waits for this turn in
@@ -104,11 +102,21 @@ pub async fn in_turn<F: Future>(aid: &str, chat: bool, work: F) -> F::Output {
     .await
 }
 
+/// Runs `work` in the turn, but fetching first as any other turn does: for the repositories a chat turn refreshes
+/// beside the bot's own checkout (its `reads:` siblings), which nothing fetches in the background.
+pub async fn fetching_first<F: Future>(work: F) -> F::Output {
+    match TURN.try_with(|t| t.aid.clone()) {
+        Ok(aid) => in_turn(&aid, false, work).await,
+        Err(_) => work.await,
+    }
+}
+
 /// A checkout's repository (its git common directory) and upstream ref, inside a turn.
 pub struct Upstream {
     turn: String,
     chat: bool,
-    repo: String,
+    /// The remote-tracking ref, refs/remotes/<remote>/<branch>.
+    tracked: String,
     key: String,
 }
 
@@ -148,8 +156,15 @@ pub async fn upstream(path: &Path, env: &Env) -> Option<Upstream> {
         turn: scope.aid,
         chat: scope.chat,
         key: format!("{common}\n{tracked}"),
-        repo: common,
+        tracked: tracked.to_string(),
     })
+}
+
+/// A new placement of the bot: its checkout is caught up from GitHub, and no chat turn starts on a fetch from before.
+pub async fn forget(path: &Path, env: &Env) {
+    if let Some(up) = upstream(path, env).await {
+        synced().lock().unwrap().remove(&up.key);
+    }
 }
 
 impl Upstream {
@@ -165,7 +180,7 @@ impl Upstream {
     }
 
     /// Whether this is a chat turn and this runner fetched or pushed this repository's upstream, in any turn, within
-    /// CHAT_FRESH_FOR: the turn starts on that, and fetches behind it (`refresh_behind`).
+    /// CHAT_FRESH_FOR: the turn may start on that (`take_behind`), and fetches behind it (`refresh_behind`).
     pub fn recent(&self) -> bool {
         let span = chat_fresh_for();
         self.chat
@@ -174,6 +189,16 @@ impl Upstream {
                 .unwrap()
                 .get(&self.key)
                 .is_some_and(|at| at.elapsed() < span)
+    }
+
+    /// Whether a person waits for this turn in the bot's own checkout (`in_turn`).
+    pub fn chat(&self) -> bool {
+        self.chat
+    }
+
+    /// The turn's attempt id, for its flight marks; empty outside a turn.
+    pub fn turn(&self) -> &str {
+        &self.turn
     }
 
     /// A fetch or push that began at `began` succeeded: the upstream ref is at least as new as the remote was then.
@@ -187,35 +212,40 @@ impl Upstream {
         note_synced(&self.key, began);
     }
 
-    /// Held while the runner fetches or pushes this repository: it waits for a background fetch of it to finish, so the
-    /// two never race for the same remote-tracking ref.
-    pub async fn one_at_a_time(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        gate(&self.repo).lock_owned().await
+    fn behind_ref(&self) -> String {
+        format!(
+            "{BEHIND}{}",
+            self.tracked.trim_start_matches("refs/remotes/")
+        )
     }
 
-    /// A chat turn that starts on the runner's recent fetch: fetch in the background, beside the model's start, so the
-    /// next turn starts on what the remote holds now. Only the remote-tracking ref moves; this turn's tree does not.
-    /// One at a time per repository: with one running already, nothing more starts. A failed fetch forgets the last
-    /// one, so the next chat turn fetches before it starts and says why, as before.
+    /// A chat turn starting on the runner's recent fetch: move the remote-tracking ref up to what the last background
+    /// fetch brought. True when the turn may start on it; false when it must fetch first (the remote's branch was
+    /// rewritten since, or the ref moved under this turn): then the record and the background fetch's ref are dropped.
+    pub async fn take_behind(&self, path: &Path, env: &Env) -> bool {
+        let behind = self.behind_ref();
+        let taken = move_up(path, env, &self.tracked, &behind).await;
+        if !taken {
+            synced().lock().unwrap().remove(&self.key);
+            let _ = run(path, env, &["update-ref", "-d", &behind]).await;
+        }
+        taken
+    }
+
+    /// A chat turn that started on the runner's recent fetch: fetch in the background, beside the model's start, so the
+    /// next chat turn starts on what the remote holds now. The fetch writes only its own ref (module comment), so this
+    /// turn's tree, its remote-tracking ref and FETCH_HEAD stay as they are. One at a time per repository and upstream.
+    /// A failed fetch forgets the last one, so the next chat turn fetches before it starts and says why, as before.
     pub fn refresh_behind(&self, path: &Path, env: &Env) {
-        crate::util::mark("fetch_skipped", &self.turn);
-        let Ok(one) = gate(&self.repo).try_lock_owned() else {
+        if !running().lock().unwrap().insert(self.key.clone()) {
             return;
-        };
+        }
         let (path, env, key) = (path.to_path_buf(), env.clone(), self.key.clone());
+        let (behind, tracked) = (self.behind_ref(), self.tracked.clone());
         tokio::spawn(async move {
-            let _one = one;
             let began = Instant::now();
-            // Outside the repository's command gate (gitrun::fetch_ungated_as_bot): it writes only objects and
-            // remote-tracking refs, and the turn's own git must not queue behind it.
-            let fetched = crate::gitrun::fetch_ungated_as_bot(
-                &path,
-                &env,
-                &["fetch", "--quiet", "--no-tags"],
-                BEHIND_TIMEOUT_S,
-            )
-            .await;
-            if fetched.as_ref().is_ok_and(|out| out.ok()) {
+            let fetched = fetch_behind(&path, &env, &tracked, &behind).await;
+            if fetched {
                 note_synced(&key, began);
             } else {
                 synced().lock().unwrap().remove(&key);
@@ -227,8 +257,141 @@ impl Upstream {
                     "Tico runner: {name}: the background fetch after a chat turn's start failed; the next chat turn fetches before it starts"
                 ));
             }
+            running().lock().unwrap().remove(&key);
         });
     }
+}
+
+async fn run(path: &Path, env: &Env, args: &[&str]) -> Option<crate::gitrun::Out> {
+    crate::gitrun::git_as_bot(path, env, args, 15)
+        .await
+        .ok()
+        .filter(|o| o.ok())
+}
+
+/// Moves `tracked` up to `behind` when that is a fast-forward (`Upstream::take_behind`).
+async fn move_up(path: &Path, env: &Env, tracked: &str, behind: &str) -> bool {
+    let Some(out) = run(
+        path,
+        env,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%09%(objectname)",
+            behind,
+            tracked,
+        ],
+    )
+    .await
+    else {
+        return false;
+    };
+    let mut at = HashMap::new();
+    for line in out.stdout.lines() {
+        if let Some((name, oid)) = line.trim().split_once('\t') {
+            at.insert(name.to_string(), oid.to_string());
+        }
+    }
+    // No background fetch has finished yet: the last fetch or push moved the remote-tracking ref itself.
+    let Some(fetched) = at.get(behind) else {
+        return true;
+    };
+    let Some(old) = at.get(tracked) else {
+        return false;
+    };
+    if fetched == old {
+        return true;
+    }
+    let ancestor = |a: &str, b: &str| {
+        let (a, b) = (a.to_string(), b.to_string());
+        async move {
+            run(
+                path,
+                env,
+                &["merge-base", "--is-ancestor", a.as_str(), b.as_str()],
+            )
+            .await
+            .is_some()
+        }
+    };
+    if ancestor(fetched, old).await {
+        return true; // a later fetch or push moved the remote-tracking ref past it
+    }
+    if !ancestor(old, fetched).await {
+        return false; // the remote's branch was rewritten: fetch first, as any turn would see it
+    }
+    // Only from the value read above: a fetch that moved it meanwhile wins, and this turn fetches first.
+    run(
+        path,
+        env,
+        &[
+            "update-ref",
+            "-m",
+            "fetch: tico background fetch",
+            tracked,
+            fetched.as_str(),
+            old.as_str(),
+        ],
+    )
+    .await
+    .is_some()
+}
+
+/// Fetch the checkout's upstream branch into `behind` alone.
+async fn fetch_behind(path: &Path, env: &Env, tracked: &str, behind: &str) -> bool {
+    let Some(branch) = run(path, env, &["symbolic-ref", "-q", "HEAD"])
+        .await
+        .map(|o| o.stdout.trim().to_string())
+    else {
+        return false;
+    };
+    let Some(target) = run(
+        path,
+        env,
+        &[
+            "for-each-ref",
+            "--format=%(upstream)%09%(upstream:remotename)%09%(upstream:remoteref)",
+            &branch,
+        ],
+    )
+    .await
+    .map(|o| o.stdout.trim().to_string()) else {
+        return false;
+    };
+    let mut parts = target.split('\t');
+    let (Some(upstream), Some(remote), Some(remoteref)) =
+        (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    // The branch moved to another upstream since the turn started: nothing to fetch for this one.
+    if upstream != tracked || remote.is_empty() || remote == "." || !remoteref.starts_with("refs/")
+    {
+        return false;
+    }
+    let refspec = format!("+{remoteref}:{behind}");
+    // Outside the repository's command gate (gitrun::fetch_ungated_as_bot): the turn's own git must not queue behind it.
+    // `--refmap=` keeps git from moving the remote-tracking ref along with it, and no gc or maintenance runs beside the
+    // turn.
+    crate::gitrun::fetch_ungated_as_bot(
+        path,
+        env,
+        &[
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--refmap=",
+            remote,
+            &refspec,
+        ],
+        BEHIND_TIMEOUT_S,
+    )
+    .await
+    .is_ok_and(|out| out.ok())
 }
 
 /// After a successful fetch or push of the checkout that began at `began`: for the rest of its turn, and for the chat
@@ -452,17 +615,21 @@ mod tests {
 
     /// Waits for a background fetch of the checkout's repository to finish.
     async fn behind_done(path: &Path, env: &Env) {
-        drop(hold(path, env).await);
-    }
-
-    /// Holds the repository's fetches: no background fetch starts while it is held.
-    async fn hold(path: &Path, env: &Env) -> tokio::sync::OwnedMutexGuard<()> {
-        upstream(path, env).await.unwrap().one_at_a_time().await
+        let key = upstream(path, env).await.unwrap().key;
+        while running().lock().unwrap().contains(&key) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     fn head(dir: &Path, rev: &str) -> String {
         sh(dir, &["rev-parse", rev])
     }
+
+    fn fetch_head(dir: &Path) -> String {
+        std::fs::read_to_string(dir.join(".git/FETCH_HEAD")).unwrap_or_default()
+    }
+
+    const BEHIND_MAIN: &str = "refs/tico/fetched/origin/main";
 
     #[tokio::test]
     async fn a_chat_turn_starts_on_the_runners_recent_fetch_and_fetches_behind_it() {
@@ -478,10 +645,9 @@ mod tests {
             f.mine.join("first.md").is_file(),
             "a chat turn with no recent fetch did not fetch"
         );
-        // The next chat turn starts on that fetch, without fetching first (its background fetch is held here, so
-        // nothing can bring the push in while it starts).
+        let (tracked, fetch_head_was) = (head(&f.mine, "origin/main"), fetch_head(&f.mine));
+        // The next chat turn starts on that fetch, without fetching first.
         push_elsewhere(&f.seed, "late.md");
-        let held = hold(&f.mine, &env).await;
         assert_eq!(
             in_turn("c2", true, crate::execute::pull_repo(&f.mine, &env)).await,
             ""
@@ -490,21 +656,21 @@ mod tests {
             !f.mine.join("late.md").exists(),
             "the chat turn fetched before it started"
         );
-        drop(held);
-        // A chat turn's background fetch moves the remote-tracking ref (its own fast-forward may or may not take it,
-        // as the fetch races it), and the next chat turn's fast-forward takes it.
+        // Its fetch behind it brings the push into its own ref alone: the turn's remote-tracking ref and FETCH_HEAD
+        // stay as they were.
+        behind_done(&f.mine, &env).await;
+        assert_eq!(head(&f.mine, BEHIND_MAIN), head(&f.seed, "HEAD"));
+        assert_eq!(head(&f.mine, "origin/main"), tracked);
+        assert_eq!(fetch_head(&f.mine), fetch_head_was);
+        // The next chat turn starts on what that fetch brought.
         assert_eq!(
             in_turn("c3", true, crate::execute::pull_repo(&f.mine, &env)).await,
             ""
         );
-        behind_done(&f.mine, &env).await;
-        assert_eq!(head(&f.mine, "origin/main"), head(&f.seed, "HEAD"));
-        assert_eq!(
-            in_turn("c4", true, crate::execute::pull_repo(&f.mine, &env)).await,
-            ""
-        );
         assert!(f.mine.join("late.md").is_file());
-        // Any other turn fetches before it starts, after waiting for a background fetch.
+        assert_eq!(head(&f.mine, "origin/main"), head(&f.seed, "HEAD"));
+        behind_done(&f.mine, &env).await;
+        // Any other turn fetches before it starts.
         push_elsewhere(&f.seed, "task.md");
         assert_eq!(
             in_turn("t1", false, crate::execute::pull_repo(&f.mine, &env)).await,
@@ -514,8 +680,18 @@ mod tests {
             f.mine.join("task.md").is_file(),
             "a task turn started on an earlier turn's fetch"
         );
+        // A new placement forgets the runner's fetch: the chat turn after it fetches first.
+        push_elsewhere(&f.seed, "placed.md");
+        forget(&f.mine, &env).await;
+        assert_eq!(
+            in_turn("c4", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            ""
+        );
+        assert!(
+            f.mine.join("placed.md").is_file(),
+            "a placement kept the record"
+        );
         // Past CHAT_FRESH_FOR a chat turn fetches before it starts again.
-        behind_done(&f.mine, &env).await;
         push_elsewhere(&f.seed, "paused.md");
         CHAT_OVERRIDE.with(|v| v.set(Some(Duration::ZERO)));
         assert_eq!(
@@ -529,7 +705,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_push_at_a_turns_end_counts_for_chat_turns_and_a_failed_background_fetch_does_not() {
+    async fn a_rewritten_upstream_or_a_failed_background_fetch_makes_the_next_chat_turn_fetch_first(
+    ) {
         let f = fixture();
         let env = turn_env(&f.root);
         // A push outside any turn's refresh (the end of a turn) counts for the chat turns after it.
@@ -538,7 +715,6 @@ mod tests {
         sh(&f.mine, &["commit", "-qm", "mine"]);
         assert_eq!(crate::execute::push_repo(&f.mine, &env).await.1, "");
         push_elsewhere(&f.seed, "late.md");
-        let held = hold(&f.mine, &env).await;
         assert_eq!(
             in_turn("c1", true, crate::execute::pull_repo(&f.mine, &env)).await,
             ""
@@ -547,7 +723,31 @@ mod tests {
             !f.mine.join("late.md").exists(),
             "the push did not count for the chat turn"
         );
-        drop(held);
+        behind_done(&f.mine, &env).await;
+
+        // The remote's branch is rewritten: the background fetch brings that, and the next chat turn fetches first, as
+        // any turn would, and drops the background fetch's ref.
+        sh(&f.seed, &["pull", "-q", "--rebase"]);
+        sh(&f.seed, &["reset", "-q", "--hard", "HEAD~1"]);
+        std::fs::write(f.seed.join("rewritten.md"), "x\n").unwrap();
+        sh(&f.seed, &["add", "-A"]);
+        sh(&f.seed, &["commit", "-qm", "rewritten"]);
+        sh(&f.seed, &["push", "-q", "--force", "origin", "HEAD:main"]);
+        assert_eq!(
+            in_turn("c2", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            ""
+        );
+        behind_done(&f.mine, &env).await;
+        assert_eq!(head(&f.mine, BEHIND_MAIN), head(&f.seed, "HEAD"));
+        assert!(
+            !in_turn("c3", true, crate::execute::pull_repo(&f.mine, &env))
+                .await
+                .is_empty(),
+            "a rewritten upstream fast-forwarded"
+        );
+        assert_eq!(head(&f.mine, "origin/main"), head(&f.seed, "HEAD"));
+        assert!(sh(&f.mine, &["for-each-ref", BEHIND_MAIN]).is_empty());
+        sh(&f.mine, &["reset", "-q", "--hard", "origin/main"]);
 
         // A background fetch that fails forgets the last fetch: the next chat turn fetches before it starts.
         let url = sh(&f.mine, &["config", "--get", "remote.origin.url"]);
@@ -560,19 +760,39 @@ mod tests {
             ],
         );
         assert_eq!(
-            in_turn("c2", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            in_turn("c4", true, crate::execute::pull_repo(&f.mine, &env)).await,
             ""
         );
         behind_done(&f.mine, &env).await;
         sh(&f.mine, &["config", "remote.origin.url", &url]);
         push_elsewhere(&f.seed, "later.md");
         assert_eq!(
-            in_turn("c3", true, crate::execute::pull_repo(&f.mine, &env)).await,
+            in_turn("c5", true, crate::execute::pull_repo(&f.mine, &env)).await,
             ""
         );
         assert!(
             f.mine.join("later.md").is_file(),
             "a chat turn trusted a failed background fetch"
         );
+    }
+
+    /// A chat turn's `reads:` siblings fetch first: nothing fetches them in the background.
+    #[tokio::test]
+    async fn fetching_first_keeps_the_turn_but_not_its_chat() {
+        let f = fixture();
+        let env = turn_env(&f.root);
+        assert_eq!(crate::execute::pull_repo(&f.mine, &env).await, "");
+        push_elsewhere(&f.seed, "late.md");
+        let pulled = in_turn("r1", true, async {
+            let chat = upstream(&f.mine, &env).await.unwrap();
+            let read = fetching_first(async {
+                let up = upstream(&f.mine, &env).await.unwrap();
+                (up.turn().to_string(), up.chat())
+            })
+            .await;
+            (chat.chat(), read)
+        })
+        .await;
+        assert_eq!(pulled, (true, ("r1".to_string(), false)));
     }
 }

@@ -31,8 +31,8 @@ pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones). The `claude_*` marks are a
 /// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`. `prepared` is
 /// its credentials and environment ready, `refreshed` its checkouts brought up to date, `skills_ready` its company
-/// skills staged. `fetch_skipped` (not a step) marks a chat turn that started on the runner's recent fetch
-/// (crate::fetch_fresh).
+/// skills staged. Two marks that are not steps tell a chat turn's refresh (crate::fetch_fresh): `fetch_skipped`, it
+/// started on the runner's recent fetch, and `fetched_first`, it fetched before it started.
 const PHASES: [&str; 19] = [
     "claimed",
     "prepared",
@@ -611,11 +611,11 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
         }
     }
 
-    // The checkout refresh, for chat turns that started on the runner's recent fetch and turns that fetched first.
-    let refresh = |skipped: bool| {
+    // A chat turn's checkout refresh, started on the runner's recent fetch or fetching first.
+    let refresh = |how: &str| {
         let mut v: Vec<u64> = turns
             .iter()
-            .filter(|t| t["phases"]["fetch_skipped"].is_u64() == skipped)
+            .filter(|t| t["phases"][how].is_u64())
             .filter_map(|t| {
                 let p = &t["phases"];
                 Some(
@@ -628,13 +628,13 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
         v.sort_unstable();
         v
     };
-    let (skipped, fetched) = (refresh(true), refresh(false));
+    let (skipped, fetched) = (refresh("fetch_skipped"), refresh("fetched_first"));
     if !skipped.is_empty() || !fetched.is_empty() {
         let median = |v: &[u64]| v.get(v.len() / 2).map_or("-".to_string(), |ms| secs(*ms));
         say(
             &mut out,
             format!(
-                "\nCheckout refresh (prepared -> refreshed, median): {} on the runner's recent fetch ({} turns), {} fetching first ({} turns)",
+                "\nChat turns' checkout refresh (prepared -> refreshed, median): {} on the runner's recent fetch ({} turns), {} fetching first ({} turns)",
                 median(&skipped),
                 skipped.len(),
                 median(&fetched),
@@ -788,7 +788,7 @@ mod tests {
             r#"{"v":1,"ts":1791977400.25,"kind":"runner.turn","attempt":"a1","bot":"acme-seo","runtime":"claude","outcome":"completed","total_ms":84000,"phases":{"claimed":0,"placed":1200,"harness_started":1500,"first_output":6000,"finished":80000,"complete_posted":81000,"done":84000}}"#,
             r#"{"v":1,"ts":1791977430.25,"kind":"runner.turn","attempt":"a2","bot":"acme-ops","runtime":"codex","outcome":"completed","total_ms":76100,"phases":{"claimed":0,"first_output":2000,"model_done":30000,"scrubbed":75000,"finished":75100,"saved":75100,"flushed":75200,"complete_posted":76000,"done":76100}}"#,
             r#"{"v":1,"ts":1791977440.25,"kind":"runner.turn","attempt":"a3","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"prepared":400,"fetch_skipped":420,"refreshed":460,"placed":500,"done":9000}}"#,
-            r#"{"v":1,"ts":1791977450.25,"kind":"runner.turn","attempt":"a4","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"prepared":400,"refreshed":1300,"placed":1350,"done":9000}}"#,
+            r#"{"v":1,"ts":1791977450.25,"kind":"runner.turn","attempt":"a4","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"prepared":400,"fetched_first":1250,"refreshed":1300,"placed":1350,"done":9000}}"#,
             r#"{"v":1,"ts":1791977460.25,"kind":"runner.heartbeat","ms":4200,"tries":1,"ok":true}"#,
             r#"{"v":1,"ts":1791977520.25,"kind":"runner.git","verb":"fetch","repo":"acme-seo","ms":9000,"code":0}"#,
             r#"{"v":1,"ts":1791977580.25,"kind":"runner.process","rss_bytes":52428800,"turns":1,"dropped":3}"#,
@@ -806,7 +806,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("Checkout refresh (prepared -> refreshed, median): 0.1s on the runner's recent fetch (1 turns), 0.9s fetching first (1 turns)"),
+            text.contains("Chat turns' checkout refresh (prepared -> refreshed, median): 0.1s on the runner's recent fetch (1 turns), 0.9s fetching first (1 turns)"),
             "{text}"
         );
         assert!(
