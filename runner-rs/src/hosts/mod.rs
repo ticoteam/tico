@@ -1032,6 +1032,13 @@ impl Host {
     }
 
     /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
+    /// The run this host's turn belongs to: a Claude host marks its own process spawn, `system/init` and `result`.
+    pub fn set_attempt(&self, aid: &str) {
+        if let Host::Claude(h) = self {
+            h.set_attempt(aid);
+        }
+    }
+
     pub fn set_capture(&self, capture: &std::sync::Arc<crate::capture::Capture>) -> bool {
         match self {
             Host::Claude(h) => h.set_capture(capture.clone()),

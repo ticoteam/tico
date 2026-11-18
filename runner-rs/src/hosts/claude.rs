@@ -533,6 +533,8 @@ struct Shared {
     effort: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
+    /// The run this host's turn belongs to, for its timing marks (flight.rs); empty until the runner names it.
+    attempt: Mutex<String>,
 }
 
 #[derive(Clone)]
@@ -593,7 +595,29 @@ impl ClaudeHost {
             effort: false.into(),
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
+            attempt: Mutex::new(String::new()),
         }))
+    }
+
+    /// Names the run this host's turns belong to, so its own marks land on that run's timings.
+    pub fn set_attempt(&self, aid: &str) {
+        *self.0.attempt.lock().unwrap_or_else(|p| p.into_inner()) = aid.to_string();
+    }
+
+    fn attempt(&self) -> String {
+        self.0
+            .attempt
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// A timing mark on the named run (crate::util::mark); nothing before `set_attempt`.
+    fn mark(&self, name: &str) {
+        let aid = self.attempt();
+        if !aid.is_empty() {
+            crate::util::mark(name, &aid);
+        }
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -930,7 +954,7 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        let (child, stderr) = {
+        let (child, stderr, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
                 return Err(failed("claude host is not running"));
@@ -943,10 +967,10 @@ impl ClaudeHost {
                 .get(thread_id)
                 .cloned()
                 .ok_or_else(|| failed(format!("unknown claude thread {thread_id}")))?;
-            if let Some(size) = transcript(&t.settings, &session_of(thread_id, &t))
+            let size = transcript(&t.settings, &session_of(thread_id, &t))
                 .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.len())
-            {
+                .map(|m| m.len());
+            if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
             let (child, stderr, reaping) = self
@@ -957,8 +981,12 @@ impl ClaudeHost {
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
             inner.context.remove(thread_id);
-            (child, stderr)
+            (child, stderr, size.unwrap_or(0))
         };
+        // Spawned now: whatever the runner holds the turn for after this (a cold sign-in) is not Claude's boot.
+        self.mark("claude_spawned");
+        // The session Claude resumes, by size: whether resuming takes longer as a thread grows.
+        crate::flight::fact(&self.attempt(), "transcript_bytes", transcript_bytes);
         log(&format!(
             "claude[{}]: turn started pid {}",
             self.0.bot,
@@ -1156,6 +1184,7 @@ impl ClaudeHost {
                         if self.before_prompt(&msg) {
                             continue;
                         }
+                        self.mark("claude_result");
                         self.settle(&turn, &msg);
                         self.track_wait(&msg);
                         result = Some(msg);
@@ -1603,6 +1632,7 @@ impl ClaudeHost {
                 }
             }
             "system" if msg["subtype"] == "init" => {
+                self.mark("claude_init");
                 let session = msg["session_id"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -2815,6 +2845,65 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    #[tokio::test]
+    async fn a_turn_marks_its_spawn_init_and_result_and_its_transcript_size() {
+        let dir =
+            std::env::temp_dir().join(format!("claude-marks-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("out.jsonl"),
+            concat!(
+                r#"{"type": "system", "subtype": "init", "session_id": "s-marks"}"#,
+                "\n",
+                r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 1, "output_tokens": 1}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\ncat out.jsonl\ncat >/dev/null\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        let thread = host.start_thread(&settings);
+        // The session it resumes: its size goes with the turn's marks.
+        let folder = dir.join(".claude/projects/acme");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{thread}.jsonl")), "x".repeat(1234)).unwrap();
+        let aid = format!("marks-{}", uuid::Uuid::new_v4().simple());
+        crate::flight::track();
+        crate::flight::phase("claimed", &aid);
+        host.set_attempt(&aid);
+        host.start_turn(&thread, "hello", None).unwrap();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if ev["kind"] == "status" && ev["state"] == "idle" {
+                break;
+            }
+        }
+        let t = crate::flight::timings(&aid).unwrap();
+        let at = |name: &str| {
+            t["phases"][name]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{name}: {t}"))
+        };
+        assert!(at("claude_spawned") <= at("claude_init"), "{t}");
+        assert!(at("claude_init") <= at("claude_result"), "{t}");
+        assert_eq!(t["transcript_bytes"], 1234, "{t}");
+        crate::flight::turn_end(&aid, "acme", "claude", "completed", true);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     const BG_STARTED: &str = r#"{"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "a1", "task_type": "local_agent", "description": "Build concept A"}]}"#;

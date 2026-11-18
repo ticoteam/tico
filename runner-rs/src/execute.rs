@@ -2301,6 +2301,7 @@ impl Runner {
             };
             let h = host.insert(made);
             h.track_allocation(flags.harness_allocated.clone());
+            h.set_attempt(&aid);
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
@@ -2876,6 +2877,7 @@ impl Runner {
                 }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
+                h.set_attempt(&aid);
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -3530,12 +3532,19 @@ impl Runner {
             );
         }
         let active = self.active.lock().unwrap().len();
-        let completion = crate::perf::with_snapshot(Value::Object(completion), active)
+        let mut completion = crate::perf::with_snapshot(Value::Object(completion), active)
             .await
             .as_object()
             .unwrap()
             .clone();
         mark("finished", &aid);
+        // Where the turn's time went, up to here, kept with its result: saved before sending, so a resent result is
+        // the same. An older server refuses the field (`run_timings`).
+        if crate::follow::feature("run_timings") {
+            if let Some(timings) = crate::flight::timings(&aid) {
+                completion.insert("timings".into(), timings);
+            }
+        }
         // A nightly memory tidy pass commits and pushes nothing, whatever ended its turn: what it changed in its
         // checkout is discarded here, before the turn settles, and the run log says what it was (criterion 24).
         if crate::continuity::memory_pass(&attempt["config"]) {

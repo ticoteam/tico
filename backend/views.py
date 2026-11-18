@@ -120,11 +120,11 @@ def prime_attempt_details(c, ids):
 
 def attempt_details(c, turn):
     """What a run's attempt row adds to its turn: `state` (run.state, backend/runs.py; None for a turn with no attempt
-    row), its diagnostics and load, and why it failed."""
+    row), its diagnostics and load, where its time went (`timings`), and why it failed."""
     attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
-    from .performance import attempt_snapshots
+    from .performance import attempt_snapshots, run_timings
 
     details = {
         "state": runs.state(attempt["state"]) if attempt else None,
@@ -132,6 +132,7 @@ def attempt_details(c, turn):
         "didnt_start": failed and not attempt["started_at"],
         **metadata(c, turn["id"]),
         **attempt_snapshots(c, turn["id"]),
+        "timings": run_timings(attempt["result"]) if attempt else None,
     }
     if failed:
         try:
