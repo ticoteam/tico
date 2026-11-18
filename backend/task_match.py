@@ -58,6 +58,7 @@ class Match:
     sql: list[tuple[str, list[Any]]] = field(default_factory=lambda: [])  # (fragment, args) over the task's columns
     words: list[str] = field(default_factory=lambda: [])
     turn: list[str] | None = None
+    late: bool = False  # the Late filter: `kept` drops a bot's task whose turn is a person's (late_rule.late_of)
 
     def __bool__(self) -> bool:
         return bool(self.sql or self.words or self.turn is not None)
@@ -116,15 +117,22 @@ def parse(
                 "(COALESCE(tasks.owner_id, '') LIKE 'human:%' AND julianday(tasks.due_at) IS NOT NULL "
                 "AND julianday(?) >= julianday(tasks.due_at) + (CASE WHEN length(tasks.due_at)=10 THEN 1 ELSE 0 END)) "
                 "OR (COALESCE(tasks.owner_id, '') NOT LIKE 'human:%' AND COALESCE(s.expected_minutes, 0) > 0 "
-                "AND julianday(?) - julianday(v.entered_at) >= COALESCE(s.expected_minutes, 0) / 1440.0)))",
+                "AND julianday(?) - julianday(v.entered_at) >= COALESCE(s.expected_minutes, 0) / 1440.0 "
+                # A person answered after the mark: the bot's clock started again (never_stuck.clock_from).
+                "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.visit_id=v.id AND a.by_id LIKE 'human:%' "
+                "AND a.created_at > v.late_told_at) "
+                "AND NOT EXISTS (SELECT 1 FROM question_marks q WHERE q.task_id=tasks.id "
+                "AND q.cleared_message_id IS NOT NULL AND q.cleared_at > v.late_told_at))))",
                 [now, now],
             )
         )
+        m.late = True
     return m
 
 
 def kept(c: sqlite3.Connection, m: Match, candidates: Sequence[Sequence[Any]], visible_sql: str) -> list[str]:
-    """Of `candidates` ([(id, title, number)], the rows the SQL filters leave), the ids the search and Waiting on keep."""
+    """Of `candidates` ([(id, title, number)], the rows the SQL filters leave), the ids the search, Late and Waiting on
+    keep."""
     from . import task_reads
 
     reads: Any = task_reads  # an untyped module
@@ -139,6 +147,20 @@ def kept(c: sqlite3.Connection, m: Match, candidates: Sequence[Sequence[Any]], v
             ):
                 labels[str(tid)].append(str(key))
         ids = [str(tid) for tid, title, number in candidates if text_hit(m.words, title, number, labels[str(tid)])]
+    if m.late:
+        # A person's turn is never Late, which only the task's waits say: the list row's own rule decides.
+        late: list[str] = []
+        for part in _chunks(ids):
+            found = c.execute(
+                "SELECT id, owner_id, due_at FROM tasks WHERE id IN (SELECT value FROM json_each(?))",
+                (json.dumps(part),),
+            ).fetchall()
+            mine = [{"id": tid, "owner_id": owner, "due_at": due} for tid, owner, due in found]
+            kept_ids = {
+                row["id"] for row in cast(list[dict[str, Any]], reads.brief(c, mine, visible_sql)) if row.get("late")
+            }
+            late += [tid for tid in part if tid in kept_ids]
+        ids = late
     if m.turn is not None:
         wanted: set[str] = set(m.turn)
         out: list[str] = []

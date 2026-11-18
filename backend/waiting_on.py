@@ -646,6 +646,12 @@ def turn(
     return bots[0].who
 
 
+def persons_turn(waits: Sequence[Wait]) -> bool:
+    """Whether all a task waits on is OKs and answers asked of people, and causes a person fixes first (`Wait.fix`,
+    Connect GitHub). Such a task is never Late: the bot is not behind (never_stuck._late, late_rule.late_of)."""
+    return bool(waits) and all((wait.state == PERSON and wait.ask) or wait.fix for wait in waits)
+
+
 def on_person(
     conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait], seen: dict[str, str | None] | None = None
 ) -> bool:
