@@ -1246,7 +1246,7 @@ def test_earlier_approval_reads_closed_records_beyond_the_first_page(monkeypatch
 
     def call(method, path):
         assert method == "GET"
-        if path == "issues?labels=release-approval&state=all&per_page=100":
+        if path == "issues?labels=release-approval&state=all&per_page=100&sort=created&direction=desc":
             return 200, [ignored], '<%s>; rel="next"' % previous_page
         if path == previous_page:
             return 200, [old], ""
@@ -1257,6 +1257,23 @@ def test_earlier_approval_reads_closed_records_beyond_the_first_page(monkeypatch
 
     monkeypatch.setattr(gh, "call", call)
     assert rt.earlier_approval(gh, "v0.5.200", {9}) == 8
+
+
+def test_approval_history_never_fetches_a_fourth_page(monkeypatch):
+    gh = rt.GitHub("o/r", "token")
+    first = "issues?labels=release-approval&state=all&per_page=100&sort=created&direction=desc"
+    page_urls = [first] + ["https://github.example/approvals?page=%d" % page for page in (2, 3, 4)]
+    fetched = []
+
+    def call(method, path):
+        assert method == "GET" and path in page_urls[:3]
+        fetched.append(path)
+        page = page_urls.index(path)
+        return 200, [{"number": page + 1}], '<%s>; rel="next"' % page_urls[page + 1]
+
+    monkeypatch.setattr(gh, "call", call)
+    assert list(gh.approval_issues("all")) == [{"number": number} for number in (1, 2, 3)]
+    assert fetched == page_urls[:3]
 
 
 def test_the_hold_label_release_hold_and_blockers_still_stop_an_automatic_approval(installs):

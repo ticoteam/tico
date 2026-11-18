@@ -503,8 +503,10 @@ class GitHub:
         return [issue for issue in self.get("issues?" + query) if "pull_request" not in issue]
 
     def approval_issues(self, state="open"):
-        query = urllib.parse.urlencode({"labels": APPROVAL_LABEL, "state": state, "per_page": 100})
-        return (issue for issue in self.page_items("issues?" + query) if "pull_request" not in issue)
+        query = urllib.parse.urlencode(
+            {"labels": APPROVAL_LABEL, "state": state, "per_page": 100, "sort": "created", "direction": "desc"}
+        )
+        return (issue for issue in self.page_items("issues?" + query, limit=3) if "pull_request" not in issue)
 
     def ensure_label(self, name, color, description):
         self.call("POST", "labels", {"name": name, "color": color, "description": description})  # 422: exists
