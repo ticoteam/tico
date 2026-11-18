@@ -69,3 +69,43 @@ def test_a_burst_an_earlier_build_marked_goes_out_unmarked(c):
     )  # saved by an earlier build, flushed after the upgrade
     assert G.flush_wakes(c) == [eng]
     assert all("wake_batch" not in refs for refs in _news(c, eng))
+
+
+def _burst(c, task_id):
+    from backend.repositories import metadata
+
+    return metadata(c, "github-task-wake:" + task_id)
+
+
+def test_an_awaited_apps_approval_wakes_the_owner_and_its_review_comment_is_a_note(c):
+    eng = _pipeline_task_in_build(c)
+    app = {"login": "acme-ci[bot]"}
+    c.execute(  # the owner armed a wait for the review's result (github.fire_once)
+        "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.wake_once',1) WHERE task_id=?", (eng,)
+    )
+    G.pr_signal(
+        c,
+        "pull_request_review",
+        {
+            "action": "submitted",
+            "repository": {"full_name": T.REPO},
+            "pull_request": {"html_url": URL},
+            "review": {"id": 7, "state": "approved", "user": app, "html_url": URL + "#r7"},
+        },
+    )
+    burst = _burst(c, eng)
+    assert any("approved" in item and "acme-ci[bot]" in item for item in burst.get("items", []))
+    assert not burst.get("notes")
+    G.flush_wakes(c)
+    G.pr_signal(
+        c,
+        "pull_request_review_comment",
+        {
+            "action": "created",
+            "repository": {"full_name": T.REPO},
+            "pull_request": {"html_url": URL},
+            "comment": {"id": 8, "user": app},
+        },
+    )
+    burst = _burst(c, eng)
+    assert burst.get("notes") and not burst.get("items")
