@@ -736,6 +736,13 @@ function needsTitle(it: NeedsEntry): string {
 function needsAsk(it: NeedsEntry): string {
   return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
 }
+/** How long an ask or a ❓ has waited on the person: past a day, the day it was asked ("Since Nov 16"), never Late. A
+    task that waits on a person's answer is not Late (backend/late_rule.py): the bot is not behind, the reply is owed. */
+function needsSince(it: NeedsEntry): string {
+  const at = Date.parse(it.since || '');
+  if ((it.kind === 'ask' || it.kind === 'question') && at && Date.now() - at >= 86400 * 1000) return `Since ${dayWords(it.since || '')}`;
+  return ageShort(it.since);
+}
 /** One row of You: its task's title (needsTitle), an Answer row's question under it. A bot's ❓ to sign in on a
     website carries Open browser, its live view without going through Flow. */
 function needsRowHTML(it: NeedsEntry): string {
@@ -745,7 +752,7 @@ function needsRowHTML(it: NeedsEntry): string {
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
     + (browser ? `<button type="button" class="ghost small" data-need-browser="${esc(it.id)}">Open browser</button>` : '')
-    + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
+    + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(needsSince(it))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
     stage's review (decide.ts). None until a stage of a pipeline in view has items. */

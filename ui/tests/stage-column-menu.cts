@@ -129,7 +129,8 @@ async function stripSteady(browser: Browser) {
       await page.keyboard.press('Enter');
       await page.locator('.prop-pop:popover-open').waitFor();
       assert.deepEqual((await menuItems(page)).map(t => t.replace(/^\w+ /, '')), ['Move all to…', 'Close all', 'Assign all to…', 'Snooze all…', 'Edit stage']);
-      assert.equal(await more.getAttribute('aria-expanded'), 'true');
+      // Waited for in the page: the head can redraw as the menu opens, replacing the ⋯ with one drawn from the open state.
+      await page.waitForFunction(() => document.querySelector('[data-pv-col-menu="ideas"]')?.getAttribute('aria-expanded') === 'true');
       // The first item has the focus (propMenu moves it there once the menu is shown).
       await page.waitForFunction(() => document.activeElement?.textContent?.trim() === 'swap_horizMove all to…');
       await shot(page, `menu-desktop-${theme}`);

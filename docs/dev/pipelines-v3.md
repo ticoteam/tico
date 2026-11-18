@@ -111,7 +111,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   page version, an ask, a snooze, a sub-task filed. A comment alone does not count, so a bot can't loop on "working on
   it".
 - **C5.** Late has two steps and no extra settings. At the stage's expected time the manager bot gets the task. At 3
-  times that, the ladder rests, once.
+  times that, the ladder rests, once. A person's turn (all the task waits on is people's answers to asks; a Connect
+  GitHub hold is not one) is never Late, and the bot's clock starts again at the person's last answer.
 - **C6.** A task owned by a person is never chased. It shows Late only after its due date.
 - **C7.** Asks never expire and tasks never close by themselves. *Today: questions expire after 7 days or go ahead on a
   default answer, and done Engineering tasks close after 24 hours.*
@@ -636,9 +637,10 @@ cases.
 
 - It sits in your list. Nothing runs and nothing reminds you.
 - Everyone else sees an amber "!" with your picture on the row, and "Waiting on Ana" on the task.
-- Past the stage's expected time it is Late. The manager bot looks once. It can push past with a reason if the
-  requirement allows that. If no bot may push past it (people only), no bot is woken. A bot's snooze never takes it
-  out of your list.
+- It is never Late: the bot is not behind. Past a day, your Needs you row says when it was asked ("Since Nov 16").
+- Past the stage's expected time the manager bot looks once. It can push past with a reason if the requirement allows
+  that. If no bot may push past it (people only), no bot is woken. A bot's snooze never takes it out of your list.
+- Once you answer, the bot has the stage's whole expected time again. It is Late only if it then sits that long.
 
 #### Where "what is missing" shows
 

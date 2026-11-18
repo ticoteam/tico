@@ -265,10 +265,14 @@ def brief(c, rows, visible_sql="1"):
             stuck.add(r[0])
         if r[1]:
             # Late is read against the owner who holds the task now (late_rule), not the owner the mark was written for.
-            marked[r[0]] = ({"late_told_at": r[1], "late_person_at": r[2], "entered_at": r[4]}, r[6])
+            marked[r[0]] = ({"late_told_at": r[1], "late_person_at": r[2], "entered_at": r[4], "id": r[7]}, r[6])
         if r[3] == "pushed_past":
             pushed.add(r[0])
     now = datetime.now(timezone.utc)
+    # A person who answered after the mark gave the bot its whole time again (never_stuck.clock_from): one read for all.
+    answered = late_rule.last_answers(
+        c, [(str(v["id"]), str(tid), str(v["entered_at"])) for tid, (v, _m) in marked.items()]
+    )
     snoozed = {
         r[0]
         for r in c.execute(
@@ -304,7 +308,18 @@ def brief(c, rows, visible_sql="1"):
         if turn and turn["ask"] and visits.get(row["id"]):
             row["visit_id"] = visits[row["id"]]  # only on an ask: with it the ask is read by id (waiting_on.ask_id)
         mark = marked.get(row["id"])
-        row["late"] = late_rule.late_of(row, mark[0], mark[1], now) if mark else None
+        row["late"] = (
+            late_rule.late_of(
+                row,
+                mark[0],
+                mark[1],
+                now,
+                persons_turn=W.persons_turn(waits.get(row["id"]) or []),
+                answered_at=answered.get(str(mark[0]["id"])),
+            )
+            if mark
+            else None
+        )
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         # Blocked wins over a snooze: no list says Snoozed for a blocked task (hubdb.tasks' snoozed filter agrees).

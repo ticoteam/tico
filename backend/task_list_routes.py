@@ -188,9 +188,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 filters["after"] = keyset_start(after, sort)
 
             def matched(restrict=None):
-                """The search's and Waiting on's ids among the rows the other filters leave (all of the view's, or
+                """The search's, Late's and Waiting on's ids among the rows the other filters leave (all of the view's, or
                 `restrict`'s); None when neither is set."""
-                if not (match.words or match.turn is not None):
+                if not (match.words or match.turn is not None or match.late):
                     return None
                 kw = {k: v for k, v in filters.items() if k not in ("visible_sql", "narrow", "order", "after")}
                 if restrict is not None:

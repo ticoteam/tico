@@ -440,6 +440,22 @@ async function you(browser: Browser) {
   console.log('You: Answer, Review and Do; rows by task title; search: ok');
 }
 
+/** An ask or a ❓ that has waited on the person more than a day says the day it was asked ("Since Nov 16"), never Late: a
+ * task waiting on a person's answer is not Late (backend/late_rule.py). A row of her own work keeps its short age. */
+async function youSince(browser: Browser) {
+  const tasks = fixtures();
+  const days = 2 * 1440 + 30;
+  const needs: Need[] = needsOf(tasks).map(n => n.id === 'r1' || n.id === 'task:t-3' ? {...n, since: at(days)} : n);
+  const {page, errors} = await open(browser, {tasks, needs});
+  const age = (id: string) => page.locator(`[data-need="${id}"] .tk-age`).innerText().then(s => s.trim());
+  assert.match(await age('r1'), /^Since [A-Z][a-z]{2} \d{1,2}(, \d{4})?$/, 'an OK asked two days ago says the day');
+  assert.equal(await age('r2'), '1h', 'a question asked an hour ago keeps its short age');
+  assert.equal(await age('task:t-3'), '2d', 'her own task is not an ask: its short age');
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('You: an ask past a day says Since <day>: ok');
+}
+
 /** A person's own open tasks, with nothing asked of them, are not in Needs you (its count, ▶, the badge) but are in You:
  * after Needs you's rows, at the end of Do, each once, kept live from the stream; their snoozed ones are in the archive. */
 async function youOwnTasks(browser: Browser) {
@@ -958,6 +974,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [slowOpen, you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages, byNumber]) await run(browser);
+    for (const run of [slowOpen, you, youSince, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages, byNumber]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
