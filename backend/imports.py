@@ -795,7 +795,7 @@ def install_imports(app, store, auth, execution, mutate):
                     meta,
                     transcript=transcript,
                     readable=transcript.replace("\n", "\n\n"),
-                    notes=body.summary_text if primary else None,
+                    notes=(body.summary_text or None) if primary else None,
                 )
             H.event(
                 c,
