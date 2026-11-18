@@ -151,3 +151,30 @@ def test_a_blocker_is_named_by_its_label_or_by_its_title_never_by_its_id(c):
     assert read[numbered]["blocks"] == [
         {"id": blocked, "number": E.task(c, blocked)["number"], "label": f"O{E.task(c, blocked)['number']}"}
     ]
+
+
+def test_a_page_of_blocked_rows_reads_the_same_statements_however_many_blockers(c):
+    """A board page's dependency lines ("Blocked by #304 ..., in Build") and relations ("#304 · Build") are read for
+    the whole page at once: on the General board each blocker cost two more statements per row before."""
+    build(c)
+
+    def statements(n):
+        blocked = [task(c, f"Waits {n}-{i}") for i in range(n)]
+        for i, tid in enumerate(blocked):
+            TR.relate(c, X.ANA, tid, task(c, f"Blocker {n}-{i}"), "depends_on")
+        found, seen = [dict(H.task(c, tid)) for tid in blocked], []
+        c.set_trace_callback(seen.append)
+        try:
+            read = {row["id"]: row for row in task_reads.brief(c, found, "1")}
+            relations = TR.grouped(c, blocked)
+        finally:
+            c.set_trace_callback(None)
+        for tid in blocked:
+            assert read[tid]["turn"]["line"].startswith("Blocked by ") and read[tid]["turn"]["line"].endswith(
+                ", in Build"
+            )
+            (dep,) = relations[tid]["depends_on"]
+            assert dep["stage"] == "Build" and dep["number"] == E.task(c, dep["id"])["number"]
+        return len(seen)
+
+    assert statements(8) == statements(2)

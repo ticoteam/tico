@@ -101,11 +101,15 @@ def test_a_bot_run_sees_the_relations_it_may_read_and_nothing_of_the_rest(api):
 def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
     with sqlite3.connect(':memory:') as c:
         c.row_factory = sqlite3.Row
-        c.execute('CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,status TEXT,owner_id TEXT,private INTEGER)')
+        c.execute(
+            'CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,status TEXT,owner_id TEXT,private INTEGER,'
+            'number INTEGER,stage_id TEXT)'
+        )
+        c.execute('CREATE TABLE stages(id TEXT PRIMARY KEY,name TEXT)')
         ids = [f'task-{i:04}' for i in range(1000)]
         c.executemany(
-            'INSERT INTO tasks VALUES(?,?,?,?,?)',
-            [(tid, tid, 'open', 'bot:cmo', int(i == 999)) for i, tid in enumerate(ids)],
+            'INSERT INTO tasks VALUES(?,?,?,?,?,?,NULL)',
+            [(tid, tid, 'open', 'bot:cmo', int(i == 999), i) for i, tid in enumerate(ids)],
         )
         for statement in relations_schema():
             c.execute(statement)
