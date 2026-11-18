@@ -310,8 +310,8 @@ let browser: import('playwright').Browser | null = null;
     assert.deepEqual(seen.botWrites, []);
     seen.briefText = 'Signups reached 265 on Friday.';
     await page.waitForFunction(() => {
-      const stream = window.__streams.findLast(s => new URL(s.url).pathname === '/api/v2/events');
-      if (!stream || stream.readyState === EventSource.CLOSED) return false;
+      const stream = window.__streams.find(s => s.readyState !== EventSource.CLOSED && new URL(s.url).pathname === '/api/v2/events');
+      if (!stream) return false;
       stream.dispatchEvent(new MessageEvent('reset', {data: '{"seq":42}'}));
       return true;
     });

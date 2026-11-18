@@ -247,6 +247,15 @@ class Prep:
             return []
         private = bool(self.calls.thread_private(c, row["thread_id"]))
         from_attachment = live or added is not None
+
+        def same_prep(conn: Any, task_id: str) -> bool:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM call_bot_notes WHERE call_id=? AND prep_task_id=?", (row["id"], task_id)
+                ).fetchone()
+                is not None
+            )
+
         tasks: list[str] = []
         for bot in bots:
             bot_id: str = bot["bot"]
@@ -269,12 +278,7 @@ class Prep:
                     owner,
                     conversation_id=row["thread_id"],
                     lint=False,
-                    same=lambda conn, task_id: (
-                        conn.execute(
-                            "SELECT 1 FROM call_bot_notes WHERE call_id=? AND prep_task_id=?", (row["id"], task_id)
-                        ).fetchone()
-                        is not None
-                    ),
+                    same=same_prep,
                     private=private,
                     wake_refs={"call_prep": row["id"]},
                     instructions=instructions(row, live),
