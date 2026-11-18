@@ -219,7 +219,9 @@ const shot = async (page: Page, name: string, selector?: string) => {
     // 4. The list: the side group's head has ↳.
     const list = await open(browser, fake, {width: 1440, height: 900}, '#/tasks?pipeline=product&layout=list', errors);
     await list.locator('.pv-group').first().waitFor();
-    assert.deepEqual(await list.locator('.pv-group').evaluateAll(gs => gs.map(g => g.classList.contains('side'))), [false, false, true, false]);
+    // An empty stage folds into the line of stage chips (#500), so it is no group of its own.
+    const groups = await list.locator('.pv-group, .pv-fold').evaluateAll(gs => gs.map(g => `${g.getAttribute('aria-label')}${g.classList.contains('side') ? ' (side)' : ''}`));
+    assert.deepEqual(groups, ['Empty stages: In progress', 'Bot QA', 'Rejected (side)', 'Ship']);
     assert.equal(await list.locator('.pv-group.side .pv-group-head .side-mark').innerText(), '↳');
     await list.close();
 
