@@ -20,6 +20,7 @@ A requirement never waits on a person who left, was removed or cannot sign in (`
 """
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -285,6 +286,7 @@ def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
         conn.execute(
             "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
             "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
+            "t.owner_id AS owner_id, t.conversation_id AS conversation_id, "
             "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
             "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
             "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
@@ -319,6 +321,8 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
 
 def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     filed = _filed(conn, task["visit"]["id"])
+    if _at_head_gate(conn, task):
+        return _second_review(conn, task, requirement, filed)
     if not filed:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No task filed yet")
     still_open = [f for f in filed if f["status"] == "open"]
@@ -335,6 +339,164 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
         line = f"{title} was closed: {why}" if why else f"{title} was closed"
         return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
     return Standing(requirement, MET, line="Done")
+
+
+# How a review request names the commit it reads: "<PR> at <commit>", where the PR is its GitHub link, owner/repo#N or
+# #N. A commit is 7 to 40 hex characters with at least one digit, so an English word never reads as one.
+_SHA = r"(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}"
+_PR_AT_RE = re.compile(
+    r"(?:https://github\.com/(?P<url>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/|(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#)"
+    rf"(?P<number>\d+)\s+(?:at|@)\s+(?:commit\s+)?(?P<sha>{_SHA})\b",
+    re.IGNORECASE,
+)
+_BARE_SHA_RE = re.compile(rf"\b{_SHA}\b", re.IGNORECASE)
+
+
+def requested_commits(text: str, refs: Iterable[str] = ()) -> dict[str, str]:
+    """{pr_ref: commit} a review request names. `refs` are the PRs linked to the task under review: "#N at <commit>"
+    names the one numbered N, and with exactly one PR linked a lone commit in the text names it. Anything else names
+    nothing: no commit is ever guessed."""
+    from .item_sources import github as F
+
+    refs = list(refs)
+    body = str(text or "")
+    out: dict[str, str] = {}
+    for m in _PR_AT_RE.finditer(body):
+        number, sha = int(m["number"]), m["sha"].lower()
+        repo = m["url"] or m["repo"]
+        if repo:
+            out[F.pr_ref(repo, number)] = sha
+            continue
+        same = [ref for ref in refs if ref.endswith(f"#{number}")]
+        if len(same) == 1:
+            out[same[0]] = sha
+    if not out and len(refs) == 1:
+        lone = {sha.lower() for sha in _BARE_SHA_RE.findall(body)}
+        if len(lone) == 1:
+            out[refs[0]] = lone.pop()
+    return out
+
+
+def _at_head_gate(conn: "sqlite3.Connection", task: Row) -> bool:
+    """Whether the task's stage is a Review stage: its page is read at the newest commit (`at_head`). Its linked_done
+    gate is the second review (`_second_review`), not any task filed on the visit."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL "
+            "AND json_extract(settings, '$.at_head')=1 LIMIT 1",
+            (task.get("stage_id"),),
+        ).fetchone()
+        is not None
+    )
+
+
+def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
+    """The filed tasks that are second reviews: subtasks filed with a review check model (`--role review`,
+    backend/check_models.py), whoever owns them. A routing, repair or build task filed on the visit is none."""
+    ids = [f["id"] for f in filed if not f["deleted"]]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    review = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT task_id FROM task_check_models WHERE role='review' AND task_id IN ({marks})", ids
+        ).fetchall()
+    }
+    return [f for f in filed if f["id"] in review]
+
+
+def _named_commits(conn: "sqlite3.Connection", review: Row, refs: Iterable[str]) -> list[tuple[str, str]]:
+    """(PR ref, commit) pairs the review was asked to read: those its request named when it was filed
+    (check_models.record), then those named in a message about the review, whoever wrote it. Nothing else: a review
+    that names no commit reads none, and the PR's head is never taken for it."""
+    from .hubdb import MESSAGE_TASK_SQL
+
+    named: list[tuple[str, str]] = []
+    for (data,) in conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
+        "AND data IS NOT NULL ORDER BY created_at, id",
+        (review["id"],),
+    ).fetchall():
+        requested = _json_object(data).get("requested")
+        if isinstance(requested, dict):
+            saved = cast("dict[str, object]", requested)
+            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
+    # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
+    for (body,) in conn.execute(
+        "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+        "WHERE m.conversation_id=? AND m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+        f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id",
+        (review["conversation_id"], review["id"]),
+    ).fetchall():
+        named.extend(requested_commits(str(body or ""), refs).items())
+    return named
+
+
+def _json_object(text: object) -> dict[str, Any]:
+    try:
+        value = json.loads(str(text))
+    except ValueError:
+        return {}
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+
+
+def _names_heads(named: list[tuple[str, str]], heads: dict[str, str | None]) -> bool:
+    """Whether the (PR ref, commit) pairs name the newest commit of every PR in `heads`. No PR linked: any review does."""
+    return all(
+        any(ref == name and head is not None and head.startswith(sha) for name, sha in named)
+        for ref, head in heads.items()
+    )
+
+
+def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, filed: list[Row]) -> Standing:
+    """The Review stage's gate. Only a second review counts (`_reviews`), and only when it is Done and reads the newest
+    commit of every PR linked to the task (no PR linked: Done is enough). A Done review of the newest commit meets it
+    even while an older one is open; the gate waits only on an open review of the newest commit (or one naming no commit
+    yet, which can still name one). A Done review that names no commit never meets it. Any other filed task, a review of an older commit, or an unread PR head leaves it not met."""
+    from .item_sources import github as F
+
+    reviews = _reviews(conn, filed)
+    if not reviews:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "No second review filed yet")
+    heads = F.heads(conn, task["id"])
+    if any(head is None for head in heads.values()):
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "The newest commit of a linked PR is not read yet")
+    named = {f["id"]: _named_commits(conn, f, heads) for f in reviews}
+    at_head = [f for f in reviews if _names_heads(named[f["id"]], heads)]
+    if any(f["status"] == "done" for f in at_head):
+        return Standing(requirement, MET, line="Done")
+    waiting = [f for f in reviews if f["status"] == "open" and (f in at_head or not named[f["id"]])]
+    if waiting:
+        first = waiting[0]
+        return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
+    unbound = [f for f in reviews if f["status"] == "done" and not named[f["id"]]]
+    if unbound and heads:
+        first = unbound[0]
+        title = first.get("title") or "The second review"
+        return Standing(
+            requirement,
+            NOT_MET,
+            task.get("owner_id"),
+            f"{title} names no commit it read: file a second review that says PR <link> at <commit>",
+            first["id"],
+        )
+    stale = [f for f in reviews if f["status"] in ("open", "done")]
+    if stale:
+        first = stale[0]
+        title = first.get("title") or "The second review"
+        return Standing(
+            requirement,
+            NOT_MET,
+            task.get("owner_id"),
+            f"{title} did not read the newest commit: file a second review of it",
+            first["id"],
+        )
+    first = reviews[0]
+    why = (first.get("why") or "").strip()
+    title = first.get("title") or "A second review"
+    line = f"{title} was closed: {why}" if why else f"{title} was closed"
+    return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
 
 
 # The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:
