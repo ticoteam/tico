@@ -2197,6 +2197,27 @@ def dropped_line(entry, depth):
     return f"- `{entry['file']}`: {where} ({took})"
 
 
+def cap_light(record, counts, timings=None):
+    """A light plan's time cap on the Python tests narrow() kept (`counts`: tests per file), as (kept counts, timings).
+    Updates `record` (narrow's) with what the cap left. The pull request plan and `local` both cap through here, so a
+    builder's local run picks what its pull request run will. The seconds are the run's measured timings over the
+    committed table; the returned timings carry the cap's estimates, untimed files included, for packing."""
+    timings = {**committed_timings(), **(timings or {})}
+    seconds = weights(counts, timings)
+    levels = record.pop("level", {})
+    kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
+    if record["left_over_budget"]:
+        record["smoke"] = True
+    else:
+        kept = [f for f in kept if f not in record["smoke_unless_capped"]]
+    del record["smoke_unless_capped"]
+    record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
+    record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
+    # Why each file did not run (the plan's `dropped`, and the job summary): depth or budget, its level and time.
+    record["dropped"] = dropped_reasons(record, levels, {**timings, **seconds})
+    return Counter({f: counts[f] for f in kept}), timings | {f: seconds[f] for f in kept}
+
+
 def committed_timings(root=ROOT):
     """The default suite's committed per-file seconds (TIMINGS_FILE), or {} when it cannot be read."""
     try:
@@ -2283,23 +2304,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         timings = {name: sum(values) / len(values) for name, values in measured.items()}
     record = picked.pop("narrow", None)
     if record is not None:
-        # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
-        timings = {**committed_timings(), **timings}
-        seconds = weights(counts, timings)
-        levels = record.pop("level", {})
-        kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
-        if record["left_over_budget"]:
-            record["smoke"] = True
-        else:
-            kept = [f for f in kept if f not in record["smoke_unless_capped"]]
-        del record["smoke_unless_capped"]
-        counts = Counter({f: counts[f] for f in kept})
+        counts, timings = cap_light(record, counts, timings)
         picked["python"] = sorted(counts)
-        timings |= {f: seconds[f] for f in kept}  # packing reuses the cap's estimates, untimed files included
-        record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
-        record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
-        # Why each file did not run (the plan's `dropped`, and the job summary): depth or budget, its level and time.
-        record["dropped"] = dropped_reasons(record, levels, {**timings, **seconds})
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
@@ -2791,13 +2797,36 @@ def pytest_leg(interpreter, jobs, suite, args):
     return ["bash", "-c", f'{shlex.join(test)}; code=$?; [ "$code" = 0 ] && exec {shlex.join(check)}; exit "$code"']
 
 
+def collected(files, root=ROOT, execute=subprocess.run):
+    """Default (not slow) tests per file among `files`, as the plan's collect() counts them, or None when collection
+    fails. A file with none drops out, as it does from the pull request plan. Like the run, collection drops an inherited
+    PYTEST_ADDOPTS: a -k or -m in it would leave a selected file uncounted, and so never run."""
+    result = execute(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", *files],
+        cwd=root,
+        env={k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        return None
+    return Counter(
+        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+    )
+
+
 LOCAL_BASE = "origin/main"
 LOCAL_JOBS = 2  # a builder's computer runs other bots' turns too
 HEAVY = Path(__file__).resolve().parent / "heavy.sh"
 
 
-def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subprocess.run):
+def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subprocess.run, full=False):
     """Run, on this computer, the tests a pull request's checks would select for this branch, before marking it ready.
+
+    The selection is the light pull request plan's (`plan --light`: narrow() and cap_light()), so a pass here means the
+    pull request run's tests passed at this head. `full` runs the whole pull_request selection instead (what the merge
+    queue and release validation reach), which can be hundreds of files.
 
     A draft pull request runs no CI, so a builder pushes freely, runs this once at the head it wants reviewed and marks
     the pull request ready (`--ready` does that after a pass). The selection is the plan's: the branch's own change
@@ -2854,8 +2883,17 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     if not changed:
         return stop(f"this branch changes nothing against {base}")
     changed = sorted(set(changed) | set(script_changes(base, "HEAD", changed, root)))
-    picked = selection(changed, "pull_request", root=root, base=base, added=changed_files(base, "HEAD", root, "A"))
+    added = changed_files(base, "HEAD", root, "A")
+    graph = DependencyMap(root) if not full and any(not unread(n) for n in changed) else None
+    picked = selection(changed, "pull_request", root=root, base=base, added=added, graph=graph)
+    if not full:
+        picked = narrow(picked, changed, "pull_request", added=added, root=root, graph=graph)
+    record = picked.pop("narrow", None)
     python = [f for f in picked["python"] or () if (root / f).is_file()]
+    if record is not None and python:
+        counts = collected(python, root)
+        if counts is not None:  # a collection that failed caps nothing: when unsure, run more
+            python = sorted(cap_light(record, counts)[0])
     browser = browser_scripts(picked["browser"], root) if picked["browser"] else []
     # On a RunsOn VM (scripts/heavy.sh with TICO_HEAVY_REMOTE=1) the venv is python3 on its PATH, not this path.
     remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
@@ -2879,7 +2917,8 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
             )
         )
     ci_only = ["conformance"] if picked["conformance"] else []
-    print(f"Selected for {head[:12]} against {base}: {picked.get('reason', '')}", flush=True)
+    scope = "the whole pull request selection" if full else "the light pull request plan"
+    print(f"Selected for {head[:12]} against {base} ({scope}): {picked.get('reason', '')}", flush=True)
     # CI sets no PYTEST_ADDOPTS; one inherited here (a -k, a -m) could deselect the selection.
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     failed = None
@@ -2940,6 +2979,9 @@ def main():
     mine.add_argument("--base", default=LOCAL_BASE)
     mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers and browser scripts at once")
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
+    mine.add_argument(
+        "--full", action="store_true", help="run the whole pull_request selection, not the light plan's narrowed one"
+    )
     ran = sub.add_parser(
         "junit-ran", allow_abbrev=False, help="exit 1 unless a pytest JUnit report holds a test that was not skipped"
     )
@@ -2986,7 +3028,7 @@ def main():
             ]
         print(", ".join(failed))
     elif args.action == "local":
-        return local(base=args.base, jobs=args.jobs, ready=args.ready)
+        return local(base=args.base, jobs=args.jobs, ready=args.ready, full=args.full)
     elif args.action == "durations":
         results = Path("ci-results")
         measured = durations(

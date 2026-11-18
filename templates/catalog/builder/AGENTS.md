@@ -130,7 +130,7 @@ and `gh pr list -R <repo> --state open`. {{app_name}} opens a task branch's draf
 links it: edit it with `gh pr edit` and never `gh pr create` one beside it (`playbooks/build-a-dev-task.md` says when
 you open one yourself). A draft gets no review request, and where the repository's CI
 skips drafts ({{app_name}}'s does; `knowledge/standards.md` says for yours) it runs no CI either: push freely, run the
-tests your change can break on your computer, then mark it ready once with `gh pr ready` (`playbooks/build-a-dev-task.md`).
+tests your change can break and the repository's pre-push check on your computer, then mark it ready once with `gh pr ready` (`playbooks/build-a-dev-task.md`).
 Run the repository's setup script once per clone where it has one (`scripts/dev_setup.sh` by convention), and never skip
 its pre-push hook. Build does not
 leave until the pull request is ready and its checks pass.
