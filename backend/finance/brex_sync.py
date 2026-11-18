@@ -30,14 +30,14 @@ What comes in, and how it maps (read-only; Brex is never written to):
   side yet is noted. Any other cash type posts generic.
 - A row Brex sends with no amount is skipped and noted, and its page goes on. A row in another currency than the book's is
   not posted and is noted.
-- History is walked once, newest first, a few pages a step. Each cash account's first step brackets its balance with its
-  first page (_bracket, as Stripe does): the page's row ids are read before and after the balance is read, so the balance
-  holds exactly the rows the page lists. The balance and those ids are kept (`held`, `counted`) and the page is taken in with
-  it. When every account has reached its end, each cash account's opening is made from its held balance (banking.open_at),
-  not from a later read, so a row posted mid-backfill is left out of the opening and comes in with the catch-up. Each later
-  poll re-reads the last CATCH_UP_DAYS (Brex's delayed transactions arrive late); a row already in is updated only when it
-  changed (banking.ingest), so a re-read never duplicates, and a re-read row the bracket already counted that predates the
-  opening is skipped.
+- History is walked once, newest first, a few pages a step. Each cash or card account's first step brackets its
+  balance with its first page (_bracket, as Stripe does): the page's row ids are read before and after the balance is
+  read, so the balance holds exactly the rows the page lists. The balance and those ids are kept (`held`, `counted`) and
+  the page is taken in with it. When every account has reached its end, each account's opening is made from its held
+  balance (banking.open_at; a card's is what it owes), not from a later read, so a row posted mid-backfill is left out
+  of the opening and comes in with the catch-up. Each later poll re-reads the last CATCH_UP_DAYS (Brex's delayed
+  transactions arrive late); a row already in is updated only when it changed (banking.ingest), so a re-read never
+  duplicates, and a re-read row the bracket already counted that predates the opening is skipped.
 - Known limit: Brex gives dates, not times. A row that is posted after a bracket and reaches Brex's list only later, and
   is older than the catch-up window, is never read again, so the books can miss it. Reconciling the account to a
   statement shows it.
@@ -92,8 +92,9 @@ def _settings(row: Any) -> dict[str, Any]:
 
 
 def _start(day: str) -> str:
-    """A day as the RFC 3339 date-time Brex's posted_at_start takes."""
-    return f"{day}T00:00:00Z"
+    """A day as the date-time Brex's posted_at_start takes: no zone suffix, since Brex answers 400 to `Z`, `.000Z` or
+    `+00:00` and to a bare date."""
+    return f"{day}T00:00:00"
 
 
 def _days_before(now: str, days: int) -> str:
@@ -229,17 +230,14 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     ):
         raise FinanceError(CONFLICT, "that credential is already connected")
     probed = V.obj(p.get("probe"), "probe")
-    cards = [V.obj(a, "a card account") for a in V.items(probed.get("card"), "probe.card")]
-    cash = [V.obj(a, "a cash account") for a in V.items(probed.get("cash"), "probe.cash")]
+    # A card-only company lists no cash account, and a cash-only one no card account: either list may be empty.
+    cards = [V.obj(a, "a card account") for a in V.opt_items(probed.get("card"), "probe.card")]
+    cash = [V.obj(a, "a cash account") for a in V.opt_items(probed.get("cash"), "probe.cash")]
     if not cards and not cash:
         raise invalid("the token sees no Brex accounts")
     if len(cards) > 1:
         raise invalid("Finance reads one Brex card account per connection")
-    history = V.opt_text(p, "history_from", 10) or f"{ctx.today[:4]}-01-01"
-    try:
-        date.fromisoformat(history)
-    except ValueError:
-        raise invalid("history_from is a day, YYYY-MM-DD") from None
+    history = banking.history_from(ctx, p)
     name = V.opt_text(p, "name", 120) or "Brex"
     base = ctx.book.base_currency
 
@@ -449,7 +447,13 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> tuple[list[s
     with store.transaction() as c:
         ctx = load(c, now)
         base = ctx.book.base_currency.upper()
+        live_card = {str(a.get("id") or ""): a for a in cards if _live(a)}
         for m in mine:
+            if str(m["kind"]) == "card_program":
+                owed = _owed(live_card.get(str(m["provider_account_id"] or "")), base)
+                if owed is not None:
+                    banking.set_balance(ctx, str(m["id"]), owed, None, now)
+                continue
             a = live_cash.get(str(m["provider_account_id"] or "")) if str(m["kind"]) == "bank" else None
             if a is None:
                 continue
@@ -599,10 +603,10 @@ def _catch_up(
 def _backfill(
     store: Any, provider: Provider, cid: str, now: str, mine: list[Any], start: str, conf: Mapping[str, Any], base: str
 ) -> list[str]:
-    """The first history: each account from `start` on, newest first, BACKFILL_PAGES pages a step, its cursor saved after
-    every page so a failed page is read again and nothing is skipped. A cash account's first step brackets its balance
-    with its first page (_bracket), and the balance it holds and the bracket's ids are saved with that page. When every
-    account has reached its end, the backfill completes."""
+    """The first history: each account from `start` on, newest first, BACKFILL_PAGES pages a step, its cursor saved
+    after every page so a failed page is read again and nothing is skipped. A cash or card account's first step brackets
+    its balance with its first page (_bracket), and the balance it holds and the bracket's ids are saved with that page.
+    When every account has reached its end, the backfill completes."""
     cursors = {str(k): str(v) for k, v in dict(conf.get("cursors") or {}).items()}
     walked = {str(x) for x in list(conf.get("walked") or [])}
     held: dict[str, int | None] = {
@@ -615,7 +619,7 @@ def _backfill(
             continue
         cursor: str | None = cursors.get(mid)
         first: Answer | None = None
-        if str(m["kind"]) == "bank" and mid not in held:
+        if str(m["kind"]) in ("bank", "card_program") and mid not in held:
             first, held[mid], why = _bracket(provider, m, start, base)
             if first is None:
                 return [why]
@@ -646,15 +650,16 @@ def _backfill(
 
 
 def _bracket(provider: Provider, m: Any, start: str, base: str) -> tuple[Answer | None, int | None, str]:
-    """A cash account's first page and its balance in the book's currency, read so that they agree (Stripe's bracket,
-    stripe_sync._bracket): the page lists the same row ids before and after the balance is read, so no row came in between
-    and the balance holds exactly the rows the page starts from. After BRACKET_TRIES disagreements the step gives up and the
-    next one reads again. Returns the page, the balance (None when it is not in the book's currency) and the problem."""
+    """A cash or card account's first page and its balance in the book's currency, read so that they agree (Stripe's
+    bracket, stripe_sync._bracket): the page lists the same row ids before and after the balance is read, so no row came
+    in between and the balance holds exactly the rows the page starts from. After BRACKET_TRIES disagreements the step
+    gives up and the next one reads again. Returns the page, the balance (None when it is not in the book's currency)
+    and the problem."""
     for _ in range(BRACKET_TRIES):
         page = _page(provider, m, start, None)
         if not page.ok:
             return None, None, error_text(page)
-        held, why = _balance(provider, str(m["provider_account_id"] or ""), base)
+        held, why = _balance(provider, m, base)
         if why:
             return None, None, why
         again = _page(provider, m, start, None)
@@ -665,8 +670,28 @@ def _bracket(provider: Provider, m: Any, start: str, base: str) -> tuple[Answer 
     return None, None, "Brex's balance changed while it was read: it is read again next time"
 
 
-def _balance(provider: Provider, account_id: str, base: str) -> tuple[int | None, str]:
-    """One cash account's current balance as Brex's account list reports it, in the book's currency (None otherwise)."""
+def _owed(account: Mapping[str, Any] | None, base: str) -> int | None:
+    """A card account's balance as the card line carries it: Brex reports what is owed as a positive current balance,
+    and a charge is negative on the card line, so what is owed is negative. None when it is not in the book's
+    currency."""
+    if account is None:
+        return None
+    amount, currency = _money_of(account.get("current_balance"))
+    return -amount if amount is not None and currency == base.upper() else None
+
+
+def _balance(provider: Provider, m: Any, base: str) -> tuple[int | None, str]:
+    """One account's current balance as Brex's account list reports it, in the book's currency (None otherwise): a cash
+    account's own, or what a card account owes (_owed)."""
+    account_id = str(m["provider_account_id"] or "")
+    if str(m["kind"]) == "card_program":
+        cards, why = _all(provider.card_accounts, ACCOUNT_PAGES)
+        if why:
+            return None, why
+        found = next((a for a in cards if str(a.get("id") or "") == account_id), None)
+        if found is None:
+            return None, f"Brex lists no card account {account_id}: it is read again next time"
+        return _owed(found, base), ""
     cash, why = _all(provider.cash_accounts, ACCOUNT_PAGES)
     if why:
         return None, why
@@ -684,9 +709,10 @@ def _save(store: Any, cid: str, now: str, changes: Mapping[str, object]) -> None
 
 
 def _complete(store: Any, cid: str, now: str) -> None:
-    """The backfill's end: the connection is backfilled, and each cash account whose bracket held a balance gets its opening
-    from that balance, less every row now taken in (banking.open_at), recorded as made (banking.mark_opened). The held
-    balances and the cursors are dropped; the bracket's ids (`counted`) are kept for the catch-up."""
+    """The backfill's end: the connection is backfilled, and each cash or card account whose bracket held a balance gets
+    its opening from that balance, less every row now taken in (banking.open_at), recorded as made
+    (banking.mark_opened). The held balances and the cursors are dropped; the bracket's ids (`counted`) are kept for the
+    catch-up."""
     with store.transaction() as c:
         conf = _settings(SK.get(c, "fin_connections", cid))
         held = dict(conf.get("held") or {})
@@ -699,7 +725,7 @@ def _complete(store: Any, cid: str, now: str) -> None:
             mid = str(m["id"])
             if (
                 str(m["connection_id"] or "") != cid
-                or str(m["kind"]) != "bank"
+                or str(m["kind"]) not in ("bank", "card_program")
                 or held.get(mid) is None
                 or not m["account_id"]
             ):

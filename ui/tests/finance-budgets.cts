@@ -359,7 +359,7 @@ async function shot(page: Page, name: string) {
     // Sources: a Tools key for Mercury (or a new one pasted), a pasted Stripe key stored on Tools and taken off again
     // when the connect fails, Brex when Tools can't be read and then with a pasted key, Google Ads to its tool page.
     {
-      const tag = 'sources';
+      const tag = 'sources', since = `${new Date().getFullYear()}-01-01`;
       const {page, errors, writes, reads, hub} = await open(browser, {hash: '#/finance/sources'});
       const pick = async (name: string) => {
         await page.locator('[data-fin-connect]').click();
@@ -383,10 +383,11 @@ async function shot(page: Page, name: string) {
       await dlg.locator('input[name=key][value="k-merc-r"]').check();
       assert.equal(await dlg.locator('input[name=token]').isVisible(), false, tag + ': a key hides it again');
       await dlg.locator('input[name=key][value="k-merc"]').check();
+      assert.equal(await dlg.locator('input[name=history_from]').inputValue(), since, tag + ': history from Jan 1 this year');
       await dlg.locator('[type=submit]').click();
       await dlg.waitFor({state: 'detached'});
       const posts = writes.filter(w => w[0] === 'POST');
-      assert.deepEqual(posts.at(-1)!.slice(1), ['/api/v2/finance/connections', {provider: 'mercury', credential_id: 'k-merc', name: 'Mercury'}], tag + ': connects with the key picked');
+      assert.deepEqual(posts.at(-1)!.slice(1), ['/api/v2/finance/connections', {provider: 'mercury', credential_id: 'k-merc', name: 'Mercury', history_from: since}], tag + ': connects with the key picked');
       assert.equal(posts.some(w => w[1].startsWith('/api/v2/credentials') || w[1].startsWith('/api/v2/api-tools')), false, tag + ': nothing stored');
       // Stripe has no tool: paste only, Read by default. The first connect fails: the key and its new tool go again.
       const before = writes.length;
@@ -409,7 +410,7 @@ async function shot(page: Page, name: string) {
       assert.ok(indexReads() > index2, tag + ': a retry reads Tools again');
       assert.deepEqual(writes.slice(retry).map(w => w[0] + ' ' + w[1]), ['POST /api/v2/api-tools', 'POST /api/v2/api-tools/stripe/keys', 'POST /api/v2/finance/connections'], tag + ': stored again, then connected');
       assert.deepEqual(writes.find(w => w[1] === '/api/v2/api-tools')![2], {name: 'Stripe', service: 'stripe'}, tag + ': a Stripe tool');
-      assert.deepEqual(writes.at(-1)![2], {provider: 'stripe', credential_id: 'k-stripe', name: 'Stripe'}, tag + ': connects with the new key');
+      assert.deepEqual(writes.at(-1)![2], {provider: 'stripe', credential_id: 'k-stripe', name: 'Stripe', history_from: since}, tag + ': connects with the new key');
       assert.deepEqual(errors, [], tag + ': no page errors');
       // Google Ads: its tool page.
       await pick('google-ads');

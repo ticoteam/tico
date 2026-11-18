@@ -3,7 +3,7 @@
   python3 scripts/fake_stripe.py --port 18500
   TICO_STRIPE_BASE=http://127.0.0.1:18500/v1   (the server reads only 127.0.0.1, localhost or ::1)
 
-It serves GET /v1/account, GET /v1/balance and GET /v1/balance_transactions (newest first, `starting_after`, `limit`,
+It serves GET /v1/account, GET /v1/balance and GET /v1/balance_transactions (newest first, `starting_after`, `limit`, `created[gte]`,
 `has_more`, the `expand[]` source as an object). Control endpoints under /_fake/ add what Stripe would have recorded:
   POST /_fake/txn    {"type": "charge", "amount": 10000, "fee": 320, "billing_name": "Acme Buyer"}  (cents)
                      a refund, dispute or returned payout names its sale or payout with "link": "ch_fake000001"
@@ -60,7 +60,7 @@ def _add(kind: str, amount: int, fee: int, billing_name: str, link: str = "") ->
         "net": amount - fee,
         "currency": "usd",
         "status": "available",
-        "created_at": NOW[0],
+        "created": NOW[0],  # unix seconds, the field Stripe sends and Finance reads
         "description": f"{kind} {billing_name}".strip(),
         "source": _source(kind, link, billing_name),
     }
@@ -105,7 +105,8 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(url.query)
                 limit = min(int(query.get("limit", ["10"])[0]), 100)
                 after = query.get("starting_after", [""])[0]
-                newest = list(reversed(TXNS))
+                since = int(query.get("created[gte]", ["0"])[0] or 0)  # Stripe's created filter, unix seconds
+                newest = [t for t in reversed(TXNS) if int(t["created"]) >= since]
                 start = 0
                 if after:
                     ids = [t["id"] for t in newest]

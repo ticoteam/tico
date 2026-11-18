@@ -13,7 +13,7 @@ import pytest
 
 from backend import trigger_presets as P
 from backend.finance import actions as FA
-from backend.finance import banking, documents, stripe_sync, sync
+from backend.finance import banking, documents, stripe_post, stripe_sync, sync
 from backend.finance.context import load
 from backend.finance.store import banking as store_banking
 from backend.finance.core import feeds as F
@@ -122,8 +122,10 @@ class FakeStripe:
             race()
         return Answer(200, {"available": [{"amount": net, "currency": "usd"}], "pending": []})
 
-    def transactions(self, starting_after: str | None = None, limit: int = 100) -> Answer:
-        newest = list(reversed(self.txns))
+    def transactions(
+        self, starting_after: str | None = None, limit: int = 100, created_gte: int | None = None
+    ) -> Answer:
+        newest = [t for t in reversed(self.txns) if created_gte is None or int(t["created"]) >= created_gte]
         start = [t["id"] for t in newest].index(starting_after) + 1 if starting_after else 0
         page = newest[start : start + min(limit, self.page)]
         return Answer(200, {"object": "list", "data": page, "has_more": start + len(page) < len(newest)})
@@ -224,6 +226,25 @@ def _asked(c: Any, provider_id: str, period: str = "") -> int:
     )
 
 
+def _full_history(books: Any, cid: str) -> None:
+    """Makes a connection one from before history_from: it reads its whole history."""
+    with books.transaction() as c:
+        settings = json.loads(c.execute("SELECT settings FROM fin_connections WHERE id=?", (cid,)).fetchone()[0])
+        settings.pop("history_from")
+        c.execute("UPDATE fin_connections SET settings=? WHERE id=?", (json.dumps(settings), cid))
+
+
+def _kind_asks(c: Any, kind: str) -> int:
+    """How many asks a Stripe kind Finance does not map raised on the Stripe money account."""
+    return int(
+        c.execute(
+            "SELECT COUNT(*) FROM fin_events WHERE name='finance.feed.needs_category' AND period_key=? AND subject IN "
+            "(SELECT id FROM fin_money_accounts WHERE kind='stripe')",
+            (f"kind:{kind}",),
+        ).fetchone()[0]
+    )
+
+
 def _entries(c: Any, prefix: str) -> int:
     return int(
         c.execute(
@@ -308,17 +329,20 @@ def test_a_refund_that_arrives_before_its_sale_waits_for_it(books):
         assert _every_entry_balances(c)
 
 
-def test_a_dispute_reverses_its_sale_and_one_naming_no_sale_is_asked(books):
+def test_a_dispute_reverses_its_sale_and_adjustments_naming_no_sale_go_to_suspense_asked_once(books):
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     stripe.add("charge", 10_000, 320, "Acme Buyer")
     stripe.add("adjustment", -10_000, link="ch_txn_0001")
     stripe.add("adjustment", -500)
+    stripe.add("adjustment", -200)
     stripe_pass(books, stripe)
     with books.read() as c:
-        assert (_sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050")) == (0, 320, -320)
-        assert _feed(c, "txn_0003")["status"] == "new"
-        assert _asked(c, "txn_0003") == 1
+        assert (_sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050")) == (0, 320, -1_020)
+        assert _named_sum(c, "Stripe suspense") == 700  # the balance still ties: the unclear rows wait on suspense
+        assert _feed(c, "txn_0003")["entry_id"] is not None and _feed(c, "txn_0004")["entry_id"] is not None
+        assert _kind_asks(c, "adjustment") == 1
+        assert _asked(c, "txn_0003") == 0 and _asked(c, "txn_0004") == 0
         assert _every_entry_balances(c)
 
 
@@ -441,14 +465,34 @@ def test_a_payout_outside_the_match_window_stays_in_transit_and_is_asked_after_s
 
 
 def test_a_refund_whose_sale_never_arrives_is_asked_after_seven_days(books):
+    """On a connection that reads its whole history (one made before history_from), a sale that never came is asked
+    about."""
     stripe = FakeStripe()
-    connect_stripe(books, stripe)
+    _full_history(books, connect_stripe(books, stripe))
     stripe.add("refund", -10_000, link="ch_missing")
     stripe_pass(books, stripe)
     stripe_pass(books, stripe, STALE_AT)
     with books.read() as c:
         assert _sum(c, "1050") == 0
         assert _asked(c, "txn_0001", "stale") == 1
+
+
+def test_a_refund_of_a_sale_before_history_from_posts_against_revenue_once_the_backfill_ended(books):
+    """A history cut at history_from: a refund of a sale before that day never finds its sale. It waits through the
+    backfill (its sale may be on an older page), then posts against Revenue with no ask: the sale is in the opening."""
+    stripe = FakeStripe(start=50_000)
+    connect_stripe(books, stripe)
+    stripe.add("refund", -10_000, link="ch_before_history")
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _feed(c, "txn_0001")["entry_id"] is None
+    stripe_pass(books, stripe, STALE_AT)
+    stripe_pass(books, stripe, "2026-10-20T13:00:00.000000Z")
+    with books.read() as c:
+        assert _feed(c, "txn_0001")["entry_id"] is not None
+        assert (_sum(c, "4000"), _sum(c, "1050")) == (10_000, stripe.total())
+        assert _asked(c, "txn_0001", "stale") == 0
+        assert _every_entry_balances(c)
 
 
 def test_an_invoice_paid_already_takes_a_customer_credit_and_a_person_is_asked(books):
@@ -1137,14 +1181,14 @@ def test_a_stripe_opening_moves_by_a_raw_post_and_back_by_its_reversal(books):
     provider's balance once the row is covered; before and after, the unposted row is the only difference."""
     sep = int(datetime(2026, 9, 10, 12, tzinfo=timezone.utc).timestamp())
     stripe = FakeStripe(start=7_000)
-    connect_stripe(books, stripe)
-    stripe.add("transfer", 500, created=sep)  # a balance type nothing posts: the balance holds it, it is asked
+    _full_history(books, connect_stripe(books, stripe))  # a full history: a row with no sale waits for a person
+    stripe.add("refund_failure", 500, link="ch_missing", created=sep)  # waits for its sale: the balance holds it
     stripe.add("charge", 2_000, 0, "Acme Buyer")  # October: posted as a sale
     stripe_pass(books, stripe)
     with books.transaction() as c:
         assert _stripe_opening(c) == 7_000
-        assert _sum(c, "1050") == 9_000  # the asked transfer is the one row the books do not carry
-        assert _asked(c, "txn_0001") == 1
+        assert _sum(c, "1050") == 9_000  # the waiting restore is the one row the books do not carry
+        assert _feed(c, "txn_0001")["status"] == "new"
     csv = "month,line,amount,team\n2026-09,Sales revenue,250000,sales\n"
     with books.transaction() as c:
         r = act(
@@ -1163,3 +1207,350 @@ def test_a_stripe_opening_moves_by_a_raw_post_and_back_by_its_reversal(books):
         assert _stripe_opening(c) == 7_000
         assert _sum(c, "1050") == stripe.total() - 500
         assert _feed(c, "txn_0001")["status"] == "new"  # uncovered again: it waits for a person
+
+
+# ------------------------------------------------------------------------------------------------ history_from
+def _settings(c: Any, cid: str) -> dict[str, Any]:
+    return dict(json.loads(c.execute("SELECT settings FROM fin_connections WHERE id=?", (cid,)).fetchone()[0]))
+
+
+def _opening_entry(c: Any) -> Any:
+    return c.execute(
+        "SELECT e.entry_date, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+        "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source_id LIKE 'opening:%' AND a.code='1050'"
+    ).fetchone()
+
+
+def test_a_new_stripe_connection_reads_from_jan_1_by_default_and_a_history_from_must_be_a_day(books):
+    stripe = FakeStripe()
+    found, _ = stripe_sync.probe(stripe)  # type: ignore[arg-type]
+    with books.transaction() as c:
+        conn = {"provider": "stripe", "credential_id": "cred-stripe", "probe": found}
+        bad = act(c, OWNER, "connection_create", {**conn, "history_from": "June"})
+        assert bad.status != "committed" and "history_from" in str(bad.reason), bad
+        made = act(c, OWNER, "connection_create", conn)
+        assert made.status == "committed", made
+        assert _settings(c, str(made.result["connection_id"]))["history_from"] == "2026-01-01"
+
+
+def test_a_cut_stripe_history_reads_from_its_day_and_opens_at_the_balance_less_the_rows_taken_in(books):
+    """Stripe answers only rows created from history_from (created[gte]); the balance holds the older ones too. The
+    opening is the balance less the rows taken in, dated the day before the first of them."""
+    older = int(datetime(2025, 12, 15, 12, tzinfo=timezone.utc).timestamp())
+    stripe = FakeStripe(start=7_000)
+    stripe.add("charge", 3_000, 0, "Acme Old", created=older)  # before history_from: never read
+    stripe.add("charge", 1_000, 0, "Acme Buyer")
+    stripe.add("charge", 2_000, 0, "Acme Buyer")
+    asked: list[int | None] = []
+    plain = stripe.transactions
+
+    def spy(starting_after: str | None = None, limit: int = 100, created_gte: int | None = None) -> Answer:
+        asked.append(created_gte)
+        return plain(starting_after, limit, created_gte)
+
+    stripe.transactions = spy  # type: ignore[method-assign]
+    connect_stripe(books, stripe)
+    stripe_pass(books, stripe)
+    assert asked and set(asked) == {int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())}
+    with books.read() as c:
+        assert _feed(c, "txn_0001") is None
+        day, amount = _opening_entry(c)
+        assert (day, amount) == ("2026-10-09", 7_000 + 3_000)  # B - S = 13_000 - 3_000
+        assert _sum(c, "1050") == stripe.total() == 13_000
+        assert _every_entry_balances(c)
+
+
+# ------------------------------------------------------------------------------------------------ marketplace kinds
+def _line_of(c: Any, name: str) -> Any:
+    return c.execute(
+        "SELECT a.code, a.type, p.code AS parent FROM fin_accounts a LEFT JOIN fin_accounts p ON p.id=a.parent_id "
+        "WHERE a.name=?",
+        (name,),
+    ).fetchone()
+
+
+def test_connect_transfers_and_stripe_capital_post_in_the_day_summary_with_no_ask(books):
+    """A marketplace's balance: Connect transfers out (and one coming back) to Payouts to connected accounts under Cost
+    of revenue, at the first free code from 5300 (a company line already holds 5300); the Capital paydowns withheld from
+    sales to the Stripe Capital loan liability. One summary entry for the day, no person asked."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    with books.transaction() as c:
+        assert (
+            act(c, OWNER, "account_create", {"code": "5300", "name": "Pro payouts", "type": "expense"}).status
+            == "committed"
+        )
+    stripe.add("charge", 10_000, 0, "Acme Buyer")
+    stripe.add("transfer", -4_000)
+    stripe.add("transfer", -3_000)
+    stripe.add("transfer_refund", 1_000)
+    stripe.add("financing_paydown", -2_000)
+    stripe.add("financing_paydown", -1_500)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert tuple(_line_of(c, "Payouts to connected accounts")) == ("5301", "expense", "5000")
+        assert _line_of(c, "Stripe Capital loan")["type"] == "liability"
+        assert _named_sum(c, "Payouts to connected accounts") == 6_000
+        assert _named_sum(c, "Stripe Capital loan") == 3_500
+        assert _sum(c, "5300") == 0
+        assert _sum(c, "1050") == stripe.total()
+        assert _entries(c, "stripe:summary:") == 1
+        assert (
+            int(c.execute("SELECT COUNT(*) FROM fin_events WHERE name='finance.feed.needs_category'").fetchone()[0])
+            == 0
+        )
+        assert _every_entry_balances(c)
+
+
+def test_a_line_the_company_made_is_reused_by_name_in_any_case(books):
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "2320", "name": "stripe capital LOAN", "type": "liability"})
+        loan = str(made.result["account_id"])
+    stripe.add("financing_paydown", -2_000)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _sum(c, "2320") == 2_000
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts WHERE lower(name)='stripe capital loan'").fetchone()[0] == 1
+        assert account(c, "2320") == loan
+
+
+def test_lines_a_connection_names_take_its_transfers_and_capital_and_a_wrong_type_is_refused(books):
+    stripe = FakeStripe()
+    cid = connect_stripe(books, stripe)
+    with books.transaction() as c:
+        sellers = str(
+            act(c, OWNER, "account_create", {"code": "5450", "name": "Seller share", "type": "expense"}).result[
+                "account_id"
+            ]
+        )
+        loan = str(
+            act(c, OWNER, "account_create", {"code": "2330", "name": "Capital", "type": "liability"}).result[
+                "account_id"
+            ]
+        )
+        wrong = act(c, OWNER, "connection_settings", {"connection_id": cid, "transfer_account_id": loan})
+        assert wrong.status != "committed"
+        done = act(
+            c,
+            OWNER,
+            "connection_settings",
+            {"connection_id": cid, "transfer_account_id": sellers, "capital_account_id": loan},
+        )
+        assert done.status == "committed", done.reason
+    stripe.add("transfer", -4_000)
+    stripe.add("financing_paydown", -900)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert (_sum(c, "5450"), _sum(c, "2330")) == (4_000, 900)
+        assert _line_of(c, "Payouts to connected accounts") is None
+        assert _every_entry_balances(c)
+
+
+def test_an_unknown_kind_posts_to_suspense_asked_once_until_a_rule_on_its_kind_takes_it(books):
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    for _ in range(3):
+        stripe.add("some_new_kind", -700)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _named_sum(c, "Stripe suspense") == 2_100  # what left the balance waits on suspense until decided
+        assert _sum(c, "1050") == stripe.total()
+        assert _kind_asks(c, "some_new_kind") == 1
+        assert all(_asked(c, f"txn_000{i}") == 0 for i in (1, 2, 3))
+    with books.transaction() as c:
+        rule = {
+            "kind": "posting",
+            "name": "New kind",
+            "when": {"feed.kind": "some_new_kind"},
+            "outcome": {"outcome": "post", "account_id": account(c, "6900")},
+            "examples": [{"input": {"feed.kind": "some_new_kind"}, "expect": "post"}],
+        }
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    stripe.add("some_new_kind", -300, created=DAY + 86_400)
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.read() as c:
+        assert (_named_sum(c, "Stripe suspense"), _sum(c, "6900")) == (2_100, 300)
+        assert _kind_asks(c, "some_new_kind") == 1
+        assert _sum(c, "1050") == stripe.total()
+        assert _every_entry_balances(c)
+
+
+def test_advances_are_not_taken_for_capital_they_wait_on_suspense_asked_once_per_kind(books):
+    """Stripe also names instant payouts `advance`, so an advance is not taken for a Capital loan: it waits on suspense,
+    one ask per kind. A Capital paydown still goes to the loan."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("advance", 30_000)
+    stripe.add("advance", 20_000)
+    stripe.add("advance_funding", 5_000)
+    stripe.add("financing_paydown", -1_000)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert (_named_sum(c, "Stripe suspense"), _named_sum(c, "Stripe Capital loan")) == (-55_000, 1_000)
+        assert (_kind_asks(c, "advance"), _kind_asks(c, "advance_funding")) == (1, 1)
+        assert _sum(c, "1050") == stripe.total()
+        assert _every_entry_balances(c)
+
+
+def test_a_day_whose_rows_cancel_out_posts_nothing_and_the_sync_goes_on(books):
+    """A transfer and its full reversal on one day sum to nothing: no summary entry (it could not balance), the rows are
+    done, and the next day's rows still post."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("transfer", -500)
+    stripe.add("transfer_refund", 500)
+    assert stripe_pass(books, stripe) == "ok"
+    with books.read() as c:
+        assert _entries(c, "stripe:summary:") == 0
+        assert {str(_feed(c, t)["status"]) for t in ("txn_0001", "txn_0002")} == {"ignored"}
+    stripe.add("transfer", -700, created=DAY + 86_400)
+    assert stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z") == "ok"
+    with books.read() as c:
+        assert (_entries(c, "stripe:summary:"), _named_sum(c, "Payouts to connected accounts")) == (1, 700)
+        assert _sum(c, "1050") == stripe.total()
+        assert _every_entry_balances(c)
+
+
+def _created_gte_spy(stripe: FakeStripe) -> list[int | None]:
+    """Records the created[gte] of every balance-transaction read."""
+    asked: list[int | None] = []
+    plain = stripe.transactions
+
+    def spy(starting_after: str | None = None, limit: int = 100, created_gte: int | None = None) -> Answer:
+        asked.append(created_gte)
+        return plain(starting_after, limit, created_gte)
+
+    stripe.transactions = spy  # type: ignore[method-assign]
+    return asked
+
+
+JAN_1 = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())
+
+
+def test_a_cut_history_with_no_rows_keeps_reading_from_its_day_and_opens_before_it(books):
+    """A history cut at Jan 1 with no row from that day on: the backfill takes nothing in and keeps no boundary, and
+    every later poll still reads from Jan 1 (an older row is never taken in). The opening is the balance, dated the day
+    before Jan 1, so a row on the sync day first seen later is not netted into it."""
+    older = int(datetime(2025, 12, 15, 12, tzinfo=timezone.utc).timestamp())
+    stripe = FakeStripe(start=7_000)
+    stripe.add("charge", 3_000, 0, "Acme Old", created=older)
+    asked = _created_gte_spy(stripe)
+    connect_stripe(books, stripe)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _opening_entry(c)[:] == ("2025-12-31", 10_000)
+    late = int(datetime(2026, 10, 15, 12, 30, tzinfo=timezone.utc).timestamp())  # the sync day, after the balance read
+    stripe.add("charge", 1_000, 0, "Acme Buyer", created=late)
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    assert asked and set(asked) == {JAN_1}
+    with books.read() as c:
+        assert _feed(c, "txn_0001") is None
+        assert _opening_entry(c)[:] == ("2025-12-31", 10_000)
+        assert _sum(c, "1050") == stripe.total() == 11_000
+        assert _every_entry_balances(c)
+
+
+def test_rows_an_earlier_finance_asked_about_one_by_one_settle_once_their_kind_is_mapped(books, monkeypatch):
+    """Transfers an earlier Finance left new and asked about row by row: the next pass posts them in the day's summary
+    and withdraws their asks; a pass after that changes nothing."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("transfer", -4_000)
+    stripe.add("transfer", -1_000)
+    with monkeypatch.context() as old:
+        old.setattr(stripe_post, "_other", lambda ctx, row, money, t, gross: stripe_post._ask(ctx, str(row["id"]), "?"))
+        stripe_pass(books, stripe)
+    with books.read() as c:
+        assert [_asked(c, t) for t in ("txn_0001", "txn_0002")] == [1, 1]
+        assert _entries(c, "stripe:summary:") == 0
+
+    def state() -> tuple[int, int, int, int]:
+        with books.read() as c:
+            asks = _asked(c, "txn_0001") + _asked(c, "txn_0002")
+            lines = int(c.execute("SELECT COUNT(*) FROM fin_lines").fetchone()[0])
+            return asks, _entries(c, "stripe:summary:"), _named_sum(c, "Payouts to connected accounts"), lines
+
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    after = state()
+    assert after[:3] == (0, 1, 5_000)
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    assert state() == after
+    with books.read() as c:
+        assert _sum(c, "1050") == stripe.total()
+        assert _every_entry_balances(c)
+
+
+def test_a_refund_of_a_sale_held_here_waits_for_it_in_a_cut_history(books):
+    """In a cut history, a refund whose sale was taken in but is held (several invoices could be it) is not one of a
+    sale before history_from: past seven days it still waits for its sale instead of posting against Revenue."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    customer = _customer(books, "Acme Retail")
+    _invoice(books, customer, 10_000)
+    _invoice(books, customer, 10_000)
+    stripe.add("charge", 10_000, 0, "Acme Retail")
+    stripe.add("refund", -10_000, link="ch_txn_0001")
+    stripe_pass(books, stripe)
+    stripe_pass(books, stripe, STALE_AT)
+    stripe_pass(books, stripe, "2026-10-20T13:00:00.000000Z")
+    with books.read() as c:
+        assert (_feed(c, "txn_0001")["entry_id"], _feed(c, "txn_0002")["entry_id"]) == (None, None)
+        assert _sum(c, "4000") == -20_000  # the two invoices only: the refund took nothing back from Revenue
+        assert _every_entry_balances(c)
+
+
+def test_a_line_set_while_the_backfill_reads_is_kept(books):
+    """connection_settings changing the connection while its backfill reads Stripe page by page: the sync's own writes
+    keep the change."""
+    stripe = FakeStripe(page=1)
+    for amount in (1_000, 2_000, 3_000):
+        stripe.add("charge", amount, 0, "Acme Buyer")
+    cid = connect_stripe(books, stripe)
+    with books.transaction() as c:
+        sellers = str(
+            act(c, OWNER, "account_create", {"code": "5450", "name": "Seller share", "type": "expense"}).result[
+                "account_id"
+            ]
+        )
+    plain = stripe.transactions
+    calls = [0]
+
+    def meanwhile(starting_after: str | None = None, limit: int = 100, created_gte: int | None = None) -> Answer:
+        calls[0] += 1
+        if calls[0] == 3:  # the second page: the first was taken in and its place saved
+            with books.transaction() as c:
+                done = act(c, OWNER, "connection_settings", {"connection_id": cid, "transfer_account_id": sellers})
+                assert done.status == "committed", done.reason
+        return plain(starting_after, limit, created_gte)
+
+    stripe.transactions = meanwhile  # type: ignore[method-assign]
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        settings = _settings(c, cid)
+        assert settings["backfilled"] is True and calls[0] >= 4
+        assert settings["transfer_account_id"] == sellers
+
+
+def test_a_new_stripe_connection_takes_its_transfer_line_and_refuses_a_wrong_type(books):
+    stripe = FakeStripe()
+    found, _ = stripe_sync.probe(stripe)  # type: ignore[arg-type]
+    conn = {"provider": "stripe", "credential_id": "cred-stripe", "probe": found}
+    with books.transaction() as c:
+        sellers = str(
+            act(c, OWNER, "account_create", {"code": "5300", "name": "Pro payouts", "type": "expense"}).result[
+                "account_id"
+            ]
+        )
+        wrong = act(c, OWNER, "connection_create", {**conn, "transfer_account_id": account(c, "4000")})
+        assert wrong.status != "committed" and "transfer_account_id" in str(wrong.reason), wrong
+        made = act(c, OWNER, "connection_create", {**conn, "transfer_account_id": sellers})
+        assert made.status == "committed", made
+        assert _settings(c, str(made.result["connection_id"]))["transfer_account_id"] == sellers
+    stripe.add("transfer", -4_000)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _sum(c, "5300") == 4_000
+        assert _line_of(c, "Payouts to connected accounts") is None

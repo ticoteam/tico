@@ -717,6 +717,15 @@ def test_the_ad_spend_api_is_for_finance_admins_and_keeps_one_import_per_ad_acco
         api.patch(f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": "nobody"}, headers=headers()).status_code
         == 422
     )
+    # A bot whose slug is not its id (a custom or renamed bot): its slug finds it, and the account keeps its id, the
+    # teammate attribution reads (bot:<id>).
+    from backend import hubdb
+
+    with store.transaction() as c:
+        hubdb.rename_bot(c, "ops", "paid-rental-ads")
+    for ref in ("paid-rental-ads", "ops", "bot:ops"):
+        got = api.patch(f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": ref}, headers=headers())
+        assert got.status_code == 200 and got.json()["bot_slug"] == "ops", (ref, got.text)
     assert (
         api.patch(
             f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": "ops"}, headers=headers("cara-test")

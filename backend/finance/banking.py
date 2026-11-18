@@ -19,7 +19,7 @@ Posting a feed row:
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any, cast
 
 from . import budgeting, documents, key_use, payments, posting, posting_rules, shared
@@ -109,13 +109,22 @@ def gl_account(ctx: Ctx, money: Any) -> L.Account:
     return account
 
 
-def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: str) -> L.Account:
-    """The first free code from `base` (1000 → 1001, 1002...) for a provider account Tico maps."""
+def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: str, parent_id: str = "") -> L.Account:
+    """The first free code from `base` (1000 → 1001, 1002...) for a provider account Tico maps, under `parent_id` when
+    given."""
     taken = {a.code for a in ctx.accounts.values()}
     code = int(base)
     while str(code) in taken:
         code += 1
-    made = L.Account(id=SL.new_id(), book_id=ctx.book.id, code=str(code), name=name[:120], type=type_, subtype=subtype)
+    made = L.Account(
+        id=SL.new_id(),
+        book_id=ctx.book.id,
+        code=str(code),
+        name=name[:120],
+        type=type_,
+        subtype=subtype,
+        parent_id=parent_id,
+    )
     L.check_account(made, ctx.accounts)
     SL.insert_account(ctx.c, made, who, ctx.at)
     ctx.changed()
@@ -156,6 +165,17 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return plan
 
 
+def history_from(ctx: Ctx, p: V.Payload) -> str:
+    """The first day a new connection reads its history from (`history_from`, YYYY-MM-DD): Jan 1 of this year when left
+    out. A connection made before this setting has none in its settings and keeps reading its whole history."""
+    day = V.opt_text(p, "history_from", 10) or f"{ctx.today[:4]}-01-01"
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise invalid("history_from is a day, YYYY-MM-DD") from None
+    return day
+
+
 def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Connect a Mercury account with the company's token (a Tico credential, read at use time and never copied
     here). `probe` is what finance/sync.probe read with that token just before: the accounts (last 4 only), the IO
@@ -174,7 +194,19 @@ def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         from . import brex_sync  # lazy: it imports this module
 
         return brex_sync.connection_create(ctx, who, p)
-    V.only(p, ("provider", "credential_id", "name", "probe", "approver_email", "token_creator_email", "server_ip"))
+    V.only(
+        p,
+        (
+            "provider",
+            "credential_id",
+            "name",
+            "probe",
+            "approver_email",
+            "token_creator_email",
+            "server_ip",
+            "history_from",
+        ),
+    )
     V.choice(p, "provider", ("mercury",))
     cred = V.text(p, "credential_id", 120)
     if any(
@@ -182,16 +214,16 @@ def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     ):
         raise FinanceError(CONFLICT, "that credential is already connected")
     probe = V.obj(p.get("probe"), "probe")
-    accounts = [V.obj(a, "an account") for a in V.items(probe.get("accounts"), "probe.accounts")]
-    raw_credit: object = probe.get("credit") or []
-    credit = [V.obj(a, "a credit account") for a in V.items(raw_credit, "probe.credit")]
+    # A company with no IO card lists no credit account (and one with only IO no bank account): either may be empty.
+    accounts = [V.obj(a, "an account") for a in V.opt_items(probe.get("accounts"), "probe.accounts")]
+    credit = [V.obj(a, "a credit account") for a in V.opt_items(probe.get("credit"), "probe.credit")]
     if not accounts and not credit:
         raise invalid("the token sees no Mercury accounts")
     approver = (V.opt_text(p, "approver_email", 200) or "").strip().lower()
     creator = (V.opt_text(p, "token_creator_email", 200) or "").strip().lower()
     users: object = probe.get("users")
     emails = (
-        {str(V.obj(u, "a user").get("email") or "").lower() for u in V.items(users, "users")}
+        {str(V.obj(u, "a user").get("email") or "").lower() for u in V.opt_items(users, "users")}
         if users is not None
         else None
     )
@@ -209,6 +241,7 @@ def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         "approval_note": note or None,
         "approver_email": approver or None,
         "egress_ip": V.opt_text(p, "server_ip", 64) or probe.get("egress_ip") or None,
+        "history_from": history_from(ctx, p),
     }
     name = V.opt_text(p, "name", 120) or "Mercury"
 
@@ -229,7 +262,7 @@ def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             },
         )
         if users is not None:
-            SK.set_provider_users(ctx.c, cid, [V.obj(u, "a user") for u in V.items(users, "users")], ctx.at)
+            SK.set_provider_users(ctx.c, cid, [V.obj(u, "a user") for u in V.opt_items(users, "users")], ctx.at)
         mapped: list[Result] = []
         for a in accounts:
             if str(a.get("status") or "active") not in ("active", "pending"):
@@ -441,10 +474,21 @@ def opening_figure(ctx: Ctx, money: Any, balance: int) -> int:
 
 
 def _natural_day(ctx: Ctx, money: Any) -> str:
-    """The day before the account's first row the balance holds (covered history counts), or today with none. set_opening
-    caps it before the first raw-totals month."""
+    """The day before the account's first row the balance holds (covered history counts). With none: the day before its
+    connection's `history_from` when its history is cut there (every row from that day on comes after the opening, so
+    none is netted into it as one the balance already held), else today. set_opening caps it before the first raw-totals
+    month."""
     _, first = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
-    return (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+    if first:
+        return (dates.day(first) - timedelta(days=1)).isoformat()
+    return _cut_day(ctx, money) or ctx.today
+
+
+def _cut_day(ctx: Ctx, money: Any) -> str:
+    """The day before the connection's `history_from` ("" when its history is not cut): the latest day an opening of a
+    cut history is dated, as every row it takes in is from `history_from` on."""
+    cut = str(_conn_settings(ctx, money).get("history_from") or "")
+    return (dates.day(cut) - timedelta(days=1)).isoformat() if cut else ""
 
 
 def open_at(ctx: Ctx, money: Any, balance: int) -> str | None:
@@ -558,7 +602,9 @@ def _before_opening(ctx: Ctx, money: Any, t: F.FeedTxn) -> None:
         return
     earlier = (dates.day(t.txn_date) - timedelta(days=1)).isoformat()
     if entry is None:
-        set_opening(ctx, money, -t.amount, earlier)
+        # An opening brought to 0 kept no day: a cut history's comes back no later than the day before history_from,
+        # where it was, so late rows give the same day in any order.
+        set_opening(ctx, money, -t.amount, min(earlier, _cut_day(ctx, money) or earlier))
         return
     dated = str(entry["entry_date"])
     set_opening(ctx, money, opening_amount(ctx, money, dated) - t.amount, min(dated, earlier))
@@ -2032,27 +2078,56 @@ def money_account_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(K.ALLOW, f"Add {labeled} ({'card' if kind == 'card_program' else 'bank'}, no connection)", apply)
 
 
+# A Stripe connection's own lines (stripe_post): the setting, and the type of line it may name.
+STRIPE_LINE_SETTINGS = {"transfer_account_id": "expense", "capital_account_id": "liability"}
+
+
+def stripe_lines(ctx: Ctx, p: V.Payload, provider: str) -> dict[str, str]:
+    """The Stripe line settings `p` gives (STRIPE_LINE_SETTINGS), each an active line of its type, or "" to clear it."""
+    out: dict[str, str] = {}
+    for key, type_ in STRIPE_LINE_SETTINGS.items():
+        if key not in p:
+            continue
+        if provider != "stripe":
+            raise invalid(f"{key} is a Stripe connection's setting")
+        line = V.opt_text(p, key, 120) or ""
+        found = ctx.accounts.get(line)
+        if line and (found is None or not found.active or found.type != type_):
+            raise invalid(f"{key} is an active {type_} line in the books")
+        out[key] = line
+    return out
+
+
 def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
-    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`)."""
-    V.only(p, ("connection_id", "card_user_id"))
+    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`). On a Stripe
+    connection, the lines its Connect transfers (`transfer_account_id`, an expense) and its Stripe Capital loan
+    (`capital_account_id`, a liability) post to, or empty to clear one (stripe_post then finds or makes the line). A
+    setting left out is unchanged."""
+    V.only(p, ("connection_id", "card_user_id", *STRIPE_LINE_SETTINGS))
     row = _connection(ctx, who, p)
     if str(row["status"]) == "disconnected":
         raise FinanceError(CONFLICT, "that connection is disconnected")
-    user = V.opt_text(p, "card_user_id", 120) or ""
-    if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
-        raise invalid("that is not a Mercury user on this connection")
+    changes: dict[str, str] = {}
+    if "card_user_id" in p:
+        user = V.opt_text(p, "card_user_id", 120) or ""
+        if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
+            raise invalid("that is not a Mercury user on this connection")
+        changes["card_user_id"] = user
+    changes.update(stripe_lines(ctx, p, str(row["provider"])))
 
     def apply(aid: str) -> Result:
-        settings = {k: v for k, v in SK.loads(row["settings"]).items() if k != "card_user_id"}
-        if user:
-            settings["card_user_id"] = user
+        settings = {k: v for k, v in SK.loads(row["settings"]).items() if k not in changes}
+        settings.update({k: v for k, v in changes.items() if v})
         SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings": SK.dump(settings), "updated_at": ctx.at})
-        return {"connection_id": str(row["id"]), "card_user_id": user or None}
+        return {"connection_id": str(row["id"]), **{k: v or None for k, v in changes.items()}}
 
-    return Plan(
-        K.ALLOW, f"Issue cards on {row['name']} to {user}" if user else f"Clear the card user on {row['name']}", apply
-    )
+    user = changes.get("card_user_id")
+    if user is None:
+        what = f"Change the Stripe lines on {row['name']}"
+    else:
+        what = f"Issue cards on {row['name']} to {user}" if user else f"Clear the card user on {row['name']}"
+    return Plan(K.ALLOW, what, apply)
 
 
 __all__ = [

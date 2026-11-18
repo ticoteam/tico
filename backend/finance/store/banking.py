@@ -1568,6 +1568,22 @@ def stripe_waiting(c: sqlite3.Connection, money_account_id: str, kinds: Sequence
     ).fetchall()
 
 
+def stripe_unsettled(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], most: int) -> list[Any]:
+    """Stripe rows of these kinds left new, posted nowhere and not marked for a day's summary, oldest first."""
+    return c.execute(
+        f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND status='new' AND "
+        "entry_id IS NULL AND json_extract(raw, '$.summary') IS NULL ORDER BY txn_date, id LIMIT ?",
+        (money_account_id, *kinds, most),
+    ).fetchall()
+
+
+def withdraw_asks(c: sqlite3.Connection, name: str, subject: str) -> int:
+    """Drop the `name` events about `subject` not yet sent on to Tico's rules (drained): what they asked is settled."""
+    return c.execute(
+        "DELETE FROM fin_events WHERE name=? AND subject=? AND drained_at IS NULL", (name, subject)
+    ).rowcount
+
+
 # A posted entry that is the bank side of a Stripe payout's clearing: its source id is `stripe:clear:<feed row id>`,
 # and `fresh_source` may add `:<when>` after it. `f` is the feed row of the payout.
 _CLEARED = (

@@ -12,6 +12,7 @@ Brex's account and transaction reads; nothing is sent anywhere."""
 
 import io
 import json
+import re
 import urllib.error
 from collections.abc import Callable
 from typing import Any
@@ -112,10 +113,25 @@ def cash_txn(tid: str, kind: str, amount: int, day: str = "2026-10-10", currency
     }
 
 
+def _card_amount(raw: dict[str, Any]) -> int:
+    """A card row as the card line carries it; 0 for one Finance does not post (no amount, another currency)."""
+    try:
+        return F.brex_card_txn(raw, CARD).amount if raw["amount"]["currency"] == "USD" else 0
+    except (FinanceError, KeyError, TypeError):
+        return 0
+
+
+# The posted_at_start Brex takes: a date-time with no zone. It answers 400 to a `Z`, an offset or a bare date.
+POSTED_AT_START = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+BAD_REQUEST = Answer(400, {"type": "BAD_REQUEST", "message": "Bad request"})
+
+
 class FakeBrex:
-    """Brex's account and transaction reads in memory. Transactions are added oldest first and listed newest first, a
-    `page` at a time, the cursor the index of the next row; posted_at_start keeps the rows posted on or after its day, as
-    Brex's filter does. `status`, when set, answers every call with that HTTP status and no data."""
+    """Brex's account and transaction reads in memory, in the shapes the real API answers: the card accounts as one bare
+    array (no page), the cash accounts and transactions as pages. Transactions are added oldest first and listed newest
+    first, a `page` at a time, the cursor the index of the next row; posted_at_start keeps the rows posted on or after
+    its day, as Brex's filter does, and a zoned one is a 400. `status`, when set, answers every call with that HTTP
+    status and no data."""
 
     def __init__(self, page: int = 100) -> None:
         self.cards: list[dict[str, Any]] = [card_account()]
@@ -123,6 +139,7 @@ class FakeBrex:
         self.card_txns: list[dict[str, Any]] = []
         self.cash_txns: dict[str, list[dict[str, Any]]] = {CASH: []}
         self.page = page
+        self.card_owed = 0  # owed on the card before its rows here (history before history_from)
         self.status: int | None = None
         self.order = "newest_first"  # the order Brex lists rows in (ORDERS)
         self.calls = 0  # cash account-list reads so far
@@ -131,7 +148,13 @@ class FakeBrex:
         ] = {}  # run before the nth cash account-list read (a row posted then)
 
     def card_accounts(self, cursor: str | None = None) -> Answer:
-        return self._answer(self.cards, cursor)
+        """Each card account owing `card_owed` from before its rows here plus what its rows charged, as the positive
+        current balance Brex reports."""
+        if self.status is not None:
+            return Answer(self.status, {"message": "nope"})
+        owed = self.card_owed - sum(_card_amount(r) for r in self.card_txns)
+        cards = [{**a, "current_balance": money(owed)} for a in self.cards]
+        return Answer(200, brex._parse(json.dumps(cards).encode()))
 
     def cash_accounts(self, cursor: str | None = None) -> Answer:
         self.calls += 1
@@ -140,9 +163,13 @@ class FakeBrex:
         return self._answer(self.cash, cursor)
 
     def card_transactions(self, posted_at_start: str, cursor: str | None = None) -> Answer:
+        if not POSTED_AT_START.fullmatch(posted_at_start):
+            return BAD_REQUEST
         return self._answer(_since(self.card_txns, posted_at_start, self.order), cursor)
 
     def cash_transactions(self, account_id: str, posted_at_start: str, cursor: str | None = None) -> Answer:
+        if not POSTED_AT_START.fullmatch(posted_at_start):
+            return BAD_REQUEST
         return self._answer(_since(self.cash_txns.get(account_id, []), posted_at_start, self.order), cursor)
 
     def me(self) -> Answer:
@@ -921,3 +948,85 @@ def test_a_book_transfer_with_no_other_side_yet_is_noted_and_waits(books):
         assert _sum(c, "6900") == 0
         status, error = _last_error(c)
     assert status == "active" and "book transfer" in error
+
+
+def test_the_card_accounts_brex_answers_as_a_bare_array_read_as_one_page():
+    def opener(request: Any, timeout: float) -> _Reply:
+        return _Reply(json.dumps([card_account("card_acc_9")]).encode())
+
+    got = brex.Brex("tok", base="https://api.brex.com", opener=opener).card_accounts()  # type: ignore[arg-type]
+    assert got.status == 200 and [a["id"] for a in brex.listed(got)] == ["card_acc_9"]
+
+
+def test_posted_at_start_is_sent_with_no_zone():
+    seen: list[str] = []
+
+    def opener(request: Any, timeout: float) -> _Reply:
+        seen.append(request.full_url)
+        return _Reply(b'{"items": [], "next_cursor": null}')
+
+    client = brex.Brex("tok", base="https://api.brex.com", opener=opener)  # type: ignore[arg-type]
+    client.card_transactions(brex_sync._start("2026-01-01"))
+    assert "posted_at_start=2026-01-01T00%3A00%3A00" in seen[0] and "Z" not in seen[0].split("posted_at_start=")[1]
+
+
+@pytest.mark.parametrize("side", ["card", "cash"])
+def test_a_company_with_only_a_card_or_only_a_cash_account_connects_and_posts(books, side):
+    fake = FakeBrex()
+    if side == "card":
+        fake.cash, fake.cash_txns = [], {}
+        fake.card_txns.append(card_txn("ct_1", "PURCHASE", 1_200))
+    else:
+        fake.cards = []
+        fake.cash_txns[CASH].append(cash_txn("cx_1", "DEPOSIT", 5_000))
+    connect_brex(books, fake)
+    brex_pass(books, fake)
+    with books.read() as c:
+        assert _feed(c, "ct_1" if side == "card" else "cx_1") is not None
+        assert _every_entry_balances(c)
+
+
+def test_a_company_with_no_card_and_no_cash_account_is_refused(books):
+    fake = FakeBrex()
+    fake.cards, fake.cash = [], []
+    found, _ = brex_sync.probe(fake)  # type: ignore[arg-type]
+    with books.transaction() as c:
+        done = act(c, OWNER, "connection_create", {"provider": "brex", "credential_id": "cred-brex", "probe": found})
+    assert done.status != "committed"
+
+
+def _openings(c: Any) -> list[tuple[str, str, int]]:
+    """Each opening line on a Brex money account's GL line: its day, its line's code and its amount."""
+    return [
+        (str(r[0]), str(r[1]), int(r[2]))
+        for r in c.execute(
+            "SELECT e.entry_date, a.code, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+            "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source_id LIKE 'opening:%' AND e.status='posted' AND "
+            "a.id IN (SELECT account_id FROM fin_money_accounts WHERE provider='brex') ORDER BY a.code"
+        )
+    ]
+
+
+def test_a_card_only_company_owing_with_no_rows_opens_the_card_liability(books):
+    """A card owing $500 and no card row from history_from on: the card line opens at what is owed (a liability),
+    dated the day before history_from."""
+    fake = FakeBrex()
+    fake.cash, fake.cash_txns = [], {}
+    fake.card_owed = 50_000
+    connect_brex(books, fake)
+    brex_pass(books, fake)
+    with books.read() as c:
+        card = _code(c, "card_program")
+        assert _openings(c) == [("2025-12-31", card, -50_000)]
+        assert _sum(c, card) == -50_000
+        assert _every_entry_balances(c)
+
+
+def test_a_cut_history_with_no_cash_rows_opens_the_day_before_history_from(books):
+    fake = FakeBrex()
+    fake.cards = []
+    fake.cash = [cash_account(balance=80_000)]
+    connect_brex(books, fake, history_from="2026-09-10")
+    brex_pass(books, fake)
+    with books.read() as c:
+        assert _openings(c) == [("2026-09-09", _code(c, "bank"), 80_000)]
