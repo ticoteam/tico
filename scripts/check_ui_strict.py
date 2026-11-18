@@ -35,7 +35,7 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
    types every other script sees. Page globals are file-local declarations. The Node scripts outside ui/ have their own
    gate on the same base config, scripts/check_node_types.py.
 
-Runs in a few seconds: one tsc pass over the UI and one over the worker. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
+Runs in a few seconds with the pinned TypeScript compiler installed by npm ci.
 """
 
 import argparse
@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "ui/tsconfig.strict.json"
 LEGACY = "ui/strict-legacy.json"  # the single list before the pieces; read from REF, never written
 STRICT = "strict"
-TSC = ["npx", "--no-install", "tsc", "-p", CONFIG, "--pretty", "false"]
+TSC = [*node_types.TSC, "-p", CONFIG, "--pretty", "false"]
 TSC_LINE = re.compile(r"^(?P<file>[^()\n]+)\((?P<line>\d+),(?P<col>\d+)\): error (?P<code>TS\d+): (?P<msg>.*)$")
 TSC_GLOBAL = re.compile(r"^error (?P<code>TS\d+): (?P<msg>.*)$")
 REQUIRED_FLAGS = (
@@ -75,7 +75,7 @@ ALLOWED_EXCLUDE = {"./vendor/**", "./assets/**", "./node_modules/**", "./observa
 WORKER_CONFIG = "ui/tsconfig.worker.json"
 WORKER_FILES = ["sw.ts"]
 WORKER_LIB = ["ES2022", "WebWorker"]
-WORKER_TSC = ["npx", "--no-install", "tsc", "-p", WORKER_CONFIG, "--pretty", "false"]
+WORKER_TSC = [*node_types.TSC, "-p", WORKER_CONFIG, "--pretty", "false"]
 # The one generated bundle (npm run build:observability): the only JavaScript that may sit under ui/ outside tests/.
 ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # Classic scripts that stay JavaScript, each with its reason (path: reason). None is left: every UI script is a .ts file.
@@ -84,7 +84,7 @@ SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
 # The UI test scripts: their own strict config, read by no baseline (rule 10).
 TESTS_CONFIG = "ui/tests/tsconfig.json"
-TESTS_TSC = ["npx", "--no-install", "tsc", "-p", TESTS_CONFIG, "--pretty", "false"]
+TESTS_TSC = [*node_types.TSC, "-p", TESTS_CONFIG, "--pretty", "false"]
 TESTS_REQUIRED = ("strict", "erasableSyntaxOnly", "verbatimModuleSyntax")
 TESTS_INCLUDE = "./**/*.cts"
 DECLARE_GLOBAL = re.compile(r"^\s*declare\s+global\b", re.M)

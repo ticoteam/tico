@@ -23,7 +23,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ts = require('typescript');
+const ts = require('@typescript/typescript6');
 
 function main() {
   const root = path.join(__dirname, '..');
