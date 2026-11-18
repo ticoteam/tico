@@ -167,7 +167,7 @@ needs Read and write on the mailbox and is audited.
 ### Send
 
 ```bash
-tico email send ana@acme.example --draft r-882...
+tico email send ana@acme.example --draft r-882... --task 1a2b3c4d
 ```
 
 `send` freezes the draft and queues it with Tico. Your sending policy is set in Tico, never in `bot.yaml`: **Settings >
@@ -179,7 +179,9 @@ Bots > <bot> > Email sending**, or the company or inbox sending policy (see [Tur
 
 Some sends always ask a person whatever the mode, for example a new correspondent, attachments, an outside Cc or many
 outside recipients, legal or money matters; the effective **Who can OK** rule decides whose yes counts. A held send
-is an OK on a task, "Send this email?", in that person's Needs you. It is bound to the frozen send: the person sees the
+is an OK on a task of its own, titled with the email ("Send: <subject> → <first recipient>"), in that person's Needs
+you. With `--task` (or, left out, the task a bot's turn works on) that task is a sub-task of the one the email is for,
+and the send's `task_id` and `approval_task_id` name both. It is bound to the frozen send: the person sees the
 whole email (the complete MIME and exact To, Cc and Bcc) and OKs it with their own click; a changed email needs a new
 OK. Nothing a bot passes releases a send, and a numbered GitHub issue authorizes nothing either. Finance queues its
 exact invoice email the same way; OKing the finance action does not OK an email nobody saw.

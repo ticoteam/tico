@@ -165,6 +165,9 @@ class Enqueue(Contract):
     automation_action_id: str = Field(default="", max_length=100)
     calendar_action_id: str = Field(default="", max_length=100)
     operation_id: str = Field(default="", max_length=200)
+    # The task this email is for: its OK, when it needs one, is asked on a sub-task of it. A bot's turn on a task names it
+    # when this is left out (`turn_task`).
+    task_id: str = Field(default="", max_length=200)
 
 
 def saved(c, scope):
@@ -628,6 +631,8 @@ def public(row):
         "body_sha256",
         "subject",
         "approval_id",
+        "task_id",
+        "approval_task_id",
         "state",
         "created_at",
         "send_after",
@@ -657,11 +662,23 @@ def settle_automation(c, row, state, detail="", message=""):
         )
 
 
+def send_title(row):
+    """What a send's OK is titled with: its subject and first recipient, so two sends waiting side by side differ."""
+    subject = " ".join(str(row["subject"] or "").split())
+    subject = (subject[:99].rstrip() + "…" if len(subject) > 100 else subject) or "(no subject)"
+    recipients = json.loads(row["recipients"] or "[]")
+    to = (" → " + recipients[0] + (f" +{len(recipients) - 1}" if len(recipients) > 1 else "")) if recipients else ""
+    return "Send: " + subject + to
+
+
 def request_approval(c, auth, row, policy):
-    """Ask for an OK of this frozen send, on a task of its own, of someone who may approve it (`approver`; the company's
-    first person when nobody can, so the send is held where someone sees it). The OK's id is the send's `approval_id`."""
+    """Ask for an OK of this frozen send, on a task of its own titled with the email (`send_title`), of someone who may
+    approve it (`approver`; the company's first person when nobody can, so the send is held where someone sees it).
+    That task is a sub-task of the send's own task when its sender may file under it: not the send's task itself, where
+    a bot's next ask would replace this one (task_engine._replace_open) and so stop the email. The OK's id is the
+    send's `approval_id`, its task the send's `approval_task_id`."""
     person = approver(c, auth, row, policy) or H.human_actor(H.default_human(c))
-    title = "Send email: " + (" ".join(str(row["subject"] or "").split())[:120] or "(no subject)")
+    parent = H.task(c, row["task_id"]) if row["task_id"] else None
     asked = task_asks.ask_ok(
         c,
         row["actor"],
@@ -670,9 +687,21 @@ def request_approval(c, auth, row, policy):
         shows=["email:" + row["id"]],
         subject=SUBJECT + row["id"],
         content=content(row),
-        title=title,
+        title=send_title(row),
+        parent_id=parent["id"] if parent and files_under(c, row["actor"], parent) else None,
     )
-    c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
+    c.execute(
+        "UPDATE email_sends SET approval_id=?,approval_task_id=? WHERE id=?",
+        (asked["requirement_id"], asked["task_id"], row["id"]),
+    )
+
+
+def files_under(c, actor, task):
+    """Whether `actor` may file a sub-task under this open task (hubdb._task_parent, checked here so a send it may not
+    file under is still asked for, on a task of its own)."""
+    if task["status"] != "open" or not H.task_private_readable(c, actor, task):
+        return False
+    return not actor.startswith("bot:") or H.task_participant(c, actor, task) or H.task_ancestor_party(c, actor, task)
 
 
 def shown_to(c, who, row):
@@ -795,6 +824,8 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         # An OK is asked for this snapshot once it is written (`request_approval`): nothing named in the request is
         # one. `body.approval_id` is only ever a person's message the second reviewer reads (`review_context`).
         "approval_id": "",
+        "task_id": body.task_id or None,
+        "approval_task_id": None,
         "classification": dump(checks),
         "decision": "{}",
         "state": "pending",
@@ -833,6 +864,21 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         )
     H.event(c, actor, "email.queued", ident, {"mailbox": mailbox, "state": row["state"]})
     return public(c.execute("SELECT * FROM email_sends WHERE id=?", (ident,)).fetchone())
+
+
+def turn_task(c, who):
+    """The task a bot's turn works on (the run's own task, else the task its message is in), or None."""
+    if not who.attempt_id:
+        return None
+    found = c.execute(
+        "SELECT a.task_id,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
+    ).fetchone()
+    if not found:
+        return None
+    if found["task_id"]:
+        return str(found["task_id"])
+    message = H.message(c, found["message_id"])
+    return H.message_task_id(message, H.conversation(c, message["conversation_id"])) if message else None
 
 
 def lint_findings(c, actor, mailbox, snap, reply_id):
@@ -1518,6 +1564,12 @@ def install(app, store, auth, mutate):
             actor = who.actor
             if not access.may(c, actor, body.mailbox.strip().lower())["send"]:
                 raise Problem("forbidden", "The sender cannot send from this inbox", 403)
+            if body.task_id:
+                task_id = auth.resolve_task(c, who, body.task_id)
+                auth.task(c, who, task_id, tags=False)
+            else:
+                task_id = turn_task(c, who)
+            body = body.model_copy(update={"task_id": task_id or ""})
             mailbox = body.mailbox.strip().lower()
             snap = snapshot(body.raw, mailbox)
             # What deciding it inside the write will ask Gmail, asked here, under no write lock.
