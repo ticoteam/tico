@@ -49,6 +49,10 @@ REPLY_VIA = (None, "", "slack", "token", "assistant")
 
 _OPEN = "SELECT * FROM question_marks WHERE cleared_at IS NULL ORDER BY created_at, id"
 _OPEN_ON_TASK = "SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id=? ORDER BY created_at, id"
+_OPEN_ON_TASKS = (
+    "SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id IN (SELECT value FROM json_each(?)) "
+    "ORDER BY created_at, id"
+)
 
 
 class Asking:
@@ -169,20 +173,22 @@ def open_rows(conn: sqlite3.Connection) -> list[Row]:
 
     read_cache = cast(Any, _read_cache)
 
-    def build() -> list[Row]:
-        rows = [dict(r) for r in conn.execute(_OPEN)]
-        if not rows:
-            return []
-        # Their messages, chats and tasks in a few reads for all of them, never a few per mark (a never-stuck pass).
-        stored = H.prime_messages(conn, {m["message_id"] for m in rows})
-        from . import task_privacy as _task_privacy
+    return read_cache.value(conn, ("question_marks_open",), lambda: _answerable_open(conn, _OPEN), shared=True)
 
-        cast(Any, _task_privacy).prime_messages(conn, stored.values())
-        H.prime_tasks(conn, {m["task_id"] for m in rows if m["task_id"]}, with_tags=False)
-        chats = chat_rows(conn, {m["conversation_id"] for m in stored.values()})
-        return [m for m in rows if answerable(conn, m, chats)]
 
-    return read_cache.value(conn, ("question_marks_open",), build, shared=True)
+def _answerable_open(conn: sqlite3.Connection, sql: str, args: tuple[object, ...] = ()) -> list[Row]:
+    """The open ❓ `sql` reads that their person can still answer (`answerable`), oldest first."""
+    rows = [dict(r) for r in conn.execute(sql, args)]
+    if not rows:
+        return []
+    # Their messages, chats and tasks in a few reads for all of them, never a few per mark (a never-stuck pass).
+    stored = H.prime_messages(conn, {m["message_id"] for m in rows})
+    from . import task_privacy as _task_privacy
+
+    cast(Any, _task_privacy).prime_messages(conn, stored.values())
+    H.prime_tasks(conn, {m["task_id"] for m in rows if m["task_id"]}, with_tags=False)
+    chats = chat_rows(conn, {m["conversation_id"] for m in stored.values()})
+    return [m for m in rows if answerable(conn, m, chats)]
 
 
 def chat_rows(conn: sqlite3.Connection, ids: Iterable[object]) -> dict[str, Row]:
@@ -358,6 +364,24 @@ def on_task(conn: sqlite3.Connection, task_id: object) -> list[Row]:
         return [m for m in rows if answerable(conn, m, chats)]
 
     return read_cache.value(conn, ("question_marks_on_task", tid), build, shared=True)
+
+
+def prime_on_tasks(conn: sqlite3.Connection, task_ids: Iterable[object]) -> None:
+    """Read the open ❓ of many tasks at once for `on_task` in this snapshot: a pass over many tasks (waiting_on.prime)
+    reads them in one statement (question_marks_open_task, the ids as one JSON list), never one read and its
+    messages and chats per task, nor the company's every open ❓ when it reads only some tasks. Nothing to do when the
+    snapshot already read every open ❓ (`open_rows`), which `on_task` then reuses."""
+    from . import read_cache as _read_cache
+
+    values = cast(Any, _read_cache).cache(conn)
+    if values is None or ("question_marks_open",) in values:
+        return
+    unread = [t for t in sorted({str(t) for t in task_ids if t}) if ("question_marks_on_task", t) not in values]
+    if not unread:
+        return
+    kept = _answerable_open(conn, _OPEN_ON_TASKS, (H._dump(unread),))
+    for tid in unread:
+        values[("question_marks_on_task", tid)] = [m for m in kept if m["task_id"] == tid]
 
 
 REPLIED_SQL = "SELECT task_id, COUNT(*) FROM question_marks WHERE cleared_message_id IS NOT NULL AND task_id <> '' GROUP BY task_id"

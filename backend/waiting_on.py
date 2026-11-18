@@ -772,6 +772,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     task_depends.prime(conn, ids)  # the tasks each depends on that are still open
+    question_marks.prime_on_tasks(conn, ids)  # each task's open ❓ (`of` asks question_marks.on_task of each)
     # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
     bots: list[str] = []
     for row in rows:
@@ -1301,6 +1302,8 @@ def _lists(
     paused: dict[str, dict[str, Row]] = {}
     seen = _seen(conn)
     fixers: dict[str, str | None] = {}
+    # Every open ❓, which the people's ❓ items below read anyway: each task's waits then take theirs from it.
+    question_marks.open_rows(conn)
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)

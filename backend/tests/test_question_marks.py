@@ -171,6 +171,27 @@ def test_a_list_over_many_tasks_reads_the_open_question_marks_once(c, general):
     assert not [s for s in seen if "cleared_at IS NULL AND task_id=?" in s], seen
 
 
+def test_a_pass_over_some_tasks_reads_their_question_marks_in_one_statement(c, general):
+    """A pass over many tasks (waiting_on.prime: GET /api/v2/health's Needs you, a never-stuck pass, a task list) reads
+    their open ❓ in one statement, never one read with its messages and chats per task, and not the company's every
+    open ❓ when it reads only some of them."""
+    tasks = [X.new_task(c, ANA, f"Write note {k}", assignee=BUILDER)["id"] for k in range(4)]
+    other = X.new_task(c, ANA, "Elsewhere", assignee=BUILDER)["id"]
+    marks = {task_id: _ask(c, task_id, text=f"Which tone should note {k} take?") for k, task_id in enumerate(tasks)}
+    _ask(c, other, text="Which tone should the other note take?")
+    seen = []
+    c.set_trace_callback(seen.append)
+    try:
+        waits = W.waiting_on_many(c, tasks)
+    finally:
+        c.set_trace_callback(None)
+    for task_id in tasks:
+        assert [w.requirement_id for w in waits[task_id] if Q.mark_id(w.requirement_id)] == [Q.wait_id(marks[task_id])]
+    assert len([s for s in seen if "FROM question_marks WHERE cleared_at IS NULL" in s]) == 1, seen
+    assert not [s for s in seen if "cleared_at IS NULL AND task_id=?" in s], seen
+    assert not [s for s in seen if "question_marks WHERE cleared_at IS NULL ORDER BY" in s], seen
+
+
 @pytest.mark.parametrize("end", ["done", "closed", "merged", "deleted"])
 def test_the_task_ending_clears_it(c, general, end):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
