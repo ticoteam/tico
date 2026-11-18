@@ -4571,14 +4571,15 @@ class Execution:
             + ("AND j.id=? " if job_id is not None else "")
             + ("AND " + H.in_person_name_sql() + " " if people_only else "")
             +
-            # A redirect first (it replaces a turn just stopped), then a person's chat. Within a bot's work, favor a
-            # live reply over task rank, so a call's prep cannot take the place of the answer it is preparing.
+            # A redirect first (it replaces a turn just stopped), then a person's chat. Favor serving a live
+            # meeting over task rank, so call prep does not delay opening the call's bot session or answering.
             "ORDER BY j.redirect DESC,CASE WHEN "
             + H.in_person_name_sql()
             + " THEN 0 ELSE 1 END,"
             f"CASE j.bot_id {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,"
             "CASE WHEN j.created_at<? THEN j.created_at ELSE '~' END,"
-            "(json_extract(m.refs,'$.live_meeting.turn_id') IS NULL),"
+            "CASE WHEN m.sender_id='keeper' AND json_extract(m.refs,'$.live_meeting.meeting_id') IS NOT NULL "
+            "THEN 0 ELSE 1 END,"
             "(qt.rank IS NULL),qt.rank,j.created_at,j.id",
             (
                 *bots,
