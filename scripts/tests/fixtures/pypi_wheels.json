@@ -297,7 +297,7 @@
  "click==8.5.0": [
   "py3-none-any"
  ],
- "croniter==6.2.4": [
+ "croniter==7.0.0": [
   "py3-none-any"
  ],
  "cryptography==50.0.2": [
@@ -1021,7 +1021,7 @@
  "pymysql==1.2.4": [
   "py3-none-any"
  ],
- "pypdf==6.21.4": [
+ "pypdf==7.1.0": [
   "py3-none-any"
  ],
  "python-dateutil==2.9.0.post0": [
@@ -1104,7 +1104,7 @@
   "cp39-cp39-win32",
   "cp39-cp39-win_amd64"
  ],
- "reportlab==4.5.1": [
+ "reportlab==5.1.0": [
   "py3-none-any"
  ],
  "s3transfer==0.19.2": [

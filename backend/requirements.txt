@@ -28,7 +28,7 @@ charset-normalizer==3.5.2
     # via reportlab
 click==8.5.0
     # via uvicorn
-croniter==6.2.4
+croniter==7.0.0
     # via -r requirements.in
 cryptography==50.0.2
     # via
@@ -91,7 +91,7 @@ pymongo==4.20.0
     # via -r requirements.in
 pymysql==1.2.4
     # via -r requirements.in
-pypdf==6.21.4
+pypdf==7.1.0
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via
@@ -101,7 +101,7 @@ python-multipart==0.0.34
     # via -r requirements.in
 pyyaml==6.0.3
     # via -r requirements.in
-reportlab==4.5.1
+reportlab==5.1.0
     # via -r requirements.in
 s3transfer==0.19.2
     # via boto3
