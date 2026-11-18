@@ -82,7 +82,8 @@ def test_nobody_is_woken_or_offered_a_snooze_while_it_waits(c, eng, later):
         assert X.wakes(c, task_id) == []  # not on entry
         assert W.turns(c, E.task(c, task_id)) == set() and W.turn(c, E.task(c, task_id), paused=True) is None
     assert later(seconds=10) == {}
-    assert later(days=5) == {"late": 2}  # Late is the label only: the manager bot has no move here
+    # A cause only the Owner fixes is a person's turn: never Late, and the manager bot has no move here.
+    assert later(days=5) == {}
     for task_id in (first, second):
         assert X.wakes(c, task_id) == []
         assert dict(H._one(c, "SELECT level, tries FROM visits WHERE task_id=?", (task_id,))) == {
