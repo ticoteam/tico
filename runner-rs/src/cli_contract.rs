@@ -316,8 +316,9 @@ fn both_clis_report_a_version_the_runner_can_read() {
             out.trim()
         );
         println!("cli contract: {} {found}", m.executable);
-        // A CLI that takes a message for the running turn (`steer`) may need a minimum version for it.
-        if m.capabilities.steer {
+        // Claude Code turns steering on from its own version line (hosts/claude.rs read_features); no other host
+        // gates steering on `--version`, so only Claude Code's output is read for that line.
+        if m.capabilities.steer && m.host == "claude" {
             assert!(
                 crate::hosts::claude::own_version(&out).is_some(),
                 "`{} --version` decides steering; Claude Code's own version line could not be read from {:?}",
