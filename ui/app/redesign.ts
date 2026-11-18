@@ -89,7 +89,7 @@ for (const name of RD_NAV_NAMES) rdNavPaint(name, document.documentElement.class
 const RD_LIB_KEY = 'tico.nav.library';
 const RD_LIB = {inside: false, was: false, mem: false};
 // Contacts sits on the Team header, so its page (and its old Directory address) leaves Library as it is.
-const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && !rdUnder(p, DIR_OLD_ROUTE) && [DOCS, MEETINGS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
+const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && !rdUnder(p, DIR_OLD_ROUTE) && [DOCS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
 function rdLibRemember(open: boolean): void { RD_LIB.mem = open; try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) === 'open'; } catch { return RD_LIB.mem; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
