@@ -96,9 +96,10 @@ def test_a_demoted_key_adder_can_remove_a_rotated_key_only_while_the_tool_is_vis
     assert get(api, f"api-tools/{tid}")["keys"][0]["id"] == cid
     assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[
-            0
-        ] == "human:ben"
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
 
 
 def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):

@@ -397,14 +397,17 @@ def test_a_demoted_adder_can_remove_a_shared_website_account_without_access_to_i
     start(api)
     tid = website(api)
     aid = account(api, tid, token="ben-test", totp=KEY)
+    second = account(api, tid, token="ben-test", username="back-office@acme.example")
     api.app.state.store.settings.credential_admins = ("ana@acme.example",)
-    [row] = get(api, f"website-tools/{tid}", "ben-test")["accounts"]
-    assert row["id"] == aid and row["can_remove"] and not row["can_manage"] and not row["can_use"]
+    rows = {row["id"]: row for row in get(api, f"website-tools/{tid}", "ben-test")["accounts"]}
+    row = rows[aid]
+    assert row["can_remove"] and not row["can_manage"] and not row["can_use"]
     assert "username" not in row and not row["has_totp"]
     path = f"website-tools/{tid}/accounts/{aid}"
     call(api, "DELETE", path, token="cara-test", expected=403)
     post(api, f"credentials/{aid}/reveal", {}, "ben-test", expected=403)
     assert call(api, "DELETE", path, token="ben-test")["deleted"]
+    assert call(api, "DELETE", f"credentials/{second}", token="ben-test")["deleted"]
 
 
 def test_the_code_route_gives_a_person_who_uses_it_the_code_logs_it_without_the_code_and_slows_down(api):

@@ -2,8 +2,8 @@
 
 A subscription is one of the company's model logins or keys, saved once in Tico rather than on a computer: a Claude
 setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a `codex login`), or an Anthropic or
-OpenAI API key. It belongs to the company; `added_by` only says who saved it. A plan (Claude or ChatGPT) has an owner
-(`owner_id`), the person whose plan it is: the one who adds it, unless an owner or admin names another active person of
+OpenAI API key. It belongs to the company. `added_by` identifies the person who saved it and can remove it. A plan
+(Claude or ChatGPT) has an owner (`owner_id`), the person who adds it unless an owner or admin names another active person of
 the company, then or later. A plan is meant for its owner's own bots, not shared ones (the Add pop-up says so). An API
 key bills per use and has no owner; a company may save many. The value is a service row of the credential vault
 (`credential_id`, CREDENTIAL + the subscription's id; backend/credentials.py `keep_service`), never shown again, never

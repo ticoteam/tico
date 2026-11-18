@@ -1244,7 +1244,9 @@ def delete_account(c: Any, who: Any, tool_id: str, account_id: str, admins: Iter
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
     if not vaults.may_remove(who, account["created_by"], manages=_may_manage(c, who, account, admins, auth)):
-        raise Problem("forbidden", "Ask a credential administrator or the account's holder to remove this account.", 403)
+        raise Problem(
+            "forbidden", "Ask a credential administrator or the account's holder to remove this account.", 403
+        )
     api_tools._drop_key(c, who, account["id"])
     _close(str(account["id"]))
     with _spent_lock:

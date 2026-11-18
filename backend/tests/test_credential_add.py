@@ -206,9 +206,12 @@ def test_a_bot_removes_its_own_key_through_mcp(api, monkeypatch):
     assert not err and out["deleted"]
     assert credential(api, "CLOSE_API_KEY") == []
     with api.app.state.store.read() as c:
-        assert c.execute(
-            "SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (own["tool_id"],)
-        ).fetchone()[0] == "bot:ops"
+        assert (
+            c.execute(
+                "SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (own["tool_id"],)
+            ).fetchone()[0]
+            == "bot:ops"
+        )
 
 
 def test_a_bot_never_overwrites_anyone_elses_key_nor_gives_its_own_away(api, monkeypatch):

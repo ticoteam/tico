@@ -2615,6 +2615,7 @@ def install_views(app, store, auth, mutate, task_view):
             from .mail import can_access
 
             admins = store.settings.credential_admins
+            credential_access = can_open(c, who, admins)
             role = auth.company_role(who)
             domains_ = Access.company_domains(c, store.settings, auth.owner_email)
             return {
@@ -2640,8 +2641,8 @@ def install_views(app, store, auth, mutate, task_view):
                 "has_tokens": personal_tokens.has_live(c, who),
                 "proxy_session": who.via_proxy,
                 "sign_in_name": auth.sign_in_name(request.headers) if who.via_proxy else "",
-                "credential_access": bool(can_open(c, who, admins)),
-                "credential_remove_access": has_removable_loose_key(c, who),
+                "credential_access": credential_access,
+                "credential_remove_access": not credential_access and has_removable_loose_key(c, who),
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),
