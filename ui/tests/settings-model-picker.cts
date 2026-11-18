@@ -227,7 +227,9 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await moreOpen(panel), true);
     await page.keyboard.press('Tab');   // Compact
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-choice-compact')), true);
-    await page.keyboard.press('ArrowDown');
+    // A native select's ArrowDown changes the value on Linux but only opens its popup on macOS: pick the size the same way
+    // everywhere, then Enter on the focused select applies it.
+    await page.locator('#sb-choice-pop [data-choice-compact]').selectOption('100000');
     await page.keyboard.press('Enter');
     await reloaded(page, 'researcher', 5);
     assert.deepEqual(calls.map(c => [c.what, c.body.compact_at]), [['compact-at', 100_000]], 'Enter applied the size after Default');

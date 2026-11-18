@@ -170,6 +170,9 @@ class Pulls:
         else:
             setattr(self.svc, name, value)
 
+    def __delattr__(self, name):
+        delattr(self.svc, name)
+
     def tick(self):
         with self.svc.lock:
             if not self.svc.off:
