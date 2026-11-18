@@ -33,7 +33,7 @@ A customer with no segment field is counted in a no-segment row and never droppe
 - A test is an idea task owned by the Growth Manager. Its label says where it is: `growth:ideas`, `growth:running`, `growth:measuring`. It ends done (Kept) or closed (Dropped: failed, inconclusive or stopped). Nothing ends a running test while it runs.
 - A test starts only when the Growth Manager (`growth-manager`) picks it at the Monday growth meeting, on a channel at stage `testing` or `scaling` with budget left (`tico growth channel list`). A paused channel gets no new test.
 - Team capacity, from the marketing team's growth meeting: at most six running tests across the team, and at most two new tests per channel Owner at a time.
-- An idea carries no prediction, hypothesis, score or bet. It says the segment, the change, the channel and the measure. The prediction is written once, as a number, on the Go-live page in Building; a hypothesis, score or bet is never written.
+- An idea carries no prediction, hypothesis, score or bet. It says the segment, the change, the channel and the measure. The prediction is written once, as a number, on the Go-live page in Building, by the channel Owner who runs the test; a hypothesis, score or bet is never written in an idea.
 - A test is read only after its own window and not in its first seven days. The seven days are a team default.
 - Every finished test gets one line in its comment on what was learned and the numbers behind it.
 
