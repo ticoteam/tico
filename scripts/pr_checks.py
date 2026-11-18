@@ -2799,10 +2799,12 @@ def pytest_leg(interpreter, jobs, suite, args):
 
 def collected(files, root=ROOT, execute=subprocess.run):
     """Default (not slow) tests per file among `files`, as the plan's collect() counts them, or None when collection
-    fails. A file with none drops out, as it does from the pull request plan."""
+    fails. A file with none drops out, as it does from the pull request plan. Like the run, collection drops an inherited
+    PYTEST_ADDOPTS: a -k or -m in it would leave a selected file uncounted, and so never run."""
     result = execute(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", *files],
         cwd=root,
+        env={k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"},
         capture_output=True,
         text=True,
         check=False,

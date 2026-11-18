@@ -2440,6 +2440,15 @@ def test_a_local_run_picks_what_the_light_pull_request_run_picks(branch, capsys,
     assert "tests/test_far.py" in pytest_leg(branch.commands[0])[0]
 
 
+def test_local_collection_counts_every_selected_file_whatever_pytest_addopts_says(tmp_path, monkeypatch):
+    # Review of #4086: an inherited PYTEST_ADDOPTS filter made collection leave a selected file uncounted, so the cap
+    # dropped it and its failing test never ran. The real collector, as the run, ignores it.
+    (tmp_path / "test_a.py").write_text("def test_keep(): pass\n")
+    (tmp_path / "test_b.py").write_text("def test_other(): assert False\n")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k keep")
+    assert checks.collected(["test_a.py", "test_b.py"], root=tmp_path) == Counter({"test_a.py": 1, "test_b.py": 1})
+
+
 def pytest_leg(command):
     """The pytest command and the report check of a Python leg, as heavy.sh is given them: bash -c '<pytest>; ...'."""
     script = command[command.index("-c") + 1]
