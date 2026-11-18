@@ -20,6 +20,7 @@ A requirement never waits on a person who left, was removed or cannot sign in (`
 """
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -285,6 +286,7 @@ def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
         conn.execute(
             "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
             "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
+            "t.owner_id AS owner_id, t.conversation_id AS conversation_id, "
             "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
             "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
             "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
@@ -319,6 +321,8 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
 
 def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     filed = _filed(conn, task["visit"]["id"])
+    if _at_head_gate(conn, task):
+        return _second_review(conn, task, requirement, filed)
     if not filed:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No task filed yet")
     still_open = [f for f in filed if f["status"] == "open"]
@@ -335,6 +339,87 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
         line = f"{title} was closed: {why}" if why else f"{title} was closed"
         return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
     return Standing(requirement, MET, line="Done")
+
+
+# A second review's owner posts "PR <url> at <commit>" (its request text): the PR and the newest commit it read.
+REVIEW_NAMES_RE = re.compile(
+    r"PR\s+https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)\s+at\s+([0-9a-f]{7,40})\b"
+)
+
+
+def _at_head_gate(conn: "sqlite3.Connection", task: Row) -> bool:
+    """Whether the task's stage is a Review stage: its page is read at the newest commit (`at_head`). Its linked_done
+    gate is the second review (`_second_review`), not any task filed on the visit."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL "
+            "AND json_extract(settings, '$.at_head')=1 LIMIT 1",
+            (task.get("stage_id"),),
+        ).fetchone()
+        is not None
+    )
+
+
+def _named_commits(conn: "sqlite3.Connection", filed: Row) -> list[tuple[str, str]]:
+    """(PR ref, commit) pairs the filed task's owner named in its messages, oldest first."""
+    from .item_sources import github as F
+
+    named: list[tuple[str, str]] = []
+    for (body,) in conn.execute(
+        "SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND kind='say' "
+        "AND deleted_at IS NULL AND superseded_at IS NULL ORDER BY created_at, id",
+        (filed["conversation_id"], filed["owner_id"]),
+    ).fetchall():
+        for repo, number, sha in REVIEW_NAMES_RE.findall(str(body or "")):
+            named.append((F.pr_ref(repo, int(number)), sha.lower()))
+    return named
+
+
+def _names_heads(named: list[tuple[str, str]], heads: dict[str, str | None]) -> bool:
+    """Whether the (PR ref, commit) pairs name the newest commit of every PR in `heads`. No PR linked: any review does."""
+    return all(
+        any(ref == name and head is not None and head.startswith(sha) for name, sha in named)
+        for ref, head in heads.items()
+    )
+
+
+def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, filed: list[Row]) -> Standing:
+    """The Review stage's gate. Only a task a review-pool reviewer owns counts, and only when it is Done and names the
+    newest commit of every PR linked to the task (no PR linked: Done is enough). Any other filed task, a review of an
+    older commit, or a PR whose newest commit is not read yet, leaves the gate not met: it never passes by accident."""
+    from .item_sources import github as F
+    from .pipeline_seats import reviewer_actors
+
+    pool = reviewer_actors(conn)
+    reviews = [f for f in filed if f["owner_id"] in pool]
+    if not reviews:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "No second review filed yet")
+    heads = F.heads(conn, task["id"])
+    if any(head is None for head in heads.values()):
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "The newest commit of a linked PR is not read yet")
+    still_open = [f for f in reviews if f["status"] == "open"]
+    if still_open:
+        first = still_open[0]
+        return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
+    done = [f for f in reviews if f["status"] == "done"]
+    for f in done:
+        if _names_heads(_named_commits(conn, f), heads):
+            return Standing(requirement, MET, line="Done")
+    if done:
+        first = done[0]
+        title = first.get("title") or "The second review"
+        return Standing(
+            requirement,
+            NOT_MET,
+            task.get("owner_id"),
+            f"{title} did not name the newest commit: file a second review of it",
+            first["id"],
+        )
+    first = reviews[0]
+    why = (first.get("why") or "").strip()
+    title = first.get("title") or "A second review"
+    line = f"{title} was closed: {why}" if why else f"{title} was closed"
+    return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
 
 
 # The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:

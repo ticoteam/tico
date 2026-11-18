@@ -11,6 +11,7 @@ import pytest
 from backend import task_delete
 from backend import task_engine as E
 from backend import task_requirements as R
+from backend.item_sources import github as F
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -268,6 +269,51 @@ def test_a_done_replacement_satisfies_linked_work_after_a_filed_task_closes(c, g
     X.say_done(c, retry)
     E.advance(c, retry["id"])
     assert E.task(c, parent["id"])["status"] == "done"
+
+
+def test_a_review_gate_counts_only_a_reviewers_second_review_of_the_newest_commit(c, general, monkeypatch):
+    # A Review stage: its page at the newest commit, and the second review it waits on. A task a builder owns, or a
+    # review of an older commit, never passes it; a reviewer's review of the newest commit does.
+    reviewer = X.bot(c, "reviewer-2")
+    c.execute("UPDATE bot_settings SET template='reviewer' WHERE bot_id=?", (reviewer.split(":", 1)[1],))
+    stages = (
+        {
+            "name": "Review",
+            "owner": "bot:manager",
+            "requirements": [{"kind": "page", "settings": {"at_head": True}}, {"kind": "linked_done"}],
+        },
+    )
+    X.pipeline(c, "product", "Product", stages)
+    parent = X.new_task(c, ANA, "Checkout flow", "product")
+    head = "1" * 40
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+
+    def gate():
+        return R.standings(c, E.task(c, parent["id"]))[1]
+
+    def review_says(row, commit):
+        # The reviewer's request text, as the review posts it: the PR and the newest commit it read.
+        body = f"PR https://github.com/acme/app/pull/7 at {commit}."
+        c.execute(
+            "INSERT INTO messages(id, conversation_id, sender_id, kind, body, created_at) VALUES(?,?,?,?,?,?)",
+            (H.new_id(), row["conversation_id"], row["owner_id"], "say", body, "2026-11-18T04:00:00Z"),
+        )
+
+    builder = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    assert (gate().state, gate().line) == (R.NOT_MET, "No second review filed yet")
+    E.move(c, builder["id"], E.CLOSED, ANA, "Not a review")
+    review = X.new_task(c, ANA, "Second review: acme/app#7", assignee=reviewer, parent=parent["id"])
+    assert (gate().state, gate().on) == (R.WAITING, review["id"])
+    review_says(review, "2" * 40)
+    X.say_done(c, review)
+    E.advance(c, review["id"])
+    assert gate().state == R.NOT_MET and "did not name the newest commit" in gate().line
+
+    again = X.new_task(c, ANA, "Second review: acme/app#7", assignee=reviewer, parent=parent["id"])
+    review_says(again, head)
+    X.say_done(c, again)
+    E.advance(c, again["id"])
+    assert gate().state == R.MET
 
 
 def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, general):
