@@ -1497,9 +1497,10 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/growth/cohorts/conflicts")
     def growth_cohort_conflict(request: Request, body: M.GrowthConflictResolve):
-        """The source's owner or an admin: a number someone typed as actual that a synced source disagrees with. Keep
+        """The source's owner, an admin or the Growth Manager (which asks whoever typed it): a number someone typed as
+        actual that a synced source disagrees with. Keep
         the typed number (the source's value is not raised again) or use the source's (it then belongs to it). With
-        `against: computed` (or `keep: computed`), the channel's owner or an admin: a typed actual that differs from the
+        `against: computed` (or `keep: computed`), the channel's owner, an admin or the Growth Manager: a typed actual that differs from the
         figure computed from customer facts; keep typed or computed, and the choice holds across later loads."""
         who = request.state.identity
 
@@ -1508,7 +1509,7 @@ def install(app, store, auth, mutate):
             slug = body.channel if body.channel not in (None, "", UNKNOWN) else None
             if body.keep == "computed" or body.against == "computed":
                 # A typed actual beside the figure computed from customer facts: the channel's owner chooses.
-                return choose(c, who.actor, admin(auth, who), slug, body.month, body.field, body.keep)
+                return choose(c, who.actor, SETUP.editor(auth, who), slug, body.month, body.field, body.keep)
             channel_id = ""
             if slug:
                 found = channel(c, slug)
@@ -1520,7 +1521,7 @@ def install(app, store, auth, mutate):
             )
             if not row:
                 raise Problem("not_found", f"No numbers for {slug or UNKNOWN} in {body.month}", 404)
-            return GS.resolve(c, who.actor, admin(auth, who), row["id"], body.field, body.keep)
+            return GS.resolve(c, who.actor, SETUP.editor(auth, who), row["id"], body.field, body.keep)
 
         return mutate(request, body, work)
 
@@ -1575,20 +1576,3 @@ def install(app, store, auth, mutate):
         answer(who, {})  # the first open, when it is one
         with store.read() as c:
             return SETUP.show(c, auth, who)
-
-    @app.post("/api/v2/growth/setup/shown")
-    def growth_setup_shown(request: Request, body: M.Empty):
-        """A person's Get started panel said "you're set up" (ui/app/growth-start.ts): it is said once per team, so the
-        panel does not come back. Before setup is done it records nothing. Answers as GET /api/v2/growth/setup."""
-        who = request.state.identity
-
-        def work(c):
-            reader(who)
-            if who.role == "bot":
-                raise Problem(
-                    "forbidden", "The Get started panel is a person's; a bot reads GET /api/v2/growth/setup", 403
-                )
-            SETUP.shown(c)
-            return SETUP.show(c, auth, who)
-
-        return mutate(request, body, work)

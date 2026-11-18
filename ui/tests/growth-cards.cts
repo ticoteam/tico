@@ -5,9 +5,8 @@
 // its tasks and "+N more"; Retention's shaded cells with dark text on light shades; the Growth board's lanes); a month
 // picked reads the cards again for it and the address keeps it; a Number added from its form sends its metric and
 // channel; Settings lists the channels with their months; a member reads and arranges nothing; a phone has one
-// column and no sideways scroll, in both themes. With synced sources (task #309): the banner names the failing and stale
-// sources and what they fill, each Number's line says where it came from, a conflict's Use sends the choice and goes,
-// Sources shows each source's health, Connect a source maps a file's columns and reports the run, and a month's synced
+// column and no sideways scroll, in both themes. With synced sources (task #309): no banner, each Number's line says where
+// it came from, a number a source disagrees with is marked with nothing to choose (the Growth Manager asks), Sources shows each source's health, Connect a source maps a file's columns and reports the run, and a month's synced
 // number is locked while its typed ones save alone. TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Locator, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -43,9 +42,9 @@ const GENERAL = pipe('general', 'General', null, 'general');
 const PIPELINES = [GENERAL, pipe('lead', 'Lead', 'growth', 'lead'), pipe('growth-experiments', 'Growth Experiments', 'growth', 'growth-experiments')];
 const BOARD = '#/tasks?pipeline=growth-experiments&who=all';
 const upTo = (month: string) => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
-// Synced sources (backend/growth_sync.py), on for one block: one Fresh, one Failing, one Stale, one typed by hand; and a
-// conflict on October's new customers for Search (typed 120, the warehouse says 131) until someone chooses.
-const SYNC = {on: false, conflict: true, may: true, many: false, rowsFail: 0};
+// Synced sources (backend/growth_sync.py), on for one block: one Fresh, one Failing, one Stale, one typed by hand; and
+// October's new customers for Search typed 48 while the warehouse says 131.
+const SYNC = {on: false, conflict: true, rowsFail: 0};
 // A typed actual of 70% beside Search's computed day 30 (backend/growth.py typed_beside): `chosen` once its owner chose.
 const DIFFERS = {on: false, chosen: null as string | null, may: true};
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3600e3).toISOString();
@@ -58,15 +57,13 @@ const SOURCES = () => [
     health_since: '2026-11-17T09:00:00Z', last_good_run: '2026-11-03T09:00:00Z', last_error: null, has_file: true},
   {id: 's4', system: 'HubSpot', truth_for: 'leads', reach_kind: 'mcp', may: 'read', owner_ref: null, kind: null, fills: [], health: 'not_synced'},
 ];
-const CONFLICT = () => ({channel: 'search', channel_name: 'Search', month: '2026-10', field: 'new_customers', typed: 120, value: 131, source: 'Signups (warehouse)', may: SYNC.may});
 const ORIGIN: Record<string, () => unknown> = {
   new_customers: () => ({fields: [], synced: [{source_id: 's2', source: 'Signups (warehouse)', at: '2026-11-11T06:00:00Z', health: 'failing', since: '2026-11-12T06:00:00Z'}],
-    typed: {count: 1, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'actual'},
-    conflicts: !SYNC.conflict ? [] : SYNC.many ? Array.from({length: 5}, CONFLICT) : [CONFLICT()], conflict_count: !SYNC.conflict ? 0 : SYNC.many ? 7 : 1}),
+    typed: {count: 1, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'actual'}}),
   cac: () => ({fields: ['spend', 'bot_cost', 'new_customers'], synced: [{source_id: 's1', source: 'Finance ad spend', at: hoursAgo(2), health: 'fresh', since: null}],
-    typed: {count: 3, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'estimate'}, conflicts: [], conflict_count: 0}),
+    typed: {count: 3, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'estimate'}}),
   kept_d30: () => ({fields: [], synced: [{source_id: 's3', source: 'Retention sheet', at: '2026-11-03T09:00:00Z', health: 'stale', since: '2026-11-17T09:00:00Z'}],
-    typed: null, conflicts: [], conflict_count: 0}),
+    typed: null}),
 };
 const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
   growth_number: (s, month) => {
@@ -135,13 +132,13 @@ const GM = {name: 'growth-manager', display_name: 'Growth Manager', org_parent: 
 // GET /api/v2/growth/setup (backend/growth_setup.py show) with the first `done` steps done, as the panel reads it.
 const STEPS = ['settings', 'channel', 'source', 'month'];
 const SEARCH = {slug: 'search', name: 'Search'};
-interface Setup {done: boolean; celebrate: boolean; steps: {step: string; done: boolean}[]; next: Record<string, unknown> | null; channel: typeof SEARCH | null;
+interface Setup {done: boolean; steps: {step: string; done: boolean}[]; next: Record<string, unknown> | null; channel: typeof SEARCH | null;
   set: Record<string, unknown>; you_may: Record<string, boolean>}
-function setupAt(done: number, {may = true, sources = 1, celebrate = false}: {may?: boolean; sources?: number; celebrate?: boolean} = {}): Setup {
+function setupAt(done: number, {may = true, sources = 1}: {may?: boolean; sources?: number} = {}): Setup {
   const step = STEPS[done];
   const next = step ? {step, number: done + 1, says: '', you_may: may, ...(may ? {} : {who_may: [{ref: 'human:ana', name: 'Ana Silva'}, {ref: 'human:ben', name: 'Ben Ode'}]}),
     ...(step === 'source' ? {sources} : {}), ...(step === 'month' ? {month: '2026-10'} : {})} : null;
-  return {done: done >= 4, celebrate, steps: STEPS.map((s, i) => ({step: s, done: i < done})), next, channel: done >= 1 ? SEARCH : null,
+  return {done: done >= 4, steps: STEPS.map((s, i) => ({step: s, done: i < done})), next, channel: done >= 1 ? SEARCH : null,
     set: {settings: done >= 1 ? {unit: 'customers', revenue_month: 80, margin_pct: 70} : null, channel: done >= 2 ? SEARCH : null,
       source: done >= 3 ? {system: 'Google Ads', truth_for: 'ad spend'} : null, month: done >= 4 ? {month: '2026-10', spend: 1800, new_customers: 6} : null},
     you_may: {settings: may, channels: may, sources: may, months: may}};
@@ -199,7 +196,6 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
       return [200, {customers: 2, removed: 0, unknown_channel: 1}];
     }
     if (p === '/api/v2/growth/setup') return [200, setup];
-    if (p === '/api/v2/growth/setup/shown') { if (setup.done) setup.celebrate = false; return [200, setup]; }
     // A channel added finishes step 2: the panel reads its steps again after the save.
     if (p === '/api/v2/growth/channels' && method === 'POST') { Object.assign(setup, setupAt(2)); return [200, {slug: 'search', name: 'Search'}]; }
     if (p === '/api/v2/growth/settings') return [200, {unit: 'customers', revenue_month: 49, margin_pct: 80}];
@@ -220,11 +216,6 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
     if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p) && SYNC.rowsFail > 0) { SYNC.rowsFail--; return [422, {error: {code: 'validation', detail: 'The file has no rows'}}]; }
     if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p)) return [200, {ok: true, error: null, written: 4, held: 1,
       not_written: [{row: 4, channel: 'podcast', month: '2026-10', reason: 'no such channel'}], not_written_count: 1}];
-    if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST' && (body as unknown as {against?: string}).against === 'computed') {
-      DIFFERS.chosen = String((body as unknown as {keep: string}).keep);
-      return [200, {kept: DIFFERS.chosen, value: DIFFERS.chosen === "typed" ? 70 : 81.3}];
-    }
-    if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST') { SYNC.conflict = false; return [200, {kept: 'source', value: 131}]; }
     return null;
   }};
 }
@@ -583,6 +574,130 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
+    {
+      // Synced sources: each Number's origin line, with no banner and no Keep / Use (the Growth Manager asks whoever typed
+      // a number a source disagrees with).
+      Object.assign(SYNC, {on: true, conflict: true});
+      const {page, errors, fake} = await open(browser);
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      assert.equal(await page.locator('[data-gr-health]').count(), 0, 'no stale-sources banner');
+      const pin = (name: string) => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
+      const newLine = pin('New customers').locator('[data-gr-origin]');
+      assert.match(await newLine.innerText(), /^Signups \(warehouse\) · [A-Z][a-z]{2} \d{1,2}(, \d{4})? failing · typed · actual$/, 'a failing source is marked on the number it fills');
+      const cacLine = pin('CAC').locator('[data-gr-origin]');
+      assert.match(await cacLine.innerText(), /^from Finance ad spend · 2h · 3 typed · estimate$/, 'a worked-out figure names its sources');
+      assert.equal(await cacLine.getAttribute('title'), 'Worked out from spend, bot cost and new customers');
+      assert.match(await pin('Kept 30 days').locator('[data-gr-origin]').innerText(), /^Retention sheet · [A-Z][a-z]{2} \d{1,2}(, \d{4})? stale · actual$/, 'a synced number says actual');
+      assert.equal(await page.locator('#dash-grid [data-gr-conflict], #dash-grid [data-gr-resolve]').count(), 0, 'no Keep or Use on a card');
+      await shot(page, 'desktop-growth-synced');
+
+      // Settings → Months → October: spend is the source's, locked; new customers were typed, and the month is marked
+      // while the warehouse disagrees, with nothing to choose; a save sends only what changed.
+      await headTool(page, '[data-gr-settings]');
+      await page.locator('dialog.gr-dlg[open] [data-gs-months="search"]').click();
+      const months = page.locator('dialog.gr-dlg[open]', {hasText: 'Search · Months'});
+      await months.locator('.gc-coh').first().waitFor();
+      assert.match(await months.locator('.gc-coh').first().innerText(), /Finance ad spend[\s\S]*Source differs/, 'October says where and that a source differs');
+      await months.locator('[data-gc-edit="0"]').click();
+      const oct = page.locator('dialog.gr-dlg[open]', {hasText: 'Search · Oct 2026'});
+      await oct.locator('[name="spend"]').waitFor();
+      assert.equal(await oct.locator('[name="spend"]').isDisabled(), true, 'a synced number is locked');
+      assert.equal(await oct.locator('[name="kept_d30"]').isDisabled(), false, 'a number its source no longer fills is typed again');
+      assert.match(await oct.locator('[data-gc-origin="spend"]').innerText(), /^From Finance ad spend · 2h · actual$/);
+      assert.match(await oct.locator('[data-gc-origin="new_customers"]').innerText(), /^Typed by .+, Nov 2 · actual$/);
+      assert.equal(await oct.locator('[data-gr-resolve]').count(), 0, 'no Keep or Use in the month');
+      await shot(page, 'desktop-growth-month-synced');
+      await oct.locator('[name="bot_cost"]').fill('120');
+      await oct.locator('[type="submit"]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.gr-dlg[open]'));
+      const putBody = fake.writes.find(([m, p]) => m === 'PUT' && p === '/api/v2/growth/cohorts')![2] as Record<string, unknown>;
+      assert.equal(putBody.bot_cost, 120);
+      assert.ok(!('spend' in putBody) && !('new_customers' in putBody) && !('kept_d90' in putBody), `only what changed is sent: ${JSON.stringify(putBody)}`);
+
+      // Sources: each synced source's health and when, a typed one as before; Connect a source maps a file's columns.
+      await page.evaluate(() => { location.hash = '#/growth/sources'; });
+      await page.locator('.gsrc-ul li').first().waitFor();
+      const row = (id: string) => ({innerText: async () => String(await page.locator(`.gsrc-ul li[data-src="${id}"] .gsrc-sync`).textContent()).replace(/\s+/g, ' ').trim()});
+      // Fresh is the normal state: no pill, just when it synced (in a sentence: "2h ago"); a typed source says nothing.
+      assert.match(await row('s1').innerText(), /^spend synced 2h ago$/);
+      assert.equal(await page.locator('.gsrc-ul li[data-src="s1"] .pill').count(), 0, 'a fresh source has no pill');
+      assert.match(await row('s2').innerText(), /^new customers and revenue \/ customer Failing since .*12.* · column "channel" not found$/);
+      assert.match(await row('s3').innerText(), /^kept 30 days and kept 90 days Stale last good run Nov 3/);
+      assert.equal(await row('s4').innerText(), '');
+      // The list has heads, in the tables' small uppercase label; an address reads as its site.
+      assert.deepEqual(await page.locator('.gsrc-head span').allInnerTexts().then(t => t.map(x => x.toUpperCase())), ['TRUTH FOR', 'SOURCE', 'REACHED BY', 'BOTS MAY', 'OWNER']);
+      await shot(page, 'desktop-growth-sources');
+      await page.locator('#gr-head [data-src-connect]').click();   // the header's quiet +
+      const con = page.locator('dialog.gr-dlg[open]', {hasText: 'Connect a source'});
+      await con.locator('[name="system"]').fill('Signups sheet');
+      const csv = 'month,channel,Spend,signups\n2026-10,search,4210,131\n2026-10,referrals,300,12\n2026-10,podcast,10,1\n';
+      await con.locator('[name="file"]').setInputFiles({name: 'signups.csv', mimeType: 'text/csv', buffer: Buffer.from(csv)});
+      await page.waitForFunction(() => (document.querySelector('dialog.gr-dlg[open] [name="f_spend"]') as HTMLInputElement | null)?.value === 'Spend');
+      await con.locator('[name="f_new_customers"]').fill('signups');
+      await shot(page, 'desktop-growth-connect');
+      // A file over the 1,000,000 characters one run takes is refused before any source is made.
+      await con.locator('[name="file"]').setInputFiles({name: 'big.csv', mimeType: 'text/csv', buffer: Buffer.from('month,channel,Spend,signups\n' + 'x'.repeat(1_000_001))});
+      await con.getByRole('button', {name: 'Connect and fill 12 months'}).click();
+      await con.locator('[data-error]:not([hidden])').waitFor();
+      assert.match(await con.locator('[data-error]').innerText(), /^That file is over 1 MB/);
+      assert.equal(fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources').length, 0, 'nothing made for a file too big');
+      await con.locator('[name="file"]').setInputFiles({name: 'signups.csv', mimeType: 'text/csv', buffer: Buffer.from(csv)});
+      // The file is refused once: the source is made, the dialog says so, and saving again changes that source.
+      SYNC.rowsFail = 1;
+      await con.getByRole('button', {name: 'Connect and fill 12 months'}).click();
+      await con.locator('[data-error]:not([hidden])').waitFor();
+      assert.match(await con.locator('[data-error]').innerText(), /^Signups sheet is connected, but its file was not taken: The file has no rows\./);
+      await con.getByRole('button', {name: 'Save and run'}).click();
+      const result = page.locator('dialog.gr-dlg[open]', {hasText: 'Signups sheet · Synced'});
+      await result.waitFor();
+      assert.match(await result.innerText(), /Wrote 4 numbers\. 1 differs from a number someone typed as actual/);
+      assert.match(await result.innerText(), /Row 4 · podcast · 2026-10: no such channel/);
+      const made = fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources')![2];
+      assert.deepEqual(made, {system: 'Signups sheet', truth_for: 'spend and new customers', owner_ref: null, sync_kind: 'file',
+        sync_map: {month: 'month', channel: 'channel', fields: {spend: 'Spend', new_customers: 'signups'}}});
+      assert.deepEqual(fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources/s5/rows')![2], {csv}, 'the file runs at once');
+      assert.equal(fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources').length, 1, 'the retry made no second source');
+      assert.equal(fake.writes.filter(([m, p]) => m === 'PATCH' && p === '/api/v2/growth/sources/s5').length, 1, 'it changed the one made');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A typed actual that differs shows under the computed figure (AC-14), with nothing to choose: the Growth Manager
+      // asks whoever typed it. Once the typed number is kept it is the cell's figure with the computed one under it.
+      Object.assign(DIFFERS, {on: true, chosen: null, may: true});
+      const {page, errors} = await open(browser, {computed: true});
+      const card = page.locator('#dash-grid [data-grx]');
+      const cell = card.locator('tr[data-grx-row="search"] td.grc-k').first();
+      await cell.waitFor();
+      assert.match(await cell.innerText(), /^81%\s+typed 70%$/, 'both values show, no buttons');
+      assert.equal(await cell.locator('button[data-keep]').count(), 0);
+      assert.match(await card.locator('.grx-foot').innerText(), /A number typed as actual that differs shows under the computed one until whoever typed it says which is right\./);
+      assert.deepEqual(errors, []);
+      await page.close();
+      DIFFERS.chosen = 'typed';
+      const kept = await open(browser, {computed: true});
+      const keptCell = kept.page.locator('#dash-grid tr[data-grx-row="search"] td[data-grx-typed="kept"]');
+      await keptCell.waitFor();
+      assert.match(await keptCell.innerText(), /^70% typed\s*computed\s*81%$/, 'the kept typed number is the figure, the computed one under it');
+      assert.match(await kept.page.locator('#dash-grid [data-grx] .grx-foot').innerText(), /A kept typed number shows as typed; LTV here uses the computed shares\./);
+      assert.deepEqual(kept.errors, []);
+      await kept.page.close();
+      Object.assign(DIFFERS, {on: false, chosen: null, may: true});
+    }
+    {
+      // A member opens a figure to its counts and rule, no keys; uploads nothing.
+      const {page, errors} = await open(browser, {computed: true, me: MEMBER});
+      const card = page.locator('#dash-grid [data-grx]');
+      await card.locator('table').waitFor();
+      assert.equal(await card.locator('[data-grx-upload]').count(), 0, 'no upload for a member');
+      await card.locator('button.grx-open').first().click();
+      const dlg = page.locator('dialog.grx-dlg');
+      await dlg.waitFor();
+      assert.match(await dlg.innerText(), /Still customers: 52\. Churned by day 30: 12\./);
+      assert.doesNotMatch(await dlg.innerText(), /cus_/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
     // ---- Growth by chat (ui/app/growth-start.ts): the Growth Manager row, Chat and Call, and the empty cards.
     const row = (page: Page) => page.locator('#gr-start');
     {
@@ -678,6 +793,6 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Growth cards: computed retention (cut, grain, not yet, too few, typed beside computed and the owner choosing, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; Growth Manager row (Chat, Call placeholder, set up, none) on desktop and phone');
+    console.log('Growth cards: computed retention (cut, grain, not yet, too few, typed beside computed with nothing to choose, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; synced sources (origin lines, no banner, no Keep/Use, Sources, Connect a source); Growth Manager row (Chat, Call placeholder, set up, none) on desktop and phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -57,8 +57,6 @@ PROPOSE = {
 # Columns set only together with the date they follow (else `<name minus _by>_at`).
 FOLLOWS = {"set_up_before_first_open": "first_opened_at"}
 DATES = ("first_opened_at", "settings_at", "channel_at", "source_at", "month_at", "done_at", "numbers_seen_at")
-# `done_shown_at` is the web's, not a step: when the Get started panel said "you're set up" (once per team), kept in
-# its own table, growth_setup_shown.
 
 
 # The bot that gathers Growth's numbers by chat and calls (templates/catalog/growth-manager, skill growth-interview): it
@@ -92,10 +90,8 @@ def who_may(c: Any) -> list[dict[str, str]]:
 
 
 def recorded(c: Any) -> dict[str, Any]:
-    """The team's first-run dates, with `done_shown_at` from its own table (growth_setup_shown)."""
-    row: dict[str, Any] = H._one(c, "SELECT * FROM growth_setup WHERE id=1") or {}
-    said: dict[str, Any] = H._one(c, "SELECT done_shown_at FROM growth_setup_shown WHERE id=1") or {}
-    return {**row, "done_shown_at": said.get("done_shown_at")}
+    """The team's first-run dates."""
+    return H._one(c, "SELECT * FROM growth_setup WHERE id=1") or {}
 
 
 def state(c: Any) -> dict[str, Any]:
@@ -287,20 +283,6 @@ def _set(c: Any, st: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def celebrate(st: dict[str, Any], row: dict[str, Any]) -> bool:
-    """Whether the web says "you're set up": setup was finished after the team first opened Growth (a team set up
-    before release has both dates from one read), and it has not been said yet."""
-    done_at, opened = row.get("done_at"), row.get("first_opened_at")
-    return bool(st["done"] and done_at and opened and done_at > opened and not row.get("done_shown_at"))
-
-
-def shown(c: Any) -> None:
-    """The web said "you're set up": written once, and only once setup is done (on a write connection)."""
-    if state(c)["done"]:
-        c.execute("INSERT OR IGNORE INTO growth_setup_shown (id) VALUES (1)")
-        c.execute("UPDATE growth_setup_shown SET done_shown_at=coalesce(done_shown_at, ?) WHERE id=1", (H.now(),))
-
-
 def show(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     """GET /api/v2/growth/setup: every step with its first done date, the next step (None once done), what the caller
     may do, and the first-open and numbers-seen dates."""
@@ -309,13 +291,11 @@ def show(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     out["steps"] = [{**s, "at": row.get(s["step"] + "_at")} for s in st["steps"]]
     out["channel"] = st["channel"]
     out["set"] = _set(c, st)
-    out["celebrate"] = celebrate(st, row)
     out["you_may"] = you_may(auth, who)
     for k in (
         "first_opened_at",
         "first_opened_by",
         "done_at",
-        "done_shown_at",
         "numbers_seen_at",
         "numbers_seen_by",
         "set_up_before_first_open",

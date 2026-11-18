@@ -117,6 +117,19 @@ def test_only_the_channels_owner_or_an_admin_chooses(api):
     assert chosen == {**chosen, "field": "kept_d30", "kept": "typed", "value": 70}
 
 
+def test_the_growth_manager_chooses_after_asking_whoever_typed_it(api):
+    owned_channel(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('growth-manager','growth-manager','Growth Manager','active')"
+        )
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
+    load(api, september())
+    gm = bot(api, "growth-manager")
+    chosen = post(api, "growth/cohorts/conflicts", {**CHOOSE, "keep": "computed"}, token=gm)
+    assert chosen == {**chosen, "field": "kept_d30", "kept": "computed"}
+
+
 def test_keeping_the_typed_number_sticks_across_later_loads(api):
     ops = owned_channel(api)
     put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})

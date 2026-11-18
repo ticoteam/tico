@@ -253,7 +253,6 @@ def test_a_support_session_reads_growth_without_recording_the_teams_dates():
                 "CREATE TABLE gtm_sources (id TEXT, retired_at TEXT, created_at TEXT)",
                 "CREATE TABLE growth_cohorts (channel_id TEXT, spend REAL, new_customers INTEGER)",
                 "CREATE TABLE growth_setup (id INTEGER PRIMARY KEY, first_opened_at TEXT, done_at TEXT)",
-                "CREATE TABLE growth_setup_shown (id INTEGER PRIMARY KEY, done_shown_at TEXT)",
             ):
                 c.execute(ddl)
             yield c
@@ -311,32 +310,6 @@ def test_the_setup_read_says_what_each_done_step_set_for_the_panel(api):
     full = get(api, "growth/setup")["set"]
     assert full["source"] == {"system": "Google Ads", "truth_for": "ad spend"}
     assert full["month"] == {"month": "2026-10", "spend": 1800, "new_customers": 6}
-
-
-def test_set_up_is_said_once_to_a_team_that_finished_after_first_opening(api):
-    assert get(api, "growth/setup")["celebrate"] is False  # the first open, nothing done
-    set_up_to(api, "month")
-    shown = get(api, "growth/setup")
-    assert shown["done"] is True and shown["celebrate"] is True
-    after = post(api, "growth/setup/shown", {}, token="cara-test")
-    assert after["celebrate"] is False and recorded(api)["done_shown_at"]
-    first = recorded(api)["done_shown_at"]
-    post(api, "growth/setup/shown", {})
-    assert recorded(api)["done_shown_at"] == first and get(api, "growth/setup")["celebrate"] is False
-
-
-def test_set_up_is_not_said_to_a_team_set_up_before_it_first_opened_growth(api):
-    set_up_to(api, "month")
-    with api.app.state.store.transaction() as c:  # as at release: no dates written yet
-        c.execute("DELETE FROM growth_setup")
-    assert get(api, "growth/setup")["celebrate"] is False
-
-
-def test_set_up_is_not_marked_shown_before_it_is_done_nor_by_a_bot(api):
-    post(api, "growth/setup/shown", {})
-    set_up_to(api, "month")
-    post(api, "growth/setup/shown", {}, token=bot(api, "ops"), expected=403)
-    assert get(api, "growth/setup")["celebrate"] is True
 
 
 def test_the_growth_manager_writes_what_people_tell_it_but_does_not_retire(api):
