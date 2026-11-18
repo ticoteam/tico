@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 import json
 from pathlib import Path
 import re
+from statistics import mean
 import subprocess
 import time
 
@@ -63,6 +64,7 @@ class Replay:
                 kept = [p for p in kept if p not in record["smoke_unless_capped"]]
             picked["python"] = kept
             record["left_over_budget"] = left
+            record["selected_seconds"] = sum(seconds[p] for p in kept)
         return picked
 
     def target(self, description):
@@ -198,7 +200,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=int, help="one-based case number in red_main_cases.json")
     parser.add_argument("--json", type=Path, help="also write detailed results as JSON")
-    parser.add_argument("--cost", action="store_true", help="also measure the last 20 merges on local main")
+    parser.add_argument("--cost", action="store_true", help="also measure the last 20 merges on main")
     args = parser.parse_args()
     start = time.monotonic()
     replay = Replay()
@@ -209,8 +211,14 @@ def main():
     report(rows)
     costs = []
     if args.cost:
+        browser_timings = json.loads((replay.root / checks.TIMINGS_FILE).read_text()).get("browser", {})
+        main_ref = subprocess.check_output(
+            ["git", "for-each-ref", "--count=1", "--format=%(refname)", "refs/heads/main", "refs/remotes/origin/main"],
+            cwd=replay.root,
+            text=True,
+        ).strip()
         merges = subprocess.check_output(
-            ["git", "log", "main", "--merges", "-20", "--format=%H"], cwd=replay.root, text=True
+            ["git", "log", main_ref or "main", "--merges", "-20", "--format=%H"], cwd=replay.root, text=True
         ).split()
         for sha in merges:
             changed = subprocess.check_output(
@@ -221,9 +229,27 @@ def main():
                 ["git", "diff", "--name-only", "--diff-filter=A", sha + "^1", sha], cwd=replay.root, text=True
             ).splitlines()
             plan = replay.plan(changed, added=[replay.resolve(p) or p for p in added])
-            cost = dict(sha=sha, python=len(plan["python"]), browser=len(plan["browser"]))
+            browser_seconds = checks.weights(
+                dict.fromkeys(plan["browser"], 1), browser_timings, checks.UNTIMED_SCRIPT_SECONDS
+            )
+            cost = dict(
+                sha=sha,
+                python=len(plan["python"]),
+                browser=len(plan["browser"]),
+                python_seconds=plan.get("narrow", {}).get("selected_seconds", 0),
+                browser_seconds=sum(browser_seconds.values()),
+            )
             costs.append(cost)
-            print(f"cost {sha[:10]} Python {cost['python']:4} browser {cost['browser']:3}")
+            print(
+                f"cost {sha[:10]} Python {cost['python']:4} ({cost['python_seconds']:7.1f}s)"
+                f" browser {cost['browser']:3} ({cost['browser_seconds']:7.1f}s)"
+            )
+        python_mean = mean(c["python_seconds"] for c in costs)
+        browser_mean = mean(c["browser_seconds"] for c in costs)
+        print(
+            f"Mean over {len(costs)} merges: {python_mean + browser_mean:.1f}s "
+            f"(Python {python_mean:.1f}s, browser {browser_mean:.1f}s), one-worker estimates"
+        )
     if args.json:
         args.json.write_text(json.dumps(dict(cases=rows, costs=costs), indent=2) + "\n")
     print(f"Elapsed {time.monotonic() - start:.1f}s; graph built once; no tests collected or run.")
