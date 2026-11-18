@@ -59,6 +59,10 @@ def _rows(api, task_id):
         ]
 
 
+def _shown(api, task_id):
+    return get(api, f"tasks/{task_id}")["task"]
+
+
 def _refused(api, path, body, token="ana-test"):
     r = api.post("/api/v2/" + path, json=body, headers={"Authorization": "Bearer " + token})
     assert r.status_code == 422, r.text
@@ -70,9 +74,9 @@ def _refused(api, path, body, token="ana-test"):
 
 def test_a_person_s_comment_holding_a_key_is_refused_and_nothing_is_stored(api):
     task = _task(api)
-    before = get(api, f"tasks/{task['id']}")
+    before = _shown(api, task["id"])
     _refused(api, f"tasks/{task['id']}/comments", {"text": "deploy key: " + KEY})
-    after = get(api, f"tasks/{task['id']}")
+    after = _shown(api, task["id"])
     assert after["version"] == before["version"]
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
@@ -94,14 +98,14 @@ def test_a_bot_is_refused_the_same_way_with_the_stable_code(api):
 def test_every_other_task_text_write_is_refused_and_the_task_stays_at_its_version(api):
     task = _task(api)
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Ordinary words"})["comment"]
-    version = get(api, f"tasks/{task['id']}")["version"]
+    version = _shown(api, task["id"])["version"]
     _refused(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "now " + KEY})  # a comment edit
     _refused(api, f"tasks/{task['id']}", {"title": "Use " + KEY})
     _refused(api, f"tasks/{task['id']}", {"note": "export GITHUB_TOKEN=" + KEY})
     _refused(api, f"tasks/{task['id']}", {"public_title": "x", "public_summary": KEY})
     _refused(api, f"tasks/{task['id']}/done", {"note": "Done; it used " + KEY})  # inside a hand-off
     _refused(api, "tasks", {"owner": "ops", "title": "New", "body": "key " + KEY})  # a create
-    shown = get(api, f"tasks/{task['id']}")
+    shown = _shown(api, task["id"])
     assert shown["version"] == version and shown["status"] == "open" and shown["title"] == "Review the report"
     assert len(_rows(api, task["id"])) == 5
 
