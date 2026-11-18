@@ -242,43 +242,44 @@ BARS: dict[str, tuple[float, float]] = {
 # missing (task #614). The verdict stays the whole question's, read on the default bar as before: these parts never move
 # a page from met to not met. When the verdict is not met or unsure, the reason names the part the model scored lowest
 # and what it looked for on the page, instead of 'Doesn't meet "Review page".' with nothing to change (seen on #602,
-# #495, #520, #559 and #3857 on Nov 18, each refused two to four times). Each line is the rubric item and, after the
-# colon, what was looked for on the page. Decide answers only probabilities (clients/judge.py: choice, score or noul,
-# never text), so a line says what was looked for and never claims what the page holds. Any other rubric asked whole is
-# explained by its own sentences (`explain_parts`).
+# #495, #520, #559 and #3857 on Nov 18, each refused two to four times). Each line names the rubric item; the first is
+# followed by the line on the page nearest to it (`_evidence`). Decide answers only probabilities (clients/judge.py:
+# choice, score or noul, never text), so that line is Tico's own quote of the page, found by the item's words, labelled
+# "nearest", and never a claim about what the model read. Any other rubric asked whole is explained by its own sentences
+# (`explain_parts`).
 EXPLAINED: dict[str, tuple[Part, ...]] = {
     "two_reviews": (
         Part(
             "two",
             "holds two reviews of the work, and each names the model that made it",
-            "No second review: looked for two reviews, each naming the model that made it.",
-            "Can't tell if there are two reviews: looked for two reviews, each naming the model that made it.",
+            "No second review that names its model.",
+            "Can't tell if there are two reviews that each name their model.",
         ),
         Part(
             "models",
             "names a different model for each of its two reviews, so a reader can see the two models differ",
-            "No second review from a different model: looked for a different model named for each of the two reviews.",
-            "Can't tell if the two reviews are by different models: looked for each review's model name.",
+            "No second review from a different model.",
+            "Can't tell if the two reviews are by different models.",
         ),
         Part(
             "commit",
             "names, in each review, the commit it reviewed for every linked PR, and that commit is the PR's newest "
             "(`work.context.heads`, in full or its first 7 or more characters)",
-            "A review doesn't name the newest commit: looked for the PR's newest commit in each review.",
-            "Can't tell if each review names the newest commit: looked for the PR's newest commit in each review.",
+            "A review doesn't name the PR's newest commit.",
+            "Can't tell if each review names the PR's newest commit.",
         ),
         Part(
             "checked",
             "says what each review checked: files read, tests or commands run",
-            "Doesn't say what each review checked: looked for the files read and tests or commands run in each.",
-            "Can't tell what each review checked: looked for the files read and tests or commands run in each.",
+            "Doesn't say what each review checked (files read, tests or commands run).",
+            "Can't tell what each review checked.",
         ),
         Part(
             "findings",
             "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
             "no findings",
-            "A finding is incomplete: looked for file:line, a severity and why it matters in each, or that there are none.",
-            "Can't tell if each finding is complete: looked for file:line, a severity and why it matters, or none.",
+            "A finding lacks file:line, a severity or why it matters, or there is no line saying there are none.",
+            "Can't tell if each finding has file:line, a severity and why it matters.",
         ),
     ),
 }
@@ -310,9 +311,16 @@ def check_of(rubric: object) -> str | None:
     return None
 
 
-# A rubric of a company's own is explained by its sentences, at most this many, each quoted in at most SENTENCE_CHARS.
+# A rubric of a company's own is explained by its sentences in at most this many parts (a longer rubric's sentences are
+# grouped, none dropped), each quoted in at most SENTENCE_CHARS.
 SENTENCES_AT_MOST = 8
 SENTENCE_CHARS = 160
+EVIDENCE_CHARS = 140  # the most of a page line a reason quotes as the nearest to an item
+# Words that say nothing about what an item asks for, left out when finding the page line nearest to it.
+_CUE_STOP = frozenset(
+    "the and that this with from each their there they them what when which while must should says said names name "
+    "attachment requirement rubric sentence meets work does have into about only also every other than then".split()
+)
 
 
 def _sentences(said: str) -> list[str]:
@@ -323,9 +331,10 @@ def _sentences(said: str) -> list[str]:
 
 def explain_parts(rubric: object) -> tuple[Part, ...]:
     """The parts asked beside a rubric asked whole, only to name what is missing (task #614): the shipped Review
-    rubric's own (EXPLAINED), or for a rubric of two or more sentences, one part per sentence (the first
-    SENTENCES_AT_MOST), the sentence quoted as what was looked for. Empty for one of CHECKS (asked as its parts) and for
-    a rubric of one sentence (its reason already names the requirement, and quoting it would be the whole rubric)."""
+    rubric's own (EXPLAINED), or for a rubric of two or more sentences, one part per sentence (grouped into at most
+    SENTENCES_AT_MOST parts, so none is left out), the sentence quoted. Empty for one of CHECKS (asked as its parts) and
+    for a rubric of one sentence: that sentence is the only item, so the reason names the requirement and quotes the page
+    line nearest to it (`_finish`)."""
     from . import pipeline_settings as PS
 
     S: Any = PS
@@ -337,32 +346,95 @@ def explain_parts(rubric: object) -> tuple[Part, ...]:
     sentences = _sentences(said)
     if len(sentences) < 2:
         return ()
+    size = -(-len(sentences) // SENTENCES_AT_MOST)  # sentences per part, so at most SENTENCES_AT_MOST parts
+    groups = [" ".join(sentences[i : i + size]) for i in range(0, len(sentences), size)]
     parts: list[Part] = []
-    for n, sentence in enumerate(sentences[:SENTENCES_AT_MOST], start=1):
+    for n, sentence in enumerate(groups, start=1):
         quoted = sentence if len(sentence) <= SENTENCE_CHARS else sentence[: SENTENCE_CHARS - 1].rstrip() + "…"
         parts.append(
             Part(
                 f"s{n}",
-                f"meets this one sentence of `requirement.rubric`: {json.dumps(sentence)}",
-                f"Not met: looked for {json.dumps(quoted)}",
-                f"Can't tell if it meets: looked for {json.dumps(quoted)}",
+                f"meets this part of `requirement.rubric`: {json.dumps(sentence)}",
+                f"Not met: {json.dumps(quoted)}",
+                f"Can't tell if it meets: {json.dumps(quoted)}",
             )
         )
     return tuple(parts)
 
 
-def _explain_lines(explain: tuple[Part, ...], parts: dict[str, float]) -> str:
+# The words a Review page uses for each of EXPLAINED's items, added to the item's own when finding its nearest line.
+_CUES: dict[str, str] = {
+    "two": "review second opinion model",
+    "models": "model maker second opinion review",
+    "commit": "commit head reviewed",
+    "checked": "read ran checked tests files",
+    "findings": "issue finding blocking severity file:line",
+}
+
+
+def _stem(word: str) -> str:
+    """A word without its plural or past ending, so "reviews", "reviewed" and "review" match."""
+    for end in ("ing", "ed", "es", "s"):
+        if word.endswith(end) and len(word) - len(end) >= 4:
+            return word[: -len(end)]
+    return word
+
+
+def _cue(text: str) -> set[str]:
+    """The words of an item or a page line that say what it is about: lower case, four letters or more, no stop words,
+    stemmed (`_stem`)."""
+    return {
+        _stem(w)
+        for w in re.findall(r"[a-z0-9][a-z0-9_-]*(?::[a-z0-9_-]+)*", text.lower())
+        if len(w) >= 4 and w not in _CUE_STOP
+    }
+
+
+def _evidence(ask: str, text: object) -> str:
+    """One line on what the page holds for an item: the page line sharing the most of the item's words (the first such
+    line on a tie), quoted up to EVIDENCE_CHARS, or that no line mentions it. Empty when Tico holds no text for the page.
+    Decide returns no text, so this is Tico's own quote, labelled nearest, never what the model read."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    want = _cue(ask)
+    best, score = "", 0
+    for raw in re.split(r"\n+|(?<=[.!?])\s+", text):
+        line = _words(raw)
+        if len(line) < 8:
+            continue
+        got = len(want & _cue(line))
+        if got > score:
+            best, score = line, got
+    if not score:
+        return "Nothing on the page mentions it."
+    quoted = best if len(best) <= EVIDENCE_CHARS else best[: EVIDENCE_CHARS - 1].rstrip() + "…"
+    return f"Nearest on the page: {json.dumps(quoted, ensure_ascii=False)}"
+
+
+def _explain_lines(explain: tuple[Part, ...], parts: dict[str, float], text: object = None) -> str:
     """The reason a not met or unsure verdict on a rubric asked whole gives from the parts asked beside it: the parts
     that read no on the default bar with their `missing` line, else the ones that can't be told, lowest first, with
-    their `unclear` line: a part never reads as missing unless it was scored no. Empty when no part stands out (then the
-    caller keeps today's line)."""
+    their `unclear` line: a part never reads as missing unless it was scored no. When every part read as there on its
+    own, the lowest is named as the least clear. The first named part is followed by the page line nearest to it
+    (`_evidence`). Empty only when no part was answered (then the caller keeps today's line)."""
     bar = (MET_AT, NOT_MET_AT)
-    known = [part for part in explain if part.key in parts]
-    no = [part.missing for part in known if _band(parts[part.key], bar) == "no"]
+    known = sorted((part for part in explain if part.key in parts), key=lambda p: parts[p.key])
+    if not known:
+        return ""
+    no = [part for part in known if _band(parts[part.key], bar) == "no"]
+    unclear = [part for part in known if _band(parts[part.key], bar) == "unsure"]
     if no:
-        return " ".join(no[:LINES_AT_MOST])
-    unclear = sorted((part for part in known if _band(parts[part.key], bar) == "unsure"), key=lambda p: parts[p.key])
-    return " ".join(part.unclear for part in unclear[:LINES_AT_MOST])
+        picked, lines = no, [part.missing for part in no]
+    elif unclear:
+        picked, lines = unclear, [part.unclear for part in unclear]
+    else:
+        picked, lines = known[:1], [f"Each item reads as there on its own; least clear: {known[0].unclear}"]
+    lines = lines[:LINES_AT_MOST]
+    first = picked[0]
+    seen = _evidence(f"{first.ask} {_CUES.get(first.key, '')}", text)
+    if seen:
+        lines.insert(1, seen)
+    return " ".join(lines)
 
 
 def _band(p: float, bar: tuple[float, float]) -> str:
@@ -800,9 +872,14 @@ def _finish(
         verdict = verdict_of(p)
         reason = _words(result.get("reason")) or reason_for(verdict, str(requirement.get("name") or ""))
         explain = explain_parts(requirement.get("rubric"))
-        if explain and parts and verdict != "met":
-            # Name the part that is missing and what was looked for (task #614). A met keeps its line.
-            named = _explain_lines(explain, parts)
+        text = state["attachment"].get("text")
+        if verdict != "met" and check is None and not _words(result.get("reason")):
+            # Name the item that is missing and the page line nearest to it (task #614). A met keeps its line, and a
+            # model that gave its own words keeps them. A rubric of one sentence is its only item: the requirement is
+            # named, and the nearest page line follows.
+            named = _explain_lines(explain, parts, text) if explain and parts else ""
+            if not named and not explain:
+                named = _evidence(str(requirement.get("rubric") or ""), text)
             if named:
                 reason = f"{reason_for(verdict, str(requirement.get('name') or ''))} {named}"
     reason = reason[:REASON_BYTES]

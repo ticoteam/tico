@@ -1186,7 +1186,7 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
     row = seeded(build)
     monkeypatch.setattr(PJ, "ENGINE", ask)
     V.run(store, H.shift(H.now(), seconds=1))
-    item = "No second review from a different model: looked for a different model named for each of the two reviews."
+    item = "No second review from a different model."
     with store.read() as r:
         bodies = [
             m[0]
@@ -1195,7 +1195,7 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
             )
         ]
         line = _standing(r, row).line
-    assert line.startswith("Decision model sent it back: ") and line.endswith(item), line
+    assert line.startswith("Decision model sent it back: ") and item in line and "on the page" in line, line
     assert len(bodies) == 1 and item in bodies[0], bodies
 
 

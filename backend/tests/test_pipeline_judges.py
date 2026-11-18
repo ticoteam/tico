@@ -488,50 +488,71 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     assert (result["verdict"], result["reason"]) == ("unsure", "Can't tell if the version production runs is named.")
 
 
+REVIEW_TEXT = (
+    "Review 1 by GPT-6.1 Terra at d34ae47.\nWhat I read: the diff and its tests.\n"
+    "Second opinion: tico-medium-1.0 reviewed d34ae47; its maker was not reported.\n"
+    "issue (blocking): backend/x.py:12 drops the last line, so the parser fails."
+)
+
+
 def test_a_review_page_refused_names_the_one_rubric_item_it_finds_unmet():
     """Task #614: the shipped Review rubric is asked whole, as before, with its parts beside it in the same call. A
-    refusal names the part the model scored no and what it looked for; an unsure part is never said to be missing, even
-    under a not met; an OK keeps today's line. The parts never change the verdict."""
+    refusal names the part the model scored no and quotes the page line nearest to it; an unsure part is never said to
+    be missing, even under a not met; a refusal whose parts all read as there names the least clear one; an OK keeps
+    today's line. The parts never change the verdict."""
     from backend import pipeline_settings as PS
 
     req = {"id": "r", "name": "Review page", "rubric": PS.REVIEW_RUBRIC}
+    page = {**ATTACHMENT, "text": REVIEW_TEXT}
     assert P.check_of(PS.REVIEW_RUBRIC) is None and P.explain_parts(PS.REVIEW_RUBRIC) == P.EXPLAINED["two_reviews"]
-    assert P.explain_parts(REQ["rubric"]) == (), "a one-sentence rubric is asked whole, with nothing beside it"
     asked = []
 
-    refused = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "models": 0.05}, asked))
+    refused = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, asked))
     assert sorted(asked[-1]) == ["met"] + sorted(f"part_{part.key}" for part in P.EXPLAINED["two_reviews"])
     assert refused["verdict"] == "not_met" and refused["p"] == 0.1, "the whole question is the verdict"
     assert refused["reason"] == (
-        'Doesn\'t meet "Review page". No second review from a different model: looked for a different model named for '
-        "each of the two reviews."
+        'Doesn\'t meet "Review page". No second review from a different model. Nearest on the page: "Second opinion: '
+        'tico-medium-1.0 reviewed d34ae47; its maker was not reported."'
     ), refused["reason"]
-    hedged = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "models": 0.5}))
+    hedged = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.5}))
     assert hedged["verdict"] == "not_met"
-    assert hedged["reason"].endswith(
-        "Can't tell if the two reviews are by different models: looked for each review's model name."
-    ), "a part that was not scored no is never said to be missing"
-    unsure = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.5, "commit": 0.5}))
-    assert unsure["verdict"] == "unsure"
-    assert unsure["reason"].endswith(
-        "Can't tell if each review names the newest commit: looked for the PR's newest commit in each review."
+    assert "Can't tell if the two reviews are by different models." in hedged["reason"], "unsure is never 'missing'"
+    assert "No second review" not in hedged["reason"]
+    unsure = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.5, "checked": 0.5}))
+    assert unsure["reason"] == (
+        'Can\'t tell if it meets "Review page". Can\'t tell what each review checked. Nearest on the page: "What I read: '
+        'the diff and its tests."'
     ), unsure["reason"]
-    passed = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.9, "models": 0.05}))
+    every = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "findings": 0.8}))
+    assert "least clear: Can't tell if each finding has file:line" in every["reason"], every["reason"]
+    assert 'Nearest on the page: "issue (blocking): backend/x.py:12' in every["reason"], every["reason"]
+    passed = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.9, "models": 0.05}))
     assert (passed["verdict"], passed["reason"]) == ("met", 'Meets "Review page".'), "an OK keeps today's wording"
-    low = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1}))
-    assert low["reason"] == 'Doesn\'t meet "Review page".', "no part stands out: today's line"
-    alone = P.judge_once(None, REQ, ATTACHMENT, engine=_parts_engine({"met": 0.1}, asked))
-    assert list(asked[-1]) == ["met"] and alone["reason"] == 'Doesn\'t meet "Shows the page live".'
+    blank = P.judge_once(
+        None, req, {**ATTACHMENT, "text": "Looks fine to me overall."}, engine=_parts_engine({"met": 0.1})
+    )
+    assert blank["reason"].endswith("Nothing on the page mentions it."), blank["reason"]
 
 
 def test_a_company_rubric_refused_names_the_sentence_it_finds_unmet():
-    """Task #614: a rubric of a company's own, of two or more sentences, is asked whole with one part per sentence
-    beside it; a refusal quotes the sentence scored no as what was looked for."""
+    """Task #614: a rubric of a company's own is asked whole, with one part per sentence beside it (grouped into at most
+    SENTENCES_AT_MOST, none left out); a refusal quotes the sentence scored no and the page line nearest to it. A rubric
+    of one sentence is its only item: the requirement is named and the nearest page line quoted."""
     req = {"id": "r", "name": "Launch page", "rubric": "Shows the page live at acme.example. Names who signed it off."}
+    page = {**ATTACHMENT, "text": "Live at acme.example since Monday.\nSigned off by the Acme lead."}
     asked = []
-    refused = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "s2": 0.05}, asked))
+    refused = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "s2": 0.05}, asked))
     assert sorted(asked[-1]) == ["met", "part_s1", "part_s2"]
-    assert refused["reason"] == 'Doesn\'t meet "Launch page". Not met: looked for "Names who signed it off."'
+    assert refused["reason"] == (
+        'Doesn\'t meet "Launch page". Not met: "Names who signed it off." Nearest on the page: "Signed off by the Acme '
+        'lead."'
+    ), refused["reason"]
+    long = " ".join(f"Item {n} is shown." for n in range(1, 12))
+    assert len(P.explain_parts(long)) == P.SENTENCES_AT_MOST and "Item 11" in P.explain_parts(long)[-1].missing
+    one = {"id": "r", "name": "Launch page", "rubric": "Names who signed off the launch."}
+    alone = P.judge_once(None, one, page, engine=_parts_engine({"met": 0.1}, asked))
+    assert list(asked[-1]) == ["met"], "a one-sentence rubric is asked whole, with nothing beside it"
+    assert alone["reason"] == 'Doesn\'t meet "Launch page". Nearest on the page: "Signed off by the Acme lead."'
 
 
 def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
