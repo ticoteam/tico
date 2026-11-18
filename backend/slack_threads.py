@@ -40,6 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import hubdb as H
 from . import org_rule_check as OR
 from . import screening
+from . import task_text_keys
 from . import slack_errors as SE
 from . import slack_gateway as G
 from .auth import Identity
@@ -1058,11 +1059,16 @@ class Bridge:
             refs["slack"]["app"] = event.get("user_id") or True  # another app's post: a plain line, not a system one
         if carry_import:
             refs["import"] = True
-        held = False
+        held, keyed, posted_now = False, False, False
         try:
             with self.store.transaction() as c:
                 if _seen(c, channel, ts):
                     return "duplicate"
+                # A key on a task is stored as a mark, before the rule check reads the text (backend/task_text_keys.py);
+                # its author is told it is still in Slack.
+                said = text
+                text = task_text_keys.mask_outside(c, self.core().thread_row(c, thread_id), actor, text, "slack")
+                keyed = text != said
                 if self._audience_moved(c, gate, link, actor, thread_id, text):
                     return "retry"  # the audience moved since the check: the next try checks again
                 verdict = OR.apply(
@@ -1087,6 +1093,7 @@ class Bridge:
                 else:
                     if link.get("read_only") and parent:
                         self._readers_follow(c, link, parent["message_id"], actor)
+                    posted_now = True
                     posted = self.core().post(
                         c,
                         actor if link.get("read_only") else self.viewer(c, actor),
@@ -1099,11 +1106,14 @@ class Bridge:
                         origin=origin,
                     )
                     _record(c, link, event, "in", "sent", message_id=posted.get("id"), origin_id=origin_id, actor=actor)
-                    return "posted"
         except Problem as exc:
             with self.store.transaction() as c:
                 _record(c, link, event, "in", "failed", origin_id=origin_id, actor=actor, error=exc.code)
             return "refused"
+        if posted_now:
+            if keyed:
+                self._note(link, channel, event.get("user_id"), task_text_keys.told("slack"))
+            return "posted"
         if held and not carry_import:
             self._note(link, channel, event.get("user_id"), "Tico held this message, so it did not reach the thread.")
         return "held"

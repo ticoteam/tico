@@ -41,6 +41,7 @@ from . import (
     wake_rules,
 )
 from . import task_privacy as privacy
+from . import task_text_keys
 from . import turns as turn_work
 from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth
@@ -1321,6 +1322,16 @@ def _install_request_guard(
                             raise Problem("too_large", "Request exceeds the upload limit", 413)
                         chunks.append(chunk)
                     request._body = b"".join(chunks)
+                    # A key in task text is refused before any route reads the body (backend/task_text_keys.py).
+                    if task_text_keys.scope(request.method, request.url.path):
+                        await asyncio.to_thread(
+                            task_text_keys.refusal,
+                            store,
+                            str(getattr(getattr(request.state, "identity", None), "actor", "") or ""),
+                            request.method,
+                            request.url.path,
+                            request._body,
+                        )
                 # assistant_owns reads the database: off the event loop.
                 if (
                     getattr(request.state, "identity", None)
