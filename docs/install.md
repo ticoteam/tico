@@ -155,7 +155,7 @@ Success: a draft file on the task, read by a person, and a task its requester cl
 Health issue.
 
 **Next: meeting notes.** Once this works, add **Project Coordinator** (`project-coordinator`, in **Operations**, or **Settings > Bots >
-Add from template**), add a fictional transcript with **Meetings > Add notes > Paste** ([Meetings](meetings.md)), and ask it for a
+Add from template**), add a fictional transcript with **Meetings > Log a meeting (the notes icon) > Paste** ([Meetings](meetings.md)), and ask it for a
 summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Owner

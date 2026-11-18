@@ -125,7 +125,6 @@ html.view-only [data-tft-new]{display:none!important}
 /* the header is the one page header (page-head.ts); the search box is its first tool, the shared filter icon (.tl-ib) the next */
 .lf-search{flex:0 1 380px;min-width:0;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
 .ph>.ph-tools>.lf-search{flex:0 1 280px;width:280px;box-sizing:border-box}
-.ph-menu>.ph-tools>.lf-search{flex:none;box-sizing:border-box;width:100%}   /* folded into ⋯: one row of the menu (its column would read 380px as height) */
 .lf-search:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .lf-search svg{flex:none}
 .lf-search input{flex:1;min-width:0;width:0;height:calc(var(--ctl) - 2px);min-height:0;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}

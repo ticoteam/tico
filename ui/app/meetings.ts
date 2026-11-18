@@ -1,4 +1,4 @@
-/* ui/app/meetings.ts — The Meetings page: list, a meeting (tasks, notes, transcript), Add notes
+/* ui/app/meetings.ts — The Meetings page: list, a meeting (tasks, notes, transcript), Log a meeting
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -86,19 +86,20 @@ async function pageNotes(): Promise<void> {
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state: MeetState = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemAdd: '', confirmDelete: '', open: false};
-  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, the shared filter
-  // icon and Live now as tools, Add notes the one filled button, Sources and Settings in its ⋯. No chat button in a top
+  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search and the shared
+  // filter icon as tools, then two quiet icons, Call and Log a meeting (no filled button: Chris, Nov 18, "call now can
+  // just be the call icon"), Sources and Settings in its ⋯. The search keeps the row (on a phone its magnifier, which
+  // opens it over the title, meetings.css), as page-head.ts keeps every search out of ⋯. No chat button in a top
   // bar (the guide): Meetings' chat is Ask, opened from the Assistant's tab on the right edge or a phone's chat mark
   // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them..
   $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
     tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
-    tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
-      + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
-      + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
+    tools: `<div class="tl-search meet-q">${TL_ICON.search}<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search"></div>`
+      + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`,
     more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
     // Call now only where this server runs Tico Meet (thread-call.ts callTicoMeet): the meeting window and bots are its.
-    primary: (callTicoMeet() ? `<button class="ghost" type="button" id="meet-call-now" aria-label="Call now" title="Call now">${CALL_SVG}<span>Call now</span></button>` : '')
-      + '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
+    primary: (callTicoMeet() ? `<button class="ghost ph-add" type="button" id="meet-call-now" aria-label="Call" title="Call">${CALL_SVG}</button>` : '')
+      + '<button class="ghost ph-add" type="button" id="notes-manual" aria-label="Log a meeting" title="Log a meeting"><span class="nav-icon" aria-hidden="true">edit_note</span></button>'}) + `
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
@@ -110,7 +111,7 @@ async function pageNotes(): Promise<void> {
     </div>
     <div id="task-filter-pop" class="tl-pop" popover></div>
     <dialog class="tmodal notes-modal" id="notes-modal" aria-label="Meeting details"><div class="notes-modal-close"><span class="mp-tools" id="notes-modal-tools"></span><button class="mp-icon" type="button" id="notes-modal-window" aria-label="Open in new tab" title="Open in new tab"><span class="nav-icon" aria-hidden="true">open_in_new</span></button><button class="mp-icon" type="button" id="notes-modal-close" aria-label="Close meeting" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div><section class="notes-detail" id="notes-detail"></section></dialog>
-    <dialog class="tmodal import-modal" id="manual-modal" aria-label="Add notes"></dialog>`;
+    <dialog class="tmodal import-modal" id="manual-modal" aria-label="Log a meeting"></dialog>`;
   // Pending's count is the tab's .ph-n, numbered by meetReviewTabs.
   $('[data-review=pending]').insertAdjacentHTML('beforeend', '<span class="ph-n meet-pending-n" id="meet-pending-count"></span>');
   document.querySelectorAll<HTMLElement>('[data-review]').forEach(button => button.onclick = () => {
@@ -121,7 +122,6 @@ async function pageNotes(): Promise<void> {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
-  $('#meet-live-now').onclick = () => pageLiveMeetings();
   const callNow = document.getElementById('meet-call-now');
   if (callNow) callNow.onclick = () => meetCallDialog();
   const dialog: HTMLDialogElement = $('#notes-modal');
@@ -227,7 +227,7 @@ async function meetUpcoming(state: MeetState): Promise<void> {
 // the call and its calendar invite; nothing opens). The one the time points at is the filled button, and Enter's.
 // `change`: a scheduled call's Change time, the dialog filled in with it: only its time and length change (who it is
 // with is its thread's), and Save sends them (PATCH /v2/calls/{id}: its calendar event first). A refusal shows in the
-// dialog either way. Closing it gives focus back to `back` (the Call now button by default).
+// dialog either way. Closing it gives focus back to `back` (the header's Call by default).
 function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?: () => HTMLElement | null} = {}): void {
   const change = opts.change, back = opts.back || (() => document.getElementById('meet-call-now'));
   const chosen: string[] = [];
@@ -268,10 +268,16 @@ function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?:
       button.disabled = !chosen.length; button.classList.toggle('primary', on); button.classList.toggle('ghost', !on);
     }
   };
-  // A team (the org chart's, as the meeting window's Add has them): its bots the viewer may call, in one pick.
-  const team = (g: OrgGroup): string[] => {
+  // A team (the org chart's, as the meeting window's Add has them): its bots the viewer may call, in one pick. A bot
+  // says its team (`team`); a team inside it (`parent`) counts too. /api/humans' team rows list no members.
+  const team = (g: OrgGroup & {id: string; parent?: string}): string[] => {
+    const under = new Set([g.id]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const x of (S.orgGroups || []) as (OrgGroup & {id: string; parent?: string})[]) if (x.parent && under.has(x.parent) && !under.has(x.id)) { under.add(x.id); grew = true; }
+    }
     const can = new Set(teammates().map(t => t.actor));
-    return (g.bots || []).map(b => 'bot:' + b).filter(a => can.has(a) && !chosen.includes(a));
+    return activeEmps().filter(e => !!e.team && under.has(e.team)).map(e => 'bot:' + e.name).filter(a => can.has(a) && !chosen.includes(a));
   };
   const teams = (): WhoCandidate[] => (S.orgGroups || []).map(g => ({g, members: team(g)})).filter(t => t.members.length).map(({g, members}) => ({
     subject: 'group:' + g.id, kind: 'group', name: g.name || g.id, face: '<span class="meet-team-ic" aria-hidden="true"><span class="nav-icon">groups</span></span>',
@@ -352,7 +358,7 @@ function meetReviewBulk(state: MeetState): void {
     box.onchange = () => { for (const r of visible) box.checked ? state.checked.add(r.id) : state.checked.delete(r.id); meetList(state); };
   }
   el.hidden = state.review !== 'pending' || selected < 2;
-  // Quiet buttons: Add notes stays the view's one filled button. Clear backs out at the left, Share goes forward last.
+  // Quiet buttons, as the header's. Clear backs out at the left, Share goes forward last.
   el.innerHTML = `<span>${selected} selected</span><button class="linkish" type="button" data-review-clear>Clear</button><span class="spacer"></span>
     <button class="ghost small" type="button" data-review-bulk="dismiss_all">Dismiss ${selected}</button>
     <button class="ghost small" type="button" data-review-bulk="approve_all">Share ${selected}</button>`;
@@ -677,7 +683,7 @@ async function meetLoad(state: MeetState, first: boolean): Promise<void> {
 }
 const meetFiltersOn = (state: MeetState) => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
 // No meetings and nothing narrowing the list: the sources, since the Sources link is hidden until one is connected
-// (the header has Add notes).
+// (the header has Log a meeting).
 const meetEmptyHTML = (state: MeetState) => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
   : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state)}</div></div>`;
 const meetPill = (r: MeetRec) => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
@@ -770,7 +776,7 @@ function meetOneLine(text: unknown): string {
   const line = m ? m[0] : s;
   return line.length > 140 ? line.slice(0, 137).replace(/\s+\S*$/, '') + '…' : line;
 }
-// A row's own action: a quiet icon button (the row is a title and marks; Add notes is the view's one filled button).
+// A row's own action: a quiet icon button (the row is a title and marks).
 const meetRowAct = (action: string, id: string, icon: string, label: string, tip = label, extra = '') =>
   `<button class="mp-icon meet-act" type="button" data-review-action="${action}" data-id="${esc(id)}"${extra} aria-label="${esc(label)}" title="${esc(tip)}">${meetIcon(icon)}</button>`;
 // The top of an open meeting: every task it turned into, each a link. The bot's progress is the Outcome below.
@@ -1047,7 +1053,7 @@ function meetSideRender(state: MeetState, rec: MeetRec): void {
   }
 }
 
-// ---- Add notes: typed notes, an uploaded or pasted transcript, or both, filed through POST /api/v2/meetings/import ----
+// ---- Log a meeting: typed notes, an uploaded or pasted transcript, or both, filed through POST /api/v2/meetings/import ----
 // A local date-time as ISO-8601 with this browser's offset; the server wants a timezone.
 function meetLocalIso(value: string): string {
   const d = new Date(value); if (Number.isNaN(d.getTime())) return '';
@@ -1065,7 +1071,7 @@ function meetNotesOpen(state: MeetState): void {
   const now = new Date(), pad = (n: number) => String(n).padStart(2, '0');
   const local = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
   dialog.innerHTML = `<form class="import-form" id="manual-form">
-      <header><h2>Add notes</h2><button class="ghost" type="button" id="manual-close" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
+      <header><h2>Log a meeting</h2><button class="ghost" type="button" id="manual-close" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <div class="import-grid">
         <label>Title <input type="text" id="manual-title" maxlength="300" autocomplete="off"></label>
         <label>Date and time <input type="datetime-local" id="manual-when" value="${local}"></label>
@@ -1089,7 +1095,7 @@ function meetNotesOpen(state: MeetState): void {
       <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('')}</select></label>
       <label class="import-private"><input type="checkbox" id="manual-private"> Private: participants, its owner and the team owner only</label>
       <div class="row"><span class="muted" id="manual-msg" role="status"></span><span class="spacer"></span>
-        <button class="ghost" type="button" id="manual-cancel">Cancel</button><button class="primary" type="submit" id="manual-go">Add notes</button></div>
+        <button class="ghost" type="button" id="manual-cancel">Cancel</button><button class="primary" type="submit" id="manual-go">Log</button></div>
     </form>`;
   const q = (sel: string) => dialog.querySelector(sel), close = () => dialog.close();
   q('#manual-close').onclick = close; q('#manual-cancel').onclick = close;

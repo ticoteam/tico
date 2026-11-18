@@ -135,8 +135,8 @@ async function main() {
       }
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/meetings');
-    await page.locator('#meet-live-now').click();
+    // The beta view has no button on Meetings (Chris, Nov 18: "remove that"); its address still opens it.
+    await page.goto('https://tico-ui.test/#/meetings/live/');
     await page.locator('#live-connect').waitFor();
     await page.locator('#live-connect input[name=title]').fill('Weekly sync');
     await page.locator('#live-connect input[name=reply_cap]').fill('2');
