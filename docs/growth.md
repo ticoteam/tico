@@ -397,8 +397,8 @@ a month) answers with `setup` too, so the next step follows without another read
 A bot may not add a channel or source, but it may **propose** one it will own: `tico growth channel propose <slug>
 --name "..."` (with `--source-system`, `--source-truth-for` and the other `--source-*` flags for the source of its
 numbers) or `tico growth source propose --channel <slug> ...` for a channel it already runs (`POST
-/api/v2/growth/proposals`). It is an OK asked of the owner, or of an admin named with `--ask`, that they give from its
-preview in Needs you. Nothing is added before that; on the OK, Tico checks it all again, adds the channel and source as
+/api/v2/growth/proposals`). It is an OK in the Needs you of the owner, or of an admin named with `--ask`, given from its
+preview; the owner or any admin may give it (its task is theirs to read), and only once. Nothing is added before that; on the OK, Tico checks it all again, adds the channel and source as
 that person, owned by the bot (the channel names the new source), and sends the bot a notice with what was added. A No
 adds nothing and the bot hears why. A bot never proposes another owner, a channel already added or already waiting, or
 a Finance ad spend source (a person connects it). While the next setup step is a channel or a source, a bot's `setup`

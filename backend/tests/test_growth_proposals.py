@@ -62,6 +62,30 @@ def test_the_bots_setup_says_it_may_propose_and_who_oks(api):
     assert "you_may_propose" not in get(api, "growth/setup", token="cara-test")["next"]
 
 
+def test_tico_growth_setup_prints_the_propose_command_at_the_channel_and_source_steps(api):
+    from clients import remotecli
+
+    ops = bot(api, "ops")
+    put(api, "growth/settings", {"revenue_month": 90, "margin_pct": 40})
+    text = remotecli.growth_text("growth setup", get(api, "growth/setup", token=ops))
+    assert "  Only the owner or an admin can" in text
+    assert "  tico growth channel propose <slug>" in text and "tool: tico_growth_channel_propose; OK'd by" in text
+    post(api, "growth/channels", {"slug": "linkedin", "name": "LinkedIn", "owner_ref": "bot:ops"})
+    text = remotecli.growth_text("growth setup", get(api, "growth/setup", token=ops))
+    assert "  tico growth source propose --channel <slug>" in text and "tool: tico_growth_source_propose" in text
+    assert "propose" not in remotecli.growth_text("growth setup", get(api, "growth/setup", token="cara-test"))
+
+
+def test_any_admin_may_ok_a_proposal_asked_of_the_owner(api):
+    asked = propose(api, bot(api, "ops"), {"channel": CHANNEL, "source": SOURCE})  # asked of Ana, the owner
+    give_ok(api, asked["requirement_id"], token="ben-test")  # Ben, an admin, opens it and OKs it
+    assert channels(api)["linkedin"]["owner_ref"] == "bot:ops"
+    [made] = events(api, "growth.channel.create")
+    assert made["actor"] == "human:ben"
+    give_ok(api, asked["requirement_id"], expected=422)  # used once: Ana's later click adds nothing
+    assert len(sources(api)) == 1
+
+
 def test_an_admin_it_was_asked_of_may_ok_it(api):
     asked = propose(api, bot(api, "ops"), {"channel": CHANNEL, "ask": "human:ben"})
     give_ok(api, asked["requirement_id"], token="ben-test")

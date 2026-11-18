@@ -1015,6 +1015,12 @@ def growth_next(setup):
         names = ", ".join(str(p.get("name")) for p in nxt.get("who_may") or [])
         who = "the owner, an admin or a bot" if nxt.get("bots_may") else "the owner or an admin"
         lines.append(f"  Only {who} can" + (f": {names}." if names else "."))
+        propose = nxt.get("you_may_propose")
+        if propose:  # a bot may propose it instead (backend/growth_proposals.py)
+            oks = ", ".join(str(p.get("name")) for p in propose.get("oks") or [])
+            lines.append("  You may propose it: " + str(propose.get("says")))
+            lines.append("  " + str(propose.get("command")))
+            lines.append(f"  tool: {propose.get('tool')}" + (f"; OK'd by {oks}" if oks else ""))
     return "\n".join(lines)
 
 

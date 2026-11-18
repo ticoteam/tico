@@ -548,8 +548,7 @@ def growth_source_add(api, args):
 
 
 PROPOSE_PROPS = {
-    "ask": _s("Who OKs it: the owner (by default) or an admin, by person id"),
-    "task": _s("Your task the OK goes on; else a task is filed for it"),
+    "ask": _s("Whose Needs you it goes to: the owner (by default) or an admin, by person id; any admin may OK it"),
 }
 SOURCE_OF_CHANNEL = {"source_" + k: v for k, v in SOURCE_PROPS.items() if k not in ("owner", "campaign")}
 
@@ -557,8 +556,6 @@ SOURCE_OF_CHANNEL = {"source_" + k: v for k, v in SOURCE_PROPS.items() if k not 
 def _proposal(api, args, body):
     if args.get("ask"):
         body["ask"] = _target(api, args["ask"])
-    if args.get("task"):
-        body["task_id"] = args["task"]
     return api.post("growth/proposals", body, key=_key(args))
 
 

@@ -159,8 +159,12 @@ def _may_answer(
     if refused:
         _refuse(conn, by, "task_requirement", refused, task_id)
     # A requirement that names nobody (a stage's OK), or a person who left, is any person's. A bot answers only when it
-    # is named.
-    if by != person and not (person is None and is_human(by)):
+    # is named. An OK of a kind any allowed person may give (task_asks.ANY_ALLOWED) passed its rule in give_ok.
+    if (
+        by != person
+        and not (person is None and is_human(by))
+        and not task_asks.given_by_another_allowed(conn, requirement["id"], value)
+    ):
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
     if value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)

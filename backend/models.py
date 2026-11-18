@@ -3629,7 +3629,6 @@ class GrowthProposal(Contract):
     source: GrowthSourceCreate | None = None
     for_channel: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")
     ask: str | None = Field(default=None, max_length=200)
-    task_id: str | None = Field(default=None, max_length=200)
 
 
 class GrowthSourceUpdate(Contract):

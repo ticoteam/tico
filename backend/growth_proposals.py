@@ -165,9 +165,14 @@ def propose(c: Any, who: Any, body: Any, catalog: Any = None) -> Row:
         shows=["growth:proposal"],
         subject=SUBJECT + H.new_id(),
         content=content,
-        task_id=body.task_id,
         title=line.rstrip("?"),
     )
+    # Its own task, private to its parties: the owner and every admin read it, since any of them may OK it.
+    from . import growth_setup
+
+    filed: Row = H.task(c, asked["task_id"]) or {}
+    for found in growth_setup.who_may(c):
+        H.task_reach(c, who.actor, filed, found["ref"])
     return {**asked, "status": "waiting", "asked_of": H.actor_name(c, person)}
 
 
