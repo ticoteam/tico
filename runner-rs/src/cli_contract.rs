@@ -275,6 +275,27 @@ impl Drop for Screen {
     }
 }
 
+/// The code the runner typed never leaves this computer, whether the CLI masks it or draws it (Claude Code 2.1.327
+/// draws `auth login`'s pasted code): not in the lines or the code `parse` reads with the code hidden, and not in
+/// the screen it logs after the code (`login::screen_digest`). The message names the command, never the screen.
+fn typed_code_stays_here(raw: &str, command: &str) {
+    let pieces = ["not-a-code", "not-a-state"];
+    let (_, code, lines, _) = parse(raw, MADE_UP_CODE);
+    assert!(
+        !lines.iter().any(|l| pieces.iter().any(|p| l.contains(p))),
+        "the code typed into `{command}` is in the lines a sign-in reports"
+    );
+    assert!(
+        !pieces.iter().any(|p| code.contains(p)),
+        "the code typed into `{command}` is in the code a sign-in reports"
+    );
+    let digest = crate::login::screen_digest(raw, MADE_UP_CODE);
+    assert!(
+        !pieces.iter().any(|p| digest.contains(p)),
+        "the code typed into `{command}` is in the screen the runner logs after it"
+    );
+}
+
 /// `oauth_retry`'s reading of a screen, from `parse`'s lines: no spaces, lower case.
 fn squeezed(raw: &str, hide: &str) -> String {
     let (_, _, lines, _) = parse(raw, hide);
@@ -515,10 +536,7 @@ fn claude_connect_shows_a_link_and_a_code_prompt_and_a_wrong_code_gives_the_retr
     let before = screen.raw().len();
     screen.type_in(MADE_UP_CODE);
     std::thread::sleep(Duration::from_millis(1200));
-    assert!(
-        !screen.raw().contains(MADE_UP_CODE),
-        "`claude setup-token` now shows the pasted code in the clear: it would reach the runner's log"
-    );
+    typed_code_stays_here(&screen.raw(), "claude setup-token");
     assert!(
         screen.raw().len() > before,
         "`claude setup-token` drew nothing when the code was typed: it may no longer be reading the terminal"
@@ -586,10 +604,7 @@ fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_promp
     let before = screen.raw().len();
     screen.type_in(MADE_UP_CODE);
     std::thread::sleep(Duration::from_millis(1200));
-    assert!(
-        !screen.raw().contains(MADE_UP_CODE),
-        "`claude auth login` now shows the pasted code in the clear: it would reach the runner's log"
-    );
+    typed_code_stays_here(&screen.raw(), "claude auth login");
     assert!(
         screen.raw().len() > before,
         "`claude auth login` drew nothing when the code was typed: it may no longer be reading the terminal"
