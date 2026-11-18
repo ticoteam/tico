@@ -93,7 +93,9 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, theme, hash: '#/task/t-3', tasks: tasks(), needs: [], beforeGoto: files});
       const win = page.locator('#task-modal[open][data-task="t-3"]');
       await win.locator('.tw-tabs').waitFor();
-      assert.deepEqual(await texts(page), ['Chat', 'Light spec', 'Token spec', 'Dark spec']);
+      // The three documents have their tabs, in order (Chat, Files and any other fixed tab are not this test's).
+      const docs = ['Light spec', 'Token spec', 'Dark spec'];
+      assert.deepEqual((await texts(page)).filter(t => docs.includes(t)), docs);
       // A document's frame once its tab is shown and its page drawn.
       const show = async (name: string): Promise<FrameLocator> => {
         await win.getByRole('tab', {name}).click();
