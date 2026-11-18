@@ -282,8 +282,9 @@ def test_needs_you_on_the_hosted_companys_shape(api, monkeypatch):
         route(api, "ana-test", runs=1)
     batched = {}
     for sql in seen:
-        if "json_each" in sql:
+        if "IN (SELECT value FROM json_each(" in sql or "FROM json_each(" in sql.partition(" WHERE ")[0]:
             batched.setdefault(re.sub(r"'\[[^']*\]'", "'[...]'", sql), sql)
+    scanned = []
     with store.read() as c:
         for shape, sql in sorted(batched.items()):
             plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql)]
@@ -292,9 +293,9 @@ def test_needs_you_on_the_hosted_companys_shape(api, monkeypatch):
                 print(f"    {line}")
             # The JSON list of keys is read through (`SCAN k VIRTUAL TABLE`); every table is looked up by an index, but
             # task_delegations, which has none yet (a few short-lived rows; an index of its own is a migration).
-            scans = [
-                line
+            scanned += [
+                (shape, line)
                 for line in plan
                 if line.startswith("SCAN ") and "VIRTUAL TABLE" not in line and line != "SCAN task_delegations"
             ]
-            assert not scans, (shape, plan)
+    assert not scanned, scanned
