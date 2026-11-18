@@ -19,8 +19,8 @@ def page(response):
     return response.json()["page"]
 
 
-def task(api):
-    return post(api, "tasks", {"owner": "ops", "title": "Report", "body": "Check the report"})["id"]
+def task(api, title="Report"):
+    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Check the report"})["id"]
 
 
 def link_spec(api, fid, tid):
@@ -123,7 +123,7 @@ def test_plain_attachment_keeps_the_tasks_document_in_its_own_series(api):
 def test_plain_attachment_can_continue_a_page_used_as_another_tasks_document(api):
     tid = task(api)
     fid = page(publish(api, task=tid, **{"as": "Spec"}))["file_id"]
-    link_spec(api, fid, task(api))
+    link_spec(api, fid, task(api, "Shared report"))
     removed = api.delete(
         f"/api/v2/pages/{fid}/links", params={"target": "task:" + tid, "role": "Spec"}, headers=headers()
     )
