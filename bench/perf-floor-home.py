@@ -405,6 +405,41 @@ def plans(api):
             print("\nplan:", shape(sql)[:160])
             for step in plan:
                 print("    ", step)
+        batched_plans(c)
+
+
+def batched_plans(c):
+    """The Needs-you build's batched reads (waiting_on.prime): each one's plan, over a list of real ids. Skipped on a
+    tree that does not have them."""
+    import json
+
+    from backend import task_pages as P
+    from backend import task_requirements as R
+
+    def ids(sql):
+        return json.dumps([str(r[0]) for r in c.execute(sql)])
+
+    tasks, visits = ids("SELECT 'task:' || id FROM tasks LIMIT 50"), ids("SELECT id FROM visits LIMIT 50")
+    stages, pipelines = ids("SELECT id FROM stages LIMIT 30"), ids("SELECT id FROM pipelines LIMIT 10")
+    reads = [
+        ("LIVE_DOCUMENTS_MANY_SQL", getattr(P, "LIVE_DOCUMENTS_MANY_SQL", None), (tasks, json.dumps(["Spec"]))),
+        ("FILED_MANY_SQL", getattr(R, "FILED_MANY_SQL", None), (visits,)),
+        ("AT_HEAD_MANY_SQL", getattr(R, "AT_HEAD_MANY_SQL", None), (stages,)),
+        ("stages by ids", "SELECT * FROM stages WHERE id IN (SELECT value FROM json_each(?))", (stages,)),
+        ("pipelines by ids", "SELECT * FROM pipelines WHERE id IN (SELECT value FROM json_each(?))", (pipelines,)),
+    ]
+    for name, sql, args in reads:
+        if sql is None:
+            continue
+        print(f"\nplan: {name}")
+        for step in c.execute("EXPLAIN QUERY PLAN " + sql, args).fetchall():
+            print("    ", step[3])
+        times = []
+        for _ in range(21):
+            began = time.perf_counter()
+            c.execute(sql, args).fetchall()
+            times.append((time.perf_counter() - began) * 1000)
+        print(f"     median {statistics.median(times):.2f} ms over 21")
 
 
 def main(api):
