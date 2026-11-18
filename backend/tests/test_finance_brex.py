@@ -113,6 +113,14 @@ def cash_txn(tid: str, kind: str, amount: int, day: str = "2026-10-10", currency
     }
 
 
+def _card_amount(raw: dict[str, Any]) -> int:
+    """A card row as the card line carries it; 0 for one Finance does not post (no amount, another currency)."""
+    try:
+        return F.brex_card_txn(raw, CARD).amount if raw["amount"]["currency"] == "USD" else 0
+    except (FinanceError, KeyError, TypeError):
+        return 0
+
+
 # The posted_at_start Brex takes: a date-time with no zone. It answers 400 to a `Z`, an offset or a bare date.
 POSTED_AT_START = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 BAD_REQUEST = Answer(400, {"type": "BAD_REQUEST", "message": "Bad request"})
@@ -131,6 +139,7 @@ class FakeBrex:
         self.card_txns: list[dict[str, Any]] = []
         self.cash_txns: dict[str, list[dict[str, Any]]] = {CASH: []}
         self.page = page
+        self.card_owed = 0  # owed on the card before its rows here (history before history_from)
         self.status: int | None = None
         self.order = "newest_first"  # the order Brex lists rows in (ORDERS)
         self.calls = 0  # cash account-list reads so far
@@ -139,9 +148,13 @@ class FakeBrex:
         ] = {}  # run before the nth cash account-list read (a row posted then)
 
     def card_accounts(self, cursor: str | None = None) -> Answer:
+        """Each card account owing `card_owed` from before its rows here plus what its rows charged, as the positive
+        current balance Brex reports."""
         if self.status is not None:
             return Answer(self.status, {"message": "nope"})
-        return Answer(200, brex._parse(json.dumps(self.cards).encode()))
+        owed = self.card_owed - sum(_card_amount(r) for r in self.card_txns)
+        cards = [{**a, "current_balance": money(owed)} for a in self.cards]
+        return Answer(200, brex._parse(json.dumps(cards).encode()))
 
     def cash_accounts(self, cursor: str | None = None) -> Answer:
         self.calls += 1
@@ -980,3 +993,40 @@ def test_a_company_with_no_card_and_no_cash_account_is_refused(books):
     with books.transaction() as c:
         done = act(c, OWNER, "connection_create", {"provider": "brex", "credential_id": "cred-brex", "probe": found})
     assert done.status != "committed"
+
+
+def _openings(c: Any) -> list[tuple[str, str, int]]:
+    """Each opening line on a Brex money account's GL line: its day, its line's code and its amount."""
+    return [
+        (str(r[0]), str(r[1]), int(r[2]))
+        for r in c.execute(
+            "SELECT e.entry_date, a.code, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+            "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source_id LIKE 'opening:%' AND e.status='posted' AND "
+            "a.id IN (SELECT account_id FROM fin_money_accounts WHERE provider='brex') ORDER BY a.code"
+        )
+    ]
+
+
+def test_a_card_only_company_owing_with_no_rows_opens_the_card_liability(books):
+    """A card owing $500 and no card row from history_from on: the card line opens at what is owed (a liability),
+    dated the day before history_from."""
+    fake = FakeBrex()
+    fake.cash, fake.cash_txns = [], {}
+    fake.card_owed = 50_000
+    connect_brex(books, fake)
+    brex_pass(books, fake)
+    with books.read() as c:
+        card = _code(c, "card_program")
+        assert _openings(c) == [("2025-12-31", card, -50_000)]
+        assert _sum(c, card) == -50_000
+        assert _every_entry_balances(c)
+
+
+def test_a_cut_history_with_no_cash_rows_opens_the_day_before_history_from(books):
+    fake = FakeBrex()
+    fake.cards = []
+    fake.cash = [cash_account(balance=80_000)]
+    connect_brex(books, fake, history_from="2026-09-10")
+    brex_pass(books, fake)
+    with books.read() as c:
+        assert _openings(c) == [("2026-09-09", _code(c, "bank"), 80_000)]
