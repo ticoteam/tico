@@ -1,0 +1,462 @@
+"""A listening's GitHub source (backend/listening_github.py, `read_github` in backend/listening.py): one item per PR
+merged into the default branch, or per release, deduped by the repository and number."""
+
+import json
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, unquote, urlsplit
+
+import pytest
+import time_machine
+
+from backend import listening as L
+from backend import listening_github as LG
+from backend.store import Problem
+from backend.tests.helpers.api import get, post
+from backend.tests.helpers.automation_api import patch
+from backend.tests.helpers.automation_runs import sql
+from backend.tests.helpers.listening import NOTE, FakeJudge, listening, source_id
+
+START = datetime(2026, 11, 2, 7, 0, tzinfo=timezone.utc)
+WIDGETS = {"id": "g1", "kind": "github", "target": "acme/widgets"}
+
+
+def at(minutes):
+    return START + timedelta(minutes=minutes)
+
+
+def gh(when):
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class FakeGitHub:
+    """GitHub's REST answers for the calls the reader makes: the repository, its closed PRs into one base, newest
+    updated first, and its releases, newest first; both paged. `refuse` maps a call number to a status."""
+
+    def __init__(self):
+        self.repos = {"acme/widgets": {"default_branch": "main"}}
+        self.prs, self.releases, self.calls, self.refuse, self.tags = [], [], [], {}, []  # tags with no release
+
+    def merge(self, number, title, when, base="main", labels=(), body=""):
+        self.prs.append(
+            {
+                "number": number,
+                "title": title,
+                "merged_at": gh(when),
+                "updated_at": gh(when),
+                "base": base,
+                "labels": [{"name": n} for n in labels],
+                "body": body,
+                "user": {"login": "sam"},
+                "html_url": f"https://github.com/acme/widgets/pull/{number}",
+            }
+        )
+
+    def release(self, rid, tag, when, name="", body="", draft=False, prerelease=False, commit_at=None):
+        self.releases.append(
+            {
+                "id": rid,
+                "tag_name": tag,
+                "name": name,
+                "body": body,
+                "draft": draft,
+                "prerelease": prerelease,
+                "created_at": gh(commit_at or when),  # GitHub's created_at is the date of the release's commit
+                "published_at": None if draft else gh(when),
+                "author": {"login": "sam"},
+                "html_url": f"https://github.com/acme/widgets/releases/tag/{tag}",
+            }
+        )
+
+    def __call__(self, path, token):
+        self.calls.append(path)
+        if len(self.calls) in self.refuse:
+            status = self.refuse[len(self.calls)]
+            headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1793520000"} if status == 403 else {}
+            return status, headers, {"message": "API rate limit exceeded" if status in (403, 429) else "Not Found"}
+        parts = urlsplit(path)
+        bits, query = parts.path.strip("/").split("/"), parse_qs(parts.query)
+        repo = "/".join(bits[1:3]).lower()  # GitHub's names are not case-sensitive
+        if repo not in self.repos or (self.repos[repo].get("private") and token != "tok"):
+            return 404, {}, {"message": "Not Found"}
+        if len(bits) == 3:
+            return 200, {}, self.repos[repo]
+        if bits[3:6] == ["git", "matching-refs", "tags"]:  # every tag, in one answer
+            tags = [r["tag_name"] for r in self.releases if not r["draft"]] + self.tags
+            return 200, {}, [{"ref": f"refs/tags/{t}"} for t in sorted(tags)]
+        if bits[3:5] == ["releases", "tags"]:
+            found = [r for r in self.releases if r["tag_name"] == unquote(bits[5]) and not r["draft"]]
+            return (200, {}, found[0]) if found else (404, {}, {"message": "Not Found"})
+        page, per = int(query["page"][0]), int(query["per_page"][0])
+        if bits[3] == "pulls":
+            rows = sorted(
+                (p for p in self.prs if p["base"] == query["base"][0]), key=lambda p: p["updated_at"], reverse=True
+            )
+        else:
+            if (page - 1) * per >= LG.RELEASES_LISTED:  # "Only the first 1000 results are available."
+                return 422, {}, {"message": "Only the first 1000 results are available."}
+            rows = sorted(self.releases, key=lambda r: r["created_at"], reverse=True)
+        return 200, {}, rows[(page - 1) * per : page * per]
+
+
+@pytest.fixture
+def github(monkeypatch):
+    fake = FakeGitHub()
+    monkeypatch.setattr(LG, "FETCH", fake)
+    return fake
+
+
+def made(api, sources=(WIDGETS,), rules=()):
+    with time_machine.travel(START, tick=False):
+        return listening(api, sources=sources, rules=rules, steps=[NOTE])["id"]
+
+
+def run(api, when, judge=None, app=None):
+    store = api.app.state.store
+    L.run_pass(store, when, judge, app)
+
+
+def items(api, aid):
+    return sql(
+        api,
+        "SELECT native_id, title, url, author, posted_at, status, text FROM listening_items WHERE automation_id=? "
+        "ORDER BY rowid",
+        (aid,),
+    )
+
+
+def source(api, aid, key="g1"):
+    return sql(api, "SELECT * FROM listening_sources WHERE id=?", (source_id(api, aid, key),))[0]
+
+
+def test_the_first_read_only_sets_where_later_reads_start(api, github):
+    github.merge(1, "feat: old work", at(-600))
+    aid = made(api)
+    run(api, START)
+    row = source(api, aid)
+    assert row["status"] == "ok" and row["last_read_at"]
+    assert items(api, aid) == []
+    assert json.loads(row["snapshot"])["follow"] == "prs"
+
+
+def test_a_pr_merged_after_the_first_read_is_one_item_with_its_title_link_author_and_time(api, github):
+    github.merge(1, "feat: old work", at(-600))
+    aid = made(api)
+    run(api, START)
+    github.merge(7, "feat: worktree switcher", at(20), labels=["ui"], body="Adds a switcher.\n" + "x" * 3000)
+    run(api, at(61))
+    [one] = items(api, aid)
+    assert one["native_id"] == "gh:acme/widgets#pr:7"
+    assert one["title"] == "feat: worktree switcher (#7)"
+    assert one["url"] == "https://github.com/acme/widgets/pull/7" and one["author"] == "sam"
+    assert one["posted_at"].startswith("2026-11-02T07:20:00")
+    assert one["text"].startswith("feat: worktree switcher\nLabels: ui\n\nAdds a switcher.")
+    assert len(one["text"]) < 1_600  # the body's start, never all of it
+
+
+def test_a_source_is_not_read_again_within_the_hour(api, github):
+    aid = made(api)
+    run(api, START)
+    calls = len(github.calls)
+    run(api, at(30))
+    assert len(github.calls) == calls
+    run(api, at(61))
+    assert len(github.calls) == calls + 2  # a quiet hour: the repository and one page
+    assert source(api, aid)["status"] == "ok"
+
+
+def test_a_pr_read_twice_or_by_two_sources_on_one_repo_is_one_item(api, github):
+    twin = {"id": "g2", "kind": "github", "target": "https://github.com/acme/widgets"}
+    shouting = {"id": "g3", "kind": "github", "target": "Acme/Widgets"}
+    aid = made(api, sources=(WIDGETS, twin, shouting))
+    run(api, START)
+    github.merge(7, "feat: worktree switcher", at(20))
+    run(api, at(61))
+    # The cursor is put back, as a read the server stopped after saving would leave it: the PR is listed again.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE listening_sources SET snapshot=?,last_read_at=NULL",
+            (json.dumps({"follow": "prs", "since": gh(at(0))}),),
+        )
+    run(api, at(125))
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#pr:7"]
+
+
+def test_two_prs_with_the_same_title_are_two_items_and_neither_is_a_copy(api, github):
+    aid = made(api, rules=[{"do": "keep", "tag": "deps", "text": "Dependency updates [r0]"}])
+    run(api, START)
+    title = "chore(deps): bump the npm group across 4 directories with 12 updates [r0]"
+    github.merge(8, title, at(10))
+    github.merge(9, title, at(12))
+    run(api, at(61), FakeJudge())
+    rows = items(api, aid)
+    assert [r["native_id"] for r in rows] == ["gh:acme/widgets#pr:8", "gh:acme/widgets#pr:9"]
+    assert "duplicate" not in {r["status"] for r in rows}
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE duplicate_of_id IS NOT NULL")[0]["n"] == 0
+
+
+def test_a_pr_merged_into_another_branch_makes_no_item(api, github):
+    aid = made(api)
+    run(api, START)
+    github.merge(10, "fix: on a release branch", at(10), base="release-1")
+    github.merge(11, "fix: on main", at(11))
+    run(api, at(61))
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#pr:11"]
+    assert any("base=main" in path for path in github.calls)
+
+
+def test_releases_make_one_item_each_pre_releases_too_drafts_never(api, github):
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    github.release(1, "v1.0.0", at(-600), name="First")
+    run(api, START)
+    assert items(api, aid) == []
+    github.release(2, "v1.1.0", at(10), name="Faster boards", body="Boards open twice as fast.")
+    github.release(3, "v1.2.0-nightly.1", at(20), prerelease=True)
+    github.release(4, "v2.0.0", at(30), draft=True)
+    run(api, at(61))
+    rows = items(api, aid)
+    assert [r["title"] for r in rows] == ["v1.1.0 — Faster boards", "v1.2.0-nightly.1"]
+    assert rows[0]["native_id"] == "gh:acme/widgets#release:2"
+    assert rows[0]["text"] == "v1.1.0 — Faster boards\n\nBoards open twice as fast."
+
+
+def test_a_repo_tico_cannot_see_is_blocked_and_the_other_sources_still_read(api, github):
+    hidden = {"id": "g2", "kind": "github", "target": "acme/secret"}
+    aid = made(api, sources=(WIDGETS, hidden))
+    run(api, START)
+    blocked = source(api, aid, "g2")
+    assert blocked["status"] == "blocked"
+    assert blocked["last_error"].startswith("Tico can't see acme/secret")
+    assert source(api, aid)["status"] == "ok"
+    with time_machine.travel(at(1), tick=False):
+        seen = get(api, f"automations/{aid}")["listening"]["sources"]
+    assert {s["key"]: s["dot"] for s in seen} == {"g1": "filled", "g2": "hollow"}
+
+
+def test_a_rate_limit_mid_read_loses_no_pr_the_next_read_saves_them_all(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    aid = made(api)
+    run(api, START)
+    for n in range(1, 6):
+        github.merge(n, f"feat: change {n}", at(n))
+    github.refuse = {len(github.calls) + 3: 403}  # the repository, page 1, then page 2 is refused
+    run(api, at(61))
+    row = source(api, aid)
+    assert row["status"] == "rate_limited" and "rate limit" in row["last_error"]
+    assert items(api, aid) == []
+    github.merge(6, "feat: change 6", at(70))
+    run(api, at(125))
+    assert [i["native_id"] for i in items(api, aid)] == [f"gh:acme/widgets#pr:{n}" for n in range(1, 7)]
+    assert source(api, aid)["status"] == "ok"
+
+
+def test_a_listing_longer_than_a_read_carries_on_at_the_next_read_and_skips_nothing(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    aid = made(api)
+    run(api, START)
+    for n in range(1, 10):  # 9 PRs: a read lists 4
+        github.merge(n, f"feat: change {n}", at(n))
+    run(api, at(61))
+    assert [i["native_id"] for i in items(api, aid)] == [f"gh:acme/widgets#pr:{n}" for n in range(6, 10)]
+    assert source(api, aid)["status"] == "ok"
+    # Between reads a new PR is merged, and PR 1, not read yet, is edited: it jumps to the head of the listing.
+    github.merge(20, "feat: change 20", at(100))
+    github.prs[0]["updated_at"] = gh(at(101))
+    for hour in range(2, 7):  # the head pushes what is left down the listing: some rows are read twice, none skipped
+        run(api, at(hour * 65))
+    ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
+    assert ids == [*range(1, 10), 20]
+    assert "carry" not in json.loads(source(api, aid)["snapshot"])  # read to its end: the cursor moved on
+    github.merge(21, "feat: change 21", at(450))
+    run(api, at(520))
+    assert items(api, aid)[-1]["native_id"] == "gh:acme/widgets#pr:21"
+
+
+def test_releases_deleted_between_reads_skip_none_and_a_refused_read_keeps_what_it_listed(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)
+    for n in range(1, 16):  # eight pages
+        github.release(n, f"v1.{n}.0", at(n))
+    github.refuse = {len(github.calls) + 4: 403}  # pages 1 to 3 listed, then the rate limit
+    run(api, at(61))
+    row = source(api, aid)
+    assert row["status"] == "rate_limited" and "rate limit" in row["last_error"]
+    assert len(items(api, aid)) == 6  # what was listed before the refusal is kept
+    # The six already saved are deleted: the ones under them move up, and the next read still lists them all.
+    github.releases = [r for r in github.releases if r["id"] < 10]
+    github.release(20, "v2.0.0", at(70))
+    run(api, at(130))
+    ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
+    assert ids == [*range(1, 16), 20]
+    assert source(api, aid)["status"] == "ok"
+
+
+def test_a_release_published_from_an_old_commit_deep_in_the_list_is_an_item_at_the_next_read(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    for n in range(1, 40):  # 39 releases from before the source started: twenty pages
+        github.release(n, f"v1.{n}.0", at(n - 600))
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)
+    run(api, at(65))
+    # A backport made from a commit older than all of them is published: GitHub lists it last.
+    github.release(50, "v0.9.1", at(70), commit_at=at(-900))
+    # Another, from a commit in the middle of the list.
+    github.release(51, "v1.20.1", at(75), commit_at=at(20 - 600))
+    run(api, at(130))  # the next hourly read, inside the spec's two hours (AC-6)
+    assert sorted(i["native_id"] for i in items(api, aid)) == [
+        "gh:acme/widgets#release:50",
+        "gh:acme/widgets#release:51",
+    ]
+    assert source(api, aid)["status"] == "ok"
+    run(api, at(195))  # read again: still one item each
+    assert len(items(api, aid)) == 2
+
+
+def test_releases_past_the_ones_github_lists_are_found_by_their_tags(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "RELEASES_LISTED", 6)  # GitHub lists 6; it answers 422 past them
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)
+    for n in range(1, 10):  # nine published since the source started: three past what GitHub lists
+        github.release(n, f"v1.{n}.0", at(n))
+    github.tags.append("nightly-marker")  # a tag with no release
+    run(api, at(61))
+    assert sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid)) == list(range(1, 10))
+    assert source(api, aid)["status"] == "ok"
+    before = len(github.calls)
+    run(api, at(125))  # read again: no copies, and no tag looked up twice
+    assert len(items(api, aid)) == 9
+    assert not any("/releases/tags/" in call for call in github.calls[before:])
+
+
+def test_a_backport_older_than_every_release_github_lists_arrives_at_the_next_read(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "RELEASES_LISTED", 6)
+    monkeypatch.setattr(LG, "TAG_LOOKUPS", 1)
+    for n in range(1, 13):  # twelve from before the source started: six past what GitHub lists
+        github.release(n, f"v1.{n}.0", at(n - 600))
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)  # the first read notes the tags past the list, and makes no item
+    assert items(api, aid) == []
+    # Two backports from commits older than all of them: GitHub lists neither, they are past its first six.
+    github.release(30, "v0.9.1", at(20), commit_at=at(-900))
+    github.release(31, "v0.9.2", at(25), commit_at=at(-899))
+    run(api, at(65))  # the next hourly read, inside the spec's two hours (AC-6); one lookup a read here
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#release:30"]
+    run(api, at(130))
+    assert [i["native_id"] for i in items(api, aid)] == [
+        "gh:acme/widgets#release:30",
+        "gh:acme/widgets#release:31",
+    ]
+    run(api, at(195))
+    assert len(items(api, aid)) == 2
+    assert source(api, aid)["status"] == "ok"
+
+
+def test_more_new_prs_between_two_reads_than_a_read_lists_lose_none(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    monkeypatch.setattr(LG, "MAX_SEGMENTS", 1)  # the head's stretch and the older one merge
+    aid = made(api)
+    run(api, START)
+    for n in range(1, 10):
+        github.merge(n, f"feat: change {n}", at(n))
+    run(api, at(61))
+    for n in range(30, 37):  # 7 more before the next read: its head alone is longer than a read
+        github.merge(n, f"feat: change {n}", at(n + 60))
+    for hour in range(2, 14):
+        run(api, at(hour * 65))
+    ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
+    assert ids == [*range(1, 10), *range(30, 37)]
+    assert "carry" not in json.loads(source(api, aid)["snapshot"])
+
+
+def test_a_private_repository_with_the_app_installed_is_read_with_its_own_token(api, github):
+    github.repos["acme/secret"] = {"default_branch": "main", "private": True}
+
+    class App:
+        def __init__(self):
+            self.asked = []
+
+        def mint(self, repos, permissions, diagnose=True):
+            self.asked.append((list(repos), dict(permissions)))
+            if repos == ["acme/secret"] and permissions.get("pull_requests") == "read":
+                return ("tok", "later")
+            raise Problem("github_access", "not installed", 403)
+
+    app = App()
+    aid = made(api, sources=({"id": "g1", "kind": "github", "target": "acme/secret"},))
+    run(api, START, app=app)
+    assert source(api, aid)["status"] == "ok"
+    github.merge(5, "feat: private change", at(20))  # the fake lists one set of PRs for every repository
+    run(api, at(61), app=app)
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/secret#pr:5"]
+    assert app.asked[0] == (["acme/secret"], {"metadata": "read", "pull_requests": "read", "contents": "read"})
+    hidden = made(api, sources=({"id": "g1", "kind": "github", "target": "acme/secret"},))
+    run(api, at(62))  # no App: the same repository is blocked
+    assert source(api, hidden)["status"] == "blocked"
+
+
+def test_changing_what_a_source_follows_starts_it_again_from_now(api, github):
+    aid = made(api)
+    run(api, START)
+    github.release(1, "v1.0.0", at(10))
+    with time_machine.travel(at(20), tick=False):
+        flow = get(api, f"automations/{aid}")
+        trigger = {**flow["trigger"], "sources": [{**WIDGETS, "follow": "releases"}]}
+        patch(api, aid, {"trigger": trigger})
+    run(api, at(61))
+    assert items(api, aid) == []  # v1.0.0 was there before it followed releases
+    github.release(2, "v1.1.0", at(70))
+    run(api, at(125))
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#release:2"]
+
+
+def test_a_github_source_is_owner_repo_and_a_pasted_address_is_trimmed(api):
+    def body(target, **extra):
+        trigger = {
+            "type": "listening",
+            "sources": [{"id": "g", "kind": "github", "target": target, **extra}],
+            "limits": [{"count": 5, "per": "day"}],
+            "at": "08:00",
+            "tz": "UTC",
+        }
+        return {"name": "T", "owner": "person:ana", "trigger": trigger, "steps": [NOTE]}
+
+    post(api, "automations", body("widgets"), expected=422)
+    post(api, "automations", body("https://acme.example/widgets"), expected=422)
+    post(api, "automations", body("acme/widgets", follow="issues"), expected=422)
+    page = body("https://acme.example/p")
+    page["trigger"]["sources"] = [{"id": "p", "kind": "page", "target": "https://acme.example/p", "follow": "prs"}]
+    post(api, "automations", page, expected=422)
+    made_ = post(api, "automations", body("https://github.com/acme/widgets/releases"))
+    assert made_["trigger"]["sources"][0] == {"id": "g", "kind": "github", "target": "acme/widgets", "follow": "prs"}
+
+
+def test_repo_of_reads_names_and_github_addresses():
+    assert LG.repo_of("acme/widgets") == "acme/widgets"
+    assert LG.repo_of(" https://www.github.com/acme/widgets.git ") == "acme/widgets"
+    assert LG.repo_of("github.com/acme/widgets/pull/3?x=1") == "acme/widgets"
+    assert LG.repo_of("widgets") is None
+    assert LG.repo_of("acme/..") is None and LG.repo_of("acme/.") is None
+    assert LG.repo_of("acme/.github") == "acme/.github"
+    assert LG.repo_of("https://gitlab.com/acme/widgets") is None
+
+
+def test_the_token_is_the_repos_else_the_installations_else_none():
+    class App:
+        def __init__(self, refuse):
+            self.refuse, self.asked = refuse, []
+
+        def mint(self, repos, permissions, diagnose=True):
+            self.asked.append(list(repos))
+            if len(self.asked) <= self.refuse:
+                raise Problem("github_access", "not installed", 403)
+            return ("tok", "later")
+
+    assert LG.token_for(App(0), "acme/widgets") == "tok"
+    installed = App(1)
+    assert LG.token_for(installed, "acme/widgets") == "tok" and installed.asked == [["acme/widgets"], []]
+    assert LG.token_for(App(2), "acme/widgets") == ""
+    assert LG.token_for(None, "acme/widgets") == ""

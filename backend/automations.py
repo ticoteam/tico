@@ -3253,7 +3253,8 @@ def tick(store, at=None, drain=True):
     try:
         # The listenings' pass, before and outside this tick's transaction: it asks the decision model and compares
         # texts between short transactions of its own. What it sends is queued here and drained below.
-        listening.run_pass(store, at, getattr(getattr(getattr(hub, "app", None), "state", None), "judge", None))
+        state = getattr(getattr(hub, "app", None), "state", None)
+        listening.run_pass(store, at, getattr(state, "judge", None), getattr(state, "github_app", None))
     except Exception:  # the automations go on without it
         log.exception("listening pass failed")
     with store.transaction() as c:
