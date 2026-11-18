@@ -82,11 +82,11 @@ async function visualHandshake(browser: Browser) {
   const threads = threadsFake({bot:'ops', messages:() => [message()]});
   // WebKit on Linux reports a fetch a reload cuts off as a page error ("Fetch API cannot load … due to access control
   // checks"), and the page asks for support access a second after it loads. So the test reloads only once every
-  // request the page has made has its answer.
+  // request the page has made has its answer (a live stream never finishes, so it doesn't count).
   const inFlight = new Set<Request>();
   let quiet = () => {};
   const answered = (request: Request) => { inFlight.delete(request); if (!inFlight.size) quiet(); };
-  page.on('request', request => inFlight.add(request));
+  page.on('request', request => { if (request.resourceType() !== 'eventsource') inFlight.add(request); });
   page.on('requestfinished', answered); page.on('requestfailed', answered);
   const reload = async () => {
     if (inFlight.size) await new Promise<void>(resolve => { quiet = resolve; });
