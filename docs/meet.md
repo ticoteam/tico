@@ -239,10 +239,9 @@ where available. To try a different model or effort, set `model` and `effort` wh
 `tico call start <thread> --bot <bot> --model <model-id> --effort medium`. Each turn records the model that ran.
 
 The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
-The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's access rules.
-When it needs to look something up or do work, it says “Let me check.” and files the follow-up with
-`tico call follow-up --call <id>`. A turn has 30 seconds from the time its question was heard. At the deadline
-the call skips an unanswered turn and shows `<bot> couldn't answer in time`.
+The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's
+access rules. When work needs more time, the bot can say “Let me check.” and file a follow-up task. At 30 seconds
+from the time it heard a question, the call skips an unanswered turn and shows `<bot> couldn't answer in time`.
 
 **Speaking it.** The first complete sentence goes to the Gateway's text-to-speech while the model continues writing.
 Later sentences are prepared as they arrive and play in order on the Tico voice track as PCM frames stream in. The full reply is posted to

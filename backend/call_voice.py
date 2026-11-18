@@ -84,10 +84,9 @@ PLAYED_KEEP = 200  # reply ids remembered per call, so a reply is spoken once
 STATES = ("listening", "waiting", "thinking", "making_voice", "speaking")
 SPOKEN_PROMPT = (
     "This meeting is a live voice call: your reply is read aloud to the people in it. Answer in plain spoken "
-    "sentences, at most about 80 words. Answer from what you know and the call notes. "
-    "If the answer needs research or work, say only Let me check. Then run "
-    'tico call follow-up --call {call_id} "<what to find out>". Do not do that work during the voice turn. '
-    "When you know the answer, give it directly. No markdown, lists, headings, links, code or emoji.\n"
+    "sentences, at most about 80 words. Use your usual tools and permissions. Answer from what you know and "
+    "the call notes. If work needs more time, say Let me check and file a follow-up task. "
+    "No markdown, lists, headings, links, code or emoji.\n"
 )
 
 

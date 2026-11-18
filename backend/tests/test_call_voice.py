@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from backend import call_media, call_notes, call_voice, calls, live_meetings, threads
+from backend import call_media, call_voice, calls, live_meetings, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, put, ready, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
@@ -352,7 +352,8 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     _speak(meet, call["id"], 0)
     turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
     assert turn["text"] == SYNTHETIC_SPEECH
-    assert post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"] is None
+    prep = post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"]
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
     first, full = "Yes.", "Yes. Ops can take the reliability review."
     with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
         post(
@@ -524,7 +525,8 @@ def test_legacy_voice_refuses_api_credentials_and_turns_fallback_off_on_a_plan(m
     give(meet, worker, "claude", key)
     call = start_call(meet, _dm(meet), bots=["ops"])
     _speak(meet, call["id"], 0)
-    assert post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"] is None
+    prep = post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"]
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
     [turn] = _turns(meet, call["meeting_id"])
     assert (turn["status"], turn["skip_reason"]) == ("skipped", "voice_requires_subscription")
     give(meet, worker, "claude", add(meet)["id"], confirm=True)
@@ -546,7 +548,8 @@ def test_pending_resident_question_moves_to_legacy_once_when_runner_loses_capabi
     give(meet, worker, "claude", add(meet, name="Legacy plan")["id"])
     attempt = _claim(meet, worker, "ops")
     assert attempt["message"]["refs"]["live_meeting"]["turn_id"] == turn["id"]
-    assert post(meet, "jobs/claim", {"bot": "ops"}, worker["token"])["attempt"] is None
+    prep = post(meet, "jobs/claim", {"bot": "ops"}, worker["token"])["attempt"]
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
     _complete(meet, worker, attempt, "The review is tomorrow.")
     assert _turns(meet, call["meeting_id"])[0]["status"] == "replied"
     with meet.app.state.store.read() as c:
@@ -559,22 +562,28 @@ def test_pending_resident_question_moves_to_legacy_once_when_runner_loses_capabi
         )
 
 
-def test_resident_primer_and_inputs_read_each_bots_current_notes(meet, monkeypatch):
-    brief = {"ops": "The review starts Monday.", "finance": "Private finance notes."}
-    monkeypatch.setattr(call_notes, "text", lambda c, call_id, bot_id: brief[bot_id], raising=False)
+def test_resident_primer_and_inputs_read_each_bots_current_notes(meet):
+    call = start_call(meet, thread(meet), bots=["ops", "finance"])
+    notes = f"calls/{call['id']}/bot-notes"
+    initial = "The review starts Monday."
+    other = "Private finance notes."
+    update = "The review moved to Tuesday."
+    post(meet, notes, {"text": initial}, token="ops-live")
+    post(meet, notes, {"text": other}, token="finance-live")
     worker = _machine(meet, "ops", resident=True)
-    call = start_call(meet, _dm(meet), bots=["ops"])
+    utterance = "Ops, when is the reliability review?"
+    _speak(meet, call["id"], 0, utterance)
     attempt = _claim(meet, worker, "ops")
-    assert brief["ops"] in attempt["message"]["body"] and brief["finance"] not in attempt["message"]["body"]
-    brief["ops"] = "The review moved to Tuesday."
-    _speak(meet, call["id"], 0)
+    assert initial in attempt["message"]["body"] and other not in attempt["message"]["body"]
+    post(meet, notes, {"text": update}, token="ops-live")
+    brief = initial + "\n\n" + update
     path = f"attempts/{attempt['id']}/inputs"
     token = worker["token"]
     assert post(meet, path + "?voice=busy", {}, token)["call_voice"] == {"closed": False}
     recap = post(meet, path + "?voice=restart", {}, token)["call_voice"]["primer"]
-    assert brief["ops"] in recap and brief["finance"] not in recap and SYNTHETIC_SPEECH in recap
+    assert brief in recap and other not in recap and utterance in recap
     assert _turns(meet, call["meeting_id"])[0]["status"] == "pending"
-    assert post(meet, path, {}, token)["call_voice"]["turn"]["notes"] == brief["ops"]
+    assert post(meet, path, {}, token)["call_voice"]["turn"]["notes"] == brief
 
 
 def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, caplog):

@@ -160,8 +160,7 @@ def voice_call(c, rid):
 
 def spoken_prompt(c, rid):
     """A bot's turn in a voice call is told that its answer is read aloud (live_meetings.PROMPT_HOOKS)."""
-    row = voice_call(c, rid)
-    return call_voice.SPOKEN_PROMPT.format(call_id=row["id"]) if row else ""
+    return call_voice.SPOKEN_PROMPT if voice_call(c, rid) else ""
 
 
 def project_reply(c, rid, reply, who):

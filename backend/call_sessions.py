@@ -3,8 +3,7 @@
 
 import hashlib
 import json
-from collections.abc import Callable
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from . import bot_settings as BS
 from . import harnesses as _harnesses
@@ -73,14 +72,6 @@ def choice(
     return {**picked, "compact_at": None}
 
 
-def notes(c: Any, call_id: str, bot: str) -> str:
-    from . import call_notes
-
-    # The live brief is supplied by call_notes.text(conn, call_id, bot_id) when call notes are available.
-    reader = cast(Callable[[Any, str, str], str] | None, getattr(call_notes, "text", None))
-    return reader(c, call_id, bot) if reader else ""
-
-
 def note_stamp(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -90,7 +81,7 @@ def primer(c: Any, row: Any, bot: str, recorded: str, *, recap: bool = False) ->
 
     profile: dict[str, Any] = H.bot(c, bot) or {}
     identity = " ".join(f"You are {profile.get('name') or bot}. {profile.get('description') or ''}".split())[:500]
-    rules = call_voice.SPOKEN_PROMPT.format(call_id=row["id"])
+    rules = call_voice.SPOKEN_PROMPT
     recent = ""
     if recap:
         chunks = c.execute(
@@ -128,7 +119,9 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     meeting = live_meetings._meeting(c, rid)
     if not choice(c, settings, bot, meeting["meeting_model"], effort(c, row["id"])):
         return False
-    recorded = notes(c, row["id"], bot)
+    from . import call_notes
+
+    recorded = call_notes.text(c, row["id"], bot)
     conv = live_meetings._turn_conversation(c, rid, bot, row["title"])
     ref = {"meeting_id": rid, "voice_call": row["id"], "notes_stamp": note_stamp(recorded)}
     msg = H.feed(c, "bot:" + bot, primer(c, row, bot, recorded), conv, refs={"live_meeting": ref, "delivery": "queue"})
@@ -211,13 +204,15 @@ def dispatch_pending(c: Any, rid: str, bot: str) -> None:
 def inputs(
     c: Any, attempt: Any, call_id: str, auth: Any, *, phase: VoicePhase = "ready", if_idle: bool = False
 ) -> dict[str, Any] | None:
+    from . import call_notes
+
     bot, job_id, aid = attempt["bot_id"], attempt["job_id"], attempt["id"]
     row = standing(c, call_id, bot, job_id)
     response: dict[str, Any] = {"messages": [], "call_voice": {"closed": not row}}
     if not row:
         return response
     if phase == "restart":
-        recorded = notes(c, call_id, bot)
+        recorded = call_notes.text(c, call_id, bot)
         response["call_voice"].update(
             primer=primer(c, row, bot, recorded, recap=True), notes_stamp=note_stamp(recorded)
         )
@@ -246,7 +241,7 @@ def inputs(
             "UPDATE live_meeting_turns SET voice_attempt=?,ran_model=? WHERE id=?",
             (aid, attempt["handed_model"] or attempt["model"], turn["id"]),
         )
-    recorded = notes(c, call_id, bot)
+    recorded = call_notes.text(c, call_id, bot)
     response["call_voice"]["turn"] = {"id": turn["id"], "text": turn["voice_input"], "notes": recorded}
     return response
 
