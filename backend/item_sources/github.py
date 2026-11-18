@@ -364,6 +364,12 @@ def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
     return out
 
 
+def prime_prs(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
+    """Read the PRs `prs_of` reads of many tasks (their links and saved metadata) together, for the reads that follow
+    in this snapshot."""
+    IM.prime_of_task(conn, task_ids, SOURCE, PR)
+
+
 def heads(conn: "sqlite3.Connection", task_id: str) -> dict[str, str | None]:
     """{pr_ref: its newest commit} for every PR linked to the task that was not closed without merging. A page `at_head`
     saves this when it is attached and is for the newest commit while it still equals this. None: no metadata yet."""

@@ -265,11 +265,14 @@ def _bot_owner(conn: "sqlite3.Connection", bot: object) -> str | None:
     left, or anything that is not a bot."""
     if not is_bot(bot):
         return None
-    found = conn.execute("SELECT owner_id FROM bot_config WHERE bot=?", (actor_id(bot),)).fetchone()
+    found = read_cache.one(conn, _OWNER_SQL, (actor_id(bot),))  # `_blocked_bots` reads every bot's together
     if not found or not found[0]:
         return None
     owner = str(found[0]) if is_human(found[0]) else human_actor(found[0])
     return owner if R.active_person(conn, owner) else None
+
+
+_OWNER_SQL = "SELECT owner_id FROM bot_config WHERE bot=?"
 
 
 def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
@@ -926,6 +929,18 @@ def _blocked_bots(conn: "sqlite3.Connection", person: str, company: bool) -> set
         ]
     actors = [f"bot:{bot}" for bot in bots]
     task_wakes.prime_bots(conn, actors)
+    # Each bot that cannot run asks who owns it (`_fixer`): every one's owner in one statement.
+    owners = (
+        {}
+        if not bots
+        else {
+            str(found[0]): (found[1],)
+            for found in conn.execute(
+                "SELECT bot, owner_id FROM bot_config WHERE bot IN (SELECT value FROM json_each(?))", _listed(bots)
+            ).fetchall()
+        }
+    )
+    read_cache.prime(conn, _OWNER_SQL, {(bot,): owners.get(bot) for bot in bots})
     seen = _seen(conn)
     out: set[str] = set()
     for bot in actors:

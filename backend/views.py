@@ -23,7 +23,7 @@ from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import login_holds, needs_lane, providers, runner_versions, runs
+from . import login_holds, needs_cache, needs_lane, providers, runner_versions, runs
 from .runs import LIVE as LIVE_RUN_STATES
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, holds, run_triggers
@@ -3423,7 +3423,7 @@ def install_views(app, store, auth, mutate, task_view):
         **api_v2(
             "Needs you",
             "getNeedsYou",
-            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
             "NeedsYou",
         ),
     )
@@ -3442,12 +3442,21 @@ def install_views(app, store, auth, mutate, task_view):
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
-        each bot's count over the whole list. A cursor from an older version starts again from the top (`restart`)."""
+        each bot's count over the whole list. A next page is cut from the build that gave the first while that build is
+        held (backend/needs_cache.py, needs_cache.TTL); a cursor from an older version starts again from the top
+        (`restart`)."""
         who = request.state.identity
         person_or_view(who)
         return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
 
     def needs_answer(who, count, ids, version, limit, cursor):
+        held = needs_cache.of(app)
+        viewer = needs_cache.viewer(who)
+        if cursor and not count and ids is None:
+            # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py).
+            built = held.get(viewer, cursor.partition(".")[0])
+            if built is not None:
+                return needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until)
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
@@ -3458,36 +3467,49 @@ def install_views(app, store, auth, mutate, task_view):
             from . import ask_snoozes
 
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
-            if version and version == current and not cursor:
-                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
-            if ids is not None:
-                wanted = {part.strip() for part in ids.split(",") if part.strip()}
-                if len(wanted) > NEEDS_IDS_MAX:
-                    raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
-                positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
-                return {
-                    "actor": who.actor,
-                    "count": len(items),
-                    "version": current,
-                    "positions": positions,
-                    "items": [x for x in items if str(x["id"]) in positions],
-                }
-            out = {
+        held.keep(viewer, current, items, woken["snoozed_until"])
+        if version and version == current and not cursor:
+            return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
+        if ids is not None:
+            wanted = {part.strip() for part in ids.split(",") if part.strip()}
+            if len(wanted) > NEEDS_IDS_MAX:
+                raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
+            positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
+            return {
                 "actor": who.actor,
                 "count": len(items),
-                "by_kind": needs_kinds(items),
-                "items": items,
                 "version": current,
-                "next": None,
-                **woken,
+                "positions": positions,
+                "items": [x for x in items if str(x["id"]) in positions],
             }
-            if limit is not None or cursor:
-                out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
-                out["bots"] = needs_bots(items, who.actor)
-                out["stages"] = needs_stages(items)
-                if restarted:
-                    out["restart"] = True
-            return out
+        if limit is not None or cursor:
+            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"])
+        return {
+            "actor": who.actor,
+            "count": len(items),
+            "by_kind": needs_kinds(items),
+            "items": items,
+            "version": current,
+            "next": None,
+            **woken,
+        }
+
+    def needs_paged(who, items, current, limit, cursor, snoozed_until):
+        page, after, restarted = needs_page(items, current, limit, cursor)
+        out = {
+            "actor": who.actor,
+            "count": len(items),
+            "by_kind": needs_kinds(items),
+            "items": page,
+            "version": current,
+            "next": after,
+            "snoozed_until": snoozed_until,
+            "bots": needs_bots(items, who.actor),
+            "stages": needs_stages(items),
+        }
+        if restarted:
+            out["restart"] = True
+        return out
 
     @app.get(
         "/api/v2/needs-you/summary",

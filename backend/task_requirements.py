@@ -229,6 +229,46 @@ def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
         unread = sorted(key for key in keys if (what, key) not in values)
         for key, rows in _by(conn, sql, column, unread).items():
             values.setdefault((what, key), rows)
+    _prime_pages(conn, tasks)
+
+
+def _prime_pages(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
+    """What a page requirement's standing (`_page`, `_one_page`) reads of each of these tasks, together: the pages
+    attached on its open visit, Jev's verdict on each, its newest send back on the visit, and the task's PRs. A few
+    statements however many pages, where each page read them one by one."""
+    from . import page_verdicts as V
+    from . import task_pages as P
+    from .item_sources import github as F
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+
+    def page_ids(what: str, key: str) -> list[str]:
+        # The rows `prime` just kept, read in place: copying and loading each task's requirements costs more here
+        # than the pages it finds.
+        return [str(r["id"]) for r in values.get((what, key)) or () if r["kind"] == "page"]
+
+    on_stage: dict[str, list[str]] = {}
+    pairs: list[tuple[str, str]] = []
+    paged: list[str] = []
+    for task in tasks:
+        visit = task.get("visit")
+        if not visit:
+            continue
+        stage_id = str(visit["stage_id"])
+        if stage_id not in on_stage:
+            on_stage[stage_id] = page_ids("requirements_on_stage", stage_id)
+        pages = on_stage[stage_id] + page_ids("requirements_on_visit", str(visit["id"]))
+        if pages:
+            pairs += [(str(visit["id"]), requirement_id) for requirement_id in pages]
+            paged.append(str(task["id"]))
+    if not pairs:
+        return
+    found = P.prime_current(conn, pairs)
+    V.prime(conn, [(str(p["file_id"]), int(p["version"]), str(p.get("rubric_hash") or "")) for p in found])
+    prime_sent_back(conn, pairs)
+    cast("Any", F).prime_prs(conn, paged)
 
 
 def on_stage(conn: "sqlite3.Connection", stage_id: str) -> list[Row]:
@@ -836,18 +876,54 @@ def last_sent_back(
     """The newest send back of a requirement that is not undone, on one visit, on any visit of one task, or on any
     visit: {id, visit_id, by_id, notes, page_version, created_at}, or None. Every reader of "the last send back" reads
     it here, so how a send back is stored is read in one place."""
-    sql = (
-        "SELECT a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
-        "JOIN visits v ON v.id = a.visit_id WHERE a.requirement_id=? AND a.answer='no' AND a.undone_at IS NULL"
-    )
+    sql = SENT_BACK_SQL
     args: list[str] = [requirement_id]
     if visit_id is not None:
         sql, args = sql + " AND a.visit_id=?", [*args, visit_id]
     if task_id is not None:
         sql, args = sql + " AND v.task_id=?", [*args, task_id]
+    # One visit's is kept for the read snapshot (`prime_sent_back` reads many visits' together).
+    values = read_cache.cache(conn) if visit_id is not None and task_id is None else None
+    key = (SENT_BACK_SQL, str(requirement_id), str(visit_id))
+    if values is not None and key in values:
+        kept: Row | None = values[key]
+        return dict(kept) if kept else None
     cursor = conn.execute(sql + " ORDER BY a.created_at DESC, a.id DESC LIMIT 1", args)
     found = cursor.fetchone()
-    return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
+    out = dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
+    if values is not None:
+        values[key] = dict(out) if out else None
+    return out
+
+
+SENT_BACK_SQL = (
+    "SELECT a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
+    "JOIN visits v ON v.id = a.visit_id WHERE a.requirement_id=? AND a.answer='no' AND a.undone_at IS NULL"
+)
+SENT_BACK_MANY_SQL = (
+    "SELECT a.requirement_id, a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
+    "JOIN visits v ON v.id = a.visit_id WHERE a.visit_id IN (SELECT value FROM json_each(?)) AND a.answer='no' "
+    "AND a.undone_at IS NULL ORDER BY a.created_at DESC, a.id DESC"
+)
+
+
+def prime_sent_back(conn: "sqlite3.Connection", pairs: Iterable[tuple[str, str]]) -> None:
+    """`last_sent_back(requirement, visit_id=visit)` of many (visit id, requirement id) pairs in one statement, misses
+    too, for the reads that follow in this snapshot. Nothing outside a snapshot."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    wanted = {(str(v), str(r)) for v, r in pairs if (SENT_BACK_SQL, str(r), str(v)) not in values}
+    if not wanted:
+        return
+    newest: dict[tuple[str, str], Row] = {}
+    cursor = conn.execute(SENT_BACK_MANY_SQL, (json.dumps(sorted({v for v, _ in wanted})),))
+    names = [d[0] for d in cursor.description][1:]
+    for raw in cursor.fetchall():
+        row = dict(zip(names, tuple(raw)[1:], strict=True))  # the columns `last_sent_back` reads, without the key
+        newest.setdefault((str(row["visit_id"]), str(raw[0])), row)  # newest first
+    for visit_id, requirement_id in wanted:
+        values.setdefault((SENT_BACK_SQL, requirement_id, visit_id), newest.get((visit_id, requirement_id)))
 
 
 def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:

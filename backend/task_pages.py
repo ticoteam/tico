@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Iterable
 
 Row = dict[str, Any]
 
@@ -58,19 +59,62 @@ def live_documents(conn: "sqlite3.Connection", task_id: str, document: str) -> d
     }
 
 
+# The live pages of one requirement on one visit (`current_pages`), and of every requirement on many visits
+# (`prime_current`): the same filter and order, so a primed list is the one the single read gives.
+_CURRENT = (
+    "SELECT rp.* FROM requirement_pages rp JOIN requirements r ON r.id=rp.requirement_id "
+    "JOIN visits v ON v.id=rp.visit_id WHERE %s AND rp.replaced_at IS NULL "
+    "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS (SELECT 1 "
+    + LIVE_DOCUMENT
+    + "AND l.page_id=rp.file_id AND l.target='task:'||v.task_id AND l.role=json_extract(r.settings,'$.document'))) "
+    "ORDER BY rp.created_at DESC,rp.rowid DESC"
+)
+CURRENT_SQL = _CURRENT % "rp.visit_id=? AND rp.requirement_id=?"
+CURRENT_MANY_SQL = _CURRENT % "rp.visit_id IN (SELECT value FROM json_each(?))"
+
+
+def _snapshot(conn: "sqlite3.Connection") -> dict[Any, Any] | None:
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    return values
+
+
 def current_pages(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> list[Row]:
-    """All submitted pages on a requirement, newest submission first."""
-    cursor = conn.execute(
-        "SELECT rp.* FROM requirement_pages rp JOIN requirements r ON r.id=rp.requirement_id "
-        "JOIN visits v ON v.id=rp.visit_id WHERE rp.visit_id=? AND rp.requirement_id=? AND rp.replaced_at IS NULL "
-        "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS (SELECT 1 "
-        + LIVE_DOCUMENT
-        + "AND l.page_id=rp.file_id AND l.target='task:'||v.task_id AND l.role=json_extract(r.settings,'$.document'))) "
-        "ORDER BY rp.created_at DESC,rp.rowid DESC",
-        (visit_id, requirement_id),
-    )
+    """All submitted pages on a requirement, newest submission first. Kept for the read snapshot (read_cache: a write
+    starts it again), so the standing, the ask's entry and its page read them once (`prime_current` for many)."""
+    values = _snapshot(conn)
+    key = (CURRENT_SQL, str(visit_id), str(requirement_id))
+    if values is not None and key in values:
+        return [dict(row) for row in values[key]]
+    cursor = conn.execute(CURRENT_SQL, (visit_id, requirement_id))
     names = [d[0] for d in cursor.description]
-    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+    rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+    if values is not None:
+        values[key] = tuple(dict(row) for row in rows)
+    return rows
+
+
+def prime_current(conn: "sqlite3.Connection", pairs: "Iterable[tuple[str, str]]") -> list[Row]:
+    """Read `current_pages` of many (visit id, requirement id) pairs in one statement, for the reads that follow in
+    this snapshot. Gives the pages it read. Nothing outside a snapshot."""
+    values = _snapshot(conn)
+    if values is None:
+        return []
+    wanted = {(str(v), str(r)) for v, r in pairs if (CURRENT_SQL, str(v), str(r)) not in values}
+    if not wanted:
+        return []
+    found: dict[tuple[str, str], list[Row]] = {pair: [] for pair in wanted}
+    cursor = conn.execute(CURRENT_MANY_SQL, (json.dumps(sorted({v for v, _ in wanted})),))
+    names = [d[0] for d in cursor.description]
+    for raw in cursor.fetchall():
+        row = dict(zip(names, raw, strict=True))
+        pages = found.get((str(row["visit_id"]), str(row["requirement_id"])))
+        if pages is not None:
+            pages.append(row)
+    for (visit_id, requirement_id), pages in found.items():
+        values.setdefault((CURRENT_SQL, visit_id, requirement_id), tuple(pages))
+    return [dict(row) for pages in found.values() for row in pages]
 
 
 def current(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:

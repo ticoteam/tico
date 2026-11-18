@@ -750,12 +750,12 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     """The page attached to a page requirement on this visit: {file_id, version, ref}, or None."""
     from . import task_pages
 
-    found = task_pages.current(conn, visit_id, requirement["id"])
-    if not found:
+    pages = task_pages.current_pages(conn, visit_id, requirement["id"])
+    if not pages:
         return None
+    found = pages[0]  # task_pages.current: the newest
     ref = f"page:{found['file_id']}@{found['version']}"
     page = {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
-    pages = task_pages.current_pages(conn, visit_id, requirement["id"])
     if len(pages) > 1:
         page["pages"] = [
             {"file_id": p["file_id"], "version": int(p["version"]), "ref": f"page:{p['file_id']}@{p['version']}"}
