@@ -139,6 +139,8 @@ const pages = async (page: Page) => {
       // Choosing Private saves it and opens the people picker.
       await props.locator('[data-prop="visible"]').click();
       const menu = page.locator('.prop-pop:popover-open');
+      // The menu opens once the pipeline's private-readers line is read (task-props.ts), so wait for its items.
+      await menu.locator('[data-prop-pick]').first().waitFor();
       // Team is where it is (ticked); the fixture's Product task is a roadmap task, so Public roadmap is offered.
       assert.deepEqual(await menu.locator('[data-prop-pick]').evaluateAll(els => els.map(e => `${e.getAttribute('data-prop-pick')} ${e.getAttribute('aria-checked')}`)),
         ['team true', 'public false', 'private false']);
