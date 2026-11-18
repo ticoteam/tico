@@ -1,18 +1,34 @@
+# pyright: strict
 """One runner lease and one subscription-backed model conversation per attached voice bot."""
 
 import hashlib
 import json
+from typing import Any
 
 from . import bot_settings as BS
-from . import harnesses, live_meetings, model_subscriptions, providers, task_models
+from . import harnesses as _harnesses
+from . import live_meetings as _live_meetings
+from . import model_subscriptions as _model_subscriptions
+from . import providers as _providers
+from . import task_models as _task_models
 from .auth import Identity
-from .shared_bots import follow
-from .store import H, Problem
+from .shared_bots import follow as _follow
+from .store import H as _H
+from .store import Problem
+
+# The execution and model catalogs still return untyped rows and configuration records.
+H: Any = _H
+harnesses: Any = _harnesses
+live_meetings: Any = _live_meetings
+model_subscriptions: Any = _model_subscriptions
+providers: Any = _providers
+task_models: Any = _task_models
+follow: Any = _follow
 
 CAPABILITY = "voice_sessions_v1"
 
 
-def model_spec(model):
+def model_spec(model: str | None) -> dict[str, Any] | None:
     spec = providers.MODEL_BY_ID.get(model or "")
     if spec and not spec.get("deprecated") and not spec.get("held"):
         if harnesses.harness_caps(spec.get("harness"), spec["runtime"]).get("voice_session"):
@@ -20,7 +36,7 @@ def model_spec(model):
     return None
 
 
-def validate(model, effort):
+def validate(model: str | None, effort: str | None) -> None:
     if model is None and effort is None:
         return
     spec = model_spec(model)
@@ -28,7 +44,9 @@ def validate(model, effort):
         raise Problem("voice_model", "Choose a supported voice subscription model and effort", 422)
 
 
-def choice(c, settings, bot, model_override, effort_override):
+def choice(
+    c: Any, settings: Any, bot: str, model_override: str | None, effort_override: str | None
+) -> dict[str, Any] | None:
     record = providers.load(c, settings)
     if model_override:
         model = model_override
@@ -41,22 +59,23 @@ def choice(c, settings, bot, model_override, effort_override):
     if not spec:
         return None
     effort = effort_override or ("low" if "low" in (spec.get("efforts") or ()) else None)
-    return {**task_models.choice_of(model, effort), "compact_at": None}
+    picked: dict[str, Any] = task_models.choice_of(model, effort)
+    return {**picked, "compact_at": None}
 
 
-def notes(c, call_id, bot):
+def notes(c: Any, call_id: str, bot: str) -> str:
     from . import call_notes
 
     # Older calls only have the published notes route; the per-bot notes reader is optional during rollout.
-    reader = getattr(call_notes, "text", None)
+    reader: Any = getattr(call_notes, "text", None)
     return str(reader(c, call_id, bot) or "") if reader is not None else ""
 
 
-def note_stamp(text):
+def note_stamp(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def ensure(c, settings, row, bot):
+def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     """Return whether this delivery uses the warm protocol. A queued or live lease is reused."""
     if row["state"] != "live" or row["ending_at"] or not row["speak_replies"] or row["provider"] != "tico":
         return False
@@ -100,7 +119,7 @@ def ensure(c, settings, row, bot):
     return True
 
 
-def is_voice(c, meeting_id):
+def is_voice(c: Any, meeting_id: str | None) -> bool:
     return (
         c.execute(
             "SELECT 1 FROM calls WHERE live_meeting_id=? AND provider='tico' AND speak_replies=1", (meeting_id,)
@@ -109,8 +128,10 @@ def is_voice(c, meeting_id):
     )
 
 
-def standing(c, call_id, bot, job_id):
-    from . import calls
+def standing(c: Any, call_id: str, bot: str, job_id: str) -> Any:
+    from . import calls as _calls
+
+    calls: Any = _calls
 
     row = c.execute(
         "SELECT a.joined_by,c.* FROM calls c JOIN live_meeting_bots a ON a.meeting_id=c.live_meeting_id "
@@ -121,7 +142,7 @@ def standing(c, call_id, bot, job_id):
     return row if row and calls.attachment_standing(c, row["joined_by"], row["thread_id"], bot) else None
 
 
-def stop(c, rid, bot=None):
+def stop(c: Any, rid: str, bot: str | None = None) -> None:
     """Cancel unopened warm jobs. A running job sees the lost standing on its input poll."""
     c.execute(
         "UPDATE jobs SET state='canceled' WHERE state='queued' AND id IN "
@@ -130,15 +151,15 @@ def stop(c, rid, bot=None):
     )
 
 
-def subscription_choice(c, runner_id, runtime):
+def subscription_choice(c: Any, runner_id: str, runtime: str) -> bool:
     sub = model_subscriptions.in_effect(c, runner_id, runtime)
     return sub is not None and model_subscriptions.KINDS[sub["kind"]]["billing"] == "subscription"
 
 
-def inputs(c, attempt, call_id, auth, *, if_idle=False):
+def inputs(c: Any, attempt: Any, call_id: str, auth: Any, *, if_idle: bool = False) -> dict[str, Any] | None:
     bot, job_id, aid = attempt["bot_id"], attempt["job_id"], attempt["id"]
     row = standing(c, call_id, bot, job_id)
-    response = {"messages": [], "call_voice": {"closed": not row}}
+    response: dict[str, Any] = {"messages": [], "call_voice": {"closed": not row}}
     if not row:
         return response
     rid = row["live_meeting_id"]
@@ -169,7 +190,7 @@ def inputs(c, attempt, call_id, auth, *, if_idle=False):
     return response
 
 
-def output(c, attempt, origin, events):
+def output(c: Any, attempt: Any, origin: dict[str, Any], events: list[tuple[str, dict[str, Any]]]) -> None:
     from . import calls
 
     ref = (origin.get("refs") or {}).get("live_meeting") or {}
@@ -177,6 +198,7 @@ def output(c, attempt, origin, events):
     bot, aid = attempt["bot_id"], attempt["id"]
     if not call_id or not events or not standing(c, call_id, bot, attempt["job_id"]):
         return
+    machine: Any = calls.CALLS
     for kind, payload in events:
         tid = payload.get("voice_turn")
         turn = c.execute(
@@ -190,8 +212,8 @@ def output(c, attempt, origin, events):
             continue
         if kind == "delta":
             text = payload.get("text")
-            if isinstance(text, str) and calls.CALLS is not None:
-                c.after_commit.append(lambda tid=tid, text=text: calls.CALLS.voice.delta(call_id, bot, tid, text))
+            if isinstance(text, str) and machine is not None:
+                c.after_commit.append(lambda tid=tid, text=text: machine.voice.delta(call_id, bot, tid, text))
         elif kind == "message" and payload.get("final") is True:
             model = payload.get("model")
             if isinstance(model, str) and 0 < len(model) <= 120:
@@ -203,7 +225,7 @@ def output(c, attempt, origin, events):
                 live_meetings._finish_pass(c, rid, turn, "bot_pass")
 
 
-def finish(c, rid, aid):
+def finish(c: Any, rid: str, aid: str) -> None:
     for turn in c.execute(
         "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND voice_attempt=? AND status='claimed'", (rid, aid)
     ).fetchall():
