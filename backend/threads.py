@@ -917,7 +917,16 @@ def _grant_sql(v, id_sql, root_sql, t):
 
 
 def readable_sql(
-    c, v, alias="conversations", *, inner=None, tasks="SELECT id FROM tasks", meeting=None, conversation=None, only=None
+    c,
+    v,
+    alias="conversations",
+    *,
+    inner=None,
+    tasks="SELECT id FROM tasks",
+    meeting=None,
+    conversation=None,
+    only=None,
+    per_row=False,
 ):
     """A SQL boolean over a conversations row named `alias` (bare columns when alias is ''): the thread is readable.
 
@@ -927,8 +936,14 @@ def readable_sql(
     meeting-provenance check every thread also passes. `only` (readable_ids) is every stored audience the roots of
     the rows asked about have (None for a root that predates threads), plus "home" when a row is a Home itself: the
     Home and legacy terms no such row can take are rendered false without reading what they need (every teammate's
-    access, every bot's shared room), which only ever narrows."""
+    access, every bot's shared room), which only ever narrows.
+
+    `per_row` (a person's check, with none of the options above, over alias r or s): the same answer, tested row by row (the row's root
+    and task looked up by id) rather than against every readable root and task, built whole for each statement. For a
+    statement that tests few rows: building those lists reads every conversation and task."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    plain = inner is None and meeting is None and conversation is None and tasks == "SELECT id FROM tasks"
+    per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
     me = _q(v.actor)
@@ -969,29 +984,32 @@ def readable_sql(
     legacies = only is None or None in only or "home" in only
     chain = _qlist(v.chain(c)) if person else "()"
     hidden = v.hidden_read(c) if (person or v.is_bot) and homes else None
-    owner_sql = f"COALESCE(r.owner_id,{_derived_owner('r')})"
+    r = "rd" if per_row else "r"  # the root's alias: one a caller's own row (often `r`) never has, when correlated
+    owner_sql = f"COALESCE({r}.owner_id,{_derived_owner(r)})"
     home = f"{owner_sql} IS NOT NULL AND {owner_sql} NOT IN {_qlist(sorted(hidden))}" if hidden is not None else "0"
-    member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id=r.id AND tm.actor IN {names})"
-    meeting_term = meeting("r.id") if meeting else "0"
-    participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
-    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live.
+    member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id={r}.id AND tm.actor IN {names})"
+    meeting_term = meeting(f"{r}.id") if meeting else "0"
+    participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r=r)} WHERE value={me})"
+    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live. A task
+    # room is read before its scope: in a CASE, so its participants (a JSON array per room) are never parsed for it.
     shared = sorted(v.shared_slugs(c, [b["id"] for b in H.bots(c)])) if person and legacies else []
+    first_human = _FIRST_HUMAN.format(r=r)
     legacy = (
-        f"(CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me} "
-        f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
-        f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END "
-        f"OR (r.kind='task' AND r.task_id IS NOT NULL))"
+        f"(CASE WHEN {r}.kind='task' AND {r}.task_id IS NOT NULL THEN 1 ELSE "
+        f"CASE COALESCE({r}.scope,'direct') WHEN 'personal' THEN COALESCE({r}.owner_id,{first_human})={me} "
+        f"AND (COALESCE({r}.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
+        f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r=r)} IN {_qlist(shared)} ELSE {participant} END END)"
     )
     root = (
-        f"CASE WHEN r.audience IS NULL THEN {legacy} ELSE CASE r.audience "
+        f"CASE WHEN {r}.audience IS NULL THEN {legacy} ELSE CASE {r}.audience "
         f"WHEN 'company' THEN {1 if person else 0} "
-        f"WHEN 'team' THEN {'1' if owner else ('r.audience_group_id IN ' + chain)} "
+        f"WHEN 'team' THEN {'1' if owner else (f'{r}.audience_group_id IN ' + chain)} "
         f"WHEN 'members' THEN {member} "
-        f"WHEN 'task' THEN r.task_id IS NOT NULL "
+        f"WHEN 'task' THEN {r}.task_id IS NOT NULL "
         f"WHEN 'home' THEN {home} "
-        f"WHEN 'personal' THEN ((COALESCE(r.room_key,'')<>'' AND COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me}) "
+        f"WHEN 'personal' THEN ((COALESCE({r}.room_key,'')<>'' AND COALESCE({r}.owner_id,{first_human})={me}) "
         f"OR {member}) "
-        f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
+        f"AND (COALESCE({r}.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
         f"WHEN 'participants' THEN {participant} "
         f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END END"
     )
@@ -1004,6 +1022,11 @@ def readable_sql(
             f" OR {x}id IN (SELECT lm.conversation_id FROM {t('messages')} lm JOIN {t('conversations')} lr ON "
             f"lr.id=lm.conversation_id WHERE lr.audience='home' AND lm.legacy_audience IN "
             f"{_qlist(['shared:' + s for s in shared])})"
+        )
+    if per_row:
+        return (
+            f"(EXISTS (SELECT 1 FROM conversations rd WHERE rd.id=COALESCE({x}root_id,{x}id) AND ({root})){bound}) "
+            f"AND ({x}task_id IS NULL OR EXISTS (SELECT 1 FROM tasks rt WHERE rt.id={x}task_id))"
         )
     out = f"(COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE {root}){bound}) AND {fence}"
     return f"({out}) AND {conversation(x + 'id')}" if conversation else out
@@ -4008,22 +4031,29 @@ def revived_roots(c, v, roots=None):
 REVIVED_CHUNK = 400  # roots per revival query when a caller names them (revived_within)
 
 
-def revived_within(c, v, within, args=None):
+def revived_within(c, v, within, args=None, *, source="conversations r"):
     """revived_roots for only the finished-task roots that match `within` (SQL over a conversations row `r`, with
     `args`): the roots a caller's own query could return, so a page that lists no task threads (the rail's lists,
     Browse) checks none, and Catch up checks only the ones its reader is in, not every finished task in the company.
-    Each root's answer is kept for the snapshot, so the rail's lists and its Catch up walk check a root once."""
+    Each root's answer is kept for the snapshot, so the rail's lists and its Catch up walk check a root once. `source`
+    is the FROM naming `r` (an INDEXED BY whose WHERE terms `within` holds)."""
+    return revival_scope(c, v, within, args, source=source)[1]
+
+
+def revival_scope(c, v, within, args=None, *, source="conversations r"):
+    """(the finished-task roots that match `within`, those of them a post brings back): revived_within, with the roots
+    it checked, so a caller can test every other finished-task root out without reading its posts."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     roots = [
         row[0]
         for row in c.execute(
-            "SELECT r.id FROM conversations r WHERE r.parent_id IS NULL AND r.task_id IN "
+            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND r.task_id IN "
             f"(SELECT id FROM tasks WHERE status IN ({FINISHED_TASKS})) AND ({within})",
             args or {},
         )
     ]
     if not roots:
-        return frozenset()
+        return frozenset(), frozenset()
     from . import task_privacy
 
     values = read_cache.cache(c)
@@ -4034,7 +4064,7 @@ def revived_within(c, v, within, args=None):
         part = missing[start : start + REVIVED_CHUNK]
         found = _revived_roots(c, v, part)
         known.update({root: root in found for root in part})
-    return frozenset(root for root in roots if known[root])
+    return frozenset(roots), frozenset(root for root in roots if known[root])
 
 
 def _revived_roots(c, v, roots):
@@ -4096,16 +4126,17 @@ def prime_checks(c, rows):
     task_privacy.prime_reply_chains(c, runs)
 
 
-def task_open_sql(c, v, r="r", revived=frozenset()):
+def task_open_sql(c, v, r="r", revived=frozenset(), *, per_row=False):
     """SQL: a thread on a task is open unless its task is done or closed and no post the viewer reads has come
     since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
     (what the task's own changes write into its thread) is not a post. The finish is the task's latest move to Done or Closed, so
-    a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
+    a later edit to the task neither hides a thread someone posted in nor brings a finished one back. `per_row`: the
+    post's readable check is readable_sql's per_row form, for a query that reaches this check for few rows."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = (
         f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
         f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.restricted=0 AND m.legacy_audience IS NULL "
-        f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's')})"
+        f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's', per_row=per_row)})"
     )
     kept = f" OR {r}.id IN {_qlist(sorted(revived))}" if revived else ""
     return (

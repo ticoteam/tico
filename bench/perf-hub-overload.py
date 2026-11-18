@@ -7,7 +7,9 @@ tasks, a few hundred threads with posts, and a message history.
 
 Env: OPEN (default 1500), CLOSED (16500), THREADS (400), RUNS (5), PROFILE=<path> (cProfile one route),
 STATEMENTS=<path> (the statement shapes one call runs), DB=<file> (keep the seeded database there and reuse it),
-PATHS=<path,...> (the routes measured), ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB).
+PATHS=<path,...> (the routes measured), ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB),
+TOKENS=<token,...> (the readers, default ana-test,ben-test,cara-test), SLOW=<dir> (with STATEMENTS: each reader's statements
+written there whole, slowest first, as <token>-<n>.sql).
 
 Per route it prints the statements one call takes, the median wall time of RUNS calls and the answer's size. Only
 fictional data, in a temporary folder removed afterwards (unless DB is given). Never point it at a real hub.
@@ -45,6 +47,7 @@ STAGES = (
     {"name": "Review", "owner": "assignee", "requirements": [{"kind": "ok", "person": X.ANA, "line": "OK the build"}]},
 )
 PATHS = tuple(os.environ.get("PATHS", "/api/v2/bots,/api/v2/threads/rail,/api/v2/health,/api/v2/me").split(","))
+TOKENS = tuple(os.environ.get("TOKENS", "ana-test,ben-test,cara-test").split(","))
 
 
 def seed(api):
@@ -177,7 +180,7 @@ def report(api):
         }
     print(counts)
     for path in PATHS:
-        for token in ("ana-test", "ben-test"):
+        for token in TOKENS:
             n, ms, size = measure(api, path, token)
             print(f"{path:28s} {token:9s} {n:6d} statements {ms:9.1f} ms {size / 1024:8.1f} KB")
             if os.environ.get("ANSWERS"):
@@ -188,7 +191,7 @@ def report(api):
     if os.environ.get("ANSWERS"):
         Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
     if os.environ.get("STATEMENTS"):
-        for token in ("ana-test", "ben-test"):
+        for token in TOKENS:
             seen, started = [], []
             with counting(api.app.state.store, Timed(seen, started)):
                 api.get(os.environ["STATEMENTS"], headers=headers(token))
@@ -200,8 +203,12 @@ def report(api):
             # Until the next statement starts: the statement's own time and the Python after it, so slow SQL stands out.
             gaps = sorted(((b - a) * 1000, q) for a, b, q in zip(started[:-1], started[1:], seen, strict=True))[::-1]
             print(f"    slowest (ms until the next statement; {sum(g for g, _ in gaps):.0f} ms in all):")
-            for ms, q in gaps[:8]:
-                print(f"{ms:8.1f}  {re.sub(r'\s+', ' ', q)[:400]}")
+            for n, (ms, q) in enumerate(gaps):
+                if n < 8:
+                    print(f"{ms:8.1f}  {re.sub(r'\s+', ' ', q)[:400]}")
+                if os.environ.get("SLOW"):
+                    Path(os.environ["SLOW"]).mkdir(parents=True, exist_ok=True)
+                    Path(os.environ["SLOW"], f"{token}-{n}.sql").write_text(f"-- {ms:.1f} ms\n{q}\n")
     if os.environ.get("PROFILE"):
         import cProfile
         import pstats
