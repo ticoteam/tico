@@ -624,9 +624,10 @@ let browser: import('playwright').Browser | null = null;
     }
     // No Tico Meet on this server: no Call now.
     config.features.tico_meet = false; mode.ticoMeet = false;
+    // Enter with a fresh document so the config is read at boot, even after the phone's call route.
+    await page.goto('about:blank');
     await page.goto('https://tico-ui.test/#/meetings');
-    await page.reload();
-    await page.locator('.ph #notes-manual').waitFor();
+    await page.locator('.ph #notes-manual').waitFor({state: 'attached'});
     assert.equal(await page.locator('#meet-call-now').count(), 0, 'no Call now without Tico Meet');
     assert.deepEqual(seen.errors, []);
     await context.close();
