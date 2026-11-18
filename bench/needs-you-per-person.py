@@ -266,5 +266,19 @@ def test_needs_you_on_the_hosted_companys_shape(api, monkeypatch):
             print(f"\n  EXPLAIN QUERY PLAN {shape}")
             for line in plan:
                 print(f"    {line}")
-            scans = [line for line in plan if line.startswith("SCAN ") and "json_each" not in line]
+            scans = [line for line in plan if line.startswith("SCAN ") and "VIRTUAL TABLE" not in line]
             assert not scans, (shape, plan)
+    # Where one build's time goes: the functions that took the most of it, by their own time and with what they call.
+    import cProfile
+    import pstats
+
+    from backend import views as V
+    from backend.tests.helpers.api import Identity
+
+    who = Identity(ANA, "owner", "ana@acme.example")
+    profile = cProfile.Profile()
+    with store.read_transaction() as c:
+        profile.runcall(V.needs_items, c, api.app.state.auth, who)
+    for order in ("tottime", "cumulative"):
+        print(f"\n  One build of Ana's list, by {order}:")
+        pstats.Stats(profile).strip_dirs().sort_stats(order).print_stats(25)
