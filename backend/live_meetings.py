@@ -673,7 +673,8 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
             else c.execute(
                 "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
                 f"WHERE j.bot_id=? AND j.state IN ('queued','leased','running','input') AND {H.unheld_sql()} "
-                "AND json_extract(m.refs,'$.live_meeting.turn_id') IS NULL LIMIT 1",
+                "AND json_extract(m.refs,'$.live_meeting.turn_id') IS NULL "
+                "AND json_extract(m.refs,'$.call_prep') IS NULL LIMIT 1",
                 (slug,),
             ).fetchone()
         )
@@ -2253,6 +2254,7 @@ def install_live_meetings(app, store, auth, write):
                     "meeting.bot_joined",
                     {"bots": added, "joined_by": who.actor, "rights": "meeting_read_and_reply"},
                 )
+                app.state.call_prep.attached_to_meeting(c, rid, added)
             return {"id": rid, "bots": attached, "added": added, "event_id": _meeting(c, rid)["next_event_id"]}
 
         return mutate(request, body, work)

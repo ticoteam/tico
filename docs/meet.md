@@ -215,6 +215,12 @@ starts a Tico Meet call with the bots in it: in the viewer's DM when one teammat
 else in a new thread with them all, named for the call's title or, without one, for who is in it. Its meeting window
 opens and joins it.
 
+**Bot notes.** Each bot has a brief for the call. If it joins without prep, Tico queues a background prep task
+immediately. The bot uses the built-in `meeting-prep` skill to add the latest figures, recent work
+and open tasks people are likely to ask it about. It can add useful facts as it finds them. In the meeting window,
+open **People** and use the notes icon beside a bot. Scheduled prep writes to the same brief and still posts its
+prep message in the thread.
+
 **Who answers.** In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that
 bot) the bot answers every utterance. In any other voice call, a group DM with two people and a bot among them, only a
 bot whose name was said answers; the router's other windows and its decisions on chat do not run in a voice call. A
@@ -290,9 +296,11 @@ to its one event, and writes that event before it changes the call.
    minute). It reads each call's event again first, as above. An event that cannot be read is read again on the next
    pass, and after three passes the call is prepped with the times it has. Then each bot on the call gets one task,
    **Prepare for <title>**, that runs the built-in `meeting-prep` skill: the bot reads the thread, the notes of the
-   thread's earlier calls, the tasks and files it links and its own work, and posts one short prep note in the thread.
+   thread's earlier calls, the tasks and files it links and its own work. It adds likely answers to its call brief
+   and posts one short prep note in the thread.
    The task goes to exactly that bot, it is private unless the thread is a company thread, and none is given when the
    booker can no longer read the thread. `prepped_at` is set in the same write, so the tasks are given once.
+   A bot attached after that sweep gets its prep task as soon as it is added.
 5. **The start.** The meeting window shows the start time and Join. The first join reads the event live: a cancelled
    one refuses the join and cancels the call (`call_cancelled`, 409), a moved one moves it, and a calendar that cannot
    be read lets the join go on. That join starts the call: it is live from then, with the bots it was booked with, and
@@ -312,7 +320,10 @@ Not done: repeating scheduled calls and replies to the invitation in Tico.
 | Leave | The person who joined, even after losing access to the thread |
 | End | The connector |
 | Change a scheduled call's time, cancel it | Its booker and the thread's managers |
-| Anything | Bots are refused. BotOps acts as the person it works for |
+| Read a bot's brief | People who can read the thread and see the bot, and the attached bot itself |
+| Add to a bot's brief | The attached bot, including during a private task |
+
+BotOps acts as the person it works for when using call controls.
 
 Errors: `meet_unavailable` (503) when no call provider is available to the caller, Google will not make the space,
 Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot join. `not_tico_meet` (409) for a token
@@ -339,6 +350,8 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `POST /api/v2/calls/{call_id}/end` | End (the connector). Answers the call `ended`, or `ending` while speech already heard is transcribed. A scheduled call is cancelled (its booker or the thread's managers), its event deleted first |
 | `PATCH /api/v2/calls/{call_id}` | Change a scheduled call's time. Body: `starts_at` and `ends_at` (as on the start). Its event changes first; see Scheduled calls |
 | `GET /api/v2/calls/{call_id}/notes` | The call's own summary and action items (each `title` and `owner`), read from its items message under that message's rules; `pending` while still owed |
+| `GET /api/v2/calls/{call_id}/bot-notes` | A bot's brief as `{text}`, newest additions last, up to 8,000 UTF-8 bytes. People who can read the call's thread name a bot they can see with `?bot=<id-or-slug>`. Attached bots read their own brief |
+| `POST /api/v2/calls/{call_id}/bot-notes` | An attached bot appends to its own brief. Body: `{text}`. The oldest text falls out as the brief grows |
 | `POST /api/v2/calls/{call_id}/ring` | Ring a person into a live call. Body: `actor`. Someone who reads the thread keeps their role; anyone else is added to it first. Answers `actor` and `added` |
 | `POST /api/v2/calls/{call_id}/action-items/retry` | Ask again for action items the Gateway could not make (the connector, after the call ended) |
 | `POST /api/v2/calls/{call_id}/bots` | Attach bots. Body: `bots`, 1 to 10 slugs; at most 10 in the call (`422 bot_limit`) |
@@ -350,11 +363,15 @@ The same operations are `tico call list|start|show|join|token|leave|end|retry` a
 `listCalls`, `startCall`, `listUpcomingCalls`, `listLiveCalls`, `getCall`, `changeCall`, `joinCall`, `refreshCallToken`, `leaveCall`,
 `setCallStage`, `clearCallStage`, `endCall`, `retryCallActionItems`, `attachCallBots` and `detachCallBot`. The stage is
 set from the meeting window only: it shows what a person in the call shares.
+For a bot's brief, use `tico call notes --call <id>` to read and `tico call note --call <id> "<text>"` to append.
+The MCP tools are `tico_call_notes` and `tico_call_note`. The corresponding OpenAPI operations are
+`getCallBotNotes` and `appendCallBotNote`.
 
 Changes are written to the change log on the `threads` topic: `call.scheduled`, `call.moved`, `call.prepped`,
 `call.started`, `call.joined`, `call.left`,
 `call.ended`, `call.stage`, `call.bot_attached`, `call.bot_detached`, `call.participant_removed`, `call.post_refused`,
-`call.action_items_given_up`, `call.action_items_retry` and `call.updated`. Each but `call.updated` has an audit row. A refusal's event tells the thread's
+`call.action_items_given_up`, `call.action_items_retry`, `call.updated` and `call.notes`. Notes changes carry the call
+and thread IDs. Call writes other than `call.updated` and `call.notes` have an audit row. A refusal's event tells the thread's
 readers that a post was refused, not what it said. The live
 event stream sends them with `GET /api/v2/events?topics=threads`, and only to people who can read the call's thread.
 A call's view lists only the people and bots the viewer may see (the teammate See level), and a person always sees

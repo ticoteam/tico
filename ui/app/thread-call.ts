@@ -535,7 +535,7 @@ function callRailMark(threadId: string, v: CallRecord): void {
 }
 // Every call.* change on the `threads` topic: that call is read again (once per burst).
 liveOn('threads', (d: ThreadsEvent & {call_id?: string}) => {
-  if (!d?.call_id || !String(d.kind || '').startsWith('call.')) return;
+  if (!d?.call_id || d.kind === 'call.notes' || !String(d.kind || '').startsWith('call.')) return;
   const id = d.call_id;
   liveSoon('call-view:' + id, () => { void callViewRead(id); }, 200);
 });

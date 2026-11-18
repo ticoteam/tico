@@ -1654,6 +1654,8 @@ def guard_write(c, who, path, auth):
     # These controls already enforce their own run ownership and never publish company content.
     if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/")):
         return
+    if re.fullmatch(r"/api/v2/calls/[^/]+/bot-notes", path):
+        return  # the call-notes route enforces the bot's identity and current attachment
     if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
         return
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):

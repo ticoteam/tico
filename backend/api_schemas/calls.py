@@ -177,6 +177,8 @@ SCHEMAS.update(
             required=["call", "url"],
         ),
         "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+        "CallBotNotes": obj({"text": "s"}),
+        "CallBotNoteWritten": obj({"ok": "b"}),
         # The meeting window's notes and ringing (backend/call_notes.py).
         "CallNotes": obj(
             {
