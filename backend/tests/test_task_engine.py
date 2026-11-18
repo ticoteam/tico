@@ -254,6 +254,22 @@ def test_a_filed_task_that_was_deleted_counts_as_closed_not_done(c, general):
     assert E.advance(c, parent["id"]) is None
 
 
+def test_a_done_replacement_satisfies_linked_work_after_a_filed_task_closes(c, general):
+    stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
+    X.pipeline(c, "product", "Product", stages)
+    parent = X.new_task(c, ANA, "Checkout flow", "product")
+    stale = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    E.move(c, stale["id"], E.CLOSED, ANA, "Superseded")
+    assert R.standings(c, E.task(c, parent["id"]))[0].state == R.NOT_MET
+
+    retry = X.new_task(c, ANA, "Build the updated cart", assignee="bot:builder", parent=parent["id"])
+    standing = R.standings(c, E.task(c, parent["id"]))[0]
+    assert (standing.state, standing.on) == (R.WAITING, retry["id"])
+    X.say_done(c, retry)
+    E.advance(c, retry["id"])
+    assert E.task(c, parent["id"])["status"] == "done"
+
+
 def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, general):
     stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
     X.pipeline(c, "product", "Product", stages)

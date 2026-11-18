@@ -1357,6 +1357,7 @@ TASK = (
         args=(
             Arg("title", "--title"),
             Arg("message", default=""),
+            Arg("message", "--body"),
             Arg("check_model", "--check-model", nargs="?", const="auto", metavar="RUNTIME[:MODEL]"),
             Arg("check_role", "--role"),
         ),

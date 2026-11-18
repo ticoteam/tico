@@ -25,11 +25,10 @@ OWNER_STAGES = (
     "product-ok-spec",
     "product-build",
     "product-fixes-1",
-    "product-fixes-2",
     "product-ok-release",
     "product-validate",
 )
-ROLE_STAGES = ("product-review-1", "product-review-2", "product-qa", "product-merge")
+ROLE_STAGES = ("product-review-1", "product-qa", "product-merge")
 
 
 def _no_roles(environment):
@@ -117,7 +116,7 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
         for slug, template in (("reviewer-1", "reviewer"), ("product-manager", "product-manager")):
             choice = {"template": template, "display_name": slug, "instructions": ""}
             onboarding._define(c, who, slug, choice, onboarding._template(template))
-    # Still no second reviewer, QA Owner nor Release Owner: their stages go to the new manager.
+    # The QA and Merge stages go to the new manager until their roles are filled.
     assert _staffing(_restart(environment)) == _expected("product-manager", **{"product-review-1": "reviewer-1"})
 
 
@@ -132,15 +131,14 @@ def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager
         "product-manager",
         **{
             "product-review-1": "reviewer-1",
-            "product-review-2": "reviewer-2",
             "product-qa": "qa-owner",
             "product-merge": "release-owner",
         },
     )
 
 
-def test_a_product_tasks_owner_holds_build_and_the_fixes(environment):
-    """No Builder: the task's assignee, its feature owner, owns Build and both Fixes in the same task."""
+def test_a_product_tasks_owner_holds_build_and_fixes(environment):
+    """The task's assignee, its feature owner, owns Build and Fixes in the same task."""
     api = _no_roles(environment)
     owner = "human:owner"
     with api.app.state.store.transaction() as c:
@@ -149,5 +147,5 @@ def test_a_product_tasks_owner_holds_build_and_the_fixes(environment):
             c, owner, "Saved carts", "Let a shopper keep a cart.", feature_owner, pipeline="product", lint=False
         )
         assert row["owner_id"] == feature_owner
-        for stage in ("product-build", "product-fixes-1", "product-fixes-2"):
+        for stage in ("product-build", "product-fixes-1"):
             assert E.move(c, row["id"], stage, owner, "On")["owner_id"] == feature_owner
