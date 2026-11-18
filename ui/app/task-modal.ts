@@ -1003,7 +1003,7 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   // asked when the ask says (its `asked_by`), else it leads with "Waiting on you".
   const asker = yours && t && turn ? String((t.to_leave || []).find(r => String(r.requirement_id) === String(turn.requirement_id))?.asked_by || '') : '';
   const ask = yours && t && turn ? row(asker.includes(':') && asker !== me ? asker : '', 'waiting on you', clipLine(turn.line, 400), 'th-status-ask task-need', taskCauseLinkHTML(turn.href),
-    `<button type="button" class="primary small th-status-act" data-task-yours data-task-answer="${esc(String(turn.requirement_id))}">Answer</button>`) : '';
+    `<button type="button" class="primary small th-status-act" data-task-yours data-task-answer="${esc(String(turn.requirement_id))}" data-task-visit="${esc(String(t.visit_id || ''))}">Answer</button>`) : '';
   return deferred + now + ask;
 }
 // Whether the draft @mentions one of `names`, as the server reads an @mention (backend/hubdb.py _at): the name, not
@@ -1273,7 +1273,7 @@ function taskYoursDotSync(d: ModalDialog, t: ModalTask | null | undefined) {
 // Answer (the reader's own ask, the chat's last row) opens the ask's card.
 async function taskAnswerOpen(state: TaskChatState, answer: HTMLButtonElement) {
   answer.disabled = true;
-  try { await decideOpenAsk(String(state.id), String(answer.dataset.taskAnswer)); } finally { answer.disabled = false; }
+  try { await decideOpenAsk(String(state.id), String(answer.dataset.taskAnswer), false, answer.dataset.taskVisit || ''); } finally { answer.disabled = false; }
 }
 // An ask of this task was answered in the Needs you card: read the open task again so its banner goes.
 function taskAskSettled(taskId: string | number): void {

@@ -19,13 +19,16 @@ function needsStageCounts(): Map<string, number> {
   return counts;
 }
 const needsStageCount = (stage: string): number => needsStageCounts().get(stage) || 0;
-/** Every page of Needs you, read before a stage's review walks it (a stage's items can be past the first page). */
-async function needsReadAll(): Promise<void> {
+/** Every page of Needs you, for a walk whose items can be past the first page (Flow on a stage, a bot or a team). The
+    rest comes at the server's largest page: each read costs the whole list on the server, so fewer is faster. `got`
+    runs after each read that may have moved the list, so an open walk adds what came (decide.ts decideFill). */
+async function needsReadAll(got?: () => void): Promise<void> {
   // A page refused because a whole re-read started meanwhile (a live event) is read again from that re-read, twice at
   // most, so a walk does not start on part of the list.
   for (let i = 0, missed = 0; i < 40 && !needsAll(); i++) {
-    if (await v2NeedsMore() || needsAll()) continue;
+    if (await v2NeedsMore(NEEDS_PAGE_MAX) || needsAll()) { got?.(); continue; }
     if (++missed > 2 || !await v2NeedsRead()) break;
+    got?.();
   }
 }
 

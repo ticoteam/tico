@@ -373,3 +373,24 @@ def test_the_filter_list_is_what_the_route_declares(api):
 
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/v2/tasks" and "GET" in r.methods)
     assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS
+
+
+def test_a_task_asking_the_reader_names_its_visit_so_needs_you_reads_that_one_ask_by_id(api):
+    """The app opens a task's ask without paging through Needs you: the task's read and its list row carry the open
+    visit (a row only while its turn is an ask), and `needs-you?ids=<visit>:<requirement>` sends that ask alone."""
+    from backend import task_engine as TE
+
+    plain = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    row = post(api, "tasks", {"owner": "bot:ops", "title": "Review the plan", "body": "Please review."})
+    with api.app.state.store.transaction() as c:
+        version = H.task(c, row["id"])["version"]
+        TE.add_requirement(c, row["id"], "human:ana", "ok", "human:ana", "Ready?", seen_version=version)
+        (visit,) = c.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (row["id"],)).fetchone()
+    task = get(api, f"tasks/{row['id']}")["task"]
+    assert task["visit_id"] == visit
+    [rid] = [w["requirement_id"] for w in task["waits"] if w["ask"] and w["who"] == "human:ana"]
+    rows = {r["id"]: r for r in tasks(api, f"{ACTIVE}&brief=1")["tasks"]}
+    assert rows[row["id"]]["turn"]["ask"] and rows[row["id"]]["visit_id"] == visit
+    assert "visit_id" not in rows[plain["id"]], "a row whose turn is no ask carries none"
+    one = get(api, f"needs-you?ids={visit}:{rid}")
+    assert [x["id"] for x in one["items"]] == [f"{visit}:{rid}"] and one["items"][0]["task_id"] == row["id"]
