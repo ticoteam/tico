@@ -100,7 +100,7 @@ def task_of_thread(c: "sqlite3.Connection", thread_id: str) -> str | None:
     """The task whose conversation `thread_id` is, or a sub-thread of: its id, or None."""
     from . import threads
 
-    thread = threads.thread_row(c, thread_id)  # pyright: ignore[reportUnknownMemberType]
+    thread = cast("dict[str, Any] | None", threads.thread_row(c, thread_id))  # pyright: ignore[reportUnknownMemberType]
     if not thread:
         return None
     root = cast("dict[str, Any]", threads.root_of(c, thread) or thread)  # pyright: ignore[reportUnknownMemberType]
@@ -165,7 +165,8 @@ def masked(text: str) -> tuple[str, list[str]]:
     if not hits:
         return text, []
     flat = secret_drop.normalize(text)
-    out, at = [], 0
+    out: list[str] = []
+    at = 0
     for hit in hits:
         out.append(flat[at : hit["start"]])
         out.append(MARK)
