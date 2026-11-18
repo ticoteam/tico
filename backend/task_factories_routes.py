@@ -221,7 +221,8 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         tasks by who holds them (backend/company_floor.py)."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # A read snapshot, so its Needs-you count reads the open tasks in batches (waiting_on.prime, read_cache).
+        with store.read_transaction() as c:
             return _floor.floor(c, auth, who)
 
     @app.post(

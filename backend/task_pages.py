@@ -49,14 +49,43 @@ LIVE_DOCUMENT = (
 )
 
 
+LIVE_DOCUMENTS_SQL = "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id"
+# Every role's live pages of many tasks: the same filter and order as LIVE_DOCUMENTS_SQL, so each (task, role) gets the
+# pages one read gives, in its order.
+LIVE_DOCUMENTS_MANY_SQL = (
+    "SELECT l.target,l.role,f.id,f.current_version "
+    + LIVE_DOCUMENT
+    + "AND l.target IN (SELECT value FROM json_each(?)) ORDER BY f.id"
+)
+
+
 def live_documents(conn: "sqlite3.Connection", task_id: str, document: str) -> dict[str, int]:
+    """{file id: current version} of the task's live pages in this role. A task `prime_live_documents` read is not read
+    again in this snapshot."""
+    values = _snapshot(conn)
+    primed = values.get(("live_documents", "task:" + task_id)) if values is not None else None
+    if primed is not None:
+        return dict(primed.get(document) or {})
     return {
         str(file_id): int(version)
-        for file_id, version in conn.execute(
-            "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id",
-            ("task:" + task_id, document),
-        )
+        for file_id, version in conn.execute(LIVE_DOCUMENTS_SQL, ("task:" + task_id, document))
     }
+
+
+def prime_live_documents(conn: "sqlite3.Connection", task_ids: "Iterable[str]") -> None:
+    """Read `live_documents` of many tasks, every role, in one statement, for the reads that follow in this snapshot
+    (a document approval's standing reads it for each task in a list). Nothing outside a snapshot."""
+    values = _snapshot(conn)
+    if values is None:
+        return
+    targets = sorted({"task:" + str(t) for t in task_ids if t and ("live_documents", "task:" + str(t)) not in values})
+    if not targets:
+        return
+    found: dict[str, dict[str, dict[str, int]]] = {target: {} for target in targets}
+    for target, role, file_id, version in conn.execute(LIVE_DOCUMENTS_MANY_SQL, (json.dumps(targets),)):
+        found[str(target)].setdefault(role, {})[str(file_id)] = int(version)
+    for target, roles in found.items():
+        values.setdefault(("live_documents", target), roles)
 
 
 # The live pages of one requirement on one visit (`current_pages`), and of every requirement on many visits

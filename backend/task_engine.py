@@ -154,8 +154,33 @@ def _part(row: Row, key: str) -> Row:
 
 
 # ----------------------------------------------------------------------------- reads
+PIPELINE_SQL = "SELECT * FROM pipelines WHERE id=?"
+STAGE_SQL = "SELECT * FROM stages WHERE id=?"
+
+
 def pipeline(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
-    return _h()._one(conn, "SELECT * FROM pipelines WHERE id=?", (pipeline_id,))
+    return _h()._one(conn, PIPELINE_SQL, (pipeline_id,))
+
+
+def prime_parts(conn: "sqlite3.Connection", stage_ids: Iterable[object], pipeline_ids: Iterable[object]) -> None:
+    """Read many stages and pipelines by id, one statement a table, for the `stage` and `pipeline` reads that follow
+    in this snapshot (`task` reads both for each task of a list). Nothing outside a snapshot."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    for one_sql, table, ids in ((STAGE_SQL, "stages", stage_ids), (PIPELINE_SQL, "pipelines", pipeline_ids)):
+        unread = sorted({str(i) for i in ids if i and ("one", one_sql, (str(i),)) not in values})
+        if not unread:
+            continue
+        found = {
+            str(row["id"]): row
+            for row in conn.execute(
+                f"SELECT * FROM {table} WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(unread),)
+            )
+        }
+        read_cache.prime(conn, one_sql, {(i,): found.get(i) for i in unread})
 
 
 _STAGES_SQL = (
@@ -196,7 +221,7 @@ def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> Non
 
 
 def stage(conn: "sqlite3.Connection", stage_id: str) -> Row | None:
-    return _h()._one(conn, "SELECT * FROM stages WHERE id=?", (stage_id,))
+    return _h()._one(conn, STAGE_SQL, (stage_id,))
 
 
 def is_main_work(stage_row: Row) -> bool:

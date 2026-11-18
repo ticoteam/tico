@@ -241,7 +241,11 @@ def person_above(conn: "sqlite3.Connection", bot: object) -> str | None:
 def company_person(conn: "sqlite3.Connection") -> str | None:
     """The person the company falls back on: its owner while they can act, else the person who has been here longest
     (first on the roster, then anyone else in `humans` by id), so the choice is stable. None only when nobody can
-    sign in."""
+    sign in. A Needs you build asks it for each task's ladder: within one read snapshot it is read once (read_cache)."""
+    return read_cache.value(conn, ("company_person",), lambda: _company_person(conn), shared=True)
+
+
+def _company_person(conn: "sqlite3.Connection") -> str | None:
     owner = pipeline_rights.company_owner(conn)
     if R.active_person(conn, owner):
         return owner
@@ -771,6 +775,9 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
             for row in conn.execute(many_sql % "SELECT value FROM json_each(?)", listed).fetchall():
                 found.setdefault(str(row[column]), row)
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
+    # Their stages and pipelines, which `task_engine.task()` reads by id: one statement a table.
+    stored = [read_cache.one(conn, _TASK_READS[0][0], (task_id,)) for task_id in ids]
+    E.prime_parts(conn, (r["stage_id"] for r in stored if r), (r["pipeline_id"] for r in stored if r))
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it

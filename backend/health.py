@@ -927,8 +927,16 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         return holding[runner_id]
 
     waiting, slow, stuck = [], [], []
-    # The whole queue, not the next three jobs: queued_reasons reads every queued message.
-    aged_bots = [slug for slug in queued if slug in assigned]
+    # The whole queue, not the next three jobs: queued_reasons reads every queued message. Only the bots the loop below
+    # asks the claim about: one on a computer, not waiting for setup, whose oldest queued job is old (or a person's
+    # message has waited). A young queue is asked nothing, so its messages are not read.
+    aged_bots = [
+        slug
+        for slug, (_, oldest) in queued.items()
+        if slug in assigned
+        and slug not in parked
+        and ((oldest and oldest < cutoff) or (asked.get(slug) and asked[slug] < person_cutoff))
+    ]
     prime_claimables(c, aged_bots, first=None)
     # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
     from .cloud_machines import GOING, STALE, homes, problem_words

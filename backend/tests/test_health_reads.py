@@ -207,3 +207,38 @@ def test_a_read_another_thread_runs_during_the_request_is_not_counted(api, monke
     assert ran, "the employees request borrowed no connection"
     assert len([row for row in body if str(row.get("name", "")).startswith("busy-")]) >= 6
     assert beside == alone, (alone, beside)
+
+
+def test_health_reads_the_whole_queue_only_of_bots_it_asks_about_and_says_the_same(api, monkeypatch):
+    # Tico Team's hub (Nov 18): Health read every queued message of every bot with queued work, though it asks the
+    # claim only about a bot whose oldest job (or a person's message) has waited: most of a poll's time went to young
+    # queues' messages. It reads those bots' queues now, and the page says what reading everyone's said.
+    from backend import execution
+    from backend.tests.helpers.run_failures import at
+
+    stuck_company(api, monkeypatch, 8)
+    real, primed = execution.prime_claimables, []
+
+    def recorded(c, bots, first=3):
+        if first is None:
+            primed.append(sorted(bots))
+        return real(c, bots, first=first)
+
+    def everyone(c, bots, first=3):
+        every = [r[0] for r in c.execute("SELECT slug FROM bots")] if first is None else bots
+        return real(c, every, first=first)
+
+    def page(prime):
+        with monkeypatch.context() as patched:
+            patched.setattr(execution, "prime_claimables", prime)
+            return api.get("/api/v2/health", headers=headers("ana-test")).content
+
+    # 40 minutes on: every busy bot's queue is old, and Health reads each of them.
+    old = page(recorded)
+    assert {f"busy-{k}" for k in range(8)} <= set(primed[-1]), primed[-1]
+    assert old == page(everyone)
+    # A minute on: no queue is old, so none is read, and the page is the one reading them all gives.
+    at(monkeypatch, api, "2026-10-24T12:01:00.000000Z")
+    young = page(recorded)
+    assert not any(slug.startswith("busy-") for slug in primed[-1]), primed[-1]
+    assert young == page(everyone)

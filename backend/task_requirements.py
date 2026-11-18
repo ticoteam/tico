@@ -230,6 +230,7 @@ def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
         for key, rows in _by(conn, sql, column, unread).items():
             values.setdefault((what, key), rows)
     _prime_pages(conn, tasks)
+    _prime_linked_done(conn, tasks)
 
 
 def _prime_pages(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
@@ -265,6 +266,7 @@ def _prime_pages(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
             paged.append(str(task["id"]))
     if not pairs:
         return
+    P.prime_live_documents(conn, paged)  # a document approval's live pages (`_page`)
     found = P.prime_current(conn, pairs)
     V.prime(conn, [(str(p["file_id"]), int(p["version"]), str(p.get("rubric_hash") or "")) for p in found])
     prime_sent_back(conn, pairs)
@@ -319,21 +321,60 @@ def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> st
     return None
 
 
+_FILED = (
+    "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
+    "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
+    "t.owner_id AS owner_id, t.conversation_id AS conversation_id, "
+    "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
+    "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
+    "END AS why%s FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id%s "
+    "ORDER BY l.created_at, l.id"
+)
+FILED_SQL = _FILED % ("", "=?")
+# Many visits' filed tasks: FILED_SQL's columns and order, then the visit each was filed on (dropped from the rows).
+FILED_MANY_SQL = _FILED % (", l.visit_id AS filed_on", " IN (SELECT value FROM json_each(?))")
+
+
 def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The tasks filed during a visit, with how each stands. One that was deleted since counts as closed: it is not
-    work that got done."""
-    return _rows(
-        conn.execute(
-            "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
-            "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
-            "t.owner_id AS owner_id, t.conversation_id AS conversation_id, "
-            "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
-            "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
-            "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
-            "ORDER BY l.created_at, l.id",
-            (visit_id,),
-        )
-    )
+    work that got done. A visit `prime` read is not read again in this snapshot."""
+    values = read_cache.cache(conn)
+    primed = values.get(("filed", str(visit_id))) if values is not None else None
+    if primed is not None:
+        return [dict(row) for row in primed]
+    return _rows(conn.execute(FILED_SQL, (visit_id,)))
+
+
+def _prime_linked_done(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
+    """What a linked_done requirement's standing (`_linked_done`) reads of each of these tasks, together: the tasks
+    filed on its open visit and whether its stage is a Review stage (`_at_head_gate`). Two statements however many."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+
+    def linked(what: str, key: str) -> bool:
+        return any(r["kind"] == "linked_done" for r in values.get((what, key)) or ())
+
+    visits: set[str] = set()
+    stages: set[str] = set()
+    for task in tasks:
+        visit = task.get("visit")
+        if not visit:
+            continue
+        if linked("requirements_on_stage", str(visit["stage_id"])) or linked("requirements_on_visit", str(visit["id"])):
+            visits.add(str(visit["id"]))
+            if task.get("stage_id") is not None:
+                stages.add(str(task["stage_id"]))
+    unread = sorted(v for v in visits if ("filed", v) not in values)
+    if unread:
+        found: dict[str, list[Row]] = {visit_id: [] for visit_id in unread}
+        for row in _rows(conn.execute(FILED_MANY_SQL, (json.dumps(unread),))):
+            found[str(row.pop("filed_on"))].append(row)
+        for visit_id, rows in found.items():
+            values.setdefault(("filed", visit_id), tuple(rows))
+    if stages:
+        gated = {str(row[0]) for row in conn.execute(AT_HEAD_MANY_SQL, (json.dumps(sorted(stages)),))}
+        read_cache.prime(conn, AT_HEAD_SQL, {(stage_id,): (1,) if stage_id in gated else None for stage_id in stages})
 
 
 def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
@@ -420,14 +461,16 @@ def requested_commits(text: str, refs: Iterable[str] = ()) -> dict[str, str]:
 def _at_head_gate(conn: "sqlite3.Connection", task: Row) -> bool:
     """Whether the task's stage is a Review stage: its page is read at the newest commit (`at_head`). Its linked_done
     gate is the second review (`_second_review`), not any task filed on the visit."""
-    return (
-        conn.execute(
-            "SELECT 1 FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL "
-            "AND json_extract(settings, '$.at_head')=1 LIMIT 1",
-            (task.get("stage_id"),),
-        ).fetchone()
-        is not None
-    )
+    return read_cache.one(conn, AT_HEAD_SQL, (task.get("stage_id"),)) is not None
+
+
+_AT_HEAD = (
+    "FROM requirements WHERE stage_id%s AND kind='page' AND withdrawn_at IS NULL "
+    "AND json_extract(settings, '$.at_head')=1"
+)
+AT_HEAD_SQL = "SELECT 1 " + _AT_HEAD % "=?" + " LIMIT 1"
+# The stages of many that are Review stages: the same test as AT_HEAD_SQL, one statement for all of them.
+AT_HEAD_MANY_SQL = "SELECT DISTINCT stage_id " + _AT_HEAD % " IN (SELECT value FROM json_each(?))"
 
 
 def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
