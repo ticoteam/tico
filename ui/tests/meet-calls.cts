@@ -6,7 +6,7 @@
 // ends, Join opening the Meet) and on a phone the sheet at 390px, and a push link's `?call=` showing it without a sound;
 // Start and Join opening a blank tab in the click before any request (so a pop-up blocker lets it through), even when
 // the server did not say what it starts, sending it to the call's meeting window on a Tico Meet answer and closing it
-// on a failure.
+// on a failure; the Meetings page's Call now, there only with Tico Meet, calling a bot in its DM and opening the window.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots: meet-calls-<name>-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -475,6 +475,115 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/thread/t-dm');
     await page.locator('.thv-head .thv-call[data-call="start"]').waitFor();
     await page.waitForFunction(() => callTicoMeet());
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+
+  // ---- the Meetings page's Call now: there with Tico Meet; its picker's list in the dialog, open for the next pick and
+  // without who is chosen; Start with the Ops bot opens a new Tico Meet call's window from their DM, and with Bea and Cy
+  // from a new thread named for them; gone where the server has no Tico Meet
+  for (const phone of [false, true]) {
+    const {context, page, seen, mode} = await open(browser, {phone});
+    const config = {features: {tico_meet: true}};
+    const dm = {id: 't-dm', title: 'Ops', audience: 'personal', audience_group_id: null, dm_with: [{actor: 'bot:ops'}], dm_with_count: 1, last_seq: 0,
+      last_message_at: at(60), me: me(), members: [], live_call: null};
+    const dms: string[] = [];
+    const made: unknown[] = [];
+    const mine = new Set(['/api/me', '/api/employees', '/api/v2/meetings', '/api/meetings/sources', '/api/v2/threads/dm', '/api/v2/threads']);
+    await page.route(u => u.hostname === 'tico-ui.test' && mine.has(u.pathname), route => {
+      const req = route.request(), url = new URL(req.url()), json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      if (url.pathname === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true, config});
+      if (url.pathname === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_chat: true, schedules: []}]);
+      if (url.pathname === '/api/v2/meetings') return json({meetings: [], pending_count: 0});
+      if (url.pathname === '/api/meetings/sources') return json({sources: []});
+      if (url.pathname === '/api/v2/threads') {
+        if (req.method() !== 'POST') return route.fallback();
+        made.push(JSON.parse(req.postData() || '{}'));
+        return json({...dm, id: 't-grp', title: 'Bea, Cy', audience: 'members', dm_with: [], dm_with_count: 0});
+      }
+      dms.push(url.searchParams.get('with') || '');
+      return json(dm);
+    });
+    await page.goto('https://tico-ui.test/#/meetings');
+    const call = page.locator('.ph #meet-call-now');
+    await call.waitFor();
+    assert.ok(await call.evaluate(b => !!b.nextElementSibling?.matches('#notes-manual')), 'beside Add notes');
+    assert.equal(await sideways(page), phone ? 390 : 1280, 'nothing sideways');
+    await themed(page, 'call-now-button', phone);
+    await call.click();
+    const dialog = page.locator('dialog.meet-call-dialog');
+    const start = dialog.locator('button[type="submit"]');
+    assert.ok(await start.isDisabled(), 'Start waits for someone to call');
+    assert.equal(await dialog.locator('input[name="title"]').inputValue(), '');
+    await dialog.locator('.who-pick-q').click();
+    const ops = page.locator('.who-pick-list [role="option"][data-who="bot:ops"]');
+    await ops.waitFor();
+    await themed(page, 'call-now-pick', phone);
+    if (phone) {
+      // The dialog stands at the top of a phone's screen, above where the keyboard comes up.
+      // (the page's styles may still be on their way: wait for the position, then check all of it)
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('dialog.meet-call-dialog')!).top === '12px');
+      const at = await dialog.evaluate(d => { const c = getComputedStyle(d); return [c.top, c.left, c.right, c.marginTop]; });
+      assert.deepEqual(at, ['12px', '16px', '16px', '0px'], 'pinned to the top, 16px in');
+    }
+    await ops.click();
+    await dialog.locator('.nm-chip[data-actor="bot:ops"]').waitFor();
+    // The list stays open for the next pick, without Ops now; it is in the dialog, so Start is under it, not covered.
+    const list = dialog.locator('.who-pick-list');
+    assert.ok(await list.isVisible(), 'the list stays open after a pick');
+    assert.equal(await ops.count(), 0, 'who is chosen leaves the list');
+    const [under, below] = [await list.boundingBox(), await start.boundingBox()];
+    assert.ok(under && below && below.y >= under.y + under.height, 'Start below the list');
+    // The chips sit between the field and the list, so a pick never moves them.
+    const [field, chip] = [await dialog.locator('.who-pick-q').boundingBox(), await dialog.locator('.nm-chip[data-actor="bot:ops"]').boundingBox()];
+    assert.ok(field && chip && under && chip.y >= field.y + field.height && under.y >= chip.y + chip.height, 'chips under the field, the list under them');
+    if (phone) assert.ok(((await list.locator('[role="option"]').first().boundingBox())?.height || 0) >= 44, 'rows 44px on a phone');
+    await themed(page, 'call-now-dialog', phone);
+    mode.start = 'tico';
+    await page.evaluate(() => { window.__order = []; });
+    if (phone) {
+      // A phone's meeting is this tab: it goes to the call's page, joined.
+      await start.click();
+      await page.waitForURL(u => u.hash === '#/call/ct?join=1');
+    } else {
+      const opened = context.waitForEvent('page');
+      await start.click();
+      const tab = await opened;
+      await tab.waitForURL(u => u.hash === '#/call/ct?join=1', {waitUntil: 'commit'});
+      assert.equal(await tab.evaluate(() => window.name), 'tico-call-ct');
+      // The tab opened in the click, before any write, so a pop-up blocker lets it through.
+      assert.deepEqual(await page.evaluate(() => window.__order), ['open ', 'POST /api/v2/threads/t-dm/calls']);
+      await tab.close();
+    }
+    await dialog.waitFor({state: 'detached'});
+    assert.deepEqual(dms, ['bot:ops'], 'one bot is its DM');
+    assert.deepEqual(seen.starts, [{provider: 'tico', bots: ['ops']}]);
+    if (!phone) {
+      // Two people, picked one after the other: a new thread with them both, named for them (no title), and its call.
+      await call.click();
+      await dialog.locator('.who-pick-q').click();
+      await dialog.locator('.who-pick-list [data-who="human:bea"]').click();
+      await dialog.locator('.who-pick-list [data-who="human:cy"]').click();
+      assert.equal(await dialog.locator('.nm-chip').count(), 2);
+      await page.evaluate(() => { window.__order = []; });
+      const opened = context.waitForEvent('page');
+      await start.click();
+      const tab = await opened;
+      await tab.waitForURL(u => u.hash === '#/call/ct?join=1', {waitUntil: 'commit'});
+      assert.equal(await tab.evaluate(() => window.name), 'tico-call-ct');
+      assert.deepEqual(made, [{title: 'Bea, Cy', audience: 'members', members: ['human:bea', 'human:cy']}]);
+      assert.deepEqual(seen.starts.at(-1), {provider: 'tico'});
+      assert.deepEqual(await page.evaluate(() => window.__order), ['open ', 'POST /api/v2/threads', 'POST /api/v2/threads/t-grp/calls']);
+      await tab.close();
+      await dialog.waitFor({state: 'detached'});
+      assert.deepEqual(dms, ['bot:ops'], 'no DM for two');
+    }
+    // No Tico Meet on this server: no Call now.
+    config.features.tico_meet = false; mode.ticoMeet = false;
+    await page.goto('https://tico-ui.test/#/meetings');
+    await page.reload();
+    await page.locator('.ph #notes-manual').waitFor();
+    assert.equal(await page.locator('#meet-call-now').count(), 0, 'no Call now without Tico Meet');
     assert.deepEqual(seen.errors, []);
     await context.close();
   }
