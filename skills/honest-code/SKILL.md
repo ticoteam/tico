@@ -76,7 +76,7 @@ the pull request names that SHA. The 80% diff-coverage gate shows that lines ran
   browser `startHub` and `pageAs` (`ui/tests/support/real-hub.cts`).
 - Outside is what does not ship with the code under test: the network, a model, HQ, another company's API, a CLI such
   as `gh` or `op`. Use a fake that exists (listed in `references/examples.md`); when it lacks a failure, add the failure
-  to the fake. A client package that calls our hub uses a live hub, or a recording transport with its reason.
+  to the fake. A client package tests against a live hub, or a recording transport with its reason.
   `block_outside_network(monkeypatch, reason)` refuses every other host.
 - A fake answers the way the real thing does: same shape, same refusals (`{error: {code, detail}}`), same order. A
   `page.route` handler returns a body the real route returns; a catch-all calls `route.abort()`, never answers `{}`.
