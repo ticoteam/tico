@@ -143,12 +143,41 @@ def task_problems(actor, owner, title, body, pipeline=None):
     return target, problems, warnings
 
 
+def private_readers_line(args, body):
+    """A dry run into a pipeline prints first, as the create does, who else reads the task if it is private
+    (backend/private_readers.py). Only the server knows whether it will be private (a private parent, a bot's default)
+    and who holds each stage, so this one read asks its dry run; it files nothing. A notice only: when the server
+    cannot be asked, the local answer stands."""
+    pipeline = getattr(args, "pipeline", None)
+    if not pipeline:
+        return
+    from clients.tico import Client
+
+    fields = {
+        "title": args.title,
+        "body": body,
+        "owner": args.owner,
+        "pipeline": pipeline,
+        "private": True if args.private else None,
+        "parent": getattr(args, "parent", None),
+        "readers": list(getattr(args, "readers", None) or []) or None,
+    }
+    try:
+        client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), retries=0)
+        said = client.post("tasks/dry-run", {k: v for k, v in fields.items() if v is not None})
+    except Exception:  # a notice: the dry run still answers from its own checks
+        return
+    if isinstance(said, dict) and said.get("private_readers"):
+        print("tico: " + str(said["private_readers"]), file=sys.stderr)
+
+
 def cmd_task_dry_run(args, who):
     """`tico task create --dry-run`: print what a create would be refused for; write nothing.
 
-    No database is opened and no request is made; the owner's kind comes from the registry
-    files and the same lint runs here, so a bot on the cloud API can size a human item before
-    it spends a turn on a refusal. Prints lines rather
+    No database is opened; the owner's kind comes from the registry files and the same lint
+    runs here, so a bot on the cloud API can size a human item before it spends a turn on a
+    refusal. Into a pipeline, one read of the server's dry run says who else reads it if it is
+    private (private_readers_line). Prints lines rather
     than JSON: `- <problem>` per problem and exit 1, or one `ok:` line.
     """
     from backend import hubdb as H
@@ -169,6 +198,7 @@ def cmd_task_dry_run(args, who):
         return 1
     for w in warnings:
         print(f"- {w} (warning: the create is accepted)")
+    private_readers_line(args, body)
     if not args.owner:
         print(
             "ok: no owner named; the server decides at the create (a first stage that picks from several picks one, "
