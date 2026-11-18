@@ -184,7 +184,7 @@ pypdf==6.21.4
     # via
     #   -c requirements.txt
     #   -r requirements.in
-pytest==9.1.1
+pytest==9.2.0
     # via
     #   -r requirements-dev.in
     #   pytest-cov
