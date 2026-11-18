@@ -785,7 +785,7 @@ a sub-thread shows its root's.
 | `POST /api/v2/threads {..., "pin_for_members": true}` | `threads.create(..., pin_for_members=True)`: a pin row for the starter and every `human:` member |
 | `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "unread": [item], "dms": {actor: unread}, "next_cursor"}` |
 | `GET /api/v2/threads/browse?q=&cursor=&limit=50` | `thread_rail.browse(c, viewer, q=None, cursor=None, limit=50)` → `{"threads": [view + "member_count"], "next_cursor"}` |
-| `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
+| `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "new_count_partial": false, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
 
 Rail. Candidates are open roots the viewer reads (`readable_sql`, then `thread_readable`) with audience company, team
 or members, or a DM with two or more others (`_dm_members`); never a 1:1 DM, a Home, a task's thread or a meeting. The
@@ -801,7 +801,7 @@ later pages have `null`, `[]` and `{}`. The sidebar's first page has the same DM
 `person_dms`. `unread` (first page only, `[]` after) is each Catch up item the rail does not hold (a 1:1 DM, a Home, a
 task's thread, a thread the viewer is in only by a mention), in Catch up's order, from the same walk as `catch_up` and
 `catch_up_ids`, so the rows and the badge agree: `{id, title, name, audience, dm_with, dm_with_count, home_actor,
-new_count, mention, task_id, last_message_at}`. A client lists them under Threads while they are in its Catch up set.
+new_count, new_count_partial, mention, task_id, last_message_at}`. A client lists them under Threads while they are in its Catch up set.
 
 Live updates. A client reads the rail whole on first load, on `reset`, on `needs` and on a safety poll every few
 minutes, and patches it from the `threads` topic in between. One `activity` event stands for every activity row of
@@ -832,9 +832,15 @@ holds an open attention item for them (`_flags` in `thread_rail`, which runs its
 mention the viewer (an open mention, or a new message delivered to them as a mention or assignment; an old `ask` row counts too) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
 subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
-and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. `new_count` is how many new
-messages of the subtree the viewer may read (a plain message counts in SQL; a restricted one or a migrated Home's old history is
-read whole for its check, at most 200 a batch of roots), or 1 for an attention item alone. The sidebar's `me.unread`
+and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. Whether a root has something
+new needs only one message the viewer may read: a plain message counts in SQL; a restricted one or a migrated Home's old
+history is read whole for its check, each root's oldest first in rounds of 1, 4 and 16 a sub-thread, so every root has its
+turn before any has more, at most 2,000 over the whole walk (`CATCH_UP_HIDDEN`; a root still unproved past that is left
+out and logged as `catch_up_unchecked`). `new_count` is how many new messages of the subtree the viewer may read, or 1 for
+an attention item alone. It is counted whole only for the items a load shows (a Catch up page's cards, the rail's
+`unread` rows), at most 2,000 messages read for their check a load, shared evenly over their sub-threads
+(`CATCH_UP_COUNTED`); an item whose count stops there keeps what was found, with `new_count_partial` true (shown as
+"180+"), never 0. The sidebar's `me.unread`
 still counts before the per-message check (follow-up). `messages` are the new messages (past the viewer's mark in each thread, under the unread rule)
 plus an open mention's or ask's own message, each through the per-message check, in tree order (a message, then the
 sub-thread under it, each with `depth`): candidates are merged in tree order from every unread sub-thread (at most

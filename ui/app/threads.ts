@@ -62,6 +62,7 @@ interface ThreadUnread {
   dm_with_count?: number | null | undefined;
   home_actor?: string | null | undefined;
   new_count: number;
+  new_count_partial?: boolean | undefined;  // new_count stopped at the server's budget: at least that many
   mention: boolean;
   task_id?: string | null | undefined;
   last_message_at?: string | null | undefined;
