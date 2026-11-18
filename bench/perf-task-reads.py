@@ -28,7 +28,7 @@ from backend.tests.helpers import engine as EH
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.api_app import api_client
 from backend.tests.helpers.statement_scope import measuring, recorder
-from backend.tests.test_task_detail_queries import build
+from backend.tests.helpers.task_detail_queries import build
 
 RUNS = 20
 OPEN, DONE, CLOSED, PEOPLE_TASKS = 160, 220, 120, 150
