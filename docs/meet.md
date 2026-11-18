@@ -43,17 +43,11 @@ participant's `in_call`, and `seen_at`. Rules, from live tests:
 
 People are matched to Google's participants by display name (one person with that name; email when Google gives one),
 and only people who can read the thread; anyone else is counted and never named. A change to the count, who is in it,
-the status source, the recording source or `seen_at` writes one `call.updated` change (no audit row).
+the status source or `seen_at` writes one `call.updated` change (no audit row).
 
-**Recording.** Google records nothing for Tico. A person's Tico Recorder can be the call's recording source:
-`POST /api/v2/calls/{call_id}/recorder` claims it (the first claim wins and its holder keeps it; the answer says
-`has_transcript` when the meeting already has one), `DELETE` releases it. Only someone in the call may claim: its
-connector, a person who opened it from Tico or was seen in it, or one of the thread's own people; any other reader gets
-`403 not_in_call`. The holder may write chunks and corrections to the call's live meeting, nothing else of it, while the
-call is live and for 90 s after it ends (the Recorder's upload tail); the transcript is posted after that tail. While Google gives no status, the source's Recorder may report the names
-in the Meet window (`POST /api/v2/calls/{call_id}/presence`, up to 100); `status_source` is then `recorder`. Google's
-answer always wins. When the call ends, the transcript is posted only if a Recorder wrote one, and the action items as
-for Tico Meet.
+**Recording.** Google records nothing for Tico, and Tico does not record a Google Meet call. For a transcript of a
+call, use a meeting tool such as Granola; see [Meetings](meetings.md#meeting-importers). Tico Meet calls are transcribed
+by Tico Meet's own server-side recorder, below.
 
 **Setup.** Google Meet needs the Workspace key (Tools > Settings > Email) authorized for
 `https://www.googleapis.com/auth/meetings.space.created` and the Meet API turned on in the key's project. The setup
@@ -71,7 +65,7 @@ who is in it every 10 s and ends it. It needs no running Tico.
 
 ## Tico Meet
 
-Status on this branch: the call API, the CLI, the MCP tools, the OpenAPI operations, the server's recorder and the
+Status on this branch: the call API, the CLI, the MCP tools, the OpenAPI operations, the server's own recorder and the
 browser signal path are built. Most tests run against fakes for LiveKit and the Gateway. One live test
 (`backend/tests/test_call_live.py`) runs against a real `livekit-server` in dev mode, the digest-pinned image: a
 synthetic speaker publishes audio through the LiveKit SDK, the recorder hears it, the Gateway's speech-to-text is the
@@ -88,7 +82,7 @@ speech is not built (see Not built).
    while the person can still read the thread. A joined client refreshes its token with
    `POST /api/v2/calls/{call_id}/token` before it expires.
 3. **Transcript.** The recorder subscribes to each microphone and screen-share audio track. Each speaker's audio goes to
-   the Gateway's speech-to-text (the Recorder's model, `elevenlabs/scribe-v2`) in clips of up to 8 seconds, or sooner
+   the Gateway's speech-to-text (`elevenlabs/scribe-v2`) in clips of up to 8 seconds, or sooner
    once the speaker is quiet for 3 seconds. Clips are transcribed on workers, so the recorder never waits on the
    Gateway. The text becomes the call's live meeting chunks. Audio is held in memory until it is sent and is never
    stored. If the Gateway does not answer, that clip is lost and the call goes on.
@@ -109,8 +103,8 @@ speech is not built (see Not built).
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
      the message says where the full one is.
    - `Action items: <title>` with one `- ` line per item, or `No action items were found.`. The items are drafted
-     from the transcript on the install's meeting model through the Gateway. The drafting is a server port of the
-     Recorder's prompt and rule (an item stands only when its quote is in the transcript word for word; at most 5),
+     from the transcript on the install's meeting model through the Gateway. The drafting follows a
+     prompt and rule (an item stands only when its quote is in the transcript word for word; at most 5),
      in `backend/call_items.py`. If the Gateway does not answer, the items stay owed. The sweep tries again, each wait
      longer than the last (two minutes, doubling, up to an hour). A day after the first failure the thread gets one
      line, `Action items for <title> could not be made`, with the retry route, and the call gives up on them. The
@@ -140,8 +134,7 @@ sets it (`--speak` in the CLI, `speak_replies` in REST and MCP) is refused with 
 
 Errors: `meet_unavailable` (503) when no call provider is available to the caller, Google will not make the space,
 Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot join. `not_tico_meet` (409) for a token
-on a Google Meet call, `not_google_meet` (409) for the Recorder routes on a Tico Meet call, `not_in_call` (403) for a
-recording claim from a reader who is not in the call. `call_in_progress` (409) for a second live call in a thread, `call_ended` (409), `not_joined` (409) when a token is
+on a Google Meet call, `call_in_progress` (409) for a second live call in a thread, `call_ended` (409), `not_joined` (409) when a token is
 asked for without joining, and `call_access_removed` (403) after removal. A call the caller cannot read is 404, the
 same as a call that does not exist. `call_meeting` (409) when the live meeting's own controls
 (`/api/v2/live-meetings/{id}/control`) are used on a call's meeting: a call is paused, resumed or ended through the call.
@@ -153,7 +146,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional, default false), `provider` (`auto`, `google_meet` or `tico`; default `auto`) |
 | `GET /api/v2/calls/ringing` | The live calls ringing the caller now |
-| `GET /api/v2/calls/{call_id}` | One call: state, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, `recorder` (`source`, `installed`) |
+| `GET /api/v2/calls/{call_id}` | One call: state, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id` |
 | `POST /api/v2/calls/{call_id}/join` | Join. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined (Tico Meet only) |
 | `POST /api/v2/calls/{call_id}/leave` | Leave |
@@ -161,9 +154,6 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `POST /api/v2/calls/{call_id}/action-items/retry` | Ask again for action items the Gateway could not make (the connector, after the call ended) |
 | `POST /api/v2/calls/{call_id}/bots` | Attach bots. Body: `bots`, 1 to 10 slugs |
 | `DELETE /api/v2/calls/{call_id}/bots/{bot}` | Detach a bot |
-| `POST /api/v2/calls/{call_id}/recorder` | Claim the recording source for your Recorder (Google Meet, live) |
-| `DELETE /api/v2/calls/{call_id}/recorder` | Release it (its holder) |
-| `POST /api/v2/calls/{call_id}/presence` | The source's Recorder reports the names in the Meet. Body: `names` (up to 100) |
 
 The same operations are `tico call list|start|show|join|token|leave|end|retry` and `tico call bot add|remove` in the
 `tico` CLI, and `tico_call_list`, `tico_call_show`, `tico_call_start`, `tico_call_join`, `tico_call_token`, `tico_call_leave`,

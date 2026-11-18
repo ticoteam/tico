@@ -15,14 +15,13 @@ type Bot = {bot: string; name: string; joined_by?: string};
 type Detail = {id: string; title: string; state: string; owner_actor: string; visibility: string; access: Person[]; seq: number; event_id: number;
   window_ms: number; cooldown_ms: number; reply_cap: number; imported_meeting_id: string | null; humans: Person[]; bots: Bot[];
   chunks: unknown[]; chat: {id?: string; actor: string; role?: string; text?: string; transcript_seq?: number; created_at?: string}[];
-  notices: unknown[]; router: unknown; client?: string; fixture_read?: number};
+  notices: unknown[]; router: unknown; fixture_read?: number};
 type Body = {client_id?: string; title: string; reply_cap?: number; cooldown_seconds?: number; add: string[]; remove?: string[]; bots: string[]; action?: string; text?: string};
 type Signal = {promise: Promise<unknown>; resolve: (value?: unknown) => void};
 type World = {meetings: Detail[]; detail: Detail | null; detailReads: number; detailHoldCount: number; detailWaiters: ((value?: unknown) => void)[];
-  detailHeld: Signal | null; holdChat: boolean; chatWaiters: ((value?: unknown) => void)[]; chatHeld: Signal | null; failChat: boolean;
-  screenReads?: number; screen?: Buffer | null};
+  detailHeld: Signal | null; holdChat: boolean; chatWaiters: ((value?: unknown) => void)[]; chatHeld: Signal | null; failChat: boolean};
 type LiveState = {chatSending: Set<string>; detail: {fixture_read: number} | null; sources: Map<string, EventTarget>; drafts: Record<string, {chatText?: string}>;
-  selected: string | null; screen: unknown};
+  selected: string | null};
 interface PageWin { liveDetailRefresh: unknown }
 declare const LIVE_MEETINGS: LiveState;
 declare function liveLoad(state: LiveState): Promise<unknown>;
@@ -97,16 +96,6 @@ async function main() {
         return json(world.detail);
       }
       if (p === '/api/v2/live-meetings/denied') return route.fulfill({status:404, contentType:'application/json', body:JSON.stringify({error:{detail:'Meeting not found'}})});
-      if (p.includes('/screen/')) world.screenReads = (world.screenReads || 0) + 1;
-      if (p === '/api/v2/live-meetings/live-1/screen/status') return world.screen ? json({generation:'fixture'}) : route.fulfill({status:410});
-      if (p === '/api/v2/live-meetings/live-1/screen/frame') {
-        if (!world.screen) return route.fulfill({status:410});
-        if (url.searchParams.get('after') === 'fixture:1') {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          return route.fulfill({status:204});
-        }
-        return route.fulfill({contentType:'image/jpeg', headers:{'X-Screen-Version':'fixture:1'}, body:world.screen});
-      }
       if (p === '/api/v2/live-meetings/live-1/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/live-meetings/live-1' && method === 'GET') {
         if (world.detailHoldCount > 0) {
@@ -147,7 +136,6 @@ async function main() {
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/meetings');
-    assert.equal(await page.locator('#meet-recorder').getAttribute('href'), 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg');
     await page.locator('#meet-live-now').click();
     await page.locator('#live-connect').waitFor();
     await page.locator('#live-connect input[name=title]').fill('Weekly sync');
@@ -314,42 +302,21 @@ async function main() {
     await page.locator('[data-live-finalize]').click();
     await page.locator('.live-finalized').waitFor();
     assert(calls.some(([op]) => op === 'finalize'));
-    assert.doesNotMatch(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
-    world.detail!.client = 'tico-recorder';
     // A deep link opens ended meetings absent from the active list, including the older alias.
     world.meetings = [];
     await page.goto('https://tico-ui.test/#/meetings?live=live-1');
     await page.waitForURL('**/#/meetings/live/live-1');
     await page.locator('.live-finalized').waitFor();
-    await page.locator('.live-card-head').getByText('From Tico Recorder').waitFor();
     assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'live-1');
-    assert.equal(await page.evaluate(() => LIVE_MEETINGS.screen), null, 'An ended meeting never starts a screen loop');
-    const endedScreenReads = world.screenReads || 0;
-    await page.waitForTimeout(1100);
-    assert.equal(world.screenReads || 0, endedScreenReads, 'Ended meeting pages do not poll screen routes');
     world.meetings = [makeDetail('live-1')];
     await page.goto('https://tico-ui.test/#/meetings/live/denied');
     await page.getByText('This meeting is not available to you, or it does not exist.').waitFor();
     assert.equal(await page.locator('.live-card').count(), 0, 'denied link never falls through to another meeting');
     assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'denied');
-    // Synthetic canvas pixels only: successful frame, expiration, and route teardown.
-    const jpeg = await page.evaluate(() => { const c = document.createElement('canvas'); c.width=80; c.height=60; c.getContext('2d')!.fillRect(0,0,80,60); return c.toDataURL('image/jpeg').split(',')[1]!; });
-    world.screen = Buffer.from(jpeg, 'base64'); world.detail!.state = 'live';
-    await page.goto('https://tico-ui.test/#/meetings/live/live-1');
-    await page.locator('.live-screen:not([hidden]) img').waitFor();
-    await page.waitForFunction(() => (document.querySelector('.live-screen img') as HTMLImageElement | null)?.naturalWidth === 80);
-    await page.evaluate(() => LIVE_MEETINGS.sources.get('live-1')!.dispatchEvent(new MessageEvent('meeting.access', {data:'{}', lastEventId:'99'})));
-    await page.waitForTimeout(400);
-    assert(await page.locator('.live-screen').isVisible(), 'adding another person must preserve an unchanged slide');
-    await page.waitForFunction(() => (document.querySelector('.live-screen img') as HTMLImageElement | null)?.naturalWidth === 80);
-    world.screen = null;
-    await page.locator('.live-screen').waitFor({state:'hidden'});
     await page.goto('https://tico-ui.test/#/meetings');
     await page.waitForFunction(() => LIVE_MEETINGS === null);
-    assert.equal(await page.locator('.live-screen').count(), 0, 'leaving a meeting removes its shared image');
     assert.deepEqual(errors, []);
     await context.close();
-    await (require('./support/recorder-pause.cts') as import('./support/recorder-pause.cts').Api)(browser);
   } finally { await browser.close(); }
 }
 

@@ -14,7 +14,7 @@ else), and a person who takes control in the live view holds it until they give 
 (409 `person_in_control` for bots). A person's view is a picture refreshed at most once a second however many people
 watch (one screenshot command per FRAME_EVERY seconds), and their clicks and keys are commands too.
 
-Nothing here is persisted: the server is one process (backend/meeting_screen.py assumes the same). A restart drops
+Nothing here is persisted: the server is one process. A restart drops
 in-flight commands and holds; a caller retries. A login's value reaches only the payload a computer collects for a
 `fill` or `copy`: never a reply, an event, an Activity row or an idempotency row. The 2FA key never leaves the server:
 `code` is answered here and a `fill`/`copy` of the code carries only the current code.
@@ -741,7 +741,7 @@ def first_url(sites: list[str]) -> str:
 
 
 def _idle(request: Request, began: float) -> None:
-    # A deliberate wait is not server processing (backend/app.py timing; backend/meeting_screen.py does the same).
+    # A deliberate wait is not server processing (backend/app.py timing).
     request.state.idle_wait_ms = getattr(request.state, "idle_wait_ms", 0) + (time.perf_counter() - began) * 1000
 
 

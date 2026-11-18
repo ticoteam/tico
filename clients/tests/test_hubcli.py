@@ -356,8 +356,8 @@ def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmati
             sent.append(("GET", path, query))
             return {
                 "org": "Acme",
-                "name": "tico-recorder",
-                "repository": "Acme/tico-recorder",
+                "name": "tico-mobile",
+                "repository": "Acme/tico-mobile",
                 "visibility": "private",
                 "auto_init": False,
                 "capability": "available",
@@ -366,18 +366,18 @@ def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmati
 
         def post(self, path, body, key=None):
             sent.append(("POST", path, body, key))
-            return {"repository": "Acme/tico-recorder"}
+            return {"repository": "Acme/tico-mobile"}
 
-    args = hubcli.parser().parse_args(["repo", "product-create", "tico-recorder"])
+    args = hubcli.parser().parse_args(["repo", "product-create", "tico-mobile"])
     assert args.fn == "repo product-create"
-    out = StringIO("Acme/tico-recorder\n")
+    out = StringIO("Acme/tico-mobile\n")
     out.isatty = lambda: True
     remotecli.product_repo_create(Api(), args.name, stdin=out, stderr=StringIO())
-    assert sent[0] == ("GET", "github/product-repos/preview", {"name": "tico-recorder"})
+    assert sent[0] == ("GET", "github/product-repos/preview", {"name": "tico-mobile"})
     assert sent[1][:3] == (
         "POST",
         "github/product-repos",
-        {"org": "Acme", "name": "tico-recorder", "visibility": "private", "auto_init": False, "confirmed": True},
+        {"org": "Acme", "name": "tico-mobile", "visibility": "private", "auto_init": False, "confirmed": True},
     )
     assert sent[1][3] and len(sent[1][3]) <= 200
 
@@ -392,8 +392,8 @@ def test_product_repository_cli_never_writes_without_matching_confirmation(monke
         def get(self, path, **query):
             return {
                 "org": "Acme",
-                "name": "tico-recorder",
-                "repository": "Acme/tico-recorder",
+                "name": "tico-mobile",
+                "repository": "Acme/tico-mobile",
                 "visibility": "private",
                 "auto_init": False,
                 "capability": "available",
@@ -406,7 +406,7 @@ def test_product_repository_cli_never_writes_without_matching_confirmation(monke
     out = StringIO("Acme/other\n")
     out.isatty = lambda: True
     with pytest.raises(remotecli.APIError, match="Confirmation did not match"):
-        remotecli.product_repo_create(Api(), "tico-recorder", stdin=out, stderr=StringIO())
+        remotecli.product_repo_create(Api(), "tico-mobile", stdin=out, stderr=StringIO())
     assert calls == []
 
 
@@ -423,8 +423,8 @@ def test_product_repository_cli_refuses_missing_capability_and_noninteractive_co
         def get(self, path, **query):
             return {
                 "org": "Acme",
-                "name": "tico-recorder",
-                "repository": "Acme/tico-recorder",
+                "name": "tico-mobile",
+                "repository": "Acme/tico-mobile",
                 "visibility": "private",
                 "auto_init": False,
                 "capability": self.capability,
@@ -435,12 +435,10 @@ def test_product_repository_cli_refuses_missing_capability_and_noninteractive_co
             self.writes += 1
 
     with pytest.raises(remotecli.APIError, match="not available"):
-        remotecli.product_repo_create(Api("missing"), "tico-recorder", stdin=StringIO(""), stderr=StringIO())
+        remotecli.product_repo_create(Api("missing"), "tico-mobile", stdin=StringIO(""), stderr=StringIO())
     available = Api("available")
-    with pytest.raises(remotecli.APIError, match="--confirm Acme/tico-recorder, or type it at an interactive terminal"):
-        remotecli.product_repo_create(
-            available, "tico-recorder", stdin=StringIO("Acme/tico-recorder\n"), stderr=StringIO()
-        )
+    with pytest.raises(remotecli.APIError, match="--confirm Acme/tico-mobile, or type it at an interactive terminal"):
+        remotecli.product_repo_create(available, "tico-mobile", stdin=StringIO("Acme/tico-mobile\n"), stderr=StringIO())
     assert available.writes == 0
 
 

@@ -53,14 +53,13 @@ AREAS = (
     ("backend/", "backend"),
     ("runner-rs/", "runner"),
     ("runner_support/", "runner"),
-    ("recorder/", "recorder"),
     ("templates/", "templates"),
     ("docs/", "docs"),
     ("scripts/", "scripts"),
     (".github/", "ci"),
 )
 USER_AREAS = frozenset({"ui", "clients", "app"})
-BACKEND_AREAS = frozenset({"backend", "runner", "recorder", "templates"})
+BACKEND_AREAS = frozenset({"backend", "runner", "templates"})
 GROUPS = (("high", "High risk"), ("user", "User-facing"), ("backend", "Backend"), ("internal", "Internal"))
 HIGH_RISK_HEADING = "## " + dict(GROUPS)["high"]
 CUT_SHORT = "The range has more commits than these notes read; the list stops at the last one read."

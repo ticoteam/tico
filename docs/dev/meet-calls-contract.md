@@ -1,7 +1,6 @@
 # Google Meet calls in threads: build contract
 
-The shared contract for the tracks building Google Meet calls, the New message pane, the Recorder on calls and phone
-push. Each track builds against this file; a change to it goes through the integration branch `chris/meet-calls`.
+The shared contract for the tracks building Google Meet calls, the New message pane and phone push. Each track builds against this file; a change to it goes through the integration branch `chris/meet-calls`.
 
 ## What Chris approved (Nov 9-10)
 
@@ -12,10 +11,7 @@ push. Each track builds against this file; a change to it goes through the integ
   notification when Tico is hidden or closed. Everyone else in the thread only sees a green phone mark on the thread's
   rail row and the live card.
 - Live status: who is in the call, a timer, the length once it ends. Source of truth in this order: Google's Meet API
-  (polled), then the Tico Recorder (when one is on the call), then nothing (card shows Join and the connector can End).
-- Starting or joining a call from Tico on a Mac opens the Tico Recorder, which records the call into the call's live
-  meeting. One Recorder per call is the source; the transcript and action items land in the thread when the call ends
-  (the existing call wrap-up). Calls skip the Recorder's Finish sheet.
+  (polled), then nothing (card shows Join and the connector can End).
 - The rail's pencil becomes **+** and opens a Slack-style **New message** pane: one To box over people, bots, groups
   and threads; threads with exactly the chosen people come first so Enter re-opens one; one person opens the DM; no
   match asks for a name (group chats need a name, unchanged).
@@ -37,10 +33,9 @@ push. Each track builds against this file; a change to it goes through the integ
 | `meet_empty_at TEXT` | first successful read that showed nobody since someone was last seen (migration `20261110060000_meet_calls.py`); NULL while anyone is seen |
 | `meet_polled_at TEXT` | last successful status read |
 | `live_count INTEGER NOT NULL DEFAULT 0` | people in the Meet now, as the status source last said (unmatched guests included) |
-| `status_source TEXT` | `google`, `recorder` or NULL (no live status) |
+| `status_source TEXT` | `google` or NULL (no live status) |
 | `ring TEXT` | JSON list of the actors rung at start |
 | `card_message_id TEXT` | the thread message that is the call's card |
-| `recorder_actor TEXT`, `recorder_claimed_at TEXT` | the person whose Recorder is the call's recording source |
 | `transcript_message_id TEXT` | the transcript post, once made |
 
 `call_participants` gains `in_call INTEGER NOT NULL DEFAULT 0`: 1 while the status source reports that person in the
@@ -60,8 +55,7 @@ All existing routes keep working for `tico` calls. Changes:
   `provider`, `meet_uri`, `join_url` (meet_uri + `?authuser=<viewer's Google address>` when known, else meet_uri; null for
   `tico`), `live_count`, `status_source`, `seen_at` (= meet_seen_at), `duration_s` (ended calls only. Google Meet: meet_active_at
   minus meet_seen_at, null when nobody was ever seen; Tico Meet: ended_at minus started_at), `ring` (bool: the viewer was rung, has not joined, and the call is live), `card_message_id`,
-  `transcript_message_id`, `recorder: {"source": <actor or null>, "installed": <viewer has a Recorder seen in the last
-  30 days, recorder_installs.mine(...)["recent"]>}`, and on each participant `in_call`.
+  `transcript_message_id`, and on each participant `in_call`.
 - `POST /api/v2/calls/{id}/join` on a `google_meet` call records the open and answers `{"call": view, "url": join_url}`
   (no token). `POST /api/v2/calls/{id}/token` on one answers `409 not_tico_meet`.
 - `POST /api/v2/calls/{id}/end` (connector) on a `google_meet` call asks Google to end the active conference
@@ -70,22 +64,9 @@ All existing routes keep working for `tico` calls. Changes:
   the call. A call the sweep ends (`meet_ended`, `no_answer`, `stale`) has its space locked the same way, on the poll
   pool.
 - `GET /api/v2/calls/ringing`: live calls ringing the viewer now (page load and reconnect): `{"calls": [view, ...]}`.
-- `POST /api/v2/calls/{id}/recorder` (body `{}`): a person who can read the thread and is in the call claims the
-  recording source for a live call. In the call means: the connector, a person with a `call_participants` row that was
-  not removed (they opened it from Tico, or a status source saw them in it), or one of the thread's own people
-  (`thread_members`, a DM's or group chat's people). Anyone else who can read the thread (a company thread's readers)
-  gets `403 not_in_call`. First claim wins and is kept by its holder; answers `{"source": bool, "meeting_id", "title",
-  "source_actor"}`. `DELETE /api/v2/calls/{id}/recorder` releases it (holder only). While held, the holder may write
-  chunks and corrections to the call's live meeting (`backend/live_meetings.py` `_connector` allows the call's
-  `recorder_actor` for those two routes only), and for 90 s after the call ended (`RECORDER_TAIL_SECONDS`, the
-  Recorder's upload tail); after that they are refused as before. A call with a recording source posts its transcript
-  only once the tail is over.
-- `POST /api/v2/calls/{id}/presence` body `{"names": [str, ...]}` (max 100): the recording source's Recorder reports
-  who it sees in the Meet window. Used only while Google gives no status (`status_source` is not `google`); names are
-  matched to company people by display name; `live_count` = len(names).
 - Thread rows (rail, browse, a thread's own row) gain `live_call`: `{"id", "live_count"}` or null.
 - Change kinds on the `threads` topic: existing `call.*`, plus `call.updated` whenever `live_count`, `in_call`,
-  `status_source`, `recorder_actor` or `meet_seen_at` changes. The browser re-reads the call on any `call.*`.
+  `status_source` or `meet_seen_at` changes. The browser re-reads the call on any `call.*`.
 
 ### Status polling (the calls sweep, every heartbeat, 10 s by default)
 
@@ -101,15 +82,15 @@ read found nobody). A call someone was seen in ends `meet_ended` once successful
 (from `meet_empty_at`); a call nobody joined within 120 s ends `no_answer`. Only a successful read changes the status:
 a read Google did not answer (timeout, 5xx, 429, status 0) keeps the count, `in_call` and source as they were and never
 counts toward the empty minute. Google refusing (401/403/404: scope not authorized, mailbox not covered) leaves
-`status_source` to the Recorder or NULL. A call ends `stale` 8 hours after it started when it has no status from Google
+`status_source` NULL. A call ends `stale` 8 hours after it started when it has no status from Google
 (refused, or no successful read for 10 minutes). The connector can always End.
 
-An ended call keeps `status_source` (the end and a later Recorder release do not clear it), so the UI can tell a
+An ended call keeps `status_source` (the end does not clear it), so the UI can tell a
 missed call (`duration_s` null, `status_source` set: something watched and saw nobody) from one nothing watched
 (`duration_s` null, `status_source` null).
 
 When a `google_meet` call ends: no LiveKit work; final windows run; the transcript is posted only when the call's live
-meeting has chunks (from the Recorder); action items as today. No "(no speech was transcribed)" post for a Meet call.
+meeting has chunks; action items as today. No "(no speech was transcribed)" post for a Meet call.
 
 ### Ringing
 
@@ -127,22 +108,6 @@ asks the admin to authorize and to the key check's probes, without changing `nar
 that lack it. The viewer's Google address for `authuser` is their mailbox when the Workspace covers it, else their
 connected Google account's address when they have one, else none.
 
-## Recorder (Recorder track)
-
-- Link: `tico-recorder://record?server=<org address>&call=<call id>`. The Recorder accepts it only for a server it is
-  signed in to (else it signs in to that org first, then continues), claims the source (`POST /calls/{id}/recorder`)
-  and, when it is the source, starts recording into the call's live meeting (`meeting_id` from the claim: no new live
-  meeting is created). It comes to the front either way. Not the source: it records nothing.
-- When the call's live meeting ends (the Recorder sees state `ended`), recording stops by itself, no Finish sheet; the
-  recording is kept as sent to that org (the server posts the transcript; the Recorder must not import it again).
-- Stopping by hand before the call ends releases the source (`DELETE /calls/{id}/recorder`).
-- Signed in to the org already, it records at once; when it had to sign in first, it asks "Record <title>?" once
-  and records only on Record (Cancel releases the source). Join on a calendar event (`event=`, calendar contract)
-  behaves the same.
-- Stretch: while the source and Google gives no status, post Meet window names to `/calls/{id}/presence` every 10 s.
-- The Tico web page opens the link on Macs when `recorder.installed`; the Tico desktop app opens it without a browser
-  prompt.
-
 ## Phone push (push track)
 
 Web Push for the Tico web app and the installed app (`ui/manifest.webmanifest`, `ui/sw.ts`): VAPID keys made once per
@@ -158,5 +123,4 @@ people's subscriptions. iPhone push works once Tico is added to the home screen.
 | Server | `chris/meet-calls-server` | backend/calls.py, backend/google_meet.py (new), backend/call_ring.py (new), backend/google_workspace.py (Meet scope only), backend/live_meetings.py (`_connector` only), thread row `live_call` (backend/thread_rail.py, backend/threads.py row builder), backend/openapi_v2.py call entries, the migration, docs/meet.md, scripts/meet-live-check.py (new), backend tests |
 | Calls UI | `chris/meet-calls-ui` | ui/app/thread-call.ts, the call card in ui/app/thread-view.ts, the rail mark in ui/app/thread-rail.ts (row render only), ring popup/sheet (new ui/app/call-ring.ts), styles, ui tests |
 | New message | `chris/meet-calls-newmsg` | rail + button and New message pane (ui/app/thread-rail.ts header, ui/app/threads-page.ts, new ui/app/new-message.ts), `GET /api/v2/threads/match` (backend/thread_api.py), ui + api tests |
-| Recorder | `chris/meet-calls-recorder` | recorder/**, app/src/recorder.rs (desktop app opens the record link) |
 | Push | `chris/meet-calls-push` | backend/web_push.py (new), its migration, ui/sw.ts, the switch in ui/app/person-page.ts, docs/push.md (new), tests |

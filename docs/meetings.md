@@ -54,20 +54,6 @@ The CLI and the API act as the human whose credential they carry: set `HUB_API_U
 a personal token (see [Who can do what](#who-can-do-what)). All of them land in the same place, in the same shape, so the list, search, sharing, Send and
 action items work identically whatever the source.
 
-### Tico Recorder
-
-**Get Tico Recorder** on Meetings downloads the Mac app
-(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`). A copy that cannot update itself, outside
-an Applications folder (for example, opened from Downloads or the disk image), asks once per launch, before your first
-recording: **Move** copies it to Applications (or `~/Applications`) and relaunches it from there; **Not now** keeps it
-where it is, and a smaller banner offers the move later. The link hides once Tico has seen one of your copies in the
-last 30 days. The Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its
-calls; Tico keeps the last version and time per person and copy, writing at most every ten minutes unless the version
-changes. The newest version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
-when the copy you used last is older, Meetings shows **Recorder update available**, and nothing else.
-`GET /api/v2/meetings/recorder` answers the same for your own copies; owners and admins see everyone's version in
-Settings > People. Neither link shows in the phone layout, in a browser window 760 px wide or less.
-
 ## Review before sharing
 
 Imported meetings wait in the importing person's **Pending** queue by default. Only the person
@@ -101,16 +87,15 @@ and attached bots through `GET /api/v2/live-meetings/{id}` under the live meetin
   Omit `private` to keep its source default: Granola is private by default; other sources are team
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
-  `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
+  `"audience": "participants"` keeps it readable only by the
   person it is filed for, people added to or joined in the live meeting it came from, and attached bots;
   the company owner is held to that too. Attached bots can read filed notes, transcripts, versions and
   attachments regardless of who added them or the filed audience, once shared and until deleted or discarded.
   Pending and dismissed meetings remain unavailable to bots. `"audience": "team"` opens it to the Team. The import route takes
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
 - `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
-  removes its transcript, chat and events from Tico; the recording stays on their computer.
-  Recorder **This Mac** uses this path and deletes a meeting already filed for review, removing its delivery
-  receipt and task links. The local recording and transcript stay, and tasks already sent remain unchanged.
+  removes its transcript, chat and events from Tico. It also deletes a meeting already filed for review, removing its
+  delivery receipt and task links. Tasks already sent remain unchanged.
   Queued links and Link proposals are cleared; recovery cannot finalize the discarded live share or send its links.
   An older Tico without discard ends the meeting and reports that its live transcript remains until Tico is updated.
 - `POST /api/v2/meetings/{id}/review` with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
@@ -268,7 +253,6 @@ format is a `422` that names the problem.
   links to it, and quotes the line when you gave one. A task shared to a bot has no footer and no quote.
   Participants-only meetings send
   private tasks only when every reader (including a bot owner's managers) is already in the meeting.
-  The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
   Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
   a failed draft. Save and Create carry the item’s `version`; a stale write returns 409 with the current item,
   keeps changed fields and shows the current values for retry. Untouched fields adopt the server's values even
@@ -277,11 +261,11 @@ format is a `422` that names the problem.
   Incoming edits preserve open forms, focus and caret.
   If another editor Creates or Dismisses an item with unsaved edits, both clients keep a closed card with
   their name, your draft and **Copy** and **Close** buttons until you copy or close it.
-  The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
+  The web views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
   every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
   a meeting removes its sessions. Participant grants end only when no remaining source meeting permits access; task parties and readers
-  retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
+  retain their independent task access.
   If Save partly succeeds, Create replays any uncertain item upload with its original request and key, then
   uses the server item and adopts its existing task if another editor already sent it. Local edits stay in
   the closed card with **Copy** and **Close**. Retrying Save recovers without creating another task.
@@ -673,8 +657,3 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.
 - `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
   `TICO_PROCESSING_OPERATORS` still names the computers that may run importers.
-
-Recorder Save replays interrupted item uploads before applying current local fields with the item's version.
-If another teammate has changed or sent the item, the Recorder keeps the local draft with Copy and Close.
-Tasks added after Save go onto the meeting before Create sends them. Link proposals use Link, and queued task
-links are sent last in batches of 20; an interrupted Save resumes the remaining batches.

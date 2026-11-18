@@ -36,7 +36,7 @@ AUDIO_SOURCES = ("microphone", "screen_share", "screen_share_audio")
 SAMPLE_RATE = 16000
 TWIRP_TIMEOUT = 8
 TRANSCRIBE_TIMEOUT = 120
-TRANSCRIBE_MODEL = "elevenlabs/scribe-v2"  # the Recorder's default speech-to-text model (recorder/src/settings.rs)
+TRANSCRIBE_MODEL = "elevenlabs/scribe-v2"  # the default speech-to-text model on the Gateway
 CONNECT_TIMEOUT = 15  # the recorder's join, and its leave
 RECORDER_PREFIX = "tico-recorder-"  # the recorder's identity is this and the call id, never a person's
 
@@ -319,7 +319,7 @@ def wav_bytes(pcm, rate=SAMPLE_RATE):
 
 
 def transcribe(base, key, audio, *, model=TRANSCRIBE_MODEL, language=""):
-    """The text of one WAV clip, through the Gateway's speech-to-text (the Recorder's path, clients/gateway.py relay).
+    """The text of one WAV clip, through the Gateway's speech-to-text (clients/gateway.py relay).
     Raises MediaUnavailable when the Gateway did not answer or refused, so the caller can keep the call going."""
     from clients import gateway as G
 

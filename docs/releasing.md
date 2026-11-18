@@ -145,7 +145,7 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
 - **The issue.** Each candidate the canary takes gets an open issue, `Release vX.Y.Z: awaiting approval`, labelled
   `release-approval`. Its body is the release notes, built by `scripts/release_notes.py`: every pull request merged
   since the release stable runs. High-risk pull requests come first, then user-facing ones (`ui/`, `clients/`, `app/`),
-  then backend ones (`backend/`, `runner-rs/`, `recorder/`, `templates/`), then the internal ones, one line each. The
+  then backend ones (`backend/`, `runner-rs/`, `templates/`), then the internal ones, one line each. The
   first line counts the blocks by group. A block gives the pull request's Spec, its demo steps (written for the Acme
   Lights demo company) and its risk when it has them, and says so in one line when it has none of the three. It also
   gives its reviews and receipts, and the areas it touches. Its checks show only when one failed or none ran.
@@ -368,8 +368,7 @@ runs and prints. It names what only CI runs (Rust conformance). A change that re
 the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
 VM against the pushed head instead. Mark a pull request ready once:
 each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
-lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
-the recorder changed. A ready pull request from this repository also runs the tests its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
+lint, the generated UI types, the runner wire contract, the migration names, and shell scripts and workflows. A ready pull request from this repository also runs the tests its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
 only. The merge queue runs the tests again: once per queue group,
 it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
@@ -392,7 +391,7 @@ what a slow content sweep reads runs that sweep in the contracts job (rule 7, `C
 `clients/commands/`, `clients/cli_spec.py`, the CLI code or `e2e/cli/` run `test_e2e_cli.py` with every command
 (`TICO_E2E_CLI_ALL=1`, as the release gate runs it), and `templates/` or `clients/catalog.py` run `test_e2e_templates.py`.
 The Rust and desktop checks run on a ready pull request and in the queue when a
-crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
+crate or `app/` changed. A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
@@ -443,8 +442,8 @@ checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, and every other
-  job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
-  the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
+  job a queue group runs under the same conditions (the Caddy image, Rust lint, and the desktop app
+  when the change reaches them), on each push, so a failure shows before the change is enqueued.
   The plan decides which of those the change reaches, so a job it does not reach starts no VM. The timing receipt,
   flake artifact and merge commit checks are queue-only. A failed leg cancels the run, so `checks` fails within minutes.
   A fork's pull request runs none of them.
@@ -733,7 +732,7 @@ rebuilds and pushes one small layer per image.
 ## Desktop apps follow the release
 
 The desktop app never holds up the server release. Only `validated`, `runner-changes` and `release` run before core
-publication; the Mac binaries, desktop, recorder and company build branches start afterwards so their fan-out cannot
+publication; the Mac binaries, desktop and company build branches start afterwards so their fan-out cannot
 compete with publication for job slots. A manual rebuild of an already published tag still runs those branches when
 `release` is skipped. The Release workflow compares the tag with the previous release
 tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
@@ -746,12 +745,7 @@ workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The ap
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
 
 The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
-`app/src/testdata/` and Markdown docs anywhere under `app/`. Recorder follows the same carry-forward rule with
-`recorder/`, `scripts/app_release.py` and `.github/workflows/recorder.yml` as its inputs and
-`recorder-latest.json` as its manifest. Recorder tests (`recorder/tests/` and the `cfg(test)`-only
-`src/network_tests.rs`, `src/stream_tests.rs` and `src/app/tests.rs`), `recorder/bench/`, `recorder/ui/preview/`
-and Markdown docs anywhere under `recorder/` do not trigger an update. `recorder/CHANGES.md` still counts because
-it supplies updater notes. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
+`app/src/testdata/` and Markdown docs anywhere under `app/`. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
 or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
 override also forces a build.
 

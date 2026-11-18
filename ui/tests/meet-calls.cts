@@ -1,6 +1,6 @@
 // Google Meet calls in a thread (docs/dev/meet-calls-contract.md): the header's phone starts a Meet in a new tab (its
-// link carries the viewer's Google account) and opens the Tico Recorder on a Mac that has it; the call card live (faces,
-// a clock, the recording dot, Join, End for its starter) and ended (its length, Transcript, or the missed mark when nobody
+// link carries the viewer's Google account); the call card live (faces,
+// a clock, Join, End for its starter) and ended (its length, Transcript, or the missed mark when nobody
 // was seen); a Meet nothing reports on showing no count and no faces; the header's green pill; the rail's green phone
 // coming and going with the call; the ring (a card at the top right, × remembered across a reload, gone when the call
 // ends, Join opening the Meet) and on a phone the sheet at 390px, and a push link's `?call=` showing it without a sound;
@@ -13,8 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
-declare const window: Window & typeof globalThis & {__chirps: number; __native: [string, unknown][]; __order: string[];
-  ticoNative?: (name: string) => {postMessage(m: unknown): unknown}; ticoNativeFeatures?: string[]};
+declare const window: Window & typeof globalThis & {__chirps: number; __order: string[]};
 
 type Page = import('playwright').Page;
 type Call = Record<string, unknown> & {id: string; thread_id: string; state: string; ring: boolean};
@@ -37,12 +36,11 @@ const msg = (id: string, seq: number, from: string, body: string, thread = 't-pl
 const meetCall = (id: string, thread: string, connector: string, extra: Record<string, unknown> = {}): Call => ({id, thread_id: thread, title: 'Call',
   state: 'live', connector, provider: 'google_meet', meet_uri: MEET, join_url: MEET + '?authuser=ana@acme.example', live_count: 0, status_source: null,
   seen_at: null, started_at: at(30), ended_at: null, duration_s: null, ring: false, card_message_id: 'card-' + id, transcript_message_id: null,
-  recorder: {source: null, installed: true}, participants: [{actor: connector, joined_at: at(30), left_at: null, removed_at: null, in_call: 0}], ...extra});
+  participants: [{actor: connector, joined_at: at(30), left_at: null, removed_at: null, in_call: 0}], ...extra});
 
-// `native`: the desktop app's bridge (app/src/bridge.rs), recording what the page asks of it.
 // `mode`: what the stand-in server says: the providers it lists (null: none), what Start makes, and a Join that fails.
 type Mode = {providers: string[] | null; start: 'google_meet' | 'tico' | 'fail'; joinFails: boolean};
-async function open(browser: import('playwright').Browser, {phone = false, native = false}: {phone?: boolean; native?: boolean} = {}) {
+async function open(browser: import('playwright').Browser, {phone = false}: {phone?: boolean} = {}) {
   const mode: Mode = {providers: ['google_meet', 'tico'], start: 'google_meet', joinFails: false};
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -69,11 +67,6 @@ async function open(browser: import('playwright').Browser, {phone = false, nativ
     window.AudioContext = class extends Real {
       override createOscillator() { window.__chirps++; return super.createOscillator(); }
     } as typeof AudioContext;
-  });
-  if (native) await context.addInitScript(() => {
-    window.__native = [];
-    window.ticoNativeFeatures = ['openRecorder', 'hasRecorder', 'recordCall'];
-    window.ticoNative = (name: string) => ({postMessage: (m: unknown) => { window.__native.push([name, m]); return true; }});
   });
   // The Meet tab lands on a stand-in for Google's page.
   await context.route('https://meet.google.com/**', route => route.fulfill({contentType: 'text/html', body: '<title>Meet</title>'}));
@@ -137,7 +130,7 @@ async function open(browser: import('playwright').Browser, {phone = false, nativ
         if (mode.joinFails) return json({error: {code: 'call_ended'}}, 409);
         seen.joins.push(c.id); c.ring = false; return json({call: c, url: c.join_url});
       }
-      // Ended before Google or a Recorder saw anyone: no length.
+      // Ended before Google saw anyone: no length.
       if (call[2]) { Object.assign(c, {state: 'ended', ended_at: at(0), duration_s: null}); return json(c); }
       return json(c);
     }
@@ -202,15 +195,13 @@ let browser: import('playwright').Browser | null = null;
     }), 'members, phone, menu');
     await themed(page, 'header-idle');
 
-    // One tap: a tab opens at once and goes to the Meet as Ana's Google account; the Recorder is asked to record it.
+    // One tap: a tab opens at once and goes to the Meet as Ana's Google account.
     const tabOpened = context.waitForEvent('page');
     await start.click();
     const tab = await tabOpened;
     await tab.waitForURL(u => u.href.startsWith(MEET));
     assert.equal(new URL(tab.url()).searchParams.get('authuser'), 'ana@acme.example');
     assert.deepEqual(seen.starts, [{provider: 'auto'}]);
-    const recorder = await page.waitForFunction(() => document.querySelector<HTMLIFrameElement>('iframe.call-recorder-link')?.src || '');
-    assert.equal(await recorder.jsonValue(), 'tico-recorder://record?server=' + encodeURIComponent('https://tico-ui.test') + '&call=c1');
     await tab.close();
     assert.deepEqual(await page.evaluate(() => window.__order), ['open ', 'POST /api/v2/threads/t-plan/calls'], 'a blank tab first, in the click');
     // The header is the green pill. Nothing reports on the Meet yet, so no count: Ana opening it is not Ana being in it.
@@ -227,13 +218,12 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await card.evaluate(e => e.classList.contains('on')), true);
     assert.equal(await card.locator('.call-card-ppl, .call-card-n').count(), 0, 'no guessed faces or count');
     assert.equal(await card.locator('.call-card-end').count(), 1);
-    assert.equal(await card.locator('.call-rec').count(), 0, 'nobody records it yet');
     await themed(page, 'card-blind');
-    // Google sees Bea join and Ana's Recorder takes the call: two faces, the count, the red dot.
-    Object.assign(c1, {status_source: 'google', live_count: 2, seen_at: at(252), recorder: {source: 'human:ana', installed: true},
+    // Google sees Bea and Ana join: two faces, the count.
+    Object.assign(c1, {status_source: 'google', live_count: 2, seen_at: at(252),
       participants: [{actor: 'human:ana', joined_at: at(252), in_call: 1}, {actor: 'human:bea', joined_at: at(200), in_call: 1}]});
     callEvent(sse, 'call.updated', c1);
-    await card.locator('.call-rec[title="Recording"]').waitFor();
+    await card.locator('.call-card-ppl > span').nth(1).waitFor();
     assert.equal(await card.locator('.call-card-ppl > span').count(), 2);
     // A Tico Meet call has no status source and still counts who joined.
     assert.deepEqual(await page.evaluate(() => {
@@ -356,19 +346,6 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.evaluate(() => RING_SOUND.timer), 0, 'no ring for a link');
     await page.locator('.thv-head .thv-call.on').waitFor();
     await themed(page, 'header-live', true);
-    assert.deepEqual(seen.errors, []);
-    await context.close();
-  }
-  // ---- the desktop app: the Recorder is asked to record the call through its bridge, never by a link
-  {
-    const {context, page, seen} = await open(browser, {native: true});
-    await page.goto('https://tico-ui.test/#/thread/t-plan');
-    const tabOpened = context.waitForEvent('page');
-    await page.locator('.thv-head .thv-call[data-call="start"]').click();
-    await (await tabOpened).waitForURL(u => u.href.startsWith(MEET));
-    await page.waitForFunction(() => window.__native.some(([name]) => name === 'recordCall'));
-    assert.deepEqual(await page.evaluate(() => window.__native.filter(([name]) => name === 'recordCall' || name === 'openRecorder')), [['recordCall', {call: 'c1'}]]);
-    assert.equal(await page.locator('iframe.call-recorder-link').count(), 0);
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

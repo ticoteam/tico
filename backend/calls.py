@@ -2,8 +2,7 @@
 
 A call is a live meeting (backend/live_meetings.py) that its thread governs, whichever provider runs it. A Google Meet
 call (`provider` google_meet) is a Meet space Tico makes as the caller (backend/google_meet.py, the Workspace key's Meet
-scope); Google runs the media, the sweep polls Google for who is in it, and a person's Tico Recorder, when one is the
-call's recording source, writes its transcript into the call's live meeting. Everything below about LiveKit, tokens and
+scope); Google runs the media and the sweep polls Google for who is in it. Everything below about LiveKit, tokens and
 the server's recorder is Tico Meet's (`provider` tico) only.
 
 For a Tico Meet call: The thread's audience decides who may join
@@ -29,7 +28,7 @@ import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Literal
+from typing import Literal
 
 from fastapi import Request
 from pydantic import Field
@@ -43,8 +42,6 @@ from . import (
     google_meet,
     google_workspace,
     live_meetings,
-    recorder_installs,
-    recorder_relay,
     teammate_access,
     threads,
 )
@@ -93,9 +90,8 @@ QUIET_SECONDS = 600
 POLL_WORKERS = 4
 POLL_BUDGET_SECONDS = 5
 POLL_SKIP_MAX = 16
-PRESENCE_MAX = 100  # the names one presence report may carry
 RINGING_LIMIT = 20  # the calls `GET /api/v2/calls/ringing` answers with at most
-CHANGE_FIELDS = ("live_count", "status_source", "recorder_actor", "meet_seen_at")  # with in_call: call.updated
+CHANGE_FIELDS = ("live_count", "status_source", "meet_seen_at")  # with in_call: call.updated
 
 # The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
 AUTH = None
@@ -181,10 +177,6 @@ class StartCall(Contract):
     title: str = Field(default="Call", min_length=1, max_length=200)
     speak_replies: bool = False  # a bot's reply read aloud: refused until the Gateway has text-to-speech
     provider: Literal["auto", "google_meet", "tico"] = "auto"
-
-
-class Presence(Contract):
-    names: list[Annotated[str, Field(max_length=200)]] = Field(max_length=PRESENCE_MAX)
 
 
 class CallBots(Contract):
@@ -278,14 +270,6 @@ def _spoken(name):
     return re.sub(r"\s+", " ", str(name or "")).strip().casefold()
 
 
-def _recorder_recent(c, who):
-    """Whether the viewer has a Tico Recorder seen in the last 30 days (recorder_installs.mine's `recent`), without
-    starting the release feed check `mine` would."""
-    person = H.actor_id(who.actor)
-    _version, at = recorder_installs._newest(c, [person]).get(person, ("", ""))
-    return bool(at) and recorder_installs._recent(at)
-
-
 class Calls:
     """The call operations. Writes run inside the caller's transaction (`c`) and record their audit row and threads change
     together with the change; the calls that reach LiveKit or the Gateway run outside any transaction."""
@@ -365,15 +349,13 @@ class Calls:
             return bool(participant["in_call"]) and row["state"] == "live"
         return row["state"] == "live" and participant["left_at"] is None and participant["removed_at"] is None
 
-    def provider_fields(self, c, row, who, *, address=None, installed=None):
+    def provider_fields(self, c, row, who, *, address=None):
         """What a call view adds for its provider and for this viewer (docs/dev/meet-calls-contract.md): the Meet link
-        as they open it, the status source's count, whether the call rings them, its messages and its recording source.
-        A list passes the viewer's `address` and `installed` once for all its rows."""
+        as they open it, the status source's count, whether the call rings them and its messages. A list passes the
+        viewer's `address` once for all its rows."""
         google = _google(row)
         if google and address is None:
             address = google_workspace.google_address(c, who.actor) or ""
-        if installed is None:
-            installed = _recorder_recent(c, who)
         if google:
             live_count = int(row["live_count"] or 0) if row["state"] == "live" else 0
         else:
@@ -384,9 +366,6 @@ class Calls:
         joined = c.execute(
             "SELECT 1 FROM call_participants WHERE call_id=? AND actor=?", (row["id"], who.actor)
         ).fetchone()
-        source = row["recorder_actor"]
-        if source and source != who.actor and not self._sees(c, who, source):
-            source = None
         return {
             "provider": row["provider"],
             "meet_uri": row["meet_uri"],
@@ -398,7 +377,6 @@ class Calls:
             "ring": row["state"] == "live" and who.actor in _ring_list(row) and not joined,
             "card_message_id": row["card_message_id"],
             "transcript_message_id": row["transcript_message_id"],
-            "recorder": {"source": source, "installed": bool(installed)},
         }
 
     def _sees(self, c, who, target):
@@ -435,8 +413,7 @@ class Calls:
 
     def _changed(self, c, row, before, in_call_before):
         """A `call.updated` change when what readers see of the call's status moved: its count, who is in it, its status
-        source, its recording source or when it was first seen. No audit row: these are what Google or a Recorder
-        reported, not anyone's act."""
+        source or when it was first seen. No audit row: these are what Google reported, not anyone's act."""
         after = _call(c, row["id"])
         in_call_after = self._in_call_set(c, row["id"])
         if any(before[name] != after[name] for name in CHANGE_FIELDS) or in_call_before != in_call_after:
@@ -556,8 +533,8 @@ class Calls:
         meeting_id, call_id, stamp = str(uuid.uuid4()), str(uuid.uuid4()), H.now()
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,reply_cap,"
-            "threshold,created_at,updated_at,started_at,visibility,client,meeting_model,thread_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "threshold,created_at,updated_at,started_at,visibility,meeting_model,thread_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 meeting_id,
                 who.actor,
@@ -572,7 +549,6 @@ class Calls:
                 stamp,
                 stamp,
                 "private",
-                None,
                 None,
                 thread_id,
             ),
@@ -968,13 +944,6 @@ class Calls:
         if row["finalized_at"]:
             return True
         if row["wrapped_up_at"] is None:
-            if (
-                _google(row)
-                and row["recorder_actor"]
-                and row["ended_at"]
-                and _seconds_since(row["ended_at"]) < live_meetings.RECORDER_TAIL_SECONDS
-            ):
-                return False  # the Recorder's last chunks may still be on their way (live_meetings.recorder_tail)
             if self.media is not None and not _google(row):
                 try:
                     self.media.stop_recorder(call_id)
@@ -1017,7 +986,7 @@ class Calls:
     def post_transcript(self, call_id):
         """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only. A
         thread that refuses the post leaves it unposted: that refusal is a hold the connector sees, and it is final. A
-        Google Meet call has a transcript only when a Recorder wrote one: with none, nothing is posted."""
+        Google Meet call has a transcript only when one was written into its meeting: with none, nothing is posted."""
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
@@ -1068,7 +1037,7 @@ class Calls:
                 )
             ]
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
-            model = recorder_relay.chat_model(c, self.store.settings)
+            model = call_items.model(c, self.store.settings)
         if not rows or not key:
             return True
         try:
@@ -1257,7 +1226,7 @@ class Calls:
                 {"bot": slug, "reason": "attacher_lost_thread"},
             )
 
-    # --- Google Meet: status from Google (or the Recorder), the recording source, and ending the conference
+    # --- Google Meet: status from Google, and ending the conference
 
     def _mint_meet(self, c, actor):
         """A Meet access token for `actor`'s Workspace mailbox. Raises google_meet.MeetUnavailable: `refused` when Meet is
@@ -1370,16 +1339,14 @@ class Calls:
         A conference with nobody listed in it is nobody in the call (Google opens one for the pre-join page), and a call
         may span several conferences (each rejoin after everyone left makes a new one). A call someone was seen in ends
         `meet_ended` once good reads have shown nobody for EMPTY_SECONDS (`meet_empty_at`, the first of them); one
-        nobody was seen in within NO_ANSWER_SECONDS of its start ends `no_answer`. Google refusing leaves the status to
-        the Recorder, or to nothing, and a call with no status from Google ends `stale` STALE_SECONDS after it
-        started. Returns the end reason, or None."""
+        nobody was seen in within NO_ANSWER_SECONDS of its start ends `no_answer`. Google refusing clears the status,
+        and a call with no status from Google ends `stale` STALE_SECONDS after it started. Returns the end reason, or
+        None."""
         ended = None
         with self.store.transaction() as c:
             row = _call(c, call_id)
             if not _google(row) or row["state"] != "live":
                 return None
-            self._drop_lost_source(c, row)
-            row = _call(c, call_id)
             if seen["ok"]:
                 people = seen["people"]
                 self._set_status(c, row, "google", people, seen["conference"], index)
@@ -1405,18 +1372,6 @@ class Calls:
             if ended:
                 self.finish(c, call_id, ended)
         return ended
-
-    def _drop_lost_source(self, c, row):
-        """A recording source who can no longer read the thread is no longer the source."""
-        if row["recorder_actor"] and not readable(c, row["recorder_actor"], row["thread_id"]):
-            before, in_call = _call(c, row["id"]), self._in_call_set(c, row["id"])
-            c.execute(
-                "UPDATE calls SET recorder_actor=NULL,recorder_claimed_at=NULL,status_source=CASE WHEN "
-                "status_source='recorder' THEN NULL ELSE status_source END,live_count=CASE WHEN "
-                "status_source='recorder' THEN 0 ELSE live_count END,updated_at=? WHERE id=?",
-                (H.now(), row["id"]),
-            )
-            self._changed(c, row, before, in_call)
 
     @staticmethod
     def _people_index(c):
@@ -1491,104 +1446,6 @@ class Calls:
             ),
         )
         self._changed(c, row, before, in_call_before)
-
-    def presence(self, c, who, call_id, names):
-        """The recording source's Recorder says who it sees in the Meet window. Kept only while Google gives no status:
-        Google's own answer wins."""
-        row = self._readable_live(c, who, call_id)
-        if row["recorder_actor"] != who.actor:
-            raise Problem("forbidden", "Only the Recorder that records this call reports who is in it", 403)
-        if row["status_source"] != "google":
-            self._set_status(c, row, "recorder", [{"name": name} for name in names], None)
-        return self.view(c, call_id, who)
-
-    def _readable_live(self, c, who, call_id):
-        human_only(who)
-        self.auth.domain(who)
-        row = _call(c, call_id)
-        if not readable(c, who.actor, row["thread_id"]):
-            raise Problem("not_found", "Call not found", 404)
-        if not _google(row):
-            raise Problem("not_google_meet", "This call is a Tico Meet call: its server records it", 409)
-        if row["state"] != "live":
-            raise Problem("call_ended", "This call has ended", 409)
-        return row
-
-    def _source_answer(self, c, who, call_id):
-        row = _call(c, call_id)
-        holder = row["recorder_actor"]
-        shown = holder if holder and (holder == who.actor or self._sees(c, who, holder)) else None
-        seq = c.execute("SELECT seq FROM live_meetings WHERE id=?", (row["live_meeting_id"],)).fetchone()
-        return {
-            "source": holder == who.actor,
-            "meeting_id": row["live_meeting_id"],
-            "title": row["title"],
-            "source_actor": shown,
-            # A Recorder numbers its chunks from 1, so it records only into a meeting nobody has written to yet.
-            "has_transcript": bool(seq and seq[0]),
-        }
-
-    def claim_recorder(self, c, who, call_id):
-        """A person who can read the thread asks for their Recorder to be the call's recording source. The first claim
-        wins and its holder keeps it; anyone else is told who has it. Only someone in the call may (_in_call_or_thread).
-        """
-        row = self._readable_live(c, who, call_id)
-        if not self._in_call_or_thread(c, row, who.actor):
-            raise Problem("not_in_call", "Only someone in this call can record it", 403)
-        if row["recorder_actor"] is None:
-            before, in_call = dict(row), self._in_call_set(c, call_id)
-            stamp = H.now()
-            c.execute(
-                "UPDATE calls SET recorder_actor=?,recorder_claimed_at=?,updated_at=? WHERE id=? "
-                "AND recorder_actor IS NULL",
-                (who.actor, stamp, stamp, call_id),
-            )
-            c.execute(
-                "INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], who.actor, stamp)
-            )
-            audit_log.write(c, who.actor, f"call:{call_id}", None, {"kind": "call.recorder_claimed"})
-            self._changed(c, row, before, in_call)
-        return self._source_answer(c, who, call_id)
-
-    @staticmethod
-    def _in_call_or_thread(c, row, actor):
-        """Whether `actor` is in the call, for claiming its recording source: its connector, someone with a place in it
-        that was not taken away (they opened it from Tico, or a status source saw them in it), or one of the thread's
-        own people (its members; a DM's or a group chat's people). Reading the thread alone, as anyone can a company
-        thread, is not being in the call."""
-        if actor == row["connector_actor"]:
-            return True
-        if c.execute(
-            "SELECT 1 FROM call_participants WHERE call_id=? AND actor=? AND removed_at IS NULL", (row["id"], actor)
-        ).fetchone():
-            return True
-        root = threads.root_of(c, threads.thread_row(c, row["thread_id"]))
-        return actor in threads._dm_members(c, root)
-
-    def release_recorder(self, c, who, call_id):
-        """The holder stops being the recording source; the Recorder's status goes with it."""
-        human_only(who)
-        self.auth.domain(who)
-        row = _call(c, call_id)
-        if not readable(c, who.actor, row["thread_id"]):
-            raise Problem("not_found", "Call not found", 404)
-        if row["recorder_actor"] and row["recorder_actor"] != who.actor:
-            raise Problem(
-                "forbidden", "Only the person whose Recorder records this call can stop it being the source", 403
-            )
-        if row["recorder_actor"] == who.actor:
-            before, in_call = dict(row), self._in_call_set(c, call_id)
-            c.execute(
-                "UPDATE calls SET recorder_actor=NULL,recorder_claimed_at=NULL,updated_at=? WHERE id=?",
-                (H.now(), call_id),
-            )
-            if row["status_source"] == "recorder" and row["state"] == "live":
-                # An ended call keeps its source: it says something watched the call (a missed call, not an unknown one).
-                c.execute("UPDATE calls SET status_source=NULL,live_count=0 WHERE id=?", (call_id,))
-                c.execute("UPDATE call_participants SET in_call=0 WHERE call_id=?", (call_id,))
-            audit_log.write(c, who.actor, f"call:{call_id}", None, {"kind": "call.recorder_released"})
-            self._changed(c, row, before, in_call)
-        return self._source_answer(c, who, call_id)
 
     def ringing(self, c, who):
         """The live calls ringing `who` now, in threads they can still read, newest first."""
@@ -1734,9 +1591,8 @@ def install_calls(app, store, auth, write):
             threads.require(c, threads.viewer(auth, who), thread_id)
             offered = calls.providers(c, who)
             address = google_workspace.google_address(c, who.actor) or ""
-            installed = _recorder_recent(c, who)
             found = [
-                {**_summary(r), **calls.provider_fields(c, r, who, address=address, installed=installed)}
+                {**_summary(r), **calls.provider_fields(c, r, who, address=address)}
                 for r in c.execute(
                     "SELECT * FROM calls WHERE thread_id=? AND (?='' OR started_at<? OR (started_at=? AND id<?)) "
                     "ORDER BY started_at DESC, id DESC LIMIT ?",
@@ -1922,42 +1778,3 @@ def install_calls(app, store, auth, write):
     def detach_call_bot(request: Request, call_id: str, bot: str, body: Empty):
         who = request.state.identity
         return write(request, body, lambda c: calls.detach_bot(c, who, call_id, bot))
-
-    @app.post(
-        "/api/v2/calls/{call_id}/presence",
-        **api_v2(
-            "Calls",
-            "reportCallPresence",
-            "The recording source's Recorder reports the names in the Meet; kept only while Google gives no status",
-            "Call",
-        ),
-    )
-    def call_presence(request: Request, call_id: str, body: Presence):
-        """The recording source's Recorder reports the names in the Meet window; kept only while Google gives none."""
-        who = request.state.identity
-        return write(request, body, lambda c: calls.presence(c, who, call_id, body.names))
-
-    @app.post(
-        "/api/v2/calls/{call_id}/recorder",
-        **api_v2(
-            "Calls",
-            "claimCallRecorder",
-            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins, if you are in the call",
-            "CallRecorderSource",
-        ),
-    )
-    def claim_call_recorder(request: Request, call_id: str, body: Empty):
-        """Make the caller's Tico Recorder the call's recording source: the first claim wins and its holder keeps it."""
-        who = request.state.identity
-        return write(request, body, lambda c: calls.claim_recorder(c, who, call_id))
-
-    @app.delete(
-        "/api/v2/calls/{call_id}/recorder",
-        **api_v2(
-            "Calls", "releaseCallRecorder", "Stop your Recorder being the call's recording source", "CallRecorderSource"
-        ),
-    )
-    def release_call_recorder(request: Request, call_id: str, body: Empty):
-        """The holder's Recorder stops being the call's recording source."""
-        who = request.state.identity
-        return write(request, body, lambda c: calls.release_recorder(c, who, call_id))

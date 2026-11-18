@@ -44,7 +44,6 @@ interface CalEventsAnswer {
   from: string; to: string; calendars: CalView[]; occurrences: CalOccurrence[];
   month_counts?: CalMonthCount[]; errors?: {ref: string; reason: string}[];
 }
-interface CalSettings { time_zone?: string | null; work_starts?: string | null; work_ends?: string | null; work_days?: string | null; record_on_join?: boolean; }
 
 const CAL_ROUTE = '#/calendar';
 const CAL_API = '/v2/calendar';
@@ -71,25 +70,9 @@ const calClock = (d: Date) => CAL_H12 ? `${d.getHours() % 12 || 12}:${calPad(d.g
 const calRange = (o: CalOccurrence) => o.all_day ? '' : `${calClock(calWhen(o.start))}–${calClock(calWhen(o.end))}`;
 
 // ----------------------------------------------------------------- Join
-// Joining opens the call in a new tab and, on a Mac, Tico Recorder on it (decision 15), unless the person turned that off
-// in the page's ⋯ menu. A browser follows the Recorder's link without leaving the page; with no Recorder installed nothing
-// happens and the call is open anyway. The link is opened as a Meet call's is (ui/app/thread-call.ts recorderLinkOpen).
-const CAL_RECORD_KEY = 'tico.calendar.record';
-function calRecordOn(): boolean { try { return localStorage.getItem(CAL_RECORD_KEY) !== 'off'; } catch { return true; } }
-function calRecordSet(on: boolean): void { try { localStorage.setItem(CAL_RECORD_KEY, on ? 'on' : 'off'); } catch { /* not kept */ } }
-function calRecorder(o: CalOccurrence): void {
-  if (!calRecordOn() || !recorderMac()) return;
-  // The desktop app opens the Recorder itself (`recordEvent`, app/src/bridge.rs, on the page's own org): a page's hidden
-  // frame cannot follow the link there. An app without `recordEvent` opens nothing, as it does for a call (thread-call.ts).
-  if (window.ticoNative) {
-    if (nativeHas('recordEvent')) try { void Promise.resolve(nativeHandler('recordEvent')?.postMessage({event: o.occurrence_id, title: o.title})).catch(() => {}); } catch {}
-    return;
-  }
-  recorderLinkOpen(`tico-recorder://record?server=${encodeURIComponent(location.origin)}&title=${encodeURIComponent(o.title)}&event=${encodeURIComponent(o.occurrence_id)}`, 'cal-recorder-link');
-}
-// A Join link: the call itself, so a new tab opens it as any link would; the click also starts the Recorder.
+// A Join link: the call itself, so a new tab opens it as any link would.
 const calJoinAttrs = (o: CalOccurrence) => o.meeting_url
-  ? `href="${esc(o.meeting_url)}" target="_blank" rel="noopener noreferrer" data-cal-join="${esc(o.occurrence_id)}"`
+  ? `href="${esc(o.meeting_url)}" target="_blank" rel="noopener noreferrer"`
   : `href="${esc(calOpenHref(o))}"`;
 // The page, on the event's day with its card open.
 const calOpenHref = (o: CalOccurrence) => `${CAL_ROUTE}?date=${calDay(calWhen(o.start))}&open=${encodeURIComponent(o.occurrence_id)}`;

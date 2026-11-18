@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
 const row = (id: string, title: string, owner: string, review_state: string, privateMeeting = false) => ({id, title, owner: owner, review_state, private: privateMeeting,
-  kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
+  kind: 'meeting', status: 'done', source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
   notes: 'Review the plan and next steps.', turns: [{speaker: 'Sam', start_ms: 0, text: 'The plan is ready.'}],
   participants: [{name: 'Sam'}], outbox: {doc: [], task: [], feature: []}});
 async function open(browser: Browser, viewport: {width: number; height: number}, scheme: 'light' | 'dark', role = 'owner') {
@@ -106,7 +106,7 @@ async function shot(page: Page, name: string) {
         await page.locator('[data-note-row=two] .note-title').click();
         await page.locator('#meet-review-private').waitFor();
         assert.equal(await page.locator('#meet-review-private').inputValue(), 'private');
-        assert.match(await page.locator('#notes-detail').innerText(), /Tico Recorder/);
+        assert.match(await page.locator('#notes-detail').innerText(), /Granola/);
         assert.equal(await page.locator('#meet-share, #meet-sections').count(), 0, 'Pending has no Share or task controls');
         assert.match(await page.locator('#notes-detail').innerText(), /The plan is ready/);
         await shot(page, `${size}-review-${scheme}`);

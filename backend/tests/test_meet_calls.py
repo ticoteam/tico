@@ -1,6 +1,6 @@
 """Google Meet calls in threads (backend/calls.py, backend/google_meet.py, docs/meet.md): the provider a start picks,
-the space it makes once, who it rings, the call view each viewer gets, the status Google's polls give, the Recorder
-as the recording source, and the privacy of all of it. Google is never asked: `google_meet.meet_call` and the
+the space it makes once, who it rings, the call view each viewer gets, the status Google's polls give, and the
+privacy of all of it. Google is never asked: `google_meet.meet_call` and the
 Workspace token mint are replaced. Every name is synthetic (Acme, acme.example)."""
 
 import json
@@ -226,18 +226,12 @@ def test_a_dm_rings_the_other_person_never_a_bot_and_a_big_thread_rings_nobody(g
 # ----------------------------------------------------------------------------- privacy
 
 
-def test_a_non_reader_cannot_see_ring_claim_or_report_on_a_call_or_its_mark(google, meet):
+def test_a_non_reader_cannot_see_ring_or_join_a_call_or_its_mark(google, meet):
     cid = thread(meet)
     call = start(meet, cid)
-    for method, path in (
-        ("get", f"calls/{call['id']}"),
-        ("post", f"calls/{call['id']}/recorder"),
-        ("post", f"calls/{call['id']}/presence"),
-        ("post", f"calls/{call['id']}/join"),
-    ):
-        body = {"names": ["Cara Chen"]} if path.endswith("presence") else {}
+    for method, path in (("get", f"calls/{call['id']}"), ("post", f"calls/{call['id']}/join")):
         r = getattr(meet, method)(
-            "/api/v2/" + path, **({} if method == "get" else {"json": body}), headers=headers("cara-test")
+            "/api/v2/" + path, **({} if method == "get" else {"json": {}}), headers=headers("cara-test")
         )
         assert r.status_code == 404, (path, r.text)
     assert get(meet, "calls/ringing", token="cara-test")["calls"] == []
@@ -319,7 +313,7 @@ def test_a_drop_and_rejoin_within_a_minute_keeps_the_call_and_a_minute_empty_end
     assert 505 <= view["duration_s"] <= 515  # first seen to last seen, across conferences: not the empty minute
     assert locked(google, space)  # the sweep's end locks the space too
     texts = thread_texts(meet, cid)
-    assert not any(text.startswith("Call transcript") for text in texts)  # no Recorder wrote one
+    assert not any(text.startswith("Call transcript") for text in texts)  # nobody wrote one
 
 
 def test_nobody_seen_in_two_minutes_is_no_answer_even_with_a_conference_open(google, meet):
@@ -368,64 +362,6 @@ def test_a_space_google_will_not_lock_still_ends_the_call(google, meet, caplog):
     assert ended["state"] == "ended" and ended["end_reason"] == "ended_by_connector"
     assert any(c[0] == "PATCH" for c in google.calls)
     assert "was not locked" in caplog.text
-
-
-# ----------------------------------------------------------------------------- the Recorder
-
-
-def test_the_first_recorder_claim_wins_and_only_its_holder_writes_the_transcript(google, meet):
-    cid = thread(meet)
-    call = start(meet, cid)
-    meeting = call["meeting_id"]
-    claim = post(meet, f"calls/{call['id']}/recorder", {}, token="ben-test")
-    assert claim == {
-        "source": True,
-        "meeting_id": meeting,
-        "title": call["title"],
-        "source_actor": "human:ben",
-        "has_transcript": False,
-    }
-    assert post(meet, f"calls/{call['id']}/recorder", {}, token="ben-test")["source"] is True  # kept by its holder
-    second = post(meet, f"calls/{call['id']}/recorder", {})
-    assert second["source"] is False and second["source_actor"] == "human:ben"
-    assert get(meet, f"live-meetings/{meeting}", token="ben-test")["state"] == "live"  # the Recorder's end check
-    chunk = {"chunks": [{"seq": 1, "speaker": "Ben", "start_ms": 0, "end_ms": 900, "text": "We ship Friday"}]}
-    post(meet, f"live-meetings/{meeting}/chunks", chunk, token="ben-test")
-    correction = {"revision": 2, "speaker": "Ben", "start_ms": 0, "end_ms": 900, "text": "We ship on Friday"}
-    post(meet, f"live-meetings/{meeting}/chunks/1/corrections", correction, token="ben-test")
-    r = meet.post(f"/api/v2/live-meetings/{meeting}/control", json={"action": "pause"}, headers=headers("ben-test"))
-    assert r.status_code == 403  # the source writes the transcript and controls nothing else
-    assert post(meet, f"calls/{call['id']}/recorder", {})["has_transcript"] is True
-    r = meet.request("DELETE", f"/api/v2/calls/{call['id']}/recorder", json={}, headers=headers("ana-test"))
-    assert r.status_code == 403
-    released = meet.request("DELETE", f"/api/v2/calls/{call['id']}/recorder", json={}, headers=headers("ben-test"))
-    assert released.status_code == 200 and released.json()["source"] is False
-    assert row(meet, call["id"])["recorder_actor"] is None
-    r = meet.post(f"/api/v2/live-meetings/{meeting}/chunks", json=chunk, headers=headers("ben-test"))
-    assert r.status_code == 403  # no longer the source
-    post(meet, f"calls/{call['id']}/end", {})
-    texts = thread_texts(meet, cid)
-    transcripts = [text for text in texts if text.startswith("Call transcript")]
-    assert len(transcripts) == 1 and "We ship on Friday" in transcripts[0]
-    assert get(meet, f"calls/{call['id']}")["transcript_message_id"]
-
-
-def test_presence_counts_while_google_is_silent_and_is_ignored_once_google_answers(google, meet):
-    call = start(meet, thread(meet))
-    space = row(meet, call["id"])["meet_space"]
-    names = {"names": ["Ana Alvarez", "Ben Brown", "A Guest"]}
-    r = meet.post(f"/api/v2/calls/{call['id']}/presence", json=names, headers=headers())
-    assert r.status_code == 403  # only the recording source reports
-    post(meet, f"calls/{call['id']}/recorder", {})
-    google.refuse = True
-    meet.app.state.calls.poll(call["id"])
-    shown = post(meet, f"calls/{call['id']}/presence", names)
-    assert shown["status_source"] == "recorder" and shown["live_count"] == 3 and shown["seen_at"]
-    google.refuse = False
-    google.now(space, "conferenceRecords/c1", "Ana Alvarez")
-    meet.app.state.calls.poll(call["id"])
-    shown = post(meet, f"calls/{call['id']}/presence", names)
-    assert shown["status_source"] == "google" and shown["live_count"] == 1
 
 
 # ----------------------------------------------------------------------------- the Workspace key's Meet scope
@@ -483,9 +419,6 @@ def test_the_declared_meet_call_answers_match_the_live_ones(google, meet):
     send("GET", "/api/v2/calls/ringing", "listRingingCalls", token="ben-test")
     send("GET", f"/api/v2/threads/{cid}", "getThread", token="ben-test")
     send("POST", f"/api/v2/calls/{call_id}/join", "joinCall", {}, token="ben-test")
-    send("POST", f"/api/v2/calls/{call_id}/recorder", "claimCallRecorder", {})
-    send("POST", f"/api/v2/calls/{call_id}/presence", "reportCallPresence", {"names": ["Ana Alvarez"]})
-    send("DELETE", f"/api/v2/calls/{call_id}/recorder", "releaseCallRecorder", {})
     send("POST", f"/api/v2/calls/{call_id}/end", "endCall", {})
 
 
@@ -581,7 +514,7 @@ def test_a_failing_read_backs_off_1_2_4_passes_and_a_good_one_resets_it(google, 
     assert reads(google, space) == before + 1
 
 
-def test_a_call_nobody_was_seen_in_has_no_duration_and_keeps_who_watched_it(google, meet):
+def test_a_call_nobody_was_seen_in_has_no_duration_and_says_whether_google_watched_it(google, meet):
     call = start(meet, thread(meet))
     backdate(meet, call["id"], 121, "started_at")
     meet.app.state.calls.poll(call["id"])  # Google answers: nobody in it
@@ -596,57 +529,3 @@ def test_a_call_nobody_was_seen_in_has_no_duration_and_keeps_who_watched_it(goog
     post(meet, f"calls/{unwatched['id']}/end", {})
     view = get(meet, f"calls/{unwatched['id']}")
     assert view["state"] == "ended" and view["duration_s"] is None and view["status_source"] is None
-    # A Recorder that watched a call and lets go after its end leaves the source in place.
-    watched = start(meet, thread(meet, subject="Acme sales"))
-    post(meet, f"calls/{watched['id']}/recorder", {})
-    google.refuse = True
-    meet.app.state.calls.poll(watched["id"])
-    post(meet, f"calls/{watched['id']}/presence", {"names": ["Ana Alvarez"]})
-    post(meet, f"calls/{watched['id']}/end", {})
-    meet.request("DELETE", f"/api/v2/calls/{watched['id']}/recorder", json={}, headers=headers("ana-test"))
-    view = get(meet, f"calls/{watched['id']}")
-    assert view["status_source"] == "recorder" and view["duration_s"] == 0
-
-
-# ----------------------------------------------------------------------------- the Recorder's tail and who may claim
-
-
-def test_the_recorder_s_last_chunks_are_taken_for_90_seconds_after_the_call_ends(google, meet):
-    cid = thread(meet)
-    call = start(meet, cid)
-    meeting = call["meeting_id"]
-    post(meet, f"calls/{call['id']}/recorder", {}, token="ben-test")
-
-    def chunk(seq, text):
-        return {
-            "chunks": [{"seq": seq, "speaker": "Ben", "start_ms": seq * 1000, "end_ms": seq * 1000 + 900, "text": text}]
-        }
-
-    post(meet, f"live-meetings/{meeting}/chunks", chunk(1, "We ship Friday"), token="ben-test")
-    post(meet, f"calls/{call['id']}/end", {})
-    assert not [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]  # it waits for the tail
-    post(meet, f"live-meetings/{meeting}/chunks", chunk(2, "Ben owns the rollout"), token="ben-test")
-    fix = {"revision": 2, "speaker": "Ben", "start_ms": 1000, "end_ms": 1900, "text": "We ship on Friday"}
-    post(meet, f"live-meetings/{meeting}/chunks/1/corrections", fix, token="ben-test")
-    backdate(meet, call["id"], 91, "ended_at")
-    late = meet.post(f"/api/v2/live-meetings/{meeting}/chunks", json=chunk(3, "Late"), headers=headers("ben-test"))
-    assert late.status_code == 403
-    fix = {**fix, "revision": 3, "text": "Too late"}
-    late = meet.post(f"/api/v2/live-meetings/{meeting}/chunks/1/corrections", json=fix, headers=headers("ben-test"))
-    assert late.status_code in (403, 409)
-    meet.app.state.calls.sweep()
-    transcripts = [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
-    assert len(transcripts) == 1 and "We ship on Friday" in transcripts[0] and "Ben owns the rollout" in transcripts[0]
-    assert "Late" not in transcripts[0]
-
-
-def test_only_someone_in_the_call_may_claim_its_recording(google, meet):
-    with meet.app.state.store.transaction() as c:
-        cid = threads.create(c, "human:ana", title="Acme all hands", audience="company")["id"]
-    call = start(meet, cid)
-    assert get(meet, f"calls/{call['id']}", token="cara-test")["id"] == call["id"]  # Cara reads the thread
-    r = meet.post(f"/api/v2/calls/{call['id']}/recorder", json={}, headers=headers("cara-test"))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "not_in_call"
-    assert row(meet, call["id"])["recorder_actor"] is None
-    join(meet, call["id"], "cara-test")  # she opens the call from Tico: now she is in it
-    assert post(meet, f"calls/{call['id']}/recorder", {}, token="cara-test")["source"] is True

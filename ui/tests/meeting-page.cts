@@ -15,7 +15,7 @@ const ago = (hours: number) => new Date(Date.now() - hours * 36e5).toISOString()
 const PEOPLE = [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben', email: 'ben@acme.example'}];
 const BOTS = [{id: 'ops', name: 'ops', display_name: 'Ops', status: 'active', schedules: []},
   {id: 'sales', name: 'sales', display_name: 'Sales', status: 'active', schedules: []}];
-const base = (id: string, extra: Record<string, unknown> = {}) => ({id, title: 'Weekly ops sync', source: 'tico-live', client: 'tico-recorder', kind: 'meeting', status: 'done',
+const base = (id: string, extra: Record<string, unknown> = {}) => ({id, title: 'Weekly ops sync', source: 'tico-live', kind: 'meeting', status: 'done',
   review_state: 'live', started: ago(3), created: ago(3), duration_ms: 1800000, can_edit: true, version: 3, private: false,
   participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben', email: 'ben@acme.example'}],
   note: 'Ship on Friday.', notes: '', transcript_readable: '', outbox: {doc: [], task: [], feature: []},

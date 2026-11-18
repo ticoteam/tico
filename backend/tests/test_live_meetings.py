@@ -30,12 +30,12 @@ def connect(api, *, title="Replay", client_id=None, fallback=30, reply_cap=3, co
 
 
 def test_connect_is_explicit_team_visible_and_second_human_must_join_to_chat(live):
-    meeting = connect(live, client_id="recorder-session-1")
+    meeting = connect(live, client_id="session-1")
     candidates = get(live, "live-meetings/bot-candidates")
     assert set(candidates) == {"bots"}
     assert all(set(bot) == {"id", "slug", "name", "description", "team"} for bot in candidates["bots"])
     assert any(bot["slug"] == "ops" for bot in candidates["bots"])
-    same = connect(live, client_id="recorder-session-1")
+    same = connect(live, client_id="session-1")
     assert same["id"] == meeting["id"]
     assert same["state"] == "live"
     assert get(live, "live-meetings/" + meeting["id"], token="ben-test")["id"] == meeting["id"]
@@ -642,7 +642,7 @@ def test_sse_replays_persisted_events_after_last_event_id(live, monkeypatch):
     }
     assert keepalive.startswith(": keep-alive")
 
-    # Recorder may resume using the query cursor instead; main-process fetch attaches Bearer auth.
+    # A client may resume using the query cursor instead; main-process fetch attaches Bearer auth.
     after_request = Request(
         {
             "type": "http",
@@ -769,8 +769,8 @@ def test_a_meeting_reply_runs_on_the_meeting_model_and_other_turns_keep_the_bots
     with live.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL)",
             (H.now(), H.now(), H.now()),
         )
         turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-company", "")
@@ -813,8 +813,8 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
     with live.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL)",
             (H.now(), H.now(), H.now()),
         )
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") == {
@@ -845,8 +845,8 @@ def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monke
     with live.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team','retired-model')",
             (H.now(), H.now(), H.now()),
         )
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") == {**own, "session": "task"}
@@ -1174,8 +1174,8 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
     def meeting(rid):
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL)",
             (rid, H.now(), H.now(), H.now()),
         )
 
@@ -1501,17 +1501,12 @@ def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkey
     assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""  # the read says it too
 
 
-def test_recorder_discard_ends_without_filing_or_bot_runs(live):
-    """A Recorder Discard calls end only; finalization is the explicit filing boundary."""
+def test_ending_files_nothing_and_runs_no_bot(live):
+    """Ending a meeting only ends it; finalization is the explicit filing boundary."""
     mid = post(
         live,
         "live-meetings",
-        {
-            "title": "Synthetic discarded recording",
-            "client_id": "recorder:discard-fixture",
-            "client": "tico-recorder",
-            "visibility": "private",
-        },
+        {"title": "Synthetic ended recording", "client_id": "end-fixture", "visibility": "private"},
     )["id"]
     chunk(live, mid, 1, 0, 1000, "Public words before pause")
     post(live, f"live-meetings/{mid}/control", {"action": "pause"})
@@ -1527,160 +1522,7 @@ def test_recorder_discard_ends_without_filing_or_bot_runs(live):
         assert c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0] == runs_before
 
 
-def screen_jpeg():
-    # A real, tiny JPEG fixture, decoded by browsers without screen capture.
-    import base64
-
-    return base64.b64decode(
-        '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAf/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k='
-    )
-
-
-def test_screen_is_people_only_ephemeral_and_revocation_clears_access(live):
-    mid = post(live, 'live-meetings', {'title': 'Private screen', 'visibility': 'private'})['id']
-    attach(live, mid, 'ops')
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    assert live.get(prefix, headers=headers('ben-test')).status_code == 404
-    generation = live.post(prefix + '/start', headers=headers()).json()['generation']
-
-    def upload(seq=1, generation=generation, data=None):
-        return live.post(
-            prefix + f'/frame?generation={generation}&seq={seq}',
-            content=data or screen_jpeg(),
-            headers={**headers(), 'Content-Type': 'image/jpeg'},
-        )
-
-    with live.app.state.store.read() as c:
-        counts = tuple(
-            c.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('idempotency', 'live_meeting_events')
-        )
-    assert upload().status_code == 204
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ops-live')).status_code == 403
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 404
-    frame = live.get(prefix + '/frame?wait=0', headers=headers())
-    assert frame.content == screen_jpeg() and 'no-store' in frame.headers['cache-control']
-    assert upload().status_code == 409
-    assert upload(2, 'old-generation').status_code == 409
-    assert upload(2, data=b'bad jpeg').status_code == 422
-    assert upload(2, data=b'x' * 1_000_001).status_code == 413
-    with live.app.state.store.read() as c:
-        assert counts == tuple(
-            c.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('idempotency', 'live_meeting_events')
-        )
-    post(live, f'live-meetings/{mid}/access', {'add': ['human:ben']})
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 200
-    post(live, f'live-meetings/{mid}/access', {'remove': ['human:ben']})
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 404
-    # Pause erases the frame; resume never restores it or the publisher generation.
-    post(live, f'live-meetings/{mid}/control', {'action': 'pause'})
-    post(live, f'live-meetings/{mid}/control', {'action': 'resume'})
-    assert upload(3).status_code == 410
-    assert live.get(prefix + '/frame?wait=0', headers=headers()).status_code == 410
-
-
-def test_screen_expiry_generation_fencing_and_browser_links(live):
+def test_the_meeting_view_links_to_its_page_in_the_browser(live):
     mid = connect(live)['id']
-    settings = live.app.state.store.settings
-    settings.public_url = 'https://acme.example'
+    live.app.state.store.settings.public_url = 'https://acme.example'
     assert get(live, f'live-meetings/{mid}')['link'] == f'https://acme.example/#/meetings/live/{mid}'
-    assert get(live, 'recorder/browser')['url'] == 'https://acme.example'
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    old = live.post(prefix + '/start', headers=headers()).json()['generation']
-    new = live.post(prefix + '/start', headers=headers()).json()['generation']
-    assert old != new
-    live.post(prefix + '/stop?generation=' + old, headers=headers())
-    assert mid in live.app.state.meeting_frames.shares
-    live.app.state.meeting_frames.shares[mid].alive -= 11
-    assert live.post(prefix + '/alive?generation=' + new, headers=headers()).status_code == 410
-    assert live.get(prefix + '/frame?wait=0', headers=headers()).status_code == 410
-    audience = live.get(prefix, headers=headers()).json()['audience']
-    newer = live.post(prefix + '/start', headers=headers()).json()['generation']
-    post(live, f'live-meetings/{mid}/access', {'visibility': 'team'})
-    assert live.post(prefix + '/alive?generation=' + newer, headers=headers()).status_code == 410
-    post(live, f'live-meetings/{mid}/access', {'visibility': 'private'})
-    assert live.post(prefix + '/start?expected_audience=' + audience, headers=headers()).status_code == 409
-
-
-def test_a_contended_screen_lock_does_not_block_the_async_server(live):
-    import threading
-    import httpx
-
-    mid = connect(live)['id']
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    live.post(prefix + '/start', headers=headers())
-    held, release = threading.Event(), threading.Event()
-
-    def hold():
-        with live.app.state.meeting_frames.lock:
-            held.set()
-            release.wait(10)
-
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert held.wait(1)
-
-    async def run():
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=live.app), base_url='http://testserver'
-        ) as client:
-            pending = asyncio.create_task(client.get(prefix + '/frame?wait=0', headers=headers()))
-            await asyncio.sleep(0.02)
-            try:
-                # Answered while the screen lock is still held (it is held until `release`), not after it: a server
-                # blocked behind the lock could not answer before then, however fast the machine.
-                response = await asyncio.wait_for(client.get('/healthz'), 5)
-                assert response.status_code == 200
-                assert not release.is_set() and holder.is_alive()  # the lock is still held
-            finally:
-                release.set()
-                await pending
-
-    try:
-        asyncio.run(run())
-    finally:
-        release.set()
-        holder.join()
-
-
-def test_discard_removes_the_transcript_copies_sent_to_bots(live):
-    meeting = post(live, "live-meetings", {"title": "Kept here", "cooldown_seconds": 0})
-    other = post(live, "live-meetings", {"title": "Another room", "cooldown_seconds": 0})
-    for room in (meeting, other):
-        attach(live, room["id"], "ops")
-    machine = runner(live)
-    assign(live, machine, "ops")
-    ready(live, machine, ["ops"])
-    chunk(live, meeting["id"], 1, 0, 1000, "Ops, the synthetic codename is confidential")
-    turn = claimed_turn(live, machine)
-    assert "confidential" in turn["message"]["body"]
-    post(
-        live,
-        f"attempts/{turn['id']}/complete",
-        {"outcome": "completed", "text": "Noted the codename confidential.", "last_seq": 0},
-        token=machine["token"],
-    )
-    chunk(live, other["id"], 1, 0, 1000, "Ops, the synthetic harbour plan")
-    kept = claimed_turn(live, machine)
-    post(
-        live,
-        f"attempts/{kept['id']}/complete",
-        {"outcome": "completed", "text": "Harbour plan noted.", "last_seq": 0},
-        token=machine["token"],
-    )
-    run_log = lambda run: live.get(f"/api/runs/{run}/log", headers=headers())
-    assert "codename" in run_log(turn["id"]).text
-    post(live, f"live-meetings/{meeting['id']}/discard", {})
-    with live.app.state.store.read() as c:
-        conv = turn["conversation"]["id"]
-        bodies = [row[0] for row in c.execute("SELECT body FROM messages WHERE conversation_id=?", (conv,))]
-        closed = c.execute("SELECT closed_at FROM conversations WHERE id=?", (conv,)).fetchone()[0]
-        attempt = c.execute("SELECT final_text,result FROM attempts WHERE id=?", (turn["id"],)).fetchone()
-        events = [row[0] for row in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (turn["id"],))]
-    assert bodies and not any("codename" in (body or "") for body in bodies)
-    assert closed
-    assert attempt is not None and "codename" not in (attempt["final_text"] or "") + (attempt["result"] or "")
-    assert not any("codename" in payload for payload in events)
-    log = run_log(turn["id"])
-    assert log.status_code in (200, 404) and "codename" not in log.text and "confidential" not in log.text
-    # A run from another meeting keeps its words.
-    assert "Harbour plan noted." in run_log(kept["id"]).text

@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""The TypeScript outside ui/: every .cts and .mts script Node runs under scripts/ and recorder/, the .d.ts files they
-read, and the Recorder window's page scripts (recorder/ui: .ts files recorder/build-ui.cjs strips into recorder/dist for
-the WebView), type-checks strictly, with no baseline.
+"""The TypeScript outside ui/: every .cts and .mts script Node runs under scripts/ and bench/, and the .d.ts files they
+read, type-checks strictly, with no baseline.
 
     python3 scripts/check_node_types.py
 
-Node, or esbuild for the Recorder's window, strips the types, so nothing else reads them: tsc here is the only check.
-The Recorder's window lives here rather than in scripts/check_ui_strict.py, whose rules are about ui/ (its baseline,
-its build, its routes): the window is one more leaf of the same strict options, with the DOM in place of Node. The
-rules:
+Node strips the types, so nothing else reads them: tsc here is the only check. These scripts live here rather than in
+scripts/check_ui_strict.py, whose rules are about ui/ (its baseline, its build, its routes). The rules:
 
 1. Each project (PROJECTS) extends tsconfig.node.json, the compiler options ui/tests/tsconfig.json shares too, and its
    EFFECTIVE options (tsc --showConfig, extends followed, not the raw JSON) keep strict, noEmit, erasableSyntaxOnly (Node
    can strip every annotation) and verbatimModuleSyntax true, moduleDetection "force" (each script is its own scope), no
    strict family flag turned off, and no noCheck.
-   A page project (PAGE_PROJECTS) has the DOM library and no Node types: its scripts run in a WebView.
 2. Every TypeScript file outside ui/ (ui/ is scripts/check_ui_strict.py's) is in one of the projects: a new folder needs
    its own leaf config, listed here.
 3. A script never uses `declare global`: a project's scripts share one program, so a global one script declares changes
-   the types every other script sees. Page globals are file-local
+   the types every other script sees. Globals are file-local
    (declare const window: Window & typeof globalThis & {...}).
 4. tsc reports nothing in any project: any diagnostic fails.
 
@@ -38,12 +34,8 @@ TSC = ["node", str(ROOT / "node_modules/typescript/bin/tsc")]
 BASE = "tsconfig.node.json"
 PROJECTS = (
     "scripts/tsconfig.json",
-    "recorder/tsconfig.json",
-    "recorder/ui/tsconfig.json",
     "bench/tsconfig.json",
 )
-# Projects whose scripts run in a page (the Recorder's WebView), not in Node.
-PAGE_PROJECTS = ("recorder/ui/tsconfig.json",)
 REQUIRED_TRUE = ("strict", "noEmit", "erasableSyntaxOnly", "verbatimModuleSyntax")
 # The flags strict turns on: --showConfig lists each, so one turned off reads false.
 STRICT_FAMILY = (
@@ -96,11 +88,6 @@ def option_problems(config, options):
     ]
     if options.get("noCheck"):
         problems.append(f"{config}: noCheck is not allowed")
-    if config in PAGE_PROJECTS:
-        if "dom" not in [lib.lower() for lib in options.get("lib", [])]:
-            problems.append(f"{config}: lib must include DOM (its scripts run in a page)")
-        if options.get("types") != []:
-            problems.append(f"{config}: types must be [] (its scripts run in a page, without Node's globals)")
     return problems
 
 
@@ -141,7 +128,7 @@ def project_files(config, effective):
 def declare_global_problems(files):
     """Rule 3: no `declare global` in a script (a .d.ts file is declarations only, and may)."""
     return [
-        f"{rel}: `declare global` is not allowed in a script; declare page globals file-locally"
+        f"{rel}: `declare global` is not allowed in a script; declare globals file-locally"
         " (declare const window: Window & typeof globalThis & {...})"
         for rel in files
         if not re.search(r"\.d\.[cm]?ts$", rel) and DECLARE_GLOBAL.search((ROOT / rel).read_text(encoding="utf-8"))

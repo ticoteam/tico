@@ -1,9 +1,7 @@
 """Action items drafted from a call's transcript once the call has ended.
 
-This is the Recorder's drafting (recorder/src/assist.rs), ported to the server: the same prompt, the same output shape,
-and the same rule that an item stands only when its quote is in the transcript word for word. The Recorder drafts while
-a meeting runs on its own computer; a call has no such computer, so the server drafts once, after the call, on the
-install's meeting model through the Gateway (backend/recorder_relay.py picks the model).
+The server drafts once, after the call, on the install's meeting model through the Gateway (`model`). An item stands
+only when its quote is in the transcript word for word.
 
 Nothing is stored here. The caller posts the items into the call's thread as one message.
 """
@@ -11,11 +9,13 @@ Nothing is stored here. The caller posts the items into the call's thread as one
 import json
 import re
 
+from . import gateway_connection, providers
+
 CHAT_TIMEOUT = 60
-MAX_ITEMS = 5  # as the Recorder's MAX_PER_REVIEW: one long stretch of speech cannot flood the list
+MAX_ITEMS = 5  # one long stretch of speech cannot flood the list
 MAX_TITLE = 300
 
-# recorder/src/assist.rs DRAFT_PROMPT, as the Recorder sends it: the call's lines are all NEW, with no EXISTING items.
+# A call sends all its lines as NEW, with no EARLIER lines and no EXISTING items.
 DRAFT_PROMPT = (
     "You find action items in a meeting transcript while the meeting is happening. An action item is something a "
     "person committed to, asked for, or the group agreed should happen: a task, a follow-up to send, a document to "
@@ -28,12 +28,18 @@ DRAFT_PROMPT = (
 )
 
 
+def model(c, settings):
+    """The model the items are drafted on: the install's meeting model when it is a Tico model, else the default one."""
+    meeting = providers.load(c, settings).get("meeting_model") or ""
+    return meeting if gateway_connection.is_tico(meeting) else providers.MEETING_MODEL
+
+
 class ItemsUnavailable(Exception):
     """The Gateway did not draft the items: no answer, or an answer that is not the items JSON."""
 
 
 def _object(text):
-    """The JSON object in a reply, also when the model wraps it in prose or a code fence (as the Recorder reads it)."""
+    """The JSON object in a reply, also when the model wraps it in prose or a code fence."""
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < start:
         return None
