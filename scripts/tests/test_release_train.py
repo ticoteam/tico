@@ -84,6 +84,9 @@ class FakeGitHub:
     def validation_runs(self):
         return list(self.runs)
 
+    def workflow_run(self, run_id):
+        return next(item for item in self.runs if str(item["id"]) == str(run_id))
+
     def failed_tokens(self, run_id):
         return self.failed.get(run_id)
 
@@ -756,6 +759,27 @@ def test_guard_reports_a_red_head_from_any_event_once(installs, tmp_path, monkey
     assert len(gh.created) == 1 and gh.comments == []
 
 
+def test_a_validation_ci_hands_over_counts_as_a_finished_run_not_a_manual_one(tmp_path, monkeypatch):
+    # ci.yml's last job dispatches the train with its own run id: a run the train started with GITHUB_TOKEN never fires
+    # workflow_run, so without it a green candidate waited for the next push or a backstop GitHub often drops.
+    handed = {"GITHUB_EVENT_NAME": "workflow_dispatch", "VALIDATION_RUN": "1"}
+    assert not rt.manual_run(handed) and rt.manual_run({"GITHUB_EVENT_NAME": "workflow_dispatch"})
+    # The switch applies to it as to any finished run; with the train on, a green candidate runs the job.
+    assert guard(FakeGitHub([run(C)]), handed, tmp_path, monkeypatch)["go"] == "false"
+    on = dict(handed, RELEASE_TRAINS="on")
+    assert guard(FakeGitHub([run(C)]), on, tmp_path, monkeypatch)["go"] == "true"
+    # A red one is read from GitHub and reported like a workflow_run's.
+    gh = FakeGitHub([run(C, conclusion="failure")])
+    assert rt.event_run(on, gh) == {
+        "conclusion": "failure",
+        "title": rt.title(C, "v0.5.201", "v0.5.200"),
+        "url": "https://github.example/run/1",
+    }
+    assert rt.plan_step(gh, NOW, rt.event_run(on, gh))["red"]["sha"] == C
+    # Not finished yet (train.yml waits for it, so only if that wait was skipped): no finished run to report.
+    assert rt.event_run(on, FakeGitHub([run(C, status="in_progress", conclusion=None)])) is None
+
+
 def test_guard_respects_the_switch_and_a_running_hotfix(tmp_path, monkeypatch):
     for event in ("schedule", "push", "workflow_run"):
         assert guard(FakeGitHub(), {"GITHUB_EVENT_NAME": event}, tmp_path, monkeypatch)["go"] == "false"
@@ -1152,6 +1176,20 @@ def test_a_step_promotes_then_ships_the_green_candidate_and_closes_the_issues(in
     assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
     # Published, and main has nothing newer: the next event does nothing.
     assert rt.plan_step(gh, NOW + timedelta(minutes=5))["action"] == "none"
+
+
+def test_a_shipped_candidate_behind_main_has_main_validated_in_the_same_step(installs, tmp_path, monkeypatch):
+    # B is green as v0.5.201 and main moved on to C: the step ships B, then validates C as v0.5.202 at once. Waiting for
+    # another event could take hours: a quiet main has no pushes, and GitHub drops most backstop schedules.
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    monkeypatch.setattr(rt.increment, "Checkout", lambda root: checkout)
+    gh = publishes(FakeGitHub([run(B)]))
+    assert rt.cmd_step(gh, ENV, NOW) == 0
+    assert gh.tagged == [("v0.5.201", B)] and installs["updated"][-1] == ("canary", "0.5.201")
+    (validation,) = [inputs for workflow, _, inputs in gh.dispatched if workflow == "ci.yml"]
+    assert validation["candidate_sha"] == C and validation["version"] == "v0.5.202"
+    assert validation["previous_release"] == "v0.5.201"
 
 
 def test_without_an_approval_stable_waits_and_the_canary_still_ships(installs):
