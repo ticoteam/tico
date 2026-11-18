@@ -220,6 +220,18 @@ def measure(api, paths):
     return out
 
 
+def _steady(value):
+    """The answers with the notice each app start posts to the owner (a new id and time on every start) named alike."""
+    if isinstance(value, list):
+        return [_steady(v) for v in value]
+    if not isinstance(value, dict):
+        return value
+    if value.get("kind") == "notice" and "keeper" in (value.get("participants") or []):
+        moving = ("id", "root_id", "path", "created_at", "last_message_at", "updated_at")
+        return {k: "<start notice>" if k in moving else _steady(v) for k, v in value.items()}
+    return {k: _steady(v) for k, v in value.items()}
+
+
 def _app(directory, db):
     settings = api_settings(directory)
     shutil.copyfile(db, settings.db_path)
@@ -264,7 +276,7 @@ def main(argv):
                 print(f"    {n:4d}  {shape}")
         return 0
     if mode == "compare":
-        before, after = (json.loads(Path(p).read_text()) for p in argv[2:4])
+        before, after = (_steady(json.loads(Path(p).read_text())) for p in argv[2:4])
         print("| read | statements before | after | median ms before | after | same answer |")
         print("|---|---|---|---|---|---|")
         same_all = True
