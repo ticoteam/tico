@@ -128,7 +128,7 @@ hook it does nothing. `payload` = `{"title": "<caller name>", "body": "# <thread
 - A scheduled call is in no live list: not `live_call`, not ringing, not `GET /api/v2/live-meetings`, not the calls
   sweep. `GET /api/v2/calls/upcoming` lists the viewer's: eligibility (booker, root owner, member, participant) is in
   the SQL before the limit, then checked exactly; rows are compact (`id`, `title`, `thread_id`, times, `people` up to
-  8). `GET /api/v2/threads/{id}/calls` adds `next_scheduled`, one indexed read.
+  8, `can_edit` from the same SQL: booker, admin, root owner or owner member). `GET /api/v2/threads/{id}/calls` adds `next_scheduled`, one indexed read.
 - The first `join` reads the event live (`call_prep.Prep.at_join`): cancelled is `409 call_cancelled` and the call
   ends `calendar_cancelled`; moved moves the times; unreadable lets the join go on. Then it turns `live` (started_at =
   now, the meeting `live`, `ring` the thread's other people), starts the recorder and rings, once. A second live call

@@ -263,12 +263,13 @@ to its one event, and writes that event before it changes the call.
    the calendar's own status). The call's id comes from the request's idempotency key, so a retry after a lost answer
    or Google's 409 finds the event already written (its `tico_call` must match) rather than inviting twice. This is
    the one place a person's action writes their calendar (calendar decision 13 is otherwise "people view").
-2. **Change time and Cancel call.** The ⋯ on Upcoming and on the header has both; the booker and the thread's managers
-   may use them. Change time reopens the Call dialog filled in and sends `PATCH /api/v2/calls/{id}`: the event is
+2. **Change time and Cancel call.** The booker and the thread's managers (`can_edit` on Upcoming rows and on
+   `next_scheduled`) have both: on Upcoming under the row's ⋯, and in the header the call's time opens Join, Change
+   time and Cancel call (for anyone else it only joins). Change time reopens the Call dialog filled in and sends `PATCH /api/v2/calls/{id}`: the event is
    changed first (its invitees become who can read the thread now; their answers are kept when that set is the
    same), and the call only once the calendar took it. A refusal changes nothing and says why
-   (`calendar_write_failed`). Cancel call, and End on a call still scheduled, deletes the event and then cancels the
-   call; a calendar that does not answer leaves it booked (`calendar_write_failed`, retryable), one that refuses for
+   (`calendar_write_failed`). Cancel call (once confirmed; no Undo, as the calendar has already told the invitees), and End on a call still
+   scheduled, deletes the event and then cancels the call; a calendar that does not answer leaves it booked (`calendar_write_failed`, retryable), one that refuses for
    good (a revoked grant) lets the cancel go on.
 3. **Changes made in the calendar.** A change to the event that Tico hears (the Google watcher, a write to the Tico
    calendar) reads the call again at once: a moved event moves the call, and a cancelled or deleted one cancels it
@@ -315,10 +316,10 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything; `next_scheduled` is the thread's soonest scheduled call, or `null` |
+| `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything; `next_scheduled` is the thread's soonest scheduled call (with `can_edit`), or `null` |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional; on for Tico Meet, off for Google Meet), `provider` (`auto`, `google_meet` or `tico`; default `auto`; bots or voice make it Tico Meet), `bots` (optional, up to 10 slugs attached at the start), `starts_at` and `ends_at` (optional, ISO 8601 with an offset: both schedule a Tico Meet call for then, up to 8 hours long; see Scheduled calls) |
 | `GET /api/v2/calls/ringing` | The live calls ringing the caller now |
-| `GET /api/v2/calls/upcoming` | The scheduled calls the caller is in (booked by them, or with them among the thread's people), soonest first. Each row is compact: `id`, `title`, `thread_id`, `scheduled_start`, `scheduled_end`, and `people` (up to 8, the booker first) |
+| `GET /api/v2/calls/upcoming` | The scheduled calls the caller is in (booked by them, or with them among the thread's people), soonest first. Each row is compact: `id`, `title`, `thread_id`, `scheduled_start`, `scheduled_end`, `people` (up to 8, the booker first), and `can_edit` |
 | `GET /api/v2/calls/{call_id}` | One call: state (`scheduled`, `live`, `ending` or `ended`), `scheduled_start` and `scheduled_end`, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, and `voice` (see Voice; `null` without voice) |
 | `POST /api/v2/calls/{call_id}/join` | Join; the first join of a scheduled call starts it. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined (Tico Meet only) |

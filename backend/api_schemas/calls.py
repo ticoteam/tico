@@ -140,7 +140,7 @@ SCHEMAS.update(
                 "available": "b",
                 "providers": items({"enum": ["google_meet", "tico"]}),
                 "next_scheduled": {
-                    "anyOf": [ref("CallSummary"), {"type": "null"}],
+                    "anyOf": [{"allOf": [ref("CallSummary"), obj({"can_edit": "b"})]}, {"type": "null"}],
                     "description": "The thread's soonest scheduled call, whatever the page; null when none",
                 },
             }
@@ -156,6 +156,10 @@ SCHEMAS.update(
                             "thread_id": "s",
                             "scheduled_start": "s",
                             "scheduled_end": "s",
+                            "can_edit": {
+                                "type": "boolean",
+                                "description": "Whether you may change its time or cancel it (its booker, or who manages its thread)",
+                            },
                             "people": items(
                                 {
                                     "type": "string",

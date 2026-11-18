@@ -8,18 +8,18 @@
 .thv-call.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-weight:600}
 .thv-call.on:hover{background:color-mix(in srgb,var(--accent) 24%,transparent);color:var(--accent)}
 .thv-call:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-/* A booked call in place of the phone: the phone and when (Join), then its ⋯. */
-.thv-call-next{display:inline-flex;align-items:center;flex:none}
-.thv-call-next-go{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 7px;border:0;border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:12.5px;white-space:nowrap;cursor:pointer}
-.thv-call-next-go:hover{background:var(--hover);color:var(--ink)}
-.thv-call-next-go:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-/* A scheduled call's ⋯ (Upcoming, the header) */
+/* A booked call in place of the phone: the phone and when (Join, or its menu). */
+.thv-call-next{display:inline-flex;flex:none;align-items:center;gap:6px;height:28px;padding:0 7px;border:0;border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:12.5px;white-space:nowrap;cursor:pointer}
+.thv-call-next:hover,.thv-call-next[aria-expanded=true]{background:var(--hover);color:var(--ink)}
+.thv-call-next:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+/* A scheduled call's ⋯ on Upcoming */
 .call-sched-more{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;padding:0;border:0;border-radius:var(--r-ctl);background:transparent;color:var(--muted);cursor:pointer}
 .call-sched-more:hover,.call-sched-more[aria-expanded=true]{background:var(--hover);color:var(--ink)}
 .call-sched-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .call-sched-more .nav-icon{font-size:18px}
 /* its menu is a thread menu (threads.css .thv-pop), placed by its own left; the Meetings page's .p-menu sizes none of it */
 .thv-pop.call-sched-menu{right:auto;min-width:160px}
+.thv-pop.call-sched-menu [data-k=cancel]{color:var(--fail)}
 @media (max-width:760px){.call-sched-more{width:44px;height:44px}}
 
 /* the card a call posts in its thread */

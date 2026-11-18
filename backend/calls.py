@@ -992,19 +992,24 @@ class Calls:
     def upcoming(self, c, who):
         """The scheduled calls `who` is in, soonest first: in threads they can read, and booked by them or with them
         among the thread's people. The SQL keeps only calls whose thread names them before the limit; each is then
-        checked exactly. A row is compact: the call, its times, its thread and up to UPCOMING_FACES of its people."""
+        checked exactly. A row is compact: the call, its times, its thread, up to UPCOMING_FACES of its people, and
+        `can_edit` (`_may_change`'s rule in the same SQL: the booker, an admin, the thread's owner or an owner member;
+        a teammate's manage grant on someone's home thread is not read here, so such a call shows no ⋯ though PATCH
+        would take it)."""
         human_only(who)
         self.auth.domain(who)
         found = []
         rows = c.execute(
             "SELECT calls.id,calls.title,calls.thread_id,calls.connector_actor,calls.scheduled_start,"
-            "calls.scheduled_end FROM calls JOIN conversations t ON t.id=calls.thread_id "
+            "calls.scheduled_end,(calls.connector_actor=:me OR :admin OR r.owner_id=:me OR EXISTS (SELECT 1 FROM "
+            "thread_members o WHERE o.thread_id=r.id AND o.actor=:me AND o.role='owner')) AS can_edit "
+            "FROM calls JOIN conversations t ON t.id=calls.thread_id "
             "JOIN conversations r ON r.id=COALESCE(t.root_id,t.id) WHERE calls.state='scheduled' AND "
             "(calls.connector_actor=:me OR r.owner_id=:me OR EXISTS (SELECT 1 FROM thread_members m "
             "WHERE m.thread_id=r.id AND m.actor=:me) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN "
             "json_valid(r.participants) THEN r.participants END) p WHERE p.value=:me)) "
             "ORDER BY calls.scheduled_start, calls.id LIMIT :n",
-            {"me": who.actor, "n": UPCOMING_LIMIT * 2},
+            {"me": who.actor, "admin": bool(threads.viewer(self.auth, who).admin(c)), "n": UPCOMING_LIMIT * 2},
         ).fetchall()
         for row in rows:
             if len(found) >= UPCOMING_LIMIT:
@@ -1023,17 +1028,22 @@ class Calls:
                     "scheduled_start": row["scheduled_start"],
                     "scheduled_end": row["scheduled_end"],
                     "people": faces,
+                    "can_edit": bool(row["can_edit"]),
                 }
             )
         return {"calls": found}
 
     def next_scheduled(self, c, who, thread_id):
-        """The thread's soonest scheduled call, for its header (one indexed read), or None."""
+        """The thread's soonest scheduled call, for its header (one indexed read), or None. `can_edit`: whether the
+        viewer may change its time or cancel it (`_may_change`)."""
         row = c.execute(
             "SELECT * FROM calls WHERE thread_id=? AND state='scheduled' ORDER BY scheduled_start, id LIMIT 1",
             (thread_id,),
         ).fetchone()
-        return {**_summary(row), **self.provider_fields(c, row, who)} if row else None
+        if row is None:
+            return None
+        edit = who.actor == row["connector_actor"] or threads.can_manage(c, threads.viewer(self.auth, who), thread_id)
+        return {**_summary(row), **self.provider_fields(c, row, who), "can_edit": bool(edit)}
 
     def _go_live(self, c, who, row):
         """The first join of a scheduled call starts it: from here it is a call like any other, with the bots it was

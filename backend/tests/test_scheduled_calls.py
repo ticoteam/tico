@@ -446,6 +446,18 @@ def test_change_time_writes_google_first_and_a_refusal_changes_nothing(meet, goo
     shared = schedule(meet, company["id"])
     assert change(meet, shared["id"], 200, token="cara-test", expected=403)["error"]["code"] == "forbidden"
     change(meet, shared["id"], 200, token="ben-test")  # an admin manages every thread
+    nexts = {
+        t: get(meet, f"threads/{company['id']}/calls", token=t)["next_scheduled"]["can_edit"]
+        for t in ("ana-test", "ben-test", "cara-test")
+    }
+    assert nexts == {"ana-test": True, "ben-test": True, "cara-test": False}
+    group = post(meet, "threads", {"title": "Acme crew", "audience": "members", "members": ["human:cara", "human:ben"]})
+    crew = schedule(meet, group["id"], minutes=400)
+    edits = {
+        t: {r["id"]: r["can_edit"] for r in get(meet, "calls/upcoming", token=t)["calls"]}[crew["id"]]
+        for t in ("ana-test", "ben-test", "cara-test")
+    }
+    assert edits == {"ana-test": True, "ben-test": True, "cara-test": False}
 
 
 def test_change_time_on_a_tico_event_changes_it_in_the_same_write(meet, google):
@@ -540,6 +552,7 @@ def test_upcoming_keeps_only_the_viewers_calls_before_its_limit(meet, google, mo
         "scheduled_start",
         "scheduled_end",
         "people",
+        "can_edit",
     }
     assert row["people"] == ["human:ana", "human:ben"]
 

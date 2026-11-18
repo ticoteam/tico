@@ -22,7 +22,8 @@ interface CallRecord {
   duration_s?: number | null; ring?: boolean; card_message_id?: string | null; transcript_message_id?: string | null;
   participants?: CallPerson[]; meeting_id?: string | null; end_reason?: string | null;
   // A scheduled call (state 'scheduled'): when it is booked for. `people`: who it is with (GET /v2/calls/upcoming).
-  scheduled_start?: string | null; scheduled_end?: string | null; people?: string[];
+  // `can_edit`: whether the viewer may change its time or cancel it (its booker, or who manages its thread).
+  scheduled_start?: string | null; scheduled_end?: string | null; people?: string[]; can_edit?: boolean;
   // The bots in the call: slugs, or (an older voice view) each bot with what it is doing and its words now; what each is
   // doing now comes in `voice` (null without voice).
   bots?: (string | CallBotRaw)[]; voice?: CallVoiceView | null;
@@ -173,11 +174,12 @@ function callHeadHTML(view: ThvView): string {
     const n = callCount(CALL_VIEWS.get(info.call.id) || info.call);
     return `<button type="button" class="thv-call on" data-call="join" aria-label="Join call" title="Join">${CALL_SVG}${n ? `<span class="tnum">${n}</span>` : ''}</button>`;
   }
-  // A booked call takes the phone's place: the phone and when, which joins it (the first join starts it), and its ⋯.
+  // A booked call takes the phone's place: the phone and when. It joins (the first join starts the call); for who may
+  // change it, it opens Join, Change time and Cancel call instead (the header has its own ⋯ beside it).
   const next = info.next ? CALL_VIEWS.get(info.next.id) || info.next : null;
   if (next?.state === 'scheduled') {
-    return `<span class="thv-call-next"><button type="button" class="thv-call-next-go" data-call="next" title="Join">${CALL_SVG}<span class="tnum">${esc(callWhen(next.scheduled_start))}</span></button>${
-      callMoreHTML('data-call="next-more"')}</span>`;
+    const menu = next.can_edit ? ' aria-haspopup="menu" aria-expanded="false"' : '';
+    return `<button type="button" class="thv-call-next" data-call="next" title="${next.can_edit ? 'Call' : 'Join'}"${menu}>${CALL_SVG}<span class="tnum">${esc(callWhen(next.scheduled_start))}</span></button>`;
   }
   // A DM with one bot calls that bot, which only Tico Meet can do: no phone where the server has no Tico Meet.
   if (!callTicoMeet(info.providers) && callDmBot(t)) return '';
@@ -223,9 +225,13 @@ async function callAction(view: ThvView, kind: string | undefined, from?: HTMLEl
   }
   // In the call here: its window opens and takes the call over.
   if (kind === 'window') { const v = CALL ? CALL_VIEWS.get(CALL.id) || {id: CALL.id, thread_id: CALL.threadId} : null; if (v) callWindowOpen(v); return; }
-  // A booked call: Join, and its menu.
-  if (kind === 'next') { if (info.next) await callJoinAny(CALL_VIEWS.get(info.next.id) || info.next); return; }
-  if (kind === 'next-more') { if (info.next && from) callScheduledMenu(from, CALL_VIEWS.get(info.next.id) || info.next, () => void callLoad(view).then(() => callViewsDraw(id))); return; }
+  // A booked call: Join, or its menu for who may change it.
+  if (kind === 'next') {
+    const next = info.next ? CALL_VIEWS.get(info.next.id) || info.next : null;
+    if (next?.can_edit && from) callScheduledMenu(from, next, () => callLoad(view), true);
+    else if (next) await callJoinAny(next);
+    return;
+  }
   const live = info.call ? CALL_VIEWS.get(info.call.id) || info.call : null;
   // Google Meet goes to a tab of its own, opened now while the click still allows it.
   if (kind === 'join' && live?.provider === 'google_meet') { await callMeetJoin(live); return; }
@@ -380,24 +386,35 @@ async function callSchedule(actors: string[], title: string, startsAt: Date, min
   if (call?.id) { callViewKeep(call); CALL_THREADS.set(t.id, {...CALL_THREADS.get(t.id), next: call}); }
   return call || null;
 }
-// A scheduled call's ⋯ (Upcoming, the thread's header).
+// A scheduled call's toast: one at a time, so Time changed right after Scheduled replaces it rather than stacking on it
+// (a wider toast under a narrower one showed as a strip at its edge).
+function callToast(msg: string): void {
+  for (const t of document.querySelectorAll('.toast.call-toast')) t.remove();
+  toast(msg);
+  const made = document.body.lastElementChild;
+  if (made?.classList.contains('toast')) made.classList.add('call-toast');
+}
+// A scheduled call's ⋯ on Upcoming.
 const callMoreHTML = (attrs: string): string =>
   `<button type="button" class="call-sched-more" ${attrs} aria-label="Call options" title="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
-// The menu behind it: Change time (the Call dialog, filled in: meetings.ts meetCallDialog) and Cancel call. Both go to
-// the call's calendar event first (docs/meet.md, Scheduled calls), so a refusal there changes nothing and shows here.
-// `done` runs once the call changed.
-function callScheduledMenu(button: HTMLElement, call: CallRecord, done: () => unknown): void {
+// The menu behind it (Join first with `join`): Change time (the Call dialog, filled in: meetings.ts meetCallDialog) and
+// Cancel call. Both go to the call's calendar event first (docs/meet.md, Scheduled calls), so a refusal there changes
+// nothing and shows here. A cancel has no Undo: the calendar has already told everyone invited. `done` runs once the
+// call changed.
+function callScheduledMenu(button: HTMLElement, call: CallRecord, done: () => unknown, join = false): void {
   // The list may be drawn again while the dialog is up: focus goes back to the ⋯ drawn in this one's place.
   const back = (): HTMLElement | null => button.isConnected ? button : document.querySelector<HTMLElement>(
     [...button.attributes].filter(a => a.name.startsWith('data-')).map(a => `[${a.name}="${CSS.escape(a.value)}"]`).join(''));
-  thvMenuShow(button, [['change', 'Change time'], ['cancel', 'Cancel call']], async key => {
+  const items: [string, string][] = [['change', 'Change time'], ['cancel', 'Cancel call']];
+  thvMenuShow(button, join ? [['join', 'Join'], ...items] : items, async key => {
+    if (key === 'join') { await callJoinAny(call); return; }
     if (key === 'change') { meetCallDialog({change: call, done, back}); return; }
-    if (!await askConfirm('Cancel this call?', button)) return;
+    if (!await askConfirm('Cancel the call for everyone?', button)) return;
     try {
       const r: CallRecord | null = await post(`/v2/calls/${encodeURIComponent(call.id)}/end`, {});
       const v = r?.call || r;
       if (v?.id) callViewKeep(v);
-      toast('Cancelled');
+      callToast('Call cancelled');
       await done();
     } catch (e) { toast(errorMessage(e, 'Could not cancel the call')); }
   }, 'call-sched-menu');

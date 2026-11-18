@@ -1,8 +1,8 @@
 // Scheduled calls (docs/meet.md, Scheduled calls): the Meetings page's Call dialog books a call with Schedule (once a
 // time is picked: then Schedule is the filled button; at Now, Start is; no window opens, the dialog closes and focus goes
-// back to Call now), the call shows in Upcoming at the top of the page with when, who, Join and its ⋯, and in its
-// thread's header as the phone and when. The ⋯'s Change time reopens the dialog filled in and sends the new time; its
-// Cancel call ends the booking. Desktop and a 390px phone; every name is synthetic (Acme, acme.example).
+// back to Call now), the call shows in Upcoming at the top of the page with when, who, Join and, for who may change it,
+// its ⋯, and in its thread's header as the phone and when (Join, or a menu with Join, Change time and Cancel call). Change
+// time reopens the dialog filled in and sends the new time; Cancel call, once confirmed, ends the booking. Desktop and a 390px phone; every name is synthetic (Acme, acme.example).
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots, in both themes: scheduled-calls-<name>-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -70,7 +70,7 @@ let browser: import('playwright').Browser | null = null;
         booked.push(body);
         const call = {id: 'cs', thread_id: 't-dm', title: body.title || 'Call', state: 'scheduled', provider: 'tico', connector: 'human:ana',
           scheduled_start: body.starts_at, scheduled_end: body.ends_at, participants: [], bots: body.bots || [], ring: false};
-        upcoming = [{id: 'cs', thread_id: 't-dm', title: call.title, scheduled_start: call.scheduled_start, scheduled_end: call.scheduled_end, people: ['human:ana', 'bot:ops']}];
+        upcoming = [{id: 'cs', thread_id: 't-dm', title: call.title, scheduled_start: call.scheduled_start, scheduled_end: call.scheduled_end, people: ['human:ana', 'bot:ops'], can_edit: true}];
         return json({call});
       }
       if (p === '/api/v2/calls/cs' && req.method() === 'PATCH') {
@@ -154,15 +154,30 @@ let browser: import('playwright').Browser | null = null;
     assert.deepEqual(changed, [{starts_at: '2026-11-18T18:00:00.000Z', ends_at: '2026-11-18T18:45:00.000Z'}]);
     await row.locator('.meet-upcoming-when', {hasText: '10:00 AM'}).waitFor();
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-upcoming-more')), 'cs', 'focus goes back to the ⋯');
+    assert.deepEqual(await page.locator('.toast').allInnerTexts(), ['Time changed'], 'one toast, the newest');
+    // Without can_edit, no ⋯.
+    upcoming = upcoming.map(v => ({...v, can_edit: false}));
+    await page.evaluate('meetUpcoming(MEET)');   // the page's own minute refresh, now
+    await more.waitFor({state: 'detached'});
+    upcoming = upcoming.map(v => ({...v, can_edit: true}));
+    await page.evaluate('meetUpcoming(MEET)');
+    await more.waitFor();
     // The thread's header: the phone and when, which joins, with its own ⋯.
     if (!phone) {
       await page.goto('https://tico-ui.test/#/thread/t-dm');
-      const next = page.locator('.thv-head .thv-call-next-go');
+      const next = page.locator('.thv-head .thv-call-next');
       await next.waitFor();
       assert.equal(await next.innerText(), 'Today 10:00 AM');
       assert.equal(await page.locator('.thv-head [data-call="start"]').count(), 0, 'one button for the call');
-      assert.ok(await page.locator('.thv-head [data-call="next-more"]').isVisible());
+      assert.equal(await page.locator('.thv-head .call-sched-more').count(), 0, 'no second ⋯ in the header');
       await shot(page, 'header', phone, theme);
+      // For who may change it, the time opens Join, Change time and Cancel call.
+      await next.click();
+      const headMenu = page.locator('.call-sched-menu');
+      assert.deepEqual(await headMenu.locator('[data-k]').allInnerTexts(), ['Join', 'Change time', 'Cancel call']);
+      await shot(page, 'header-menu', phone, theme);
+      await page.keyboard.press('Escape');
+      await headMenu.waitFor({state: 'detached'});
       await page.goto('https://tico-ui.test/#/meetings');
       await row.waitFor();
     }
@@ -171,6 +186,7 @@ let browser: import('playwright').Browser | null = null;
     await menu.locator('[data-k="cancel"]').click();
     await row.waitFor({state: 'detached'});
     assert.deepEqual([asked.length, ended], [1, ['cs']]);
+    assert.deepEqual(await page.locator('.toast').allInnerTexts(), ['Call cancelled']);
     assert.deepEqual(errors, []);
     await context.close();
   }

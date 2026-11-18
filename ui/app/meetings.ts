@@ -165,7 +165,7 @@ async function pageNotes(): Promise<void> {
 }
 
 // Upcoming: the scheduled calls the viewer is in, soonest first (GET /v2/calls/upcoming), each with when, who, Join and
-// its ⋯ (thread-call.ts callScheduledMenu). Join (thread-call.ts, data-call-join) opens the meeting window, and the first
+// its ⋯ for who may change it (thread-call.ts callScheduledMenu). Join (thread-call.ts, data-call-join) opens the meeting window, and the first
 // join starts the call. A phone says only the time for a call today.
 async function meetUpcoming(state: MeetState): Promise<void> {
   const box = document.getElementById('meet-upcoming');
@@ -181,7 +181,7 @@ async function meetUpcoming(state: MeetState): Promise<void> {
     return `<div class="meet-upcoming-row" data-upcoming="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
       <span class="meet-upcoming-when muted tnum">${esc(phone ? when.replace(/^Today /, '') : when)}</span>
       <span class="meet-upcoming-ppl">${(v.people || []).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 18)}</span>`).join('')}</span>
-      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button>${callMoreHTML(`data-upcoming-more="${esc(v.id)}"`)}</div>`;
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button>${v.can_edit ? callMoreHTML(`data-upcoming-more="${esc(v.id)}"`) : ''}</div>`;
   }).join('')}` : '');
   box.onclick = ev => {
     const more = eventElement(ev)?.closest<HTMLElement>('[data-upcoming-more]'), v = CALL_VIEWS.get(more?.dataset['upcomingMore'] || '');
@@ -207,8 +207,8 @@ function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?:
   const dialog = whDialog('Call', `${change ? '' : whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
     <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title"${change ? ` value="${esc(change.title || 'Call')}" disabled` : ''}>
     <div class="meet-call-when"><span class="meet-call-at-box"><button type="button" class="meet-call-at" data-call-at><span class="nav-icon" aria-hidden="true">schedule</span><span data-call-at-label></span></button>
-      <input type="datetime-local" name="starts" class="meet-call-at-input" tabindex="-1" aria-label="Starts" value="${meetLocalValue(at || meetNextHalfHour())}"></span>
-      ${change ? '' : '<button type="button" class="meet-call-now-again" data-call-at-now aria-label="Now" title="Now" hidden><span class="nav-icon" aria-hidden="true">close</span></button>'}
+      <input type="datetime-local" name="starts" class="meet-call-at-input" tabindex="-1" aria-label="Starts" value="${meetLocalValue(at || meetNextHalfHour())}">
+      ${change ? '' : '<button type="button" class="meet-call-now-again" data-call-at-now aria-label="Now" title="Now" hidden><span class="nav-icon" aria-hidden="true">close</span></button>'}</span>
       <select name="minutes" aria-label="Length">${lengths.map(n => `<option value="${n}"${n === length ? ' selected' : ''}>${n} min</option>`).join('')}</select></div>`,
     change ? '<button type="submit" class="primary meet-call-save">Save</button>'
       : `<button type="button" class="meet-call-schedule" disabled>Schedule</button><button type="button" class="meet-call-start" disabled>${CALL_SVG}Start</button>`);
@@ -229,6 +229,7 @@ function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?:
     $d<HTMLElement>('[data-call-at-label]')!.textContent = at ? callWhen(at.toISOString()) : 'Now';
     const again = $d<HTMLElement>('[data-call-at-now]');
     if (again) again.hidden = !at;
+    $d<HTMLElement>('.meet-call-at-box')?.classList.toggle('has-clear', !!again && !!at);
     minutes.hidden = !at;
     // The time decides which button is the filled one.
     for (const [button, on] of [[start, !at], [schedule, !!at]] as const) {
@@ -276,7 +277,7 @@ function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?:
   const book = () => act(schedule, async () => {
     if (!at) { $d<HTMLButtonElement>('[data-call-at]')?.click(); return false; }
     if (!await callSchedule([...chosen], title(), at, (ends(at).getTime() - at.getTime()) / 60000)) return false;
-    toast('Scheduled');
+    callToast('Scheduled');
     if (MEET) void meetUpcoming(MEET);
     return true;
   });
@@ -286,7 +287,7 @@ function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?:
     const r: CallRecord | null = await patch(`/v2/calls/${encodeURIComponent(change.id)}`, {starts_at: at.toISOString(), ends_at: ends(at).toISOString()});
     const v = r?.call || r;
     if (v?.id) callViewKeep(v);
-    toast('Changed');
+    callToast('Time changed');
     await opts.done?.();
     return true;
   });
