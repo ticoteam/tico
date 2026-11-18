@@ -49,6 +49,7 @@ RUNS = int(os.environ.get("RUNS", 21))
 WORKERS = [f"worker{n:02d}" for n in range(30)]
 PEOPLE = ["human:ana", "human:ben", "human:cara"]
 READS = ("/api/v2/company/floor", "/api/v2/places/person:me")
+SKIP = (Problem, H.Refused)  # a move or an ask the engine refuses for this task: the bench goes on without it
 
 
 def seed(api):
@@ -89,12 +90,12 @@ def seed(api):
                     pipeline=pipeline,
                     lint=False,
                 )
-                with contextlib.suppress(Problem):
+                with contextlib.suppress(*SKIP):
                     if E.task(c, row["id"])["stage_id"] != stage:
                         E.move(c, row["id"], stage, "human:ana", "Set up for the bench")
                 if k % 3 == 0:
                     version = H.task(c, row["id"])["version"]
-                    with contextlib.suppress(Problem):
+                    with contextlib.suppress(*SKIP):
                         E.add_requirement(
                             c,
                             row["id"],
@@ -121,8 +122,10 @@ def seed(api):
                     pipeline=pipeline,
                     lint=False,
                 )
-                with contextlib.suppress(Problem):
+                try:
                     E.move(c, row["id"], done[pipeline], "human:ana", "Finished for the bench")
+                except SKIP:
+                    E.move(c, row["id"], E.CLOSED, "human:ana", "Closed for the bench")
     with store.transaction() as c:
         for n in range(THREADS):
             starter = rnd.choice(PEOPLE + [f"bot:{w}" for w in WORKERS[:10]])
@@ -131,7 +134,7 @@ def seed(api):
             tid = out.get("thread_id") or out.get("conversation_id")
             for k in range(4):
                 who = rnd.choice(PEOPLE + [f"bot:{w}" for w in WORKERS])
-                with contextlib.suppress(Problem):
+                with contextlib.suppress(*SKIP):
                     threads.post(c, who, tid, f"Note {k}" + (" @ben" if rnd.random() < 0.2 else ""))
         now, rows = H.now(), []
         for d in range(30):
@@ -167,6 +170,12 @@ def seed(api):
             ).fetchone()[0],
             "tasks": c.execute("SELECT count(*) FROM tasks").fetchone()[0],
             "visits": c.execute("SELECT count(*) FROM visits").fetchone()[0],
+            "tasks by status": dict(c.execute("SELECT status, count(*) FROM tasks GROUP BY status").fetchall()),
+            "open tasks by stage": len(
+                c.execute(
+                    "SELECT DISTINCT stage_id FROM tasks WHERE status='open' AND pipeline_id IS NOT NULL"
+                ).fetchall()
+            ),
             "open OKs": c.execute(
                 "SELECT count(*) FROM requirements WHERE kind='ok' AND withdrawn_at IS NULL"
             ).fetchone()[0],
