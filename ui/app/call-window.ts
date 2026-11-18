@@ -247,14 +247,16 @@ function cwChatMount(st: CwState): void {
     // Link a file posts it at once: its link, which the chat draws as the file's card.
     libPick: f => { if (st.chat) void thvSend(st.chat, {text: `[${f.title.replace(/[[\]]/g, '')}](${API}/v2/files/${encodeURIComponent(f.id)})`}); },
     body: m => cwTaskBody(st, m)});
-  // The newest message stays in view while the chat's box changes size (a stage opening above it, the phone's peek):
-  // pinned to the end while it was at the end.
+  // The newest message stays in view while the chat's box changes size (a stage opening above it, the phone's peek)
+  // or its messages grow (a card that finishes loading): pinned to the end while it was at the end.
   const box = host.querySelector<HTMLElement>('.thv-scroll');
   if (!box || !window.ResizeObserver) return;
   let end = true;
   box.addEventListener('scroll', () => { end = box.scrollHeight - box.scrollTop - box.clientHeight < 8; }, {passive: true});
   st.pin = new ResizeObserver(() => { if (end) box.scrollTop = box.scrollHeight; });
   st.pin.observe(box);
+  const list = box.querySelector<HTMLElement>('.thv-list');
+  if (list) st.pin.observe(list);
 }
 
 // ----------------------------------------------------------------- reading the call

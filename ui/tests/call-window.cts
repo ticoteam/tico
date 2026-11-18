@@ -559,7 +559,8 @@ let browser: import('playwright').Browser | null = null;
     await page.locator('.cw.cw-wide').waitFor();
     assert.ok(await sideways(page) <= 390);
     // The chat's peek under the file: its newest message in view, above the field.
-    await page.waitForFunction(() => { const b = document.querySelector('.cw-thread .thv-scroll') as HTMLElement; return b.scrollHeight - b.scrollTop - b.clientHeight < 2; });
+    await page.waitForFunction(() => { const b = document.querySelector('.cw-thread .thv-scroll') as HTMLElement; return b.scrollHeight - b.scrollTop - b.clientHeight < 2; }, null, {timeout: 10000})
+      .catch(async () => { throw new Error('the chat is not at its end: ' + JSON.stringify(await page.evaluate(() => { const b = document.querySelector('.cw-thread .thv-scroll') as HTMLElement; return {scrollHeight: b.scrollHeight, scrollTop: b.scrollTop, clientHeight: b.clientHeight}; }))); });
     await themed(page, 'file-stage', true);
     for (const b of await page.locator('.cw-bar button').all()) assert.ok((await b.boundingBox())!.height >= 44, 'a finger-sized control');
     await page.locator('.cw-bar [data-cw-ctl="stop"]').click();
