@@ -3,7 +3,7 @@
     {
       "data": {
         "after": 0,
-        "seq": 135,
+        "seq": 139,
         "topics": [
           "tasks",
           "messages",
@@ -747,11 +747,11 @@
         "at": "<time>",
         "kind": "attention",
         "root_id": "<id12>",
-        "seq": 51,
+        "seq": 53,
         "thread_id": "<id12>"
       },
       "event": "threads",
-      "id": "51"
+      "id": "53"
     },
     {
       "data": {
@@ -762,11 +762,11 @@
           "last_read_seq": 6
         },
         "root_id": "<id12>",
-        "seq": 52,
+        "seq": 54,
         "thread_id": "<id12>"
       },
       "event": "threads",
-      "id": "52"
+      "id": "54"
     },
     {
       "data": {
@@ -779,7 +779,7 @@
         "kind": "activity",
         "message_id": "<id13>",
         "root_id": "<id12>",
-        "seq": 54,
+        "seq": 56,
         "thread": {
           "audience": "task",
           "id": "<id12>",
@@ -795,7 +795,7 @@
         "unread_count": 0
       },
       "event": "threads",
-      "id": "54"
+      "id": "56"
     },
     {
       "data": {
@@ -803,11 +803,11 @@
         "at": "<time>",
         "kind": "bot_status",
         "root_id": "<id12>",
-        "seq": 61,
+        "seq": 63,
         "thread_id": "<id12>"
       },
       "event": "threads",
-      "id": "61"
+      "id": "63"
     },
     {
       "data": {
@@ -818,11 +818,11 @@
         "job_id": "<id15>",
         "message_id": "<id15>",
         "run_id": null,
-        "seq": 62,
+        "seq": 64,
         "state": "canceled"
       },
       "event": "runs",
-      "id": "62"
+      "id": "64"
     },
     {
       "data": {
@@ -836,7 +836,7 @@
           "update",
           "visit"
         ],
-        "seq": 65,
+        "seq": 67,
         "task": {
           "acceptance_criteria": [],
           "assignee_id": "bot:ops",
@@ -874,7 +874,7 @@
           "links": [],
           "live_meeting_id": null,
           "note": "",
-          "number": null,
+          "number": 1,
           "on_person": false,
           "organization": null,
           "origin_actor": null,
@@ -916,7 +916,7 @@
         }
       },
       "event": "tasks",
-      "id": "65"
+      "id": "67"
     },
     {
       "data": {
@@ -924,7 +924,7 @@
         "at": "<time>",
         "kind": "created",
         "root_id": "<id16>",
-        "seq": 67,
+        "seq": 69,
         "thread": {
           "archived_at": null,
           "audience": "task",
@@ -964,7 +964,7 @@
         "thread_id": "<id16>"
       },
       "event": "threads",
-      "id": "67"
+      "id": "69"
     },
     {
       "data": {
@@ -1016,11 +1016,11 @@
         "message_seq": 7,
         "revision": 0,
         "root_id": "<id16>",
-        "seq": 72,
+        "seq": 74,
         "thread_id": "<id16>"
       },
       "event": "messages",
-      "id": "72"
+      "id": "74"
     },
     {
       "data": {
@@ -1069,11 +1069,11 @@
         "message_seq": 8,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 82,
+        "seq": 86,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "82"
+      "id": "86"
     },
     {
       "data": {
@@ -1084,11 +1084,11 @@
           "last_read_seq": 7
         },
         "root_id": "<conversation>",
-        "seq": 84,
+        "seq": 88,
         "thread_id": "<conversation>"
       },
       "event": "threads",
-      "id": "84"
+      "id": "88"
     },
     {
       "data": {
@@ -1099,11 +1099,11 @@
           "last_read_seq": 7
         },
         "root_id": "<id16>",
-        "seq": 85,
+        "seq": 89,
         "thread_id": "<id16>"
       },
       "event": "threads",
-      "id": "85"
+      "id": "89"
     },
     {
       "data": {
@@ -1150,11 +1150,11 @@
         "message_seq": 9,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 91,
+        "seq": 95,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "91"
+      "id": "95"
     },
     {
       "data": {
@@ -1165,11 +1165,11 @@
         "job_id": "<id21>",
         "message_id": "<id21>",
         "run_id": null,
-        "seq": 95,
+        "seq": 99,
         "state": "queued"
       },
       "event": "runs",
-      "id": "95"
+      "id": "99"
     },
     {
       "data": {
@@ -1180,11 +1180,11 @@
         "job_id": "<id23>",
         "message_id": "<id23>",
         "run_id": null,
-        "seq": 103,
+        "seq": 107,
         "state": "canceled"
       },
       "event": "runs",
-      "id": "103"
+      "id": "107"
     },
     {
       "data": {
@@ -1197,7 +1197,7 @@
         "kind": "activity",
         "message_id": "<id17>",
         "root_id": "<id16>",
-        "seq": 107,
+        "seq": 111,
         "thread": {
           "audience": "task",
           "id": "<id16>",
@@ -1213,7 +1213,7 @@
         "unread_count": 0
       },
       "event": "threads",
-      "id": "107"
+      "id": "111"
     },
     {
       "data": {
@@ -1228,7 +1228,7 @@
           "update",
           "visit"
         ],
-        "seq": 113,
+        "seq": 117,
         "task": {
           "acceptance_criteria": [],
           "assignee_id": "bot:ops",
@@ -1266,7 +1266,7 @@
           "links": [],
           "live_meeting_id": null,
           "note": "",
-          "number": null,
+          "number": 2,
           "on_person": true,
           "organization": null,
           "origin_actor": null,
@@ -1318,7 +1318,7 @@
         }
       },
       "event": "tasks",
-      "id": "113"
+      "id": "117"
     },
     {
       "data": {
@@ -1326,11 +1326,11 @@
         "at": "<time>",
         "kind": "bot_status",
         "root_id": "<id16>",
-        "seq": 115,
+        "seq": 119,
         "thread_id": "<id16>"
       },
       "event": "threads",
-      "id": "115"
+      "id": "119"
     },
     {
       "data": {
@@ -1341,18 +1341,47 @@
         "job_id": "<id25>",
         "message_id": "<id25>",
         "run_id": null,
-        "seq": 116,
+        "seq": 120,
         "state": "canceled"
       },
       "event": "runs",
-      "id": "116"
+      "id": "120"
+    },
+    {
+      "data": {
+        "actor": "runner:<id26>",
+        "at": "<time>",
+        "bot_id": "ops",
+        "conversation_id": "<conversation>",
+        "job_id": "<chat_message>",
+        "run_id": "<id9>",
+        "seq": 122,
+        "state": "completed"
+      },
+      "event": "runs",
+      "id": "122"
+    },
+    {
+      "data": {
+        "actor": "runner:<id26>",
+        "at": "<time>",
+        "bot_id": "ops",
+        "conversation_id": "<conversation>",
+        "job_id": "<chat_message>",
+        "message_id": "<chat_message>",
+        "run_id": "<id9>",
+        "seq": 124,
+        "state": "completed"
+      },
+      "event": "runs",
+      "id": "124"
     },
     {
       "data": {
         "actor": "runner:<id26>",
         "at": "<time>",
         "bot": "ops",
-        "seq": 123,
+        "seq": 127,
         "status": {
           "bot": "ops",
           "bot_state": "active",
@@ -1370,7 +1399,19 @@
         }
       },
       "event": "bots",
-      "id": "123"
+      "id": "127"
+    },
+    {
+      "data": {
+        "actor": "runner:<id26>",
+        "at": "<time>",
+        "kind": "bot_status",
+        "root_id": "<conversation>",
+        "seq": 128,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "128"
     },
     {
       "data": {
@@ -1383,7 +1424,7 @@
         "kind": "activity",
         "message_id": "<id27>",
         "root_id": "<conversation>",
-        "seq": 126,
+        "seq": 130,
         "thread": {
           "audience": "personal",
           "dm_with": [
@@ -1406,7 +1447,7 @@
         "unread_count": 1
       },
       "event": "threads",
-      "id": "126"
+      "id": "130"
     },
     {
       "data": {
@@ -1414,11 +1455,11 @@
         "at": "<time>",
         "kind": "attention",
         "root_id": "<conversation>",
-        "seq": 127,
+        "seq": 131,
         "thread_id": "<conversation>"
       },
       "event": "threads",
-      "id": "127"
+      "id": "131"
     },
     {
       "data": {
@@ -1462,7 +1503,7 @@
               "due_at": null,
               "id": "<open_task>",
               "late": null,
-              "number": null,
+              "number": 2,
               "owner_id": "bot:ops",
               "pipeline_id": "general",
               "pushed_past": false,
@@ -1486,10 +1527,10 @@
             "task_id": "<open_task>"
           }
         ],
-        "seq": 128
+        "seq": 132
       },
       "event": "needs",
-      "id": "128"
+      "id": "132"
     },
     {
       "data": {
@@ -1543,11 +1584,11 @@
         "message_seq": 10,
         "revision": 0,
         "root_id": "<conversation>",
-        "seq": 129,
+        "seq": 133,
         "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "129"
+      "id": "133"
     },
     {
       "data": {
@@ -1557,11 +1598,11 @@
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "run_id": "<id9>",
-        "seq": 131,
+        "seq": 135,
         "state": "completed"
       },
       "event": "runs",
-      "id": "131"
+      "id": "135"
     },
     {
       "data": {
@@ -1569,11 +1610,11 @@
         "at": "<time>",
         "kind": "bot_status",
         "root_id": "<conversation>",
-        "seq": 132,
+        "seq": 136,
         "thread_id": "<conversation>"
       },
       "event": "threads",
-      "id": "132"
+      "id": "136"
     },
     {
       "data": {
@@ -1584,18 +1625,18 @@
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
         "run_id": "<id9>",
-        "seq": 133,
+        "seq": 137,
         "state": "completed"
       },
       "event": "runs",
-      "id": "133"
+      "id": "137"
     },
     {
       "data": {
         "actor": "runner:<id26>",
         "at": "<time>",
         "bot": "ops",
-        "seq": 134,
+        "seq": 138,
         "status": {
           "bot": "ops",
           "bot_state": "active",
@@ -1613,17 +1654,17 @@
         }
       },
       "event": "bots",
-      "id": "134"
+      "id": "138"
     },
     {
       "data": {
         "actor": "human:ana",
         "area": "goals",
         "at": "<time>",
-        "seq": 135
+        "seq": 139
       },
       "event": "setup",
-      "id": "135"
+      "id": "139"
     }
   ],
   "request": "GET /api/v2/events?after=0",

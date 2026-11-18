@@ -91,7 +91,7 @@ PRESETS: dict[str, Row] = {
         "id": "general",
         "name": "General",
         "goal": "Where every task goes unless it belongs to another pipeline.",
-        "prefix": None,
+        "prefix": "G",  # General numbers its tasks, as every pipeline with a prefix does
         "manager_id": None,  # the General Manager bot, when the org has one (ensure_presets)
         "owner_id": None,
         "private": False,
@@ -1590,6 +1590,9 @@ def save(
     ts = _h().now()
     pid = _write_pipeline(conn, parsed, existing, ts)
     loosened = _write_stages(conn, by, pid, parsed, ts)
+    if existing and parsed["prefix"] and not existing.get("prefix"):
+        # The tasks it already holds are numbered now, oldest first (number_pipeline), as new ones are when made.
+        _h().number_pipeline(conn, by, pid, f"Numbered when {parsed['name']} got the prefix {parsed['prefix']}")
     after = read(conn, pid)
     assert after is not None
     _h().event(
