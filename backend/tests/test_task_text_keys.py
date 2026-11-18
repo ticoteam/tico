@@ -40,6 +40,22 @@ ORDINARY = [
     "hotkey: Ctrl-K opens search",
     "max_tokens: 4096",
     "cache key: tasks:list:v2",
+    # Names with a version, a dashed hash or a Tico file id after a key word (QA on 30c1714, N1).
+    "key: build2026",
+    "cache key: sha1-30c1714c9",
+    "api key: file-8d19d6b6a8e1db42533c3cd7",
+    "token: gpt-4o-mini",
+    "auth: sha256",
+]
+# Synthetic keys a word in front of them names, which ordinary text never holds: letters only, short hex, mixed.
+# Built from pieces, so this file holds no key-shaped literal.
+NAMED_KEYS = [
+    "api key: " + "qzhvkrtw" * 4 + "mxbn",  # 36 lowercase letters
+    "token: " + "XKQWZPTRVB" * 2,  # 20 uppercase letters
+    "token=" + "a1b2" + "c3d4",
+    "api_key=" + "Xk29fLq8" + "Zr7Tn3Wd",
+    "secret: " + "dGhpcyBp" + "cyBhIGtleQ==",
+    "token: " + "9f86d081-884c-4d63-a0d1-" + "7f0e1e1f2b3c",  # a UUID that names nothing here
 ]
 # The spec page's own text (people's names changed to the fictional team's).
 SPEC_PAGE = (Path(__file__).parent / "fixtures" / "task_text_spec_page.txt").read_text()
@@ -152,6 +168,33 @@ def test_every_detector_key_is_still_refused_in_task_text():
         text = "".join(case["text"]) if isinstance(case["text"], list) else case["text"]
         certain = [e for e in case["expect"] if e.get("tier") == "certain"]
         assert len(K.found(text)) >= len(certain), case.get("id")
+
+
+def test_a_named_key_is_refused_however_it_is_spelled(api):
+    task = _task(api)
+    for line in NAMED_KEYS:
+        assert K.found(line), line
+        _refused(api, f"tasks/{task['id']}/comments", {"text": line})
+    assert len(_rows(api, task["id"])) == len(NAMED_KEYS)
+
+
+def test_this_team_s_own_ids_after_a_key_word_are_stored_unchanged(api):
+    task = _task(api)
+    text = f"token: {task['id']}\napi key: {task['conversation_id']}\napi key: file-8d19d6b6a8e1db42533c3cd7"
+    said = post(api, f"tasks/{task['id']}/comments", {"text": text})["comment"]
+    assert said["body"] == text and _rows(api, task["id"]) == []
+
+
+def test_a_file_holding_a_key_still_uploads_with_ordinary_text(api):
+    # Only the form's text fields are task text: the file's bytes are not read as one blob with them.
+    task = _task(api)
+    r = api.post(
+        f"/api/v2/uploads/threads/{task['conversation_id']}/messages",
+        data={"text": "the log"},
+        files={"files": ("run.log", ("export GITHUB_TOKEN=" + KEY).encode(), "text/plain")},
+        headers=headers(),
+    )
+    assert r.status_code == 200, r.text
 
 
 def _upload_refused(api, path, data):
