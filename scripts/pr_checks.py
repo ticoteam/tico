@@ -1746,6 +1746,59 @@ def smoke_check(root=ROOT):
     return problems
 
 
+# Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names: the release
+# gate gives them python shards 1-2 (release_checks.NATIVE_SHARDS), and the incremental plan its waiting VMs
+# (release_increment.build_jobs); every other python VM starts without the binaries.
+NATIVE_TEST = re.compile(
+    r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
+    r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+    # scripts/tico-computer runs the checkout's runner (install, status: runner_support/engine.py finds
+    # the binary).
+    r'"scripts" / "tico(?:-computer)?"\)|scripts/tico(?:-computer)?"'
+)
+# A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
+TEST_IMPORT = re.compile(
+    r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+    r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)'
+)
+
+
+def native_test_files(names, root=ROOT):
+    """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
+    named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
+    reading every test, and run the whole suite for any test change). `root`: the checkout they are read from (the
+    incremental plan reads the candidate's). release_checks.py and release_increment.py both use this rule: keep it
+    here, since CI checks the planner out with this file alone beside it (ci.yml `validation-control`)."""
+    root = Path(root)
+    texts, verdicts = {}, {}
+
+    def text(name):
+        if name not in texts:
+            try:
+                texts[name] = (root / name).read_text(errors='replace')
+            except OSError:  # not a file here (a test's stand-in name, a package): nothing to run natively
+                texts[name] = ''
+        return texts[name]
+
+    def imports(source):
+        for package, members, module in TEST_IMPORT.findall(source):
+            if module:
+                yield module.replace('.', '/') + '.py'
+            else:
+                yield package.replace('.', '/') + '.py'
+                yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
+
+    def native(name, seen=()):
+        if name not in verdicts:
+            source = text(name)
+            verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
+                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name
+            )
+        return verdicts[name]
+
+    return {name for name in names if native(name)}
+
+
 def start_collect(root=ROOT):
     """The default collection as a background process. On a hosted runner it takes about a minute, about as long as the
     dependency map the plan builds meanwhile on another core, so a plan that builds the map starts this first."""
