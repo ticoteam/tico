@@ -488,7 +488,8 @@ def segment(c: Conn, auth: Any, who: Any, label: str) -> Row:
     }
     if defined:
         slug = str(cohorts[0]["value"])
-        row: Row = next((s for s in SEG.listed(c, include_retired=True) if s["slug"] == slug), {})
+        none: Row = {}
+        row: Row = next((s for s in SEG.listed(c, include_retired=True) if s["slug"] == slug), none)
         out.update(
             segment=slug,
             name=row.get("name") or "No segment",
