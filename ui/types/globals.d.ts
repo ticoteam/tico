@@ -17,6 +17,7 @@ interface Window {
   ticoNativeFeatures?: any;
   ticoNativeLog?: any;
   ticoNativeVersion?: any;
+  ticoScreenCaptureUnavailable?: boolean;
   __callLeaveTimeoutMs?: number;
   threadHref: any;
   threadRowHref: any;

@@ -47,7 +47,7 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
   if (stale()) return;
   const room = new LK.Room({adaptiveStream: false, dynacast: false});
   CALL = {id: call.id, threadId, title: title || call.title || 'Call', connector: (j.call || call).connector, room,
-          token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0, gen,
+          token: j.token, url: j.url, muted: true, sharing: false, leaving: false, timer: 0, gen,
           stageN: 0, staging: 0, reconnecting: false};
   const here = CALL;
   room.on(LK.RoomEvent.TrackSubscribed, (track: CallTrack, _pub: unknown, who: CallParticipant | undefined) => { if (CALL === here) callTrackOn(track, who); });
@@ -83,12 +83,24 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
   }
   // A newer join or a leave took over while this one connected: its room goes, and no microphone is turned on.
   if (CALL !== here || gen !== CALL_GEN) { try { room.disconnect(); } catch {} return; }
-  try { await room.localParticipant.setMicrophoneEnabled(true); }
-  catch { here.muted = true; toast('Microphone blocked'); }
+  await callMicSet(here, true);
   if (CALL !== here) { try { room.disconnect(); } catch {} return; }
   here.timer = setInterval(() => void callRefresh(here), CALL_REFRESH_MS);
   callBarDraw();
   callViewsDraw(threadId);
+}
+async function callMicSet(here: CallState, on: boolean): Promise<void> {
+  if (on && !callMicAvailable()) { toast('Microphone not available in this window'); return; }
+  try {
+    await here.room.localParticipant.setMicrophoneEnabled(on);
+    here.muted = !on;
+  } catch (e) {
+    if (CALL !== here) return;
+    const name = isErrorRecord(e) ? e.name : undefined;
+    if (name === 'NotAllowedError' || name === 'SecurityError') toast('Microphone blocked');
+    else if (name === 'NotFoundError') toast('No microphone found');
+    else toast(on ? 'Could not turn on the microphone' : 'Could not turn off the microphone');
+  }
 }
 async function callRefresh(here: CallState): Promise<void> {
   if (CALL !== here) return;
@@ -131,7 +143,7 @@ async function callLeave({end = false}: {end?: boolean} = {}): Promise<void> {
     catch (e) {
       if (CALL !== here) return;
       here.leaving = false;
-      toast(errorMessage(e, 'Could not end the call'), true);
+      toast(callErrorMessage(e, 'Could not end the call'), true);
       callBarDraw();
       return;
     }
@@ -198,18 +210,15 @@ function callVoiceDraw(box: HTMLElement | null, voice: CallVoiceView | null | un
 }
 async function callBarAct(k: string, button: HTMLElement): Promise<void> {
   const here = CALL; if (!here) return;
-  const lp = here.room?.localParticipant;
   try {
-    if (k === 'mute') { here.muted = !here.muted; await lp?.setMicrophoneEnabled(!here.muted); }
+    if (k === 'mute') await callMicSet(here, here.muted);
     else if (k === 'share') { if (here.sharing) await callShowStop(); else await callShareStart(here); }
     else if (k === 'leave') { await callLeave(); return; }
     else if (k === 'end') { if (await askConfirm('End the call for everyone?')) await callLeave({end: true}); return; }
     else if (k === 'bot') { callBotPick(button); return; }
     else if (k === 'window') { callWindowOpen(CALL_VIEWS.get(here.id) || {id: here.id, thread_id: here.threadId}); return; }
   } catch (e) {
-    if (k === 'share') here.sharing = false;
-    if (k === 'mute') here.muted = !here.muted;
-    if ((isErrorRecord(e) ? e.name : undefined) !== 'NotAllowedError') toast(errorMessage(e, 'Could not change that'));
+    toast(callErrorMessage(e, 'Could not change that'));
   }
   callBarDraw();
 }
@@ -233,7 +242,7 @@ async function callStagePut(here: CallState, body: {kind: 'screen' | 'file'; fil
   } catch (e) {
     // An older server has no stage: the screen still reaches the room, and nothing here stops it.
     here.stageN = Number.MAX_SAFE_INTEGER;
-    if (body.kind === 'file') toast(errorMessage(e, 'Could not show the file'), true);
+    if (body.kind === 'file') toast(callErrorMessage(e, 'Could not show the file'), true);
     return false;
   } finally { here.staging--; }
 }
@@ -245,9 +254,14 @@ async function callStageClear(here: CallState): Promise<void> {
 }
 // Share the screen: it reaches the room first, then the stage says it shows.
 async function callShareStart(here: CallState): Promise<void> {
+  if (!callShareable()) return;
   here.sharing = true;
   try { await here.room?.localParticipant?.setScreenShareEnabled(true, {audio: false}); }
-  catch (e) { here.sharing = false; throw e; }
+  catch (e) {
+    here.sharing = false;
+    if (CALL === here && (isErrorRecord(e) ? e.name : undefined) !== 'NotAllowedError') toast('Could not share the screen');
+    return;
+  }
   if (CALL === here && here.sharing) await callStagePut(here, {kind: 'screen'});
 }
 // Show a Tico file in place of whatever showed, this tab's own screen too: one thing at a time.
@@ -299,7 +313,7 @@ function callBotPick(button: HTMLElement): void {
   thvMenuShow(button, bots, async slug => {
     if (!CALL) return;
     try { await post(callPath(CALL.id) + '/bots', {bots: [slug]}); toast(`${actorName('bot:' + slug)} joined`); }
-    catch (e) { toast(errorMessage(e, 'Could not add the bot')); }
+    catch (e) { toast(callErrorMessage(e, 'Could not add the bot')); }
   });
 }
 // Every track this tab sends (microphone, screen; never a camera) stops now, before the room is told.

@@ -45,11 +45,12 @@ tauri-plugin-autostart = "2"
 block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSHTTPCookie", "NSString", "NSUUID"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin"] }
 
 [dev-dependencies]
 base64 = "0.22"
 minisign = "0.10"
+plist = "1"
 tauri = { version = "2", features = ["test"] }
 
 [patch.crates-io]
