@@ -42,6 +42,27 @@
         "status": "failed"
       },
       {
+        "kind": "tokens",
+        "input": 16297,
+        "output": 118,
+        "total": 16415,
+        "cost_usd": null,
+        "usage": {
+          "input": 16297,
+          "cached": 10584,
+          "cache_write": 5711,
+          "output": 118,
+          "requests": [
+            [
+              5713,
+              10584,
+              118,
+              1
+            ]
+          ]
+        }
+      },
+      {
         "kind": "turn_completed",
         "status": "interrupted"
       },
