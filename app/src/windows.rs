@@ -3355,7 +3355,7 @@ pub(crate) fn call_window_org<'a>(label: &'a str, id: &str) -> Option<&'a str> {
 }
 
 /// What each call window measured before it grew for a shared screen, by label.
-static CALL_SIZES: Mutex<Vec<(String, Size)>> = Mutex::new(Vec::new());
+static CALL_SIZES: std::sync::Mutex<Vec<(String, Size)>> = std::sync::Mutex::new(Vec::new());
 
 /// A window's inner size, logical: width and height.
 type Size = (f64, f64);
