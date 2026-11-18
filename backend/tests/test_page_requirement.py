@@ -1186,7 +1186,7 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
     row = seeded(build)
     monkeypatch.setattr(PJ, "ENGINE", ask)
     V.run(store, H.shift(H.now(), seconds=1))
-    item = "No second review from a different model: the two reviews name the same model, or one names none."
+    item = "No second review from a different model: looked for a different model named for each of the two reviews."
     with store.read() as r:
         bodies = [
             m[0]

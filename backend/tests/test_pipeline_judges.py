@@ -490,22 +490,27 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
 
 def test_a_review_page_refused_names_the_one_rubric_item_it_finds_unmet():
     """Task #614: the shipped Review rubric is asked whole, as before, with its parts beside it in the same call. A
-    refusal names the part the model scored no and what it looked for; an unsure names the part it can't tell; an OK
-    keeps today's line. The parts never change the verdict."""
+    refusal names the part the model scored no and what it looked for; an unsure part is never said to be missing, even
+    under a not met; an OK keeps today's line. The parts never change the verdict."""
     from backend import pipeline_settings as PS
 
     req = {"id": "r", "name": "Review page", "rubric": PS.REVIEW_RUBRIC}
-    assert P.check_of(PS.REVIEW_RUBRIC) is None and P.explained_of(PS.REVIEW_RUBRIC) == "two_reviews"
-    assert P.explained_of(REQ["rubric"]) is None, "a company's own rubric is asked whole, with nothing beside it"
+    assert P.check_of(PS.REVIEW_RUBRIC) is None and P.explain_parts(PS.REVIEW_RUBRIC) == P.EXPLAINED["two_reviews"]
+    assert P.explain_parts(REQ["rubric"]) == (), "a one-sentence rubric is asked whole, with nothing beside it"
     asked = []
 
     refused = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "models": 0.05}, asked))
     assert sorted(asked[-1]) == ["met"] + sorted(f"part_{part.key}" for part in P.EXPLAINED["two_reviews"])
     assert refused["verdict"] == "not_met" and refused["p"] == 0.1, "the whole question is the verdict"
     assert refused["reason"] == (
-        'Doesn\'t meet "Review page". No second review from a different model: the two reviews name the same model, '
-        "or one names none."
+        'Doesn\'t meet "Review page". No second review from a different model: looked for a different model named for '
+        "each of the two reviews."
     ), refused["reason"]
+    hedged = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "models": 0.5}))
+    assert hedged["verdict"] == "not_met"
+    assert hedged["reason"].endswith(
+        "Can't tell if the two reviews are by different models: looked for each review's model name."
+    ), "a part that was not scored no is never said to be missing"
     unsure = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.5, "commit": 0.5}))
     assert unsure["verdict"] == "unsure"
     assert unsure["reason"].endswith(
@@ -517,6 +522,16 @@ def test_a_review_page_refused_names_the_one_rubric_item_it_finds_unmet():
     assert low["reason"] == 'Doesn\'t meet "Review page".', "no part stands out: today's line"
     alone = P.judge_once(None, REQ, ATTACHMENT, engine=_parts_engine({"met": 0.1}, asked))
     assert list(asked[-1]) == ["met"] and alone["reason"] == 'Doesn\'t meet "Shows the page live".'
+
+
+def test_a_company_rubric_refused_names_the_sentence_it_finds_unmet():
+    """Task #614: a rubric of a company's own, of two or more sentences, is asked whole with one part per sentence
+    beside it; a refusal quotes the sentence scored no as what was looked for."""
+    req = {"id": "r", "name": "Launch page", "rubric": "Shows the page live at acme.example. Names who signed it off."}
+    asked = []
+    refused = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"met": 0.1, "s2": 0.05}, asked))
+    assert sorted(asked[-1]) == ["met", "part_s1", "part_s2"]
+    assert refused["reason"] == 'Doesn\'t meet "Launch page". Not met: looked for "Names who signed it off."'
 
 
 def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
