@@ -64,7 +64,7 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
   const call = liveCall(big);
   const seen = {errors: [] as string[], joins: 0, botWrites: [] as string[], tasks: [] as unknown[], rings: [] as string[], memberWrites: 0, meetingReads: 0,
     streams: [] as string[], notes: notes('bot:content-social'), posts: [] as string[], fileReads: [] as string[], stageWrites: [] as string[],
-    screensAtDelete: [] as boolean[][]};
+    screensAtDelete: [] as boolean[][], briefReads: [] as string[]};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A stand-in media client: its rooms keep their handlers so the test can say who speaks and who shares. The room has
   // people the call's view does not list (the recorder, someone already gone): they are no one's face.
@@ -136,6 +136,10 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
     if (p === '/api/v2/threads/t-plan/calls') return json({calls: [call], next_before: null, available: true, providers: ['tico', 'google_meet']});
     if (p === '/api/v2/calls/c1') return json(call);
     if (p === '/api/v2/calls/c2') return json(endedCall());
+    if (p === '/api/v2/calls/c1/bot-notes') {
+      seen.briefReads.push(url.searchParams.get('bot') || '');
+      return json({text: 'Signups reached 241 on Thursday.'});
+    }
     if (p === '/api/v2/calls/c1/notes' || p === '/api/v2/calls/c2/notes') return json(seen.notes);
     if (p === '/api/v2/calls/c1/join') { seen.joins++; return json({call, token: 'tok', url: 'wss://lk.test'}); }
     if (p === '/api/v2/calls/c1/leave') return json(call);
@@ -297,6 +301,14 @@ let browser: import('playwright').Browser | null = null;
     await page.locator('.cw-people-list .cw-row').first().waitFor();
     assert.match(await page.locator('.cw-people-list .cw-row-name').first().innerText(), /^Chris\s+You$/);
     assert.equal(await page.locator('.cw-people-list .cw-h').innerText(), 'In call · 5');
+    const brief = page.getByRole('button', {name: 'Notes for Growth Manager'});
+    await brief.click();
+    const note = page.locator('.cw-brief', {hasText: 'Signups reached 241 on Thursday.'});
+    await note.waitFor();
+    assert.deepEqual(seen.briefReads, ['growth-manager']);
+    assert.deepEqual(seen.botWrites, []);
+    await brief.click();
+    await note.waitFor({state: 'detached'});
     await page.locator('[data-cw-q]').fill('gro');
     await page.locator('.cw-team [data-cw-team="growth"]').waitFor();
     assert.equal(await page.locator('.cw-people-list .cw-h').count(), 0, 'results instead of the call');

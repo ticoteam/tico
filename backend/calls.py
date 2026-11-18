@@ -870,6 +870,8 @@ class Calls:
         c.execute("RELEASE call_card")
         if isinstance(card, dict) and card.get("id") and not card.get("held"):
             c.execute("UPDATE calls SET card_message_id=? WHERE id=?", (card["id"], call_id))
+        if bots and not scheduled:
+            self.app.state.call_prep.live(c, _call(c, call_id))
         return self.view(c, call_id, who)
 
     @staticmethod
@@ -1000,6 +1002,8 @@ class Calls:
     def readable(c, actor, thread_id):
         return readable(c, actor, thread_id)
 
+    attachment_standing = staticmethod(attachment_standing)
+
     @staticmethod
     def thread_private(c, thread_id):
         """Whether a call's thread is private: anything but a company thread. Work filed from it is private too."""
@@ -1087,6 +1091,7 @@ class Calls:
             "call.started",
             {"meeting_id": row["live_meeting_id"], "provider": row["provider"], "scheduled": True},
         )
+        self.app.state.call_prep.live(c, row)
         call_id = row["id"]
         c.after_commit.append(lambda: self._went_live(call_id))
         return True
@@ -1353,6 +1358,7 @@ class Calls:
         ).fetchone():
             raise Problem("forbidden", "Join this call before attaching bots", 403)
         self._attach(c, who, row, meeting, slugs)
+        self.app.state.call_prep.live(c, row)
         return self.view(c, call_id, who)
 
     def _may_attach(self, c, who, slugs):

@@ -130,6 +130,9 @@ button.cw-face{cursor:pointer}
 .cw-h{margin:10px 8px 4px;font-size:var(--t-sm)}
 .cw-row-bot{width:100%;border:0;background:transparent;color:var(--ink);text-align:left;cursor:pointer}
 .cw-row-bot:hover{background:var(--hover)}
+.cw-bot-row{display:flex;align-items:center;padding-right:8px}
+.cw-bot-row .cw-row-bot{flex:1;width:auto;min-width:0}
+.cw-brief{margin:0 8px 8px;padding-left:12px;border-left:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
 .cw-mark{flex:none;width:8px;height:8px;margin:0 11px;border-radius:50%}
 .cw-mark-on{background:var(--ok)}
 .cw-mark-think{background:var(--run);animation:cw-breath 1.6s infinite ease-in-out}

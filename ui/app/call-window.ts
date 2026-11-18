@@ -32,6 +32,7 @@ interface CwState {
   chunks: Map<number, CwChunk>; bots: string[];
   // Bots taken out of the call here: their faces stay, faint, to be tapped back in.
   gone: Set<string>; busy: Set<string>;
+  brief: {bot: string; text: string | null} | null;
   joinTried: boolean; missing: boolean; drawn: number; wide: boolean; size: [number, number] | null;
   // The notes, once the call has ended (null until read), and what was done with each item here.
   ended: boolean; notes: CwNotes | null; made: Map<string, string>; tq: string; tsearch: boolean; notesTries: number;
@@ -116,7 +117,7 @@ function pageCallWindow(id: string): void {
     <footer class="cw-bar"></footer>`;
   document.body.append(el);
   const st: CwState = {id, el, tab: 'chat', threadId: '', title: '', join, chat: null, source: null, meeting: '', after: 0, eventId: 0,
-    chunks: new Map(), bots: [], gone: new Set(), busy: new Set(), joinTried: false, missing: false, drawn: 0, wide: false, size: null,
+    chunks: new Map(), bots: [], gone: new Set(), busy: new Set(), brief: null, joinTried: false, missing: false, drawn: 0, wide: false, size: null,
     ended: false, notes: null, made: new Map(), tq: '', tsearch: false, notesTries: 0, task: '', note: '', noteAt: 0,
     pop: '', fileKey: '', fileLoad: null, tasks: new Map(), pin: null};
   CW = st;
@@ -528,10 +529,33 @@ function cwPeopleDraw(st: CwState): void {
       f.muted ? `<span class="cw-in muted" role="img" aria-label="Muted">${cwIcon(CW_ICONS.muted)}</span>` : ''}`;
     const inner = `${cwAv(f.actor, 28)}<span class="cw-row-name">${esc(cwName(f.actor))}${f.actor === myActor() ? ' <span class="muted">You</span>' : ''}</span>${marks}`;
     // A bot's row takes it out, as its face does, with Undo.
-    return f.bot ? `<button type="button" class="cw-row cw-row-bot" data-cw-bot="${esc(actorSlug(f.actor))}" data-on="true" aria-label="${esc(`Take ${actorName(f.actor)} out of the call`)}">${inner}</button>`
-      : `<div class="cw-row">${inner}</div>`;
+    if (!f.bot) return `<div class="cw-row">${inner}</div>`;
+    const slug = actorSlug(f.actor), brief = st.brief?.bot === slug ? st.brief : null;
+    const label = esc(`Notes for ${cwName(f.actor)}`);
+    return `<div class="cw-bot-row"><button type="button" class="cw-row cw-row-bot" data-cw-bot="${esc(slug)}" data-on="true" aria-label="${esc(`Take ${actorName(f.actor)} out of the call`)}">${inner}</button>
+      <button type="button" class="cw-plus" data-cw-brief="${esc(slug)}" aria-label="${label}" title="${label}" aria-expanded="${!!brief}">${cwIcon(CW_ICONS.file)}</button></div>`
+      + (brief ? `<div class="cw-brief" aria-live="polite">${esc(brief.text ?? 'Loading…')}</div>` : '');
   }).join('')}`);
 }
+async function cwBriefRead(st: CwState, bot: string): Promise<void> {
+  const brief = {bot, text: st.brief?.bot === bot ? st.brief.text : null};
+  st.brief = brief;
+  cwPeopleDraw(st);
+  try {
+    const r = await get<{text: string}>(callPath(st.id) + '/bot-notes?bot=' + encodeURIComponent(bot), {fresh: true});
+    brief.text = r?.text || 'No notes yet';
+  } catch {
+    brief.text = 'Notes unavailable';
+  }
+  if (CW === st && st.brief === brief) cwPeopleDraw(st);
+}
+liveOn('threads', (event: ThreadsEvent & {call_id?: string}) => {
+  const st = CW;
+  if (!st || event?.kind !== 'call.notes' || event.call_id !== st.id) return;
+  liveSoon('call-brief:' + st.id, () => {
+    if (CW === st && st.brief) void cwBriefRead(st, st.brief.bot);
+  }, 200);
+});
 function cwBarDraw(st: CwState, v: CallRecord | null): void {
   const bar = st.el.querySelector<HTMLElement>('.cw-bar'); if (!bar) return;
   const here = cwHere(st);
@@ -588,6 +612,12 @@ async function cwClick(st: CwState, ev: MouseEvent): Promise<void> {
   if (card) { ev.preventDefault(); cwOpenElsewhere(st, card.getAttribute('href') || ''); return; }
   const tab = t.closest<HTMLElement>('[data-cw-tab]');
   if (tab) { st.tab = tab.dataset.cwTab || 'chat'; cwDraw(st); if (st.tab === 'transcript') cwScrollEnd(st); return; }
+  const brief = t.closest<HTMLElement>('[data-cw-brief]')?.dataset.cwBrief;
+  if (brief) {
+    if (st.brief?.bot === brief) { st.brief = null; cwPeopleDraw(st); }
+    else await cwBriefRead(st, brief);
+    return;
+  }
   const bot = t.closest<HTMLElement>('[data-cw-bot]');
   if (bot) { await cwBotToggle(st, bot.dataset.cwBot || '', bot.dataset.on === 'true'); return; }
   const team = t.closest<HTMLElement>('[data-cw-team]');

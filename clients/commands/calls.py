@@ -433,6 +433,27 @@ def call_show(api, args):
 
 
 @tool(
+    "tico_call_notes",
+    "Read a bot's brief for a call. People name a bot they can see. An attached bot reads its own brief.",
+    {"call_id": _s("The call's id"), "bot": _s("The bot's id or slug")},
+    required=("call_id",),
+)
+def call_notes(api, args):
+    return api.get(f"calls/{args['call_id']}/bot-notes", bot=args.get("bot"))
+
+
+@tool(
+    "tico_call_note",
+    "As a bot attached to a call, add a short fact to your brief. Use only facts you can share in the call's thread.",
+    {"call_id": _s("The call's id"), "text": _s("The fact or short note to add")},
+    required=("call_id", "text"),
+    writes=True,
+)
+def call_note(api, args):
+    return api.post(f"calls/{args['call_id']}/bot-notes", {"text": args["text"]}, key=_key(args))
+
+
+@tool(
     "tico_call_start",
     "Start a call in a thread you can write to. Its audio and screen share reach the people in the "
     "thread, and a live transcript is kept while it runs and posted to the thread when it ends. You are its connector. "
@@ -568,6 +589,19 @@ CALL = (
         example="tico call start t1 --title 'Weekly sync' --bot ops",
     ),
     Command("call show", "a call: its state, people, bots and how it ended", example="tico call show c1"),
+    Command(
+        "call notes",
+        "read a bot's brief for a call",
+        args=(Arg("call_id", flag="--call"),),
+        render=lambda _args, result: result["text"],
+        example="tico call notes --call c1 --bot ops",
+    ),
+    Command(
+        "call note",
+        "add to your brief as a bot attached to the call",
+        args=(Arg("call_id", flag="--call"),),
+        example="tico call note --call c1 'The rollout reached 45% on Tuesday'",
+    ),
     Command(
         "call join",
         "join a call: the URL and a token good for 5 minutes",

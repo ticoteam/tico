@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import calendar_api, calendar_store, call_prep, calls, gcal_live, gcal_watch
+from backend import calendar_api, calendar_store, call_prep, calls, gcal_live, gcal_watch, migrations
 from backend.store import H, Problem
-from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.calls import join, meet, thread  # noqa: F401
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
@@ -293,6 +293,19 @@ def test_the_sweep_preps_the_exact_bot_once_and_at_once_inside_thirty_minutes(me
     assert sweep(meet) == {}  # prepped: nothing more, however often the sweep runs
     assert len(_prep_tasks(meet)) == 1
 
+    computer = runner(meet)
+    assign(meet, computer, "ops")
+    ready(meet, computer, ["ops"], capabilities=["private_lanes_v1"])
+    turn = claim(meet, computer, "ops")
+    token = turn["token"]
+    post(meet, f"attempts/{turn['id']}/started", {"thread_id": "synthetic-prep"}, token=computer["token"])
+    facts = {"text": "The checkout rollout reached 45% on Tuesday."}
+    post(meet, f"calls/{later['id']}/bot-notes", facts, token=token, expected=403)
+    assert post(meet, f"calls/{soon['id']}/bot-notes", facts, token=token) == {"ok": True}
+    assert get(meet, f"calls/{soon['id']}/bot-notes?bot=ops", token="ben-test") == facts
+    assert join(meet, soon["id"])["call"]["state"] == "live"
+    assert len(_prep_tasks(meet)) == 1
+
 
 def test_a_bot_booked_by_its_slug_is_held_and_prepped_by_its_id(meet, google):
     """Schedule names bots as Call now does, by slug; a bot made through the API has a UUIDv7 id, which the call keeps
@@ -310,6 +323,37 @@ def test_a_company_threads_prep_task_is_public(meet, google):
     schedule(meet, made["id"], minutes=10, bots=["ops"])
     assert sweep(meet) == {"prepped": 1}
     assert _prep_tasks(meet) == [("Prepare for Acme planning", _ops(meet), 0)]
+
+
+def test_migrating_a_prepped_call_keeps_its_existing_task(meet, google):
+    cid = thread(meet)
+    call = schedule(meet, cid, minutes=10, bots=["ops"])
+    call_id = call["id"]
+    migration = next(m for m in migrations.files() if m.version.endswith("_call_bot_notes"))
+    with meet.app.state.store.transaction() as c:
+        task = H.task_create(
+            c,
+            "human:ana",
+            "Prepare for Acme planning",
+            "",
+            "bot:ops",
+            conversation_id=cid,
+            private=True,
+            instructions=(
+                f"Prepare for the call 'Acme planning' (call {call_id}) in thread {cid}: "
+                "read Tico's skills/meeting-prep/SKILL.md (under HUB_DIR) and follow it."
+            ),
+        )
+        c.execute("UPDATE calls SET prepped_at=? WHERE id=?", (H.now(), call_id))
+        c.execute("DROP TABLE call_bot_notes")
+        for statement in migrations.statements(migration.path.read_text()):
+            c.execute(statement)
+        assert (
+            c.execute("SELECT prep_task_id FROM call_bot_notes WHERE call_id=?", (call_id,)).fetchone()[0] == task["id"]
+        )
+
+    join(meet, call_id)
+    assert len(_prep_tasks(meet)) == 1
 
 
 def test_a_booker_who_cannot_read_the_thread_any_more_gives_no_prep(meet, google, monkeypatch):

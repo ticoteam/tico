@@ -4571,15 +4571,14 @@ class Execution:
             + ("AND j.id=? " if job_id is not None else "")
             + ("AND " + H.in_person_name_sql() + " " if people_only else "")
             +
-            # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
-            # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
-            # then a job waiting past QUEUE_STARVE_S, oldest first, so rank cannot starve it; then task rank, then
-            # the longest waiting.
+            # A redirect first (it replaces a turn just stopped), then a person's chat. Within a bot's work, favor a
+            # live reply over task rank, so a call's prep cannot take the place of the answer it is preparing.
             "ORDER BY j.redirect DESC,CASE WHEN "
             + H.in_person_name_sql()
             + " THEN 0 ELSE 1 END,"
             f"CASE j.bot_id {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,"
             "CASE WHEN j.created_at<? THEN j.created_at ELSE '~' END,"
+            "(json_extract(m.refs,'$.live_meeting.turn_id') IS NULL),"
             "(qt.rank IS NULL),qt.rank,j.created_at,j.id",
             (
                 *bots,

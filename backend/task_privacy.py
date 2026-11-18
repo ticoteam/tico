@@ -1688,6 +1688,11 @@ def guard_write(c, who, path, auth):
     if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
         return
     meetings = meeting_sources(c).attempt(who.attempt_id)
+    bot_notes = re.fullmatch(r"/api/v2/calls/([^/]+)/bot-notes", path)
+    if bot_notes:
+        from . import call_notes
+
+        return call_notes.private_write(c, who, bot_notes[1], meetings)
     if private_meetings(c, meetings):
         # A meeting turn is one scoped reply, not an ordinary task or company publisher.
         if path in PRIVATE_MEETING_WRITES:

@@ -229,6 +229,8 @@ AUDIENCE = {
         )
     },
     **{name: REQUESTER for name in CALL_TOOLS},  # a person's act; BotOps acts as the person it works for
+    "tico_call_notes": NOT_ASSISTANT,
+    "tico_call_note": BOTS,
     # The Assistant only.
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).

@@ -18,7 +18,8 @@ the call gets one task, "Prepare for <title>", from the person who booked it, th
 (skills/meeting-prep/SKILL.md) for the call's thread; the thread gets the task's quiet "Started task" line. The task is
 private when the thread is (anything but a company thread), it goes to exactly the bot on the call, and none is given
 when the booker can no longer read the thread. The tasks and `prepped_at` are one write that only a call still
-unprepped makes, so a pass that runs twice (two processes, a restart part-way through) gives them once.
+unprepped makes, so a pass that runs twice (two processes, a restart part-way through) gives them once. A bot that
+joins a live call without prep gets the same kind of task from the person who added it.
 
 A scheduled call nobody joined ends `missed` MISSED_AFTER its end. One pass spends at most SWEEP_BUDGET; the calls it
 did not reach wait for the next minute, so the heartbeat is never held up.
@@ -54,10 +55,11 @@ def _stored(text: object) -> str:
     return at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def instructions(row: Row) -> str:
+def instructions(row: Row, live: bool) -> str:
+    phase = "already live" if live else "scheduled"
     return (
-        f"Prepare for the call {row['title']!r} (call {row['id']}) in thread {row['thread_id']}: read Tico's {SKILL} "
-        "(under HUB_DIR) and follow it."
+        f"Prepare for the call {row['title']!r} (call {row['id']}) in thread {row['thread_id']}. "
+        f"The call is {phase}. Read Tico's {SKILL} (under HUB_DIR) and follow it."
     )
 
 
@@ -212,33 +214,47 @@ class Prep:
         can no longer read the thread gives none: the task would carry the thread to them."""
         tasks: list[str] = []
         if self.calls.readable(c, row["connector_actor"], row["thread_id"]):
-            tasks = self._tasks(c, row)
+            tasks = self._tasks(c, row, live=False)
         else:
             log.info("call_prep: call %s gets no prep: its booker cannot read its thread", row["id"])
         c.execute("UPDATE calls SET prepped_at=?,updated_at=? WHERE id=? AND prepped_at IS NULL", (now, now, row["id"]))
         self.calls._record(c, row["connector_actor"], row["id"], row["thread_id"], "call.prepped", {"tasks": tasks})
 
-    def _tasks(self, c: Any, row: Row) -> list[str]:
-        slugs: list[str] = [
-            r["bot"]
-            for r in c.execute(
-                "SELECT bot FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot", (row["live_meeting_id"],)
-            )
-        ]
+    def live(self, c: Any, row: Row) -> None:
+        self._tasks(c, row, live=True)
+
+    def attached_to_meeting(self, c: Any, meeting_id: str) -> None:
+        row = c.execute(
+            "SELECT * FROM calls WHERE live_meeting_id=? AND state='live' AND ending_at IS NULL", (meeting_id,)
+        ).fetchone()
+        if row:
+            self.live(c, dict(row))
+
+    def _tasks(self, c: Any, row: Row, *, live: bool) -> list[str]:
+        bots = c.execute(
+            "SELECT b.bot,b.joined_by,n.prep_task_id,LENGTH(n.text) AS note_length "
+            "FROM live_meeting_bots b LEFT JOIN call_bot_notes n ON n.call_id=? AND n.bot_id=b.bot "
+            "WHERE b.meeting_id=? ORDER BY b.bot",
+            (row["id"], row["live_meeting_id"]),
+        ).fetchall()
+        if not bots:
+            return []
         private = bool(self.calls.thread_private(c, row["thread_id"]))
         tasks: list[str] = []
-        for slug in slugs:
-            found: Row | None = H.resolve_bot(c, slug)
-            if not found or slug not in (found["slug"], found["id"]):
-                log.info("call_prep: call %s has bot %s, who is no longer on the team", row["id"], slug)
+        for bot in bots:
+            bot_id: str = bot["bot"]
+            requester: str = bot["joined_by"] if live else row["connector_actor"]
+            if live and (bot["prep_task_id"] or bot["note_length"]):
                 continue
-            owner = "bot:" + found["id"]
+            if live and not self.calls.attachment_standing(c, requester, row["thread_id"], bot_id):
+                continue
+            owner = "bot:" + bot_id
             # A bot that cannot take the task (paused, gone, refused by a rule, handed elsewhere) costs only its own.
             c.execute("SAVEPOINT call_prep_task")
             try:
                 made: Row = H.task_create(
                     c,
-                    row["connector_actor"],
+                    requester,
                     "Prepare for " + row["title"],
                     "",
                     owner,
@@ -246,13 +262,19 @@ class Prep:
                     lint=False,
                     deduplicate=False,
                     private=private,
-                    instructions=instructions(row),
+                    wake_refs={"call_prep": row["id"]},
+                    instructions=instructions(row, live),
                 )
                 if made.get("owner_id") != owner:
                     raise Problem("rerouted", f"the task went to {made.get('owner_id')}, not {owner}", 409)
+                c.execute(
+                    "INSERT INTO call_bot_notes(call_id,bot_id,prep_task_id) VALUES(?,?,?) "
+                    "ON CONFLICT(call_id,bot_id) DO UPDATE SET prep_task_id=excluded.prep_task_id",
+                    (row["id"], bot_id, made["id"]),
+                )
                 tasks.append(made["id"])
             except (H.Refused, Problem) as exc:
                 c.execute("ROLLBACK TO call_prep_task")
-                log.info("call_prep: %s got no prep task for call %s: %s", slug, row["id"], str(exc))
+                log.info("call_prep: %s got no prep task for call %s: %s", bot_id, row["id"], str(exc))
             c.execute("RELEASE call_prep_task")
         return tasks
