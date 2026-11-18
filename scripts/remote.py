@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run one heavy command on a fresh RunsOn VM (.github/workflows/remote-run.yml) instead of on this computer.
 
-    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8|16] [--minutes N] [--ref SHA] -- CMD...
+    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8] [--minutes N] [--ref SHA] -- CMD...
 
 It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
 command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
@@ -384,9 +384,10 @@ def main(argv=None):
         choices=('python', 'browser', 'rust', 'all'),
         help='what the VM installs first (default: guessed from the command)',
     )
-    parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
-    # The whole default Python suite takes about 19 minutes on 16 vCPUs (a test worker per vCPU; 49 before Nov 11) and
-    # about four times that on 4, past the limit: a whole-suite run takes --cpus 16.
+    parser.add_argument('--cpus', choices=('4', '8'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
+    # Remote runs stay on Spot VMs of 8 vCPUs at most. The whole default Python suite took about 19 minutes on 16 vCPUs
+    # (a test worker per vCPU), so it runs as two time-balanced halves on 8, each its own remote run, at once:
+    #   remote.py --cpus 8 -- python scripts/release_checks.py --shard 1/2   (and --shard 2/2)
     parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')
     parser.add_argument('--ref', help='commit to run (default: HEAD, which must be pushed)')
     parser.add_argument('command', nargs=argparse.REMAINDER)

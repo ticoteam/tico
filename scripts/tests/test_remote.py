@@ -352,6 +352,13 @@ def test_a_bad_command_line_exits_2():
     assert exit.value.code == 2
 
 
+def test_a_run_above_8_vcpus_is_refused_before_anything_is_sent(monkeypatch):
+    monkeypatch.setattr(remote, 'run', lambda *a, **k: pytest.fail('a 16-vCPU run was dispatched'))
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--cpus', '16', '--', 'true'])
+    assert exit.value.code == 2
+
+
 class _Answer:
     def __init__(self, body):
         self.body = body
