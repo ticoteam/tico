@@ -3139,6 +3139,35 @@ def turn_wrote(c, aid, conversation_id, actor):
     )
 
 
+def check_unanswered(c, aid, actor, task_id, check, body, reply):
+    """A check (backend/check_models.py) that its turn ended, done or closed, with nothing of the turn's in its room
+    (no reply posted, no comment): a quiet Tico line there says why, so the parent's turn reading the room finds the
+    reason rather than an empty room. Its findings, if any, stay on the run."""
+    task = H.task(c, task_id) if task_id else None
+    if reply is not None or not task or task["owner_id"] != actor or task["status"] not in ("done", "closed"):
+        return None
+    started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
+    ended = max(task.get("done_at") or "", task.get("closed_at") or "")
+    if not started or ended < str(started[0] or "") or turn_wrote(c, aid, task["conversation_id"], actor):
+        return None
+    model = f"{check['runtime']}:{check['model']}"
+    said = (
+        f"The check on {model} ended its task without a reply: its run returned no final message, so it left no "
+        "findings here."
+        if not str(body.text or "").strip()
+        else f"The check on {model} ended its task, but its reply was not posted here. It is kept on run {aid[:8]}."
+    )
+    return H.say(
+        c,
+        H.TICO_ACTOR,
+        actor,
+        said,
+        conversation_id=task["conversation_id"],
+        kind="notice",
+        refs={"quiet": True, "task": task["id"], "turn_id": aid, "check_unanswered": True},
+    )
+
+
 def told_only(c, aid, msg, text, task, conv, actor):
     """Whether turn `aid`, woken by Tico's notice `msg` on `task` (H.run_notice), ends with words for nobody: the notice
     is not the task's request (its first wake, refs.news "assignment", whose answer is the requester's), no person's act
@@ -6665,6 +6694,16 @@ class Execution:
         or post in (it was removed, the thread was archived) withholds that reply, and the run is still done."""
         from . import threads
 
+        if target == actor:
+            # A check's own room (complete `own_check`): open in its thread, since a bot sends nothing to itself.
+            return threads.post(
+                c,
+                threads.viewer(None, Identity(actor, "bot", attempt_id=aid)),
+                conv["id"],
+                text,
+                refs=refs,
+                in_reply_to=msg["id"],
+            )
         if not carried and privacy.make_page_actor(c, actor, msg) == target:
             # The Assistant's answer belongs in the initiating person's private room, as its request does.
             return H._write_message(c, actor, target, text, conv, "say", refs, msg["id"], None, delivered_at=H.now())
@@ -6830,6 +6869,9 @@ class Execution:
         )
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot_id"]
+        # A turn on a check subtask ran on the check's model, not the bot's (backend/check_models.py).
+        # Decided by what the claim handed out: a check handed to another bot mid-turn still ran on the check's model.
+        check_task, check = check_models.handed_out(c, aid)
         reply, held = None, False
         # Nothing is posted under a comment taken back mid-turn: the reply would stand where it was and could
         # restate it. The turn's own result is still recorded below.
@@ -6888,8 +6930,13 @@ class Execution:
                     or carried
                     or (bool(source_refs.get("needs_action")) and not source_refs.get("comment"))
                 )
+                own_check = False
                 if target == H.TICO_ACTOR and task:
                     target = reply_target(source, conv, task)
+                    # A check the bot filed for itself (check_models) answers into its own room: its requester is the
+                    # bot, so the reply had nobody to go to and was dropped, yet it is the review the parent's turn
+                    # reads (Nov 18: a codex check finished its task and its findings were only on the run).
+                    own_check = bool(check and check_task == task["id"] and target == actor)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread hears its owner's turn: on
                     # the open task; once the owner marked the work done; or, for a finished turn that came in after
@@ -6904,7 +6951,7 @@ class Execution:
                     if conv.get("kind") == "chat" or (
                         conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])
                     ):
-                        replyable = target not in (H.TICO_ACTOR, actor) and not wrote
+                        replyable = (target not in (H.TICO_ACTOR, actor) or own_check) and not wrote
                     else:
                         replyable = actor == task["owner_id"] and (
                             task["status"] == "done"
@@ -6939,7 +6986,7 @@ class Execution:
                 # A reply the turn already sent is not posted again, but the person waiting still hears of a hold.
                 reaches = replyable
                 replyable = replyable and posting
-                if target not in (H.TICO_ACTOR, actor):
+                if target not in (H.TICO_ACTOR, actor) or own_check:
                     refs = {
                         "turn_id": aid,
                         **({"task": task["id"]} if task else {}),
@@ -7041,9 +7088,8 @@ class Execution:
                 from . import question_marks
 
                 question_marks.unasked_reply(c, aid, actor, task["id"], text, posted=reply is not None, woken_by=msg)
-        # A turn on a check subtask ran on the check's model, not the bot's (backend/check_models.py).
-        # Decided by what the claim handed out: a check handed to another bot mid-turn still ran on the check's model.
-        check_task, check = check_models.handed_out(c, aid)
+        if check and body.outcome == "completed" and not held and not kept_warm:
+            check_unanswered(c, aid, actor, check_task, check, body, reply)
         # Quota is a terminal provider pause even when it happens halfway through fallback work. Reuse the
         # restart safety judgement: local work may continue, while used OKs and outside actions stay held.
         failure = None
