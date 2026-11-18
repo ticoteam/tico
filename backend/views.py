@@ -1419,8 +1419,12 @@ def live_parts(parts):
     return cut, len(parts) - len(kept)
 
 
-def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=None):
-    page = privacy.page(c, who, cid, **(page_args or {})) if who else message_page(c, cid)
+def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=None, room=None):
+    page = (
+        privacy.page(c, who, cid, chat=(auth, room) if room else None, **(page_args or {}))
+        if who
+        else message_page(c, cid)
+    )
     from .chat_goals import current
 
     return {**page, "execution": conversation_execution(c, cid, who, settings, auth=auth), "goal": current(c, cid)}
@@ -3538,9 +3542,9 @@ def install_views(app, store, auth, mutate, task_view):
     )
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
         with store.read() as c:
-            auth.conversation(c, request.state.identity, cid)
+            room = auth.conversation(c, request.state.identity, cid)
             snap = conversation_snapshot(
-                c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth
+                c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth, room=room
             )
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             visuals.for_reader(app, auth.settings, c, request.state.identity, snap["messages"])

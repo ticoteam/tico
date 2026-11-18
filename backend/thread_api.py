@@ -754,7 +754,7 @@ def install(app, store, auth, mutate, rule_check):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
         breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
-        first page has `bot_status`."""
+        first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
         with store.read() as c:
             return threads.timeline(
                 c,

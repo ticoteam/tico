@@ -225,7 +225,7 @@ def register(app, auth, mutate, settings, store, visual_view):
         **api_v2(
             "Conversations",
             "listMessages",
-            "The newest messages (up to 200, or limit=); before=<message id> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
+            "The newest messages (up to 200, or limit=); before=<next_before> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
             "MessagePage",
         ),
     )
@@ -238,20 +238,21 @@ def register(app, auth, mutate, settings, store, visual_view):
         max_bytes: int | None = None,
     ):
         with store.read() as c:
-            auth.conversation(c, request.state.identity, cid)
+            room = auth.conversation(c, request.state.identity, cid)
             page = privacy.page(
                 c,
                 request.state.identity,
                 cid,
                 since=views.since_time(since),
                 before=before,
+                chat=(auth, room),
                 **views.page_options(limit, max_bytes),
             )
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             visual_view(c, request.state.identity, page["messages"])
             known = teammate_access.Known(c, request.state.identity, auth)  # people the reader may not see
             return {
-                "conversation": known.conversation(H.conversation(c, cid)),
+                "conversation": known.conversation(room),
                 **page,
                 "messages": known.messages(page["messages"]),
             }

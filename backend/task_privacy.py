@@ -4,12 +4,21 @@ Structured provenance is checked again on each request. This cannot retract a do
 or identify private information copied into unrelated, untagged prose.
 """
 
+from __future__ import annotations
+
 import json
 import re
+from collections.abc import Iterator
+from itertools import islice
+from sqlite3 import Connection
+from typing import TYPE_CHECKING, Any
 
 from .store import H, Problem
 from . import read_cache
 from .live_privacy import sources as meeting_sources
+
+if TYPE_CHECKING:
+    from . import threads
 
 
 def _task(c, tid):
@@ -608,21 +617,143 @@ def require_message(c, who, message):
     return message
 
 
-def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_bytes=None):
+CHAT_ACTIVITY_PAGE_SIZE = 50
+_ACTIVITY_CURSOR_PREFIX = "task-activity:"
+
+_CHAT_ACTIVITY_CANDIDATES = """
+SELECT m.*, COALESCE(t.task_id,r.task_id) AS activity_task, m.{position} AS activity_position
+FROM messages m JOIN conversations t ON t.id=m.conversation_id
+JOIN conversations r ON r.id=COALESCE(t.root_id,t.id)
+WHERE m.sender_id=? AND m.kind='say' AND m.seq IS NOT NULL AND m.deleted_at IS NULL
+  AND r.task_id IS NOT NULL AND r.deleted_at IS NULL
+"""
+
+
+def chat_peer(c: Connection, v: threads.Viewer, room: dict[str, Any] | None) -> str | None:
+    """The bot peer of this person in a two-member DM, including legacy personal rooms."""
+    from . import threads
+
+    if (
+        not v.is_person
+        or not room
+        or room["kind"] != "chat"
+        or room.get("task_id")
+        or room.get("parent_id")
+        or threads.audience_of(room) not in ("personal", "participants")
+    ):
+        return None
+    snapshot(c)
+    members: set[str] = {r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (room["id"],))}
+    if threads.audience_of(room) == "participants" or room.get("room_key"):
+        members.update(room.get("participants") or ())
+    if len(members) == 2 and v.actor in members:
+        other = next(iter(members - {v.actor}))
+        if other.startswith("bot:"):
+            return other
+    return None
+
+
+def _readable_chat_activity(
+    c: Connection, v: threads.Viewer, rows: list[dict[str, Any]]
+) -> Iterator[tuple[dict[str, Any], dict[str, Any], int]]:
+    from . import threads
+
+    tasks = {m["id"]: m.pop("activity_task") for m in rows}
+    positions = {m["id"]: m.pop("activity_position") for m in rows}
+    places = {m["conversation_id"] for m in rows}
+    prime_rooms(c, places)
+    roots = {(H.conversation(c, cid) or {}).get("root_id") or cid for cid in places}
+    threads.prime_members(c, v.who, places, roots=roots)
+    H.prime_message_rows(c, rows)
+    prime_messages(c, rows)
+    reader = actor(v.who)
+    for m in rows:
+        if threads.thread_readable(c, v, m["conversation_id"]) and message_readable(c, reader, m, current=True):
+            task = H.task_untagged(c, tasks[m["id"]])
+            if task:
+                yield m, task, positions[m["id"]]
+
+
+def _chat_activity_position(c: Connection, v: threads.Viewer, bot: str, cursor: str) -> int | None:
+    """A conversation page can continue at the last visible activity when it filled before the chat window ended."""
+    row = c.execute(_CHAT_ACTIVITY_CANDIDATES.format(position="rowid") + " AND m.id=?", (bot, cursor)).fetchone()
+    if row and next(_readable_chat_activity(c, v, [dict(row)]), None):
+        return row["activity_position"]
+    return None
+
+
+def chat_activity(
+    c: Connection,
+    v: threads.Viewer,
+    bot: str,
+    lower: int,
+    upper: int,
+    *,
+    by_rowid: bool = False,
+    since: str | None = None,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Read the chat page's half-open window in one stream, checking its candidates in batches.
+
+    Only a further readable excerpt can make the page end early. Its cursor is the last activity sent, so private
+    rows never create a page boundary and messages below that boundary can be read on the next page.
+    """
+    position = "rowid" if by_rowid else "seq"
+    args: tuple[str | int, ...] = (bot, lower, upper)
+    clauses = f" AND m.{position}>=? AND m.{position}<?"
+    if since:
+        clauses += " AND m.created_at>?"
+        args += (since,)
+    candidates = iter(
+        c.execute(_CHAT_ACTIVITY_CANDIDATES.format(position=position) + clauses + f" ORDER BY m.{position} DESC", args)
+    )
+    out: list[dict[str, Any]] = []
+    cutoff = None
+    while rows := [dict(r) for r in islice(candidates, CHAT_ACTIVITY_PAGE_SIZE + 1)]:
+        for message, task, order in _readable_chat_activity(c, v, rows):
+            if len(out) == CHAT_ACTIVITY_PAGE_SIZE:
+                return list(reversed(out)), cutoff
+            words = (message["body"] or "").lstrip()
+            first = words.split("\n", 1)[0].strip()
+            cutoff = order
+            out.append(
+                {
+                    "id": message["id"],
+                    "seq": message["seq"],
+                    "created_at": message["created_at"],
+                    "task_id": task["id"],
+                    "title": (task["title"] or "")[:300],
+                    "excerpt": first if len(first) <= 160 else first[:159] + "…",
+                }
+            )
+    return list(reversed(out)), None
+
+
+def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_bytes=None, chat=None):
     """Paginate visible rows, so hidden rows cannot leak cursors or counts. `max_bytes` also ends the page once
     its messages come to that many bytes as JSON (the newest message is always sent); the rest pages back."""
     snapshot(c)
+    from . import threads
+
+    v = threads.viewer(chat[0], who) if chat else None
+    bot = chat_peer(c, v, chat[1]) if v is not None and chat else None
+    upper = 1 << 62
     clauses, args = ["conversation_id=?"], [cid]
     if not H.is_bot(getattr(who, "actor", who)):
         # A person reads the room's timeline: the messages with a seq. Tico's notices to a bot and its carriers are
         # the bot's run input (H.run_notice), read by the bot alone.
         clauses.append("seq IS NOT NULL")
     if before:
-        anchor = c.execute("SELECT rowid,* FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
-        if not anchor or not message_readable(c, actor(who), anchor):
+        if v is not None and bot and before.startswith(_ACTIVITY_CURSOR_PREFIX):
+            upper = _chat_activity_position(c, v, bot, before.removeprefix(_ACTIVITY_CURSOR_PREFIX))
+        else:
+            anchor = c.execute(
+                "SELECT rowid,* FROM messages WHERE id=? AND conversation_id=?", (before, cid)
+            ).fetchone()
+            upper = anchor["rowid"] if anchor and message_readable(c, actor(who), anchor) else None
+        if upper is None:
             raise Problem("cursor", "Message cursor is unavailable", 422)
         clauses.append("rowid<?")
-        args.append(anchor["rowid"])
+        args.append(upper)
     if since:
         clauses.append("created_at>?")
         args.append(since)
@@ -637,7 +768,7 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             clauses[0] = "+conversation_id=?"
             clauses.append("id IN (SELECT value FROM json_each(?))")
             args.append(json.dumps(sorted(ids)))
-    visible, reader, size, full = [], actor(who), 0, False
+    visible, positions, reader, size, full = [], [], actor(who), 0, False
 
     def consider(stored):
         """The same skip rules as one row of the old loop. True once the page must stop."""
@@ -666,7 +797,9 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
         except Problem:
             return False
-        message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
+        message = {
+            key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS and key != "rowid"
+        }
         from .files import readable_page_refs
 
         message["refs"] = H._json(stored["refs"], {}) or {}
@@ -677,6 +810,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 full = True
                 return True
         visible.append(message)
+        if bot:
+            positions.append(stored["rowid"])
         return len(visible) > limit
 
     window = []
@@ -697,7 +832,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
     # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
     # task's message before its privacy check, so a read costs the room once, not twice. The window is
     # primed before those checks, so rooms, replies, inputs and runs are not one query per message.
-    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
+    columns = "rowid,*" if bot else "*"
+    for row in c.execute(
+        f"SELECT {columns} FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args
+    ):
         window.append(dict(row))
         if len(window) >= 80 and flush():
             break
@@ -705,7 +843,18 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
         flush()
     more = full or len(visible) > limit
     messages = list(reversed(visible[:limit]))
-    return {"messages": messages, "has_more": more, "next_before": messages[0]["id"] if more and messages else None}
+    next_before = messages[0]["id"] if more and messages else None
+    out = {"messages": messages, "has_more": more, "next_before": next_before}
+    if v is not None and bot:
+        floor = positions[len(messages) - 1] if next_before else 0
+        activity, cutoff = chat_activity(c, v, bot, floor, upper, by_rowid=True, since=since)
+        if activity:
+            out["task_activity"] = activity
+        if cutoff is not None:
+            out["messages"] = [m for m, pos in zip(messages, reversed(positions[:limit]), strict=True) if pos >= cutoff]
+            out["has_more"] = True
+            out["next_before"] = _ACTIVITY_CURSOR_PREFIX + activity[0]["id"]
+    return out
 
 
 def deleted_comment_ack(c, principal, payload):
