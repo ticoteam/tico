@@ -12,7 +12,7 @@
 // - the editor names what someone else changed when its save is refused as out of date;
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
 //   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them;
-// - a task's row for a stage's OK is its title alone, met or not; what it waits on is its tooltip.
+// - a task's row for a stage's OK is its title alone, met or not; what it waits on is its tooltip;
 // - in the list, each run of empty stages (even one) is one line of stage chips in its place, and a pipeline with nothing
 //   open is one empty state with New task; neither while searching, nor while more tasks are still to be read (#500).
 // Run: node ui/tests/pipeline-view-unit.cts
