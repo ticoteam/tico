@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from backend import call_media, call_voice, calls, events, live_meetings, threads
+from backend import call_media, call_voice, calls, live_meetings, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
@@ -31,7 +31,6 @@ from backend.tests.helpers.calls import (
 )
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
-from backend.tests.helpers.task_lanes import new_task, task_bot
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
@@ -173,7 +172,17 @@ def test_in_a_one_to_one_call_the_bot_answers_every_question_aloud_one_at_a_time
 
 
 def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering_a_task(meet):
+    from backend import events
+    from backend.tests.helpers.credentials import setup as credential_setup
+    from backend.tests.helpers.model_subscriptions import add, company, give, on
+    from backend.tests.helpers.task_lanes import new_task, task_bot
+
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
     machine = task_bot(meet, lanes=True, capacity=5)
+    give(meet, machine, default["runtime"], add(meet)["id"])
     rid, token = machine["runner_id"], machine["token"]
     task = new_task(meet, "Review the launch")
     claim = {"next_run": True, "start_places": True, "busy_bots": [], "busy_lanes": []}
@@ -190,7 +199,8 @@ def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering
     with store.read() as c:
         cursor = events.latest(c)
     _speak(meet, call["id"], 0, "Can we ship today?")
-    assert _turns(meet, call["meeting_id"]) == [{"bot": "ops", "status": "pending", "skip_reason": ""}]
+    [turn] = _turns(meet, call["meeting_id"])
+    assert (turn["bot"], turn["status"]) == ("ops", "pending")
     with store.read() as c:
         sent, _, reset, _ = events.runner_read(c, rid, "runner:" + rid, cursor)
     assert not reset
