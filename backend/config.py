@@ -374,7 +374,7 @@ class Settings:
     default_runtime: str = ""
     default_model: str = ""
     # The models choice the installer asks for (backend/models_preset.py; scripts/install.sh writes
-    # TICO_MODELS_PRESET=subscriptions-gateway for the recommended setup). First boot only, like the three above.
+    # TICO_MODELS_PRESET=subscriptions for the recommended setup). First boot only, like the three above.
     models_preset: str = ""
     credential_kms_key: str = ""
     # A hosted company's own KMS settings (setup/cell.py writes them; backend/credentials.py `CredentialCipher`): its id as

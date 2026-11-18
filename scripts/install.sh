@@ -630,7 +630,7 @@ run_local() {
       if [ -n "$RECOMMENDED" ]; then
         # The recommended choices, read by the server on its first start (models preset, Gateway enrollment).
         printf 'TICO_INSTALL_PRESET=recommended\n'
-        printf 'TICO_MODELS_PRESET=subscriptions-gateway\n'
+        printf 'TICO_MODELS_PRESET=subscriptions\n'
         [ -z "$GATEWAY_INVITE" ] || printf 'TICO_GATEWAY_INVITE=%s\n' "$GATEWAY_INVITE"
       fi
     } > "$env_tmp" )

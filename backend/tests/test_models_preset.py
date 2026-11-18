@@ -299,9 +299,22 @@ def test_one_sign_in_card_until_claude_and_chatgpt_are_signed_in_and_it_names_th
 
 
 def test_no_sign_in_card_under_the_other_choices(api):
-    for preset in ("subscriptions", "gateway", "own-keys", ""):
+    for preset in ("gateway", "own-keys", ""):
         choose(api, preset)
         assert needs(api) == []
+
+
+def test_subscriptions_only_shows_the_sign_in_card_without_the_docker_runner_line(api):
+    """Subscriptions only (recommended since Nov 18) still asks for the sign-ins, but no Gateway work waits on a
+    Docker runner, so the card doesn't name one."""
+    choose(api, "subscriptions")
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated=False)
+    cards = needs(api)
+    assert [c["title"] for c in cards] == [models_preset.SIGN_IN_TITLE]
+    assert models_preset.NOT_ISOLATED_LINE not in cards[0]["first_line"]
 
 
 @pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
