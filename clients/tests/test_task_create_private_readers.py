@@ -73,3 +73,18 @@ def test_the_dry_run_answers_alone_when_the_server_cannot_be_asked_or_no_pipelin
     assert code == 0 and "tico:" not in capsys.readouterr().err
     code, asked = _dry(monkeypatch, {"ok": True, "private_readers": LINE}, "--private")
     assert code == 0 and asked == [] and "tico:" not in capsys.readouterr().err
+
+
+def test_the_command_itself_prints_the_line_on_a_private_dry_run(monkeypatch, capsys):
+    """Review: through the entry point a bot runs (`tico task create --private --pipeline engineering --dry-run`),
+    which takes the dry run before any request path."""
+    from clients import tico
+
+    monkeypatch.setenv("HUB_API_URL", "https://acme.example")
+    monkeypatch.setenv("HUB_BOT", "builder")
+    monkeypatch.setattr(tico.Client, "post", lambda self, path, body=None, key=None: {"private_readers": LINE})
+    argv = ["task", "create", "--private", "--pipeline", "engineering", "--owner", "bot:builder"]
+    assert hubcli.main([*argv, "--title", "Fix it", "--body", "Rounds pay.", "--dry-run"]) == 0
+    out = capsys.readouterr()
+    assert out.err.splitlines()[0] == "tico: " + LINE
+    assert out.out.startswith("ok: would create")
