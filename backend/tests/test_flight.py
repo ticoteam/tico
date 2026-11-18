@@ -96,7 +96,7 @@ def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store
         finally:
             flight.request_finished(token)
     assert cost[2] == 5 and len(cost[3]) == 3
-    rec.request("GET /api/status", "human", 200, 1500, 10, "human:ana", cost)
+    rec.request("GET /api/status", "human", 200, 1500, 10, "human:ana", cost, "token:muse")
     rec.request("GET /api/status", "human", 200, 1600, 10, "human:ana", [900.0, 0.0, 40])  # an older-shaped cost
     rec.drain(MINUTE)
     taken = rec.take(MINUTE)
@@ -108,7 +108,21 @@ def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store
     assert {"sql": "SELECT * FROM tasks WHERE id='?'", "n": 2, "ms": named["top"][1]["ms"]} in named["top"]
     assert "secret" not in json.dumps(slow) and sum(1 for r in slow if "top" not in r) == 1
     # The flight file, which a stalled server still writes, carries the same names.
-    assert [r["top"] for r in rec.pop_slow() if "top" in r] == [named["top"]]
+    filed = rec.pop_slow()
+    assert [r["top"] for r in filed if "top" in r] == [named["top"]]
+    # And says how the person reached the server, so a burst can be traced to the assistant or script behind it.
+    assert [r.get("client") for r in filed] == ["token:muse", None]
+
+
+def test_a_slow_request_names_how_a_person_reached_the_server():
+    """A person's personal API token by its label, the Assistant, or the browser; nothing for bots and runners."""
+    from backend.auth import Identity
+
+    assert flight.client_of(Identity("human:ana", "human", via_token=True, token_label="muse")) == "token:muse"
+    assert flight.client_of(Identity("human:ana", "human", via_token=True)) == "token:unnamed"
+    assert flight.client_of(Identity("human:ana", "owner", via="assistant")) == "assistant"
+    assert flight.client_of(Identity("human:ana", "human")) == "browser"
+    assert flight.client_of(Identity("bot:ops", "bot")) == flight.client_of(None) == ""
 
 
 def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, capsys):
