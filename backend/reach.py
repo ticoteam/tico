@@ -965,7 +965,10 @@ def wrote_lately(c, sender, receiver, before=None):
     args = [receiver, since, until, sender]
     where = "m.sender_id=? AND m.created_at>=? AND m.created_at<? AND (m.recipient_id=?"
     if H._has_table(c, "message_mentions"):
-        where += " OR EXISTS(SELECT 1 FROM message_mentions x WHERE x.message_id=m.id AND x.actor=?)"
+        # Only a mention the bot may read: one outside the thread's audience names a message it cannot file from.
+        where += (
+            " OR EXISTS(SELECT 1 FROM message_mentions x WHERE x.message_id=m.id AND x.actor=? AND x.in_audience=1)"
+        )
         args.append(sender)
     row = c.execute(
         f"SELECT m.id, m.created_at FROM messages m WHERE {where}) ORDER BY m.created_at DESC LIMIT 1", args

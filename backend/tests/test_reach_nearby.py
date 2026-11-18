@@ -736,3 +736,19 @@ def test_the_refusal_for_a_person_who_wrote_lately_says_to_file_for_them_and_nam
     with api.app.state.store.read() as c:
         week_later = (datetime.now(timezone.utc) + timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         assert reach.wrote_lately(c, "bot:ops", "human:ben", before=week_later) is None
+
+
+def test_a_mention_in_a_thread_the_bot_cannot_read_is_not_named_in_its_refusal(api):
+    """Ben @mentions ops in a members-only thread ops is not in: ops cannot read or file from that message, so its
+    refusal is today's, through its manager, and names neither the message nor its date."""
+    two_levels_down(api)
+    tid = members_thread(api, ["human:ben"])
+    posted = api.post(f"/api/v2/threads/{tid}/messages", json={"text": "Numbers, @ops?"}, headers=headers("ben-test"))
+    assert posted.status_code == 200, posted.text
+    own = task(api, "ops-test", "bot:ops", title="A question for Ben")
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(reach.Refused) as refused:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    detail = refused.value.detail
+    assert refused.value.extra["via"] == "bot:product-design" and "who can pass it on" in detail, detail
+    assert posted.json()["id"] not in detail and "--from-message" not in detail, detail
