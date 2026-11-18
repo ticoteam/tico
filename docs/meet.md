@@ -250,8 +250,10 @@ access rules. At 30 seconds from the time it heard a question, the call skips an
 `tico call follow-up --call <id> "<what to find out or do>"`. The task runs on its normal model with its normal
 tools and permissions. It keeps a link to the call and a few recent transcript lines, and the call's thread members
 can read it. Someone in the call can also file one for an attached bot with `--bot <slug>`. The answer goes back to
-the thread with a task link. In a voice call, an attached bot can read a short version at a pause, after any open
-question. Failed or unanswered work leaves a brief message in the thread. Ended calls show follow-ups in their notes.
+the thread with a task link. If the requester marks the task done with a note, the thread credits them for the answer.
+In a voice call, an attached bot can read a short version at a pause, after any open question. The answer stays queued
+if the recorder needs to reconnect. Failed or unanswered work leaves a brief message once recovery settles. Ended
+calls show up to 100 follow-ups in their notes.
 
 **Speaking it.** The first complete sentence goes to the Gateway's text-to-speech while the model continues writing.
 Later sentences are prepared as they arrive and play in order on the Tico voice track as PCM frames stream in. The full reply is posted to

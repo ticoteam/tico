@@ -2079,6 +2079,10 @@ class Calls:
         self.drop_pending(call_id)
         if exists and not self.media.running(call_id):
             self.media.start_recorder(call_id, room, self._audio_for(call_id), self._quiet_for(call_id))
+        if row["speak_replies"] and self.media.running(call_id):
+            from . import call_follow_ups
+
+            call_follow_ups.queue_speech(self, call_id)
 
     def _presence(self, c, row, present):
         """Record who LiveKit has in a Tico Meet call's room (Tico voice left out), and say whether that ends the call:

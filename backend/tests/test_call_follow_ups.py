@@ -5,7 +5,7 @@ import threading
 
 import httpx
 
-from backend import call_media
+from backend import call_media, call_notes, hubdb as H, run_failures, task_privacy
 from backend.tests.helpers.api import assign, get, post, runner, unrelated_task_managers
 from backend.tests.helpers.calls import (
     PCM_ONE_SECOND,
@@ -18,6 +18,7 @@ from backend.tests.helpers.calls import (
     thread,
 )
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
+from backend.tests.helpers.run_failures import at
 from backend.tests.threads_e2e import add_member, create_thread, ok, remove_member
 
 
@@ -35,6 +36,16 @@ def _claim(api, machine):
     return attempt
 
 
+def _prepared_call(api, thread_id, machine):
+    call = start_call(api, thread_id, bots=["ops"])
+    join(api, call["id"])
+    prep = _claim(api, machine)
+    assert prep["message"]["refs"]["call_prep"] == call["id"]
+    post(api, f"tasks/{prep['task']['id']}/done", {"version": prep["task"]["version"]}, prep["token"])
+    post(api, f"attempts/{prep['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    return call
+
+
 def _follow_up(api, call, ask, token="ana-test", **kwargs):
     return post(api, f"calls/{call['id']}/follow-ups", {"ask": ask}, token=token, **kwargs)
 
@@ -48,8 +59,7 @@ def test_an_attached_bot_hands_its_question_to_a_normal_task_only_the_thread_can
         unrelated_task_managers(c, "ops")
     machine = _machine(meet)
     thread_id = thread(meet)
-    call = start_call(meet, thread_id, bots=["ops"])
-    join(meet, call["id"])
+    call = _prepared_call(meet, thread_id, machine)
     assert _follow_up(meet, call, "Find the ship date", "ben-test", expected=403)["error"]["code"] == "forbidden"
     assert _follow_up(meet, call, "Find the ship date", "cara-test", expected=404)["error"]["code"] == "not_found"
     calls = meet.app.state.calls
@@ -74,6 +84,7 @@ def test_an_attached_bot_hands_its_question_to_a_normal_task_only_the_thread_can
     assert _follow_up(meet, call, "Find the ship date", machine["token"], expected=403)["error"]["code"] == "identity"
     task_id = _follow_up(meet, call, "Find the ship date", attempt["token"], key="follow-up")["task_id"]
     assert _follow_up(meet, call, "Find the ship date", attempt["token"], key="follow-up") == {"task_id": task_id}
+    next_task = _follow_up(meet, call, "Check the freight window", attempt["token"])["task_id"]
     shown = get(meet, f"tasks/{task_id}", "ben-test")
     assert (shown["task"]["title"], shown["task"]["owner_id"]) == ("Find the ship date", "bot:ops")
     [request] = [m["body"] for m in shown["messages"] if m["body"].startswith("Find the ship date")]
@@ -100,14 +111,23 @@ def test_an_attached_bot_hands_its_question_to_a_normal_task_only_the_thread_can
     assert calls.settle()
     worker = _claim(meet, machine)
     assert (worker["task"]["id"], worker["lane"], worker.get("live_meeting")) == (task_id, "task:" + task_id, None)
+    post(
+        meet,
+        f"attempts/{worker['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "The shipping date is still pending."},
+        machine["token"],
+    )
+    next_run = _claim(meet, machine)
+    assert next_run["task"]["id"] == next_task
+    with meet.app.state.store.read() as c:
+        assert task_privacy.attempt_tasks(c, next_run["id"]) == {next_task}
 
 
 def test_a_task_answer_waits_for_speech_and_an_open_question_then_returns_once(meet, monkeypatch):
     machine = _machine(meet)
     thread_id = thread(meet)
-    call = start_call(meet, thread_id, bots=["ops"])
+    call = _prepared_call(meet, thread_id, machine)
     call_id = call["id"]
-    join(meet, call_id)
     task_id = _follow_up(meet, call, "Find the launch date")["task_id"]
     calls, media = meet.app.state.calls, meet.app.state.call_media
     synthesized = []
@@ -183,9 +203,8 @@ def test_a_task_answer_waits_for_speech_and_an_open_question_then_returns_once(m
 def test_an_answer_after_end_is_in_the_thread_and_notes_but_not_spoken(meet):
     machine = _machine(meet)
     thread_id = thread(meet)
-    call = start_call(meet, thread_id, bots=["ops"])
+    call = _prepared_call(meet, thread_id, machine)
     call_id = call["id"]
-    join(meet, call_id)
     task_id = _follow_up(meet, call, "Check the next booking")["task_id"]
     worker = _claim(meet, machine)
     post(meet, f"calls/{call_id}/end", {})
@@ -216,12 +235,21 @@ def test_an_answer_after_end_is_in_the_thread_and_notes_but_not_spoken(meet):
 
 
 def test_closed_work_reports_no_answer_without_speaking(meet):
+    machine = _machine(meet)
     thread_id = thread(meet)
-    call = start_call(meet, thread_id, bots=["ops"])
-    join(meet, call["id"])
+    call = _prepared_call(meet, thread_id, machine)
     task_id = _follow_up(meet, call, "Check the menu")["task_id"]
+    worker = _claim(meet, machine)
     post(meet, f"tasks/{task_id}/move", {"to": "closed", "why": "Plans changed."})
     calls = meet.app.state.calls
+    calls.sweep()
+    assert _messages(meet, thread_id, task_id) == []
+    post(
+        meet,
+        f"attempts/{worker['id']}/complete",
+        {"outcome": "interrupted", "last_seq": 0},
+        machine["token"],
+    )
     calls.sweep()
     calls.voice.tick()
     assert calls.settle()
@@ -229,13 +257,14 @@ def test_closed_work_reports_no_answer_without_speaking(meet):
     assert answer["sender_id"] == "bot:ops"
     assert answer["body"].splitlines()[0] == "The follow-up on Check the menu ended without an answer."
     assert meet.app.state.call_media.said == []
+    calls.sweep()
+    assert _messages(meet, thread_id, task_id) == [answer]
 
 
-def test_a_terminal_run_failure_reports_to_the_thread_without_speaking(meet):
+def test_recovery_waits_for_a_retry_and_reports_a_final_disposition_once(meet, monkeypatch):
     machine = _machine(meet)
     thread_id = thread(meet)
-    call = start_call(meet, thread_id, bots=["ops"])
-    join(meet, call["id"])
+    call = _prepared_call(meet, thread_id, machine)
     task_id = _follow_up(meet, call, "Verify the estimate")["task_id"]
     worker = _claim(meet, machine)
     post(
@@ -246,11 +275,94 @@ def test_a_terminal_run_failure_reports_to_the_thread_without_speaking(meet):
     )
     calls = meet.app.state.calls
     calls.sweep()
+    assert _messages(meet, thread_id, task_id) == []
+    resumed = post(
+        meet,
+        f"jobs/{worker['job_id']}/reconcile",
+        {
+            "run_id": worker["id"],
+            "decision": "resume",
+            "note": "The service is available again. Try the estimate once more.",
+            "acknowledge_uncertain_effects": True,
+        },
+    )
+    assert resumed["state"] == "queued"
+    calls.sweep()
+    assert _messages(meet, thread_id, task_id) == []
+    with meet.app.state.store.read() as c:
+        until = run_failures.get(c, "ops")["until_at"]
+    at(monkeypatch, meet, H.shift(until, seconds=1))
+    private_lanes_ready(meet, machine, "ops")
+    retry = _claim(meet, machine)
+    assert retry["job_id"] == worker["job_id"]
+    post(
+        meet,
+        f"attempts/{retry['id']}/complete",
+        {"outcome": "failed", "last_seq": 0, "text": "The outside service returned 503 again."},
+        machine["token"],
+    )
+    calls.sweep()
+    assert _messages(meet, thread_id, task_id) == []
+    post(
+        meet,
+        f"jobs/{retry['job_id']}/reconcile",
+        {
+            "run_id": retry["id"],
+            "decision": "dismiss",
+            "note": "The service is still unavailable. Stop looking up the estimate.",
+            "acknowledge_uncertain_effects": True,
+        },
+    )
+    calls.sweep()
     calls.voice.tick()
     assert calls.settle()
     [answer] = _messages(meet, thread_id, task_id)
     assert answer["body"].splitlines()[0] == "The follow-up on Verify the estimate failed before it could answer."
     assert meet.app.state.call_media.said == []
+    calls.sweep()
+    assert _messages(meet, thread_id, task_id) == [answer]
+
+
+def test_requester_note_survives_recorder_recovery_with_its_author(meet):
+    machine = _machine(meet)
+    thread_id = thread(meet)
+    call = _prepared_call(meet, thread_id, machine)
+    call_id = call["id"]
+    task_id = _follow_up(meet, call, "Check the rollout date")["task_id"]
+    worker = _claim(meet, machine)
+    post(meet, f"tasks/{task_id}/done", {"note": "Friday", "version": worker["task"]["version"]})
+    calls, media = meet.app.state.calls, meet.app.state.call_media
+    calls.sweep()
+    assert _messages(meet, thread_id, task_id) == []
+    post(meet, f"attempts/{worker['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    media.stop_recorder(call_id)
+    media.down = True
+    calls.sweep()
+    [answer] = _messages(meet, thread_id, task_id)
+    assert answer["sender_id"] == "human:ana"
+    assert answer["body"].splitlines()[0] == "Back on Check the rollout date: Friday"
+    assert "turn_id" not in answer["refs"]
+    with meet.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT notes FROM answers WHERE id=?", (answer["refs"]["answer_id"],)).fetchone()[0] == "Friday"
+        )
+        assert call_notes.text(c, call_id, "ops").endswith("Back on Check the rollout date: Friday")
+    calls.voice.tick()
+    assert media.said == []
+
+    media.down = False
+    calls.sweep()
+    calls.voice.forget(call_id)
+    calls.sweep()
+    calls.voice.tick()
+    assert calls.settle()
+    assert [item[0] for item in media.said] == [call_id]
+    calls.voice.forget(call_id)
+    calls.sweep()
+    calls.voice.tick()
+    assert calls.settle()
+    assert _messages(meet, thread_id, task_id) == [answer]
+    assert len(media.said) == 1
 
 
 def test_follow_up_access_follows_thread_membership(meet):
@@ -264,6 +376,10 @@ def test_follow_up_access_follows_thread_membership(meet):
     task_id = post(meet, path, {"ask": ask, "bot": "ops"})["task_id"]
     get(meet, f"tasks/{task_id}", "cara-test", expected=404)
     ok(add_member(meet, "ana-test", thread_id, "human:cara"))
+    with meet.app.state.store.read() as c:
+        assert H.task_private_readable(
+            c, "human:cara", {"id": task_id, "private": 1, "owner_id": "bot:ops", "requester_id": "human:ana"}
+        )
     assert get(meet, f"tasks/{task_id}", "cara-test")["task"]["title"] == ask
     ok(remove_member(meet, "ana-test", thread_id, "human:cara"))
     get(meet, f"tasks/{task_id}", "cara-test", expected=404)

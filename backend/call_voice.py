@@ -704,11 +704,17 @@ class Voice:
             return
         voice = self._call(call_id)
         with voice.lock:
+            if (
+                reply_id in voice.played
+                or (voice.open and voice.open.get("reply") == reply_id)
+                or any(item[1] == reply_id for item in voice.follow_ups)
+            ):
+                return
             voice.follow_ups.append((bot, reply_id, text))
         self.wake.set()
 
     def _next_follow_up(self, call_id: str, voice: CallVoice) -> None:
-        if self.calls.speech_pending(call_id):
+        if not self.calls.media.running(call_id) or self.calls.speech_pending(call_id):
             return
         with voice.lock:
             if voice.open is not None or voice.waiting or not voice.follow_ups:
@@ -806,6 +812,7 @@ class Voice:
         media = self.calls.media
         follow_up = deadline is None
         played = 0
+        mark = None
         why = "not_spoken"
         stream = text if isinstance(text, ReplyStream) else None
         try:
@@ -814,6 +821,8 @@ class Voice:
                 used = c.execute("SELECT voice_ms FROM calls WHERE id=?", (call_id,)).fetchone()
             budget = VOICE_CAP_MS - (int(used[0] or 0) if used else 0)
             mark = media.mark(call_id)  # a hush after standing was checked also stops this reply
+            if follow_up and mark is None:
+                return
             if not key or not self._standing(call_id, bot, voice, epoch):
                 why = "no_voice" if not key else "canceled"
                 return
@@ -928,6 +937,14 @@ class Voice:
             why = "voice_failed"
             report("calls_voice", call_id, exc, logger="tico.call_voice")
         finally:
+            recorder_lost = (
+                follow_up
+                and not played
+                and (
+                    mark is None or not media.running(call_id) or (why == "not_spoken" and media.mark(call_id) != mark)
+                )
+            )
+            finish_follow_up = follow_up and not recorder_lost
             with voice.lock:
                 if _epoch(voice, bot) != epoch:
                     why = "canceled"
@@ -935,7 +952,8 @@ class Voice:
                     if follow_up and isinstance(text, str):
                         if voice.open.get("yielded") and not played and _epoch(voice, bot) == epoch:
                             voice.follow_ups.appendleft((bot, reply_id, text))
-                        else:
+                            finish_follow_up = False
+                        elif finish_follow_up:
                             voice.played.append(reply_id)
                     if stream is not None and not stream.closed:
                         voice.open["playback_done"] = True
@@ -948,6 +966,10 @@ class Voice:
                 with self.store.transaction() as c:
                     if played:
                         c.execute("UPDATE calls SET voice_ms=voice_ms+? WHERE id=?", (played, call_id))
+                    if finish_follow_up:
+                        from . import call_follow_ups
+
+                        call_follow_ups.finish_speech(c, call_id, reply_id)
                     self.touch(call_id, c)
             except Exception as exc:  # noqa: BLE001 - the spoken time is a cap, not a record
                 report("calls_voice", call_id, exc, logger="tico.call_voice")

@@ -30,7 +30,7 @@ threads: Any = _threads
 Record = dict[str, Any]
 
 TRANSCRIPT_LINES = 5
-NOTES_LIMIT = 20
+NOTES_LIMIT = 100
 ANSWER_CHARS = 8000
 
 
@@ -145,6 +145,7 @@ def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, as
         body,
         owner,
         private=True,
+        reconcile_related=False,
         instructions="Answer the call's request. Put the answer in your task completion note or final reply.",
     )
     c.execute("INSERT INTO call_follow_ups(task_id,call_id,bot_id) VALUES(?,?,?)", (task["id"], row["id"], bot))
@@ -152,50 +153,59 @@ def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, as
 
 
 def _ready(c: Connection) -> list[Row]:
-    # Done can be written by a tool call before its bot's final reply is stored. A terminal run failure is
-    # reported only once the job has stopped retrying. Closed tasks are already terminal.
+    # A run can still write its final reply after the task ends. An uncertain job can still accept a late reply
+    # or be queued again by recovery, so the job's disposition decides when its failure is final.
     return c.execute(
-        "SELECT f.task_id,f.bot_id,t.status,t.title AS topic,s.* FROM call_follow_ups f "
+        "SELECT f.task_id,f.bot_id,t.status,t.requester_id,t.title AS topic,s.* FROM call_follow_ups f "
         "JOIN tasks t ON t.id=f.task_id JOIN calls s ON s.id=f.call_id "
-        "WHERE f.returned_state IS NOT 'done' AND (f.returned_state IS NULL OR t.status='done') AND (t.status='closed' OR "
-        "(NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id AND a.bot_id=f.bot_id "
-        "AND a.state IN ('leased','running','input')) AND (t.status='done' OR EXISTS ("
-        "SELECT 1 FROM attempts a JOIN jobs j ON j.attempt_id=a.id WHERE a.task_id=t.id AND a.bot_id=f.bot_id "
-        "AND a.state='failed' AND j.state IN ('failed','uncertain') AND a.id=("
-        "SELECT latest.id FROM attempts latest WHERE latest.task_id=t.id AND latest.bot_id=f.bot_id "
-        "ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1))))) "
+        "WHERE f.returned_state IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=t.id "
+        "AND a.state IN ('leased','running','input')) "
+        "AND NOT EXISTS (SELECT 1 FROM messages m JOIN jobs j ON j.message_id=m.id "
+        "WHERE m.conversation_id=t.conversation_id AND j.state IN ('queued','leased','running','input','uncertain')) "
+        "AND (t.status IN ('done','closed') OR (SELECT j.state FROM messages m JOIN jobs j ON j.message_id=m.id "
+        "WHERE m.conversation_id=t.conversation_id AND j.bot_id=f.bot_id "
+        "ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) IN ('failed','canceled')) "
         "ORDER BY f.rowid LIMIT 20"
     ).fetchall()
 
 
-def _answer(c: Connection, row: Row) -> tuple[str, str | None]:
+def _answer(c: Connection, row: Row) -> tuple[str, str, Record]:
     actor = f"bot:{row['bot_id']}"
     if row["status"] != "done":
-        return "", None
+        return "", actor, {}
     done = c.execute(
-        "SELECT a.notes,a.created_at FROM answers a JOIN visits v ON v.id=a.visit_id "
-        "JOIN requirements r ON r.id=a.requirement_id WHERE v.task_id=? AND a.by_id=? AND a.answer='done' "
+        "SELECT a.id,a.notes,a.by_id,a.created_at,(SELECT e.via FROM history_events e WHERE e.subject_type='task' "
+        "AND e.subject_id=v.task_id AND e.kind='answer' AND json_extract(e.data,'$.answer_id')=a.id LIMIT 1) AS via "
+        "FROM answers a JOIN visits v ON v.id=a.visit_id "
+        "JOIN requirements r ON r.id=a.requirement_id WHERE v.task_id=? AND a.by_id IN (?,?) AND a.answer='done' "
         "AND r.kind='owner_done' AND a.undone_at IS NULL AND trim(a.notes)<>'' "
         "ORDER BY a.created_at DESC,a.rowid DESC LIMIT 1",
-        (row["task_id"], actor),
+        (row["task_id"], actor, row["requester_id"]),
     ).fetchone()
+    if done:
+        refs: Record = {"answer_id": done["id"]}
+        if done["via"]:
+            refs["via"] = done["via"]
+        if done["by_id"] == actor:
+            run = c.execute(
+                "SELECT id FROM attempts WHERE task_id=? AND bot_id=? AND started_at<=? AND finished_at>=? "
+                "ORDER BY started_at DESC,rowid DESC LIMIT 1",
+                (row["task_id"], row["bot_id"], done["created_at"], done["created_at"]),
+            ).fetchone()
+            if run:
+                refs["turn_id"] = run["id"]
+        return done["notes"].strip(), done["by_id"], refs
     run = c.execute(
-        "SELECT id,final_text,started_at,finished_at,result FROM attempts WHERE task_id=? AND bot_id=? "
+        "SELECT id,final_text,result FROM attempts WHERE task_id=? AND bot_id=? "
         "ORDER BY created_at DESC,rowid DESC LIMIT 1",
         (row["task_id"], row["bot_id"]),
     ).fetchone()
-    if done:
-        aid = (
-            run["id"]
-            if run and run["started_at"] and run["started_at"] <= done["created_at"] <= (run["finished_at"] or "")
-            else None
-        )
-        return done["notes"].strip(), aid
     if run and run["final_text"]:
         verdict: Record = H._json(run["result"], {}) or {}
         if verdict.get("outcome") == "completed" and not verdict.get("held_reply"):
-            return run["final_text"].strip(), run["id"]
-    return "", None
+            return run["final_text"].strip(), actor, {"turn_id": run["id"]}
+    return "", actor, {}
 
 
 def _speakers_read(c: Connection, row: Row, message: Record) -> bool:
@@ -223,14 +233,14 @@ def _notes_may_keep(c: Connection, row: Row, aid: str | None) -> bool:
     return not any(H.task_private(c, H.task(c, tid)) for tid in private_tasks) and meetings <= {row["live_meeting_id"]}
 
 
-def _return(c: Any, calls: Any, row: Row) -> None:
+def _return(c: Any, row: Row) -> None:
     from . import call_notes
 
     thread = threads.thread_row(c, row["thread_id"])
     if thread is None or thread.get("deleted_at"):
         c.execute("UPDATE call_follow_ups SET returned_state='done' WHERE task_id=?", (row["task_id"],))
         return
-    answer, aid = _answer(c, row)
+    answer, author, provenance = _answer(c, row)
     answer = answer[:ANSWER_CHARS]
     topic = row["topic"]
     link = f"[Open task](#/task/{row['task_id']})"
@@ -246,27 +256,25 @@ def _return(c: Any, calls: Any, row: Row) -> None:
         "live_meeting": {"meeting_id": row["live_meeting_id"]},
         "quiet": True,
         "no_mentions": True,
-        **({"turn_id": aid} if aid else {}),
+        **provenance,
     }
     # This is a server projection of the bot's completed work. It may arrive after the bot leaves the call or its
     # run lease ends. Its task, call and run references keep the original readers on the message.
-    message = H._write_message(c, f"bot:{row['bot_id']}", None, f"{body}\n\n{link}", thread, "say", refs, None, None)
+    message = H._write_message(c, author, None, f"{body}\n\n{link}", thread, "say", refs, None, None)
     state = row["status"] if row["status"] in ("done", "closed") else "failed"
+    speak = bool(answer and row["state"] == "live" and not row["ending_at"] and row["speak_replies"])
     c.execute(
-        "UPDATE call_follow_ups SET returned_state=?,message_id=? WHERE task_id=?",
-        (state, message["id"], row["task_id"]),
+        "UPDATE call_follow_ups SET returned_state=?,message_id=?,speech_pending=? WHERE task_id=?",
+        (state, message["id"], speak, row["task_id"]),
     )
     c.execute(
         "INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,created_at) "
         "VALUES('threads','call.follow_up',?,?,?,?)",
-        (row["id"], row["thread_id"], f"bot:{row['bot_id']}", H.now()),
+        (row["id"], row["thread_id"], author, H.now()),
     )
     append = getattr(call_notes, "append", None)
-    if answer and append is not None and _notes_may_keep(c, row, aid):
+    if answer and append is not None and _notes_may_keep(c, row, provenance.get("turn_id")):
         append(c, row["id"], row["bot_id"], body)
-    if answer and row["state"] == "live" and not row["ending_at"] and row["speak_replies"]:
-        text = " ".join(body.split()[:80])
-        c.after_commit.append(lambda: calls.voice.follow_up(row["id"], row["bot_id"], message["id"], text))
 
 
 def sweep(calls: Any) -> None:
@@ -277,7 +285,28 @@ def sweep(calls: Any) -> None:
     with calls.store.transaction() as c:
         for row in _ready(c):
             with batch_work.isolated(c, "call_follow_up", row["task_id"], private=True):
-                _return(c, calls, row)
+                _return(c, row)
+
+
+def queue_speech(calls: Any, call_id: str) -> None:
+    """Pick up durable answers when a live call has a recorder, including after a server restart."""
+    with calls.store.read() as c:
+        rows: list[Row] = c.execute(
+            "SELECT f.bot_id,f.message_id,m.body FROM call_follow_ups f "
+            "JOIN messages m ON m.id=f.message_id AND m.deleted_at IS NULL "
+            "WHERE f.call_id=? AND f.speech_pending=1 ORDER BY f.rowid LIMIT 20",
+            (call_id,),
+        ).fetchall()
+    for row in rows:
+        body = row["body"].rsplit("\n\n", 1)[0]
+        calls.voice.follow_up(call_id, row["bot_id"], row["message_id"], " ".join(body.split()[:80]))
+
+
+def finish_speech(c: Connection, call_id: str, message_id: str) -> None:
+    c.execute(
+        "UPDATE call_follow_ups SET speech_pending=0 WHERE call_id=? AND message_id=? AND speech_pending=1",
+        (call_id, message_id),
+    )
 
 
 def notes(c: Connection, auth: Any, who: Identity, call_id: str) -> list[Record]:

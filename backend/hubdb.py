@@ -2398,13 +2398,14 @@ def task_private_readable(conn, actor, row):
 
     if row['id'] in participant_tasks(conn, actor):
         return True
+    task_id = row["id"]
     if "readers" not in row:
-        row = _one(conn, "SELECT readers FROM tasks WHERE id=?", (row["id"],)) or {}
+        row = _one(conn, "SELECT readers FROM tasks WHERE id=?", (task_id,)) or {}
     if task_reader(conn, actor, row):
         return True
     from . import call_follow_ups
 
-    return call_follow_ups.thread_reader(conn, actor, row["id"])
+    return call_follow_ups.thread_reader(conn, actor, task_id)
 
 
 def stage_read_held(conn, actor, row):
@@ -4553,6 +4554,7 @@ def task_create(
     public_title=None,
     public_summary=None,
     wake_refs=None,
+    reconcile_related=True,
     trigger=None,
     trigger_source=None,
     from_private=False,
@@ -4595,6 +4597,7 @@ def task_create(
     occurrence per producing step: a retry of a run whose step already opened it gets that task back
     (`_reuse_occurrence`), never a second one.
     `wake_refs`, `trigger` and `trigger_source` go on the owner bot's wake: what the run it starts is for.
+    `reconcile_related` lets a task whose result is shared with another audience keep unrelated work out of that wake.
     `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
@@ -4905,7 +4908,7 @@ def task_create(
         # Give a bot the rest of this relationship's active work with the new task. The runner puts current-message refs
         # in its prompt, so the bot can reuse or reconcile overlapping work without merging distinct deliverables.
         related = []
-        if is_bot(target):
+        if reconcile_related and is_bot(target):
             marks = ",".join("?" * len(ACTIVE_STATUSES))
             related = _rows(
                 conn.execute(
