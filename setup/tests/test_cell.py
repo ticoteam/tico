@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from setup import cell, envfile
 from setup.cell import Result
@@ -2527,6 +2528,13 @@ def test_no_page_host_can_read_another_companys_folder():
 def test_a_page_host_is_one_of_the_companys_hosts_for_the_wake_service_and_the_tunnel():
     assert cell.hosts_of(page_company()) == ["acme.tico.team", "acme.tico.page"]
     assert cell.tunnel_hosts("tico.team", [page_company()]) == ["acme.tico.page"]
+
+
+def test_the_cell_front_door_uses_the_same_images_as_compose():
+    compose = Path(__file__).resolve().parents[2] / "compose.yaml"
+    services = yaml.safe_load(compose.read_text())["services"]
+    assert cell.ROUTER_IMAGE == services["caddy"]["image"]
+    assert cell.TUNNEL_IMAGE == services["cloudflared"]["image"]
 
 
 def test_the_router_mounts_the_page_folders_read_only_and_nothing_else_of_the_cell():
