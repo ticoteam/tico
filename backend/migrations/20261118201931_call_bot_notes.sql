@@ -25,6 +25,6 @@ FROM (
         LIMIT 1
     ) AS prep_task_id
     FROM calls c JOIN live_meeting_bots b ON b.meeting_id=c.live_meeting_id
-    WHERE c.state IN ('scheduled','live') AND c.prepped_at IS NOT NULL
+    WHERE c.state IN ('scheduled','live')
 )
 WHERE prep_task_id IS NOT NULL;
