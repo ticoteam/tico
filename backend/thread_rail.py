@@ -154,6 +154,8 @@ def _views(c, v, rows, *, summaries=None):
     if v._members is None:
         v._members = {}
     v._members.update(T._prefetch_members(c, v, ids))
+    if not (v.is_person and v.admin(c)):  # an admin manages every thread without the owner check
+        T.prime_owners(c, v, ids)
     summaries = T.subtree_summaries(c, v, ids) if summaries is None else summaries
     followers = T._followers_of(c, v, ids)
     dms = T.dm_with(c, v, rows)

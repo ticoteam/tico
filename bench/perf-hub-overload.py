@@ -6,7 +6,8 @@ tasks, a few hundred threads with posts, and a message history.
     nice -n 10 .venv/bin/python bench/perf-hub-overload.py
 
 Env: OPEN (default 1500), CLOSED (16500), THREADS (400), RUNS (5), PROFILE=<path> (cProfile one route),
-STATEMENTS=<path> (the statement shapes one call runs), DB=<file> (keep the seeded database there and reuse it).
+STATEMENTS=<path> (the statement shapes one call runs), DB=<file> (keep the seeded database there and reuse it),
+PATHS=<path,...> (the routes measured), ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB).
 
 Per route it prints the statements one call takes, the median wall time of RUNS calls and the answer's size. Only
 fictional data, in a temporary folder removed afterwards (unless DB is given). Never point it at a real hub.
@@ -14,6 +15,7 @@ fictional data, in a temporary folder removed afterwards (unless DB is given). N
 
 import collections
 import contextlib
+import json
 import os
 import random
 import re
@@ -42,7 +44,7 @@ STAGES = (
     {"name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
     {"name": "Review", "owner": "assignee", "requirements": [{"kind": "ok", "person": X.ANA, "line": "OK the build"}]},
 )
-PATHS = ("/api/v2/bots", "/api/v2/threads/rail", "/api/v2/health", "/api/v2/me")
+PATHS = tuple(os.environ.get("PATHS", "/api/v2/bots,/api/v2/threads/rail,/api/v2/health,/api/v2/me").split(","))
 
 
 def seed(api):
@@ -77,7 +79,9 @@ def seed(api):
                     break
                 new, room = H.new_id(), H.new_id()
                 sel = ",".join(
-                    "?" if col == "id" else ("NULL" if col in ("number", "stage_id", "pipeline_id", "stage_entered_at") else col)
+                    "?"
+                    if col == "id"
+                    else ("NULL" if col in ("number", "stage_id", "pipeline_id", "stage_entered_at") else col)
                     for col in cols
                 )
                 c.execute(f"INSERT INTO tasks({','.join(cols)}) SELECT {sel} FROM tasks WHERE id=?", (new, tid))
@@ -154,6 +158,7 @@ def measure(api, path, token="ana-test"):
 
 
 def report(api):
+    answers = {}
     with api.app.state.store.read() as c:
         counts = {
             t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
@@ -164,13 +169,22 @@ def report(api):
         for token in ("ana-test", "ben-test"):
             n, ms, size = measure(api, path, token)
             print(f"{path:28s} {token:9s} {n:6d} statements {ms:9.1f} ms {size / 1024:8.1f} KB")
+            if os.environ.get("ANSWERS"):
+                answer = api.get(path, headers=headers(token)).json()
+                if isinstance(answer, dict):
+                    answer.pop("seq", None)  # the change number the page is as of, not part of its rows
+                answers[f"{path} {token}"] = answer
+    if os.environ.get("ANSWERS"):
+        Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
     if os.environ.get("STATEMENTS"):
-        seen = []
-        with counting(api.app.state.store, seen):
-            api.get(os.environ["STATEMENTS"], headers=headers("ana-test"))
-        shapes = collections.Counter(re.sub(r"'[^']*'|\b\d+\b", "?", q)[:200] for q in seen)
-        for q, k in shapes.most_common(25):
-            print(f"{k:5d}  {q}")
+        for token in ("ana-test", "ben-test"):
+            seen = []
+            with counting(api.app.state.store, seen):
+                api.get(os.environ["STATEMENTS"], headers=headers(token))
+            print(f"--- {token}: {len(seen)} statements")
+            shapes = collections.Counter(re.sub(r"'[^']*'|\b\d+\b", "?", q)[:200] for q in seen)
+            for q, k in shapes.most_common(25):
+                print(f"{k:5d}  {q}")
     if os.environ.get("PROFILE"):
         import cProfile
         import pstats
@@ -209,19 +223,17 @@ def main():
     keep = os.environ.get("DB")
     with tempfile.TemporaryDirectory(prefix=".tmp-overload-", dir=Path(__file__).resolve().parents[1]) as directory:
         folder = Path(directory)
-        if keep and Path(keep).exists():
-            install = reopened(folder, keep)
-            api = next(install)
-        else:
-            install = api_client(folder, None)
-            api = next(install)
-            t = time.perf_counter()
-            seed(api)
-            print(f"seeded in {time.perf_counter() - t:.1f}s")
-            if keep:
-                with api.app.state.store.read() as c:
-                    c.execute("VACUUM INTO ?", (keep,))
-        try:
+        reuse = keep and Path(keep).exists()
+        install = reopened(folder, keep) if reuse else api_client(folder, None)
+        api = next(install)
+        try:  # close the app even when seeding fails, or its threads keep the process alive
+            if not reuse:
+                t = time.perf_counter()
+                seed(api)
+                print(f"seeded in {time.perf_counter() - t:.1f}s")
+                if keep:
+                    with api.app.state.store.read() as c:
+                        c.execute("VACUUM INTO ?", (keep,))
             report(api)
         finally:
             install.close()

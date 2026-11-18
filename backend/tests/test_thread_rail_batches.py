@@ -334,3 +334,34 @@ def test_revived_within_checks_each_root_once_a_snapshot_across_chunks(api, monk
             calls.clear()
             assert threads.revived_within(c, v, "1") == whole, actor
             assert calls == [], (actor, calls)
+
+
+def _members_threads(api, start, stop):
+    """Members threads ana starts and cara is in (every third one cara starts, so she owns it), each with a post."""
+    with api.app.state.store.transaction() as c:
+        for i in range(start, stop):
+            starter, other = ("human:cara", "human:ana") if i % 3 == 0 else ("human:ana", "human:cara")
+            out = threads.post(c, starter, None, f"Plan {i}", start={"title": f"Plan {i}", "audience": "members"})
+            tid = out.get("thread_id") or out.get("conversation_id")
+            threads.add_member(c, starter, tid, other)
+            threads.post(c, other, tid, f"Seen {i}")
+
+
+def test_a_plain_members_rail_checks_its_rows_together(api, monkeypatch):
+    """cara is neither admin nor owner of most rows: 5 then 30 members threads add at most 10 statements to her rail
+    (each row's owner check and names are read with the page's), list every thread, and read the same with no cache."""
+    counts, done = {}, 0
+    for size in (5, 30):
+        _members_threads(api, done, size)
+        done = size
+        page, counts[size] = _first_page(api, "cara-test")
+        assert len([r for r in page["threads"] if r["title"].startswith("Plan ")]) == size, page["threads"]
+    assert counts[30] - counts[5] <= 10, counts
+    batched = {r: get(api, "threads/rail", r) for r in ("cara-test", "ana-test")}
+    monkeypatch.setattr(read_cache, "cache", lambda c: None)
+    for reader, page in batched.items():
+        alone = get(api, "threads/rail", reader)
+        page.pop("seq", None), alone.pop("seq", None)
+        assert alone == page, f"priming changed the rail for {reader}"
+    managed = {r["title"]: r["me"]["can_manage"] for r in batched["cara-test"]["threads"]}
+    assert managed["Plan 0"] and not managed["Plan 1"], managed
