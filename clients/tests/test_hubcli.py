@@ -655,7 +655,7 @@ class AgainstAStub(unittest.TestCase):
             "review",
             "--title",
             "Review PR 700",
-            "--message",
+            "--body",
             "https://github.com/ticoteam/tico/pull/700",
             env=self.env,
         )
@@ -665,6 +665,7 @@ class AgainstAStub(unittest.TestCase):
             (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
             ("bot:assistant", "grok", "review", "T1"),
         )
+        self.assertEqual(posted["message"], "https://github.com/ticoteam/tico/pull/700")
         # With no value, the server picks the company's check model.
         code, out = run_hub(
             "task", "child", "T1", "--check-model", "--role", "review", "--title", "Review PR 701", env=self.env

@@ -58,7 +58,7 @@ approval before merge.
    changes go straight to Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
-   (`tico task child <task> --check-model`).
+   (`tico task child <task> --check-model --title "Second opinion" --body "What to check"`).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
    reason on the task. There is no second round of the same review after fixes.
 4. Validation skills attach evidence (tests, screenshots) to the task; a person OKs each release from its notes and

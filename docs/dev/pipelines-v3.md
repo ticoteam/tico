@@ -246,8 +246,8 @@ That gives three kinds of stage, and no others:
      one ran and passed. Tico's own check runs are ignored.
    - **PR merged.** Every linked PR has merged.
    - **In a release.** Every merge is inside a published release.
-5. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
-   not met.
+5. **Linked work done.** At least one task filed during this visit ended Done, and none are open or deleted. Closed
+   tasks stop blocking when another task filed during the same visit ends Done.
 6. **Related input.** Jev picks the one or two bots the work touches, and each comments once. It never blocks. See
    [Related input](#related-input).
 
@@ -812,7 +812,7 @@ The Product and Engineering presets both use Build → Review → Fixes → QA. 
 commit of every linked PR, with both reviews and their models, and a finished second-review subtask on a different
 model. The reviewer files it with
 `tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
-and includes the PRs and full head commits in `--message`. In Fixes, the owner addresses both reviews and says done.
+and includes the PRs and full head commits in `--body`. In Fixes, the owner addresses both reviews and says done.
 The task moves on when the checks pass.
 
 Existing pipelines keep their Review and Fixes stages on startup, including Review 2 and Fixes 2 where present.

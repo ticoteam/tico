@@ -274,7 +274,7 @@ def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     return _rows(
         conn.execute(
             "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
-            "COALESCE(t.status, 'closed') AS status, t.number, "
+            "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
             "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
             "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
             "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
@@ -315,7 +315,9 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     if still_open:
         first = still_open[0]
         return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
-    closed = [f for f in filed if f["status"] != "done"]
+    has_done = any(f["status"] == "done" for f in filed)
+    # A finished retry can replace closed work, but a deleted task still needs the owner's attention.
+    closed = [f for f in filed if f["status"] != "done" and (f["deleted"] or not has_done)]
     if closed:
         first = closed[0]
         why = (first.get("why") or "").strip()

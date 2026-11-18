@@ -10,7 +10,7 @@ Read the rest of the repository only where the diff needs it.
 
 When Review requires a done subtask, file
 `tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
-and pass the linked PRs and their full head commits in `--message`. Choose a model different from yours. Ask for an
+and pass the linked PRs and their full head commits in `--body`. Choose a model different from yours. Ask for an
 independent review and have the child say done with its findings, the commits, and its model. Once it finishes, include
 both reviews in the same page, with the model and commit named for each PR. Use one finding per real defect, with
 `file:line`, severity, and why it matters. Leave out style nits and summaries of the diff. Say when there are no findings.

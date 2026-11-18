@@ -229,7 +229,7 @@ def _review(sid: str) -> Row:
         sid,
         "Review",
         "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
-        "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in its message. "
+        "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
         "Choose a different model and attach both reviews in one Review page.",
         120,
         [_page("Review page", REVIEW_RUBRIC, at_head=True), {"kind": "linked_done"}],
@@ -497,12 +497,17 @@ _FIXES_2_RUBRICS = (
     "to OK it without opening the code.",
     _FIXES_2_RUBRIC_QA,
 )
+_REVIEW_PURPOSE_BEFORE_BODY = (
+    "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
+    "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in its message. "
+    "Choose a different model and attach both reviews in one Review page."
+)
 EARLIER: dict[str, tuple[str, ...]] = {
     "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
     "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3),
     "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC,),
-    "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.",),
-    "product-review-1/purpose": ("Review the newest commit and attach a Review page.",),
+    "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
+    "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "engineering-fixes-2/purpose": (
         "Fix what the second review found and attach a Review page that shows what was built.",
         "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
@@ -558,7 +563,7 @@ EARLIER: dict[str, tuple[str, ...]] = {
 LEGACY = ("engineering", "product")
 SOFTWARE = (*LEGACY, PRODUCT)  # the presets only a company that builds software gets
 FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to something checked in production."}
-# Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
+# Who fills each preset's manager, its stage owners (including older stages), and which pages a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
     "engineering": {
         "manager": S.ENGINEERING_MANAGER,
@@ -567,6 +572,8 @@ ROLES: dict[str, Row] = {
             "engineering-build": S.BUILDER,
             "engineering-review-1": S.REVIEWER_1,
             "engineering-fixes-1": S.BUILDER,
+            "engineering-review-2": S.REVIEWER_2,
+            "engineering-fixes-2": S.BUILDER,
             QA_STAGE: S.BUILDER,
             "engineering-merge": S.RELEASE_MANAGER,
             "engineering-release": S.RELEASE_MANAGER,
@@ -589,6 +596,7 @@ ROLES[PRODUCT] = {
     # Every other stage is the task's assignee's: its feature owner.
     "stages": {
         "product-review-1": S.REVIEWER_1,
+        "product-review-2": S.REVIEWER_2,
         "product-qa": S.QA_OWNER,
         "product-merge": S.RELEASE_MANAGER,
     },
@@ -1704,13 +1712,24 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
             "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND (manager_id IS NULL OR manager_id=?)",
             (record["manager_id"], ts, pipeline_id, stand_ins[1]),
         )
-    for stage in record["stages"] if key in ROLES else ():
-        if stage.get("owner"):
+    roles = ROLES.get(key)
+    if not roles:
+        return
+    owners = {stage["id"]: stage.get("owner") for stage in record["stages"]}
+    legacy = roles["stages"].keys() - owners.keys()
+    if legacy:
+        legacy &= {s["id"] for s in task_engine.stages(conn, pipeline_id)}
+    if legacy:
+        who = S.resolve(conn)
+        owners.update({sid: who.get(roles["stages"][sid]) or record["manager_id"] for sid in legacy})
+    for sid, owner in owners.items():
+        if owner:
             conn.execute(
                 "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
                 "AND (owner IS NULL OR owner=? OR owner=?)",
-                (stage["owner"], ts, stage["id"], pipeline_id, *stand_ins),
+                (owner, ts, sid, pipeline_id, *stand_ins),
             )
+    for stage in record["stages"]:
         for req in stage["requirements"]:
             if req.get("person_id"):
                 conn.execute(
@@ -1783,6 +1802,7 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
         return []
     record = PRESETS[key]
     work = {str(s["id"]): s for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"}
+    second_review = {"engineering-review-1": "engineering-review-2", "product-review-1": "product-review-2"}
     whole = all(s["id"] in work for s in record["stages"])
     ts = _h().now()
     paths: list[str] = []
@@ -1798,9 +1818,9 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
         reqs = R.on_stage(conn, stage["id"])
         keys = [requirement_key(r) for r in reqs]
         wanted = [requirement_key(r) for r in stage["requirements"]]
-        # The combined Review rubric goes with the subtask gate. Older single-review stages keep their wording.
-        if stage["id"] in ("engineering-review-1", "product-review-1") and (
-            have["name"] != stage["name"] or "linked_done" not in keys
+        # The combined Review rubric goes with the subtask gate in a pipeline with one review stage.
+        if stage["id"] in second_review and (
+            second_review[stage["id"]] in work or have["name"] != stage["name"] or "linked_done" not in keys
         ):
             continue
         purpose = f"{stage['id']}/purpose"

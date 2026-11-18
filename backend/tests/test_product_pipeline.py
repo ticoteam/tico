@@ -18,6 +18,7 @@ from backend import validate_gate as G
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.product_engineering_presets import (
+    EPM,
     PPM,
     _answers,
     _role_bot,
@@ -131,11 +132,17 @@ def test_review_and_fixes_have_the_same_gates_in_both_presets(preset, prefix):
 
 
 @pytest.mark.parametrize("preset", ["engineering", PS.PRODUCT])
-def test_start_keeps_tasks_and_visits_in_the_separate_review_and_fixes_stages(c, preset):
+@pytest.mark.parametrize("renamed_review", [False, True])
+def test_start_keeps_tasks_and_visits_in_the_separate_review_and_fixes_stages(c, preset, renamed_review):
     _team(c)
     _answers(c, software="yes")
     PS._ensure_factory(c)
-    old = PS.save(c, PS.SYSTEM, legacy_review_stages(c, PS.preset(c, preset)))
+    record = legacy_review_stages(c, PS.preset(c, preset))
+    if renamed_review:
+        review = next(s for s in record["stages"] if s["name"] == "Review 1")
+        review["name"] = "Review"
+        review["requirements"].append({"kind": "linked_done"})
+    old = PS.save(c, PS.SYSTEM, record)
     pid = old["id"]
     held = []
     for stage in (f"{pid}-review-2", f"{pid}-fixes-2"):
@@ -171,6 +178,34 @@ def test_a_role_bot_that_appears_later_takes_its_stage_from_the_manager(c):
     _seat(c, "QA Owner", "qa-owner", "qa")
     PS.ensure_presets(c)
     assert {s["name"]: s["owner"] for s in PS.read(c, "product")["stages"]}["QA"] == "bot:qa"
+
+
+@pytest.mark.parametrize(
+    ("preset", "manager", "staffing"),
+    [
+        (PS.PRODUCT, PPM, {"product-review-2": "bot:rev-b"}),
+        ("engineering", EPM, {"engineering-review-2": "bot:rev-b", "engineering-fixes-2": "bot:builder"}),
+    ],
+)
+def test_legacy_stages_get_their_role_bots_when_they_appear(c, preset, manager, staffing):
+    _role_bot(c, manager, manager)
+    _role_bot(c, "rev-a", "reviewer")
+    _seat(c, "Reviewer 1", "reviewer", "rev-a")
+    _answers(c, software="yes")
+    PS._ensure_factory(c)
+    old = PS.save(c, PS.SYSTEM, legacy_review_stages(c, PS.preset(c, preset)))
+    assert {s["id"]: s["owner"] for s in old["stages"] if s["id"] in staffing} == dict.fromkeys(
+        staffing, f"bot:{manager}"
+    )
+
+    _role_bot(c, "rev-b", "reviewer")
+    _seat(c, "Reviewer 2", "reviewer", "rev-b")
+    if preset == "engineering":
+        _role_bot(c, "builder", "builder")
+    PS.ensure_presets(c)
+    current = PS.read(c, old["id"])
+    assert {s["id"]: s["owner"] for s in current["stages"] if s["id"] in staffing} == staffing
+    assert old["settings_version"] == current["settings_version"] == 1
 
 
 # ----------------------------------------------------------------------------- the approvals

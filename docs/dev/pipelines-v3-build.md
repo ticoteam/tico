@@ -216,7 +216,8 @@ the ladder would wake (`waiting_on.turn`): the bot with the task's own work, bef
 the manager bot when the task has no owner. News meant for a bot with no turn (an answer to its ask, a send back)
 goes to whoever has the turn, naming the bot it was for.
 
-A filed task that was deleted counts as closed, not done, for Linked work done.
+A deleted filed task blocks Linked work done. A filed task that ends Closed stops blocking once another task from
+the same visit ends Done.
 
 What `move()` does, in order, in one transaction: check the version; work out the kind; for forward, check requirements
 through `task_requirements.unmet`, then room; for back and close, `stage_effects.undo`; close the visit (its task
