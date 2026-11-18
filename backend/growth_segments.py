@@ -11,7 +11,8 @@ blank one, is No segment. A channel's spend is for one segment (`growth_channels
 The customer's own segment decides counts, retention and LTV; the channel's segment decides spend only. A team with no
 segments reads its labels as before.
 
-Who may: everyone signed in reads. The owner and admins add, change and retire segments, as channels.
+Who may: everyone signed in reads. The owner, admins and the Growth Manager add and change segments, as channels
+(backend/growth_setup.py editor); retiring one stays a person's.
 """
 
 import sqlite3
@@ -21,12 +22,14 @@ from typing import Any, cast
 from fastapi import Request
 
 from . import brand as _brand_untyped
+from . import growth_setup as _setup_untyped
 from . import hubdb as _hubdb_untyped
 from . import models as M
 from .store import Problem
 
 H: Any = _hubdb_untyped
 admin = cast("Callable[[Any, Any], bool]", _brand_untyped.admin)
+may_edit = cast("Callable[[Any, Any, Any], bool]", _setup_untyped.editor)
 Row = dict[str, Any]
 
 NO_SEGMENT = "none"  # the cut's value for customers whose label names no segment; never a segment's slug
@@ -172,10 +175,15 @@ def retire(c: sqlite3.Connection, actor: str, slug: str) -> Row:
 
 
 def install(app: Any, store: Any, auth: Any, mutate: Callable[..., Any]) -> None:
-    def editor(who: Any, what: str) -> None:
+    def editor(c: sqlite3.Connection, who: Any, what: str) -> None:
+        auth.domain(who)
+        if not may_edit(auth, who, c):
+            raise Problem("forbidden", f"Only the owner, an admin or the Growth Manager {what}", 403)
+
+    def retirer(who: Any) -> None:
         auth.domain(who)
         if not admin(auth, who):
-            raise Problem("forbidden", f"Only the owner or an admin {what}", 403)
+            raise Problem("forbidden", "Only the owner or an admin retires a segment", 403)
 
     @app.get("/api/v2/growth/segments")
     def growth_segments(request: Request, include_retired: bool = False) -> Row:  # pyright: ignore[reportUnusedFunction]
@@ -183,26 +191,26 @@ def install(app: Any, store: Any, auth: Any, mutate: Callable[..., Any]) -> None
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return {"segments": listed(c, include_retired), "may_edit": admin(auth, who)}
+            return {"segments": listed(c, include_retired), "may_edit": may_edit(auth, who, c)}
 
     @app.post("/api/v2/growth/segments")
     def growth_segment_add(request: Request, body: M.GrowthSegmentCreate) -> Any:  # pyright: ignore[reportUnusedFunction]
-        """Owner or admin: a new segment."""
+        """Owner, admin or the Growth Manager: a new segment."""
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> Row:
-            editor(who, "adds a segment")
+            editor(c, who, "adds a segment")
             return create(c, who.actor, body)
 
         return mutate(request, body, work)
 
     @app.patch("/api/v2/growth/segments/{slug}")
     def growth_segment_update(request: Request, slug: str, body: M.GrowthSegmentUpdate) -> Any:  # pyright: ignore[reportUnusedFunction]
-        """Owner or admin: change a segment, only the fields sent."""
+        """Owner, admin or the Growth Manager: change a segment, only the fields sent."""
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> Row:
-            editor(who, "changes a segment")
+            editor(c, who, "changes a segment")
             return update(c, who.actor, slug, {k: getattr(body, k) for k in body.model_fields_set})
 
         return mutate(request, body, work)
@@ -213,7 +221,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Callable[..., Any]) -> None
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> Row:
-            editor(who, "retires a segment")
+            retirer(who)
             return retire(c, who.actor, slug)
 
         return mutate(request, body, work)

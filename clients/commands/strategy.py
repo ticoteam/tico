@@ -421,7 +421,8 @@ SEGMENT_PROPS = {
 
 @tool(
     "tico_growth_segment_set",
-    "Owner or admin only: add a segment, or change one by slug (only the fields sent); retire: true retires it.",
+    "Owner, admin or the Growth Manager: add a segment, or change one by slug (only the fields sent); retire: true "
+    "retires it (owner or admin only).",
     {
         "slug": _s("Lowercase, digits and dashes: consumer"),
         **SEGMENT_PROPS,
@@ -1127,7 +1128,7 @@ CLI = (
     ),
     Command(
         "growth segment set",
-        "add a segment or change one (owner or admin); --retire retires it",
+        "add a segment or change one (owner, admin or the Growth Manager); --retire retires it (owner or admin)",
         args=(
             Arg("name", "--name"),
             Arg("customer_rule", "--rule"),

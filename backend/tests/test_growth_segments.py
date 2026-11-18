@@ -234,3 +234,18 @@ def test_a_team_without_segments_reads_its_labels_as_before(api):
     agency = cohort(result, "agency", "2026-09")
     assert agency["cac"]["status"] == "not_split" and "cac_loaded" not in agency
     assert get(api, "growth/segments/agency")["spend"] == "spend is not split by segment"
+
+
+def test_the_growth_manager_adds_and_changes_segments_but_does_not_retire_them(api):
+    from backend.tests.helpers.company import bot
+
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('0b1d2c3e','growth-manager','Growth Manager','active')"
+        )
+    gm = bot(api, "0b1d2c3e")
+    assert get(api, "growth/segments", token=gm)["may_edit"] is True
+    post(api, "growth/segments", {"slug": "rental", "name": "Rental", "churn_days": 90}, token=gm)
+    patch(api, "growth/segments/rental", {"margin_pct": 50}, token=gm)
+    post(api, "growth/segments/rental/retire", {}, token=gm, expected=403)
+    post(api, "growth/segments", {"slug": "hosts", "name": "Hosts"}, token="cara-test", expected=403)
