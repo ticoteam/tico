@@ -104,7 +104,7 @@ class Rule4Unsolicited(HubCase):
         first = self.conn.execute(
             "SELECT sender_id FROM messages WHERE conversation_id=? ORDER BY created_at LIMIT 1", (chat,)
         ).fetchone()[0]
-        self.assertEqual(first, H.KEEPER, "the task's notice opened the chat")
+        self.assertEqual(first, H.TICO_ACTOR, "the task's notice opened the chat")
         reply = H.say(self.conn, CMO, ANA, "84.", conversation_id=chat)
         self.assertNotIn("unsolicited", reply["refs"])
 
@@ -112,7 +112,7 @@ class Rule4Unsolicited(HubCase):
         chat = H.open_conversation(self.conn, CMO, [CMO, ANA], kind="chat")["id"]
         H.task_create(self.conn, ANA, "Draft the report", "Write a report", CMO, lint=False, conversation_id=chat)
         senders = [r[0] for r in self.conn.execute("SELECT sender_id FROM messages WHERE conversation_id=?", (chat,))]
-        self.assertEqual(senders, [H.KEEPER], "only the task's notice is in the chat")
+        self.assertEqual(senders, [H.TICO_ACTOR], "only the task's notice is in the chat")
         sent = H.say(self.conn, CMO, ANA, "Pick the launch date, or tell me to hold.", conversation_id=chat)
         self.assertTrue(sent["refs"].get("unsolicited"), "the bot opened it, so the person asked nothing")
 
@@ -248,10 +248,10 @@ class Rule8Counting(HubCase):
         H.quarantine(self.conn, "cmo", "escape: the task note reaches outside the hub: secrets/mail.env")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         focus = H.status(self.conn, "cmo")["focus"]
-        H.status_set(self.conn, H.KEEPER, "cmo", state="crashed", focus="Runner disconnected")
+        H.status_set(self.conn, H.TICO_ACTOR, "cmo", state="crashed", focus="Runner disconnected")
         self.assertEqual(H.status(self.conn, "cmo")["focus"], focus)
         self.refused("quarantined", H.say, self.conn, CMO, SEO, "still here?")
-        self.refused("quarantined", H.status_set, self.conn, H.KEEPER, "cmo", state="active")
+        self.refused("quarantined", H.status_set, self.conn, H.TICO_ACTOR, "cmo", state="active")
         H.status_set(self.conn, ANA, "cmo", state="active", reason="reviewed, a bad path")
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         self.assertTrue(H.say(self.conn, CMO, SEO, "back"))
@@ -264,7 +264,7 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         released = self.conn.execute("SELECT released_how,released_by_id FROM holds WHERE kind='quarantine'")
-        self.assertEqual([tuple(r) for r in released], [("expired", H.KEEPER)])
+        self.assertEqual([tuple(r) for r in released], [("expired", H.TICO_ACTOR)])
         self.refuse_reach(1)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active", "the count started over")
 

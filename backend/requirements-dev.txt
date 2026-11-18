@@ -15,17 +15,18 @@ annotated-types==0.8.0
 anyio==4.15.1
     # via
     #   -c requirements.txt
+    #   fastapi
     #   httpx
     #   starlette
 attrs==26.1.0
     # via
     #   jsonschema
     #   referencing
-boto3==1.43.114
+boto3==1.44.5
     # via
     #   -c requirements.txt
     #   -r requirements.in
-botocore==1.43.114
+botocore==1.44.5
     # via
     #   -c requirements.txt
     #   boto3
@@ -73,7 +74,7 @@ dnspython==2.9.2
     #   pymongo
 execnet==2.1.2
     # via pytest-xdist
-fastapi==0.141.1
+fastapi==0.163.2
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -120,6 +121,10 @@ numpy==2.5.4
     # via
     #   -c requirements.txt
     #   livekit
+opentelemetry-api==1.45.2
+    # via
+    #   -c requirements.txt
+    #   fastapi
 orjson==3.13.0
     # via
     #   -c requirements.txt
@@ -131,7 +136,7 @@ pillow==13.0.0
     #   -c requirements.txt
     #   -r requirements.in
     #   reportlab
-playwright==1.64.0
+playwright==1.65.1
     # via -r requirements-dev.in
 pluggy==1.7.0
     # via
@@ -141,11 +146,11 @@ protobuf==7.36.2
     # via
     #   -c requirements.txt
     #   livekit
-psycopg[binary]==3.3.6
+psycopg[binary]==3.3.9
     # via
     #   -c requirements.txt
     #   -r requirements.in
-psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+psycopg-binary==3.3.9 ; implementation_name != 'pypy'
     # via
     #   -c requirements.txt
     #   psycopg
@@ -153,27 +158,25 @@ pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementatio
     # via
     #   -c requirements.txt
     #   cffi
-pydantic==2.14.1
+pydantic==2.14.3
     # via
     #   -c requirements.txt
     #   fastapi
-pydantic-core==2.50.1
+pydantic-core==2.50.4
     # via
     #   -c requirements.txt
     #   pydantic
-pyee==14.0.0
-    # via playwright
 pygments==2.21.0
     # via pytest
 pyjwt[crypto]==2.15.1
     # via
     #   -c requirements.txt
     #   -r requirements.in
-pymongo==4.19.0
+pymongo==4.20.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
-pymysql==1.2.3
+pymysql==1.2.4
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -196,7 +199,7 @@ python-dateutil==2.9.0.post0
     #   botocore
     #   croniter
     #   time-machine
-python-multipart==0.0.32
+python-multipart==0.0.34
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -220,7 +223,7 @@ s3transfer==0.19.2
     # via
     #   -c requirements.txt
     #   boto3
-sentry-sdk==2.69.2
+sentry-sdk==2.75.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -228,11 +231,11 @@ six==1.17.0
     # via
     #   -c requirements.txt
     #   python-dateutil
-slack-sdk==3.45.0
+slack-sdk==3.47.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
-starlette==1.8.0
+starlette==1.10.0
     # via
     #   -c requirements.txt
     #   fastapi
@@ -246,9 +249,9 @@ typing-extensions==4.16.0
     # via
     #   -c requirements.txt
     #   fastapi
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
-    #   pyee
     #   typing-inspection
 typing-inspection==0.4.4
     # via
@@ -272,5 +275,5 @@ uvloop==0.23.0 ; sys_platform != 'win32'
 websockets==16.1.1
     # via
     #   -c requirements.txt
-    #   -r requirements-dev.in
     #   -r requirements.in
+    #   -r requirements-dev.in

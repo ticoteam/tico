@@ -460,7 +460,7 @@ NEW_BOT = {
     "display_name": "Junior",
     "description": "Drafts the memos.",
     "status": "planned",
-    "model": "gpt-6.1-sol",
+    "model": "gpt-6.2-sol",
     "effort": "high",
     "harness": None,
     "runner_id": None,

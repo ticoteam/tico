@@ -18,19 +18,49 @@ pipeline (the one the growth packs file ideas into; a channel's keeps its `chann
 there is no link. The owner and admins get **Settings**, which holds the channels, the numbers the maths uses and a **Where
 numbers come from** link to Sources; anyone else gets a **Sources** link.
 
-The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). A Growth page nobody
-arranged shows these cards, each a template below:
+The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). Over the cards sits
+**The Growth line** (below). A Growth page nobody arranged shows these cards under it, each a template below:
 
 - **Funnel**, large: the five stages (Reach, Acquire, Activate, Retain, Refer), each with its KPI's reading and the share
-  of the stage before, and the North Star.
-- **Number**, small, six of them: new customers, CAC, spend, LTV:CAC, payback and the share kept at 30 days.
-- **Channels**, large: one row per channel, and Unknown.
+  of the stage before (only between stages counted in the same unit), and the North Star.
 - **Retention**, medium: the share kept at 30, 90 and 180 days, cohort by cohort.
 - **Growth board**, medium: the open marketing tests by stage.
+
+The **Number** and **Channels** cards are still templates anyone may add; the line says what they said, so a new page
+does not repeat them. A page someone already arranged keeps its own pins.
 
 The first change saves them as real pins. A **month** picker reads the cards for one month: the page offers the newest 24
 months that have cohort rows, and the newest one is the default. A month with no cohorts yet shows the last month that
 has one for the figures that carry back (retention, LTV, LTV:CAC), saying which month they are from.
+
+## The Growth line
+
+One block over the cards reads the picked month left to right: **Sources** → **Channels** → **This month** (spend, new
+customers, kept to day 30) → **Unit economics** (CAC, LTV:CAC, payback) → **KPIs**. One sentence over it says the month,
+for example "October brought 132 new customers, up 12%. Each cost $151 to win and pays back in 4 months. One channel is
+over its guardrail. One source has not synced since 10 Jan, so 3 numbers below are from then." While the line shows, the
+stale-sources banner gives way to it.
+
+- **At rest** it is one row per channel, then Unknown and All channels. Each row shows the sources that fill it on the
+  left and the KPIs it moves on the right. A source that is stale or failing says since when, and every number it fills
+  is marked stale.
+- **Select** a source, a channel or a KPI (click, or Tab and Enter): its rows stay, the rest fade, and gray links join
+  them, dashed from a stale source. Select it again to clear. The links are pictures only; each channel's name reads its
+  sources and KPIs aloud. On a phone the rows stack and say "From … → moves …" in words instead.
+- **Any number** opens, under its own row, where it comes from: the sum with today's values, each input naming its source
+  and when it synced (or that it was typed, or computed from how many customers), the KPI it moves and its last six
+  months. A computed number has **Open its customers**, which opens that row on the Retention card. All channels' CAC
+  says it divides named channels' spend by every new customer, Unknown included.
+- **Spend** has a budget bar and says "$3,600 over budget"; a channel's guardrail chip says "$22 over guardrail".
+- **No KPI linked** on a channel is a button for whoever may edit channels: it opens the channel, where **Moves** picks
+  the input KPI (`input_kpi_id`; `--input-kpi` on `tico growth channel update`). A KPI the reader may not see is not
+  shown as linked.
+
+An agent reads the same thing as `line` in `GET /api/v2/growth/numbers?month=YYYY-MM` (`tico growth numbers --month`,
+`tico_growth_numbers`): `sources` with their health and what each fills, `channels` with each number's value, words,
+origin, source ids and names, stale mark and trace, `kpis` with the channels that move or hold them, and `headline`.
+`line` is null when there is no live channel. Opening a trace or selecting a source is counted once a day per person
+(`POST /api/v2/growth/line/used`), to see how many Growth viewers use the line.
 
 ## Cards
 

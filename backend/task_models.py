@@ -504,7 +504,7 @@ def handed(c, attempt_id, task_id, record):
         H._task_event(
             c,
             task_id,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "task_model",
             label(record["asked"]),
             record.get("ran") or label(record["asked"]),

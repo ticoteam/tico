@@ -474,7 +474,8 @@ def test_the_verdict_comes_from_the_parts_and_names_at_most_three():
 def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     from backend import pipeline_settings as PS
 
-    assert P.check_of(PS.SPEC_RUBRIC) == "spec" and P.check_of(PS.REVIEW_RUBRIC) == "review"
+    assert P.check_of(PS.SPEC_RUBRIC) == "spec" and P.check_of(PS.LEGACY_REVIEW_RUBRIC) == "review"
+    assert P.check_of(PS.REVIEW_RUBRIC) is None, "the combined review needs the whole rubric"
     assert P.check_of(PS.QA_RUBRIC) == "qa" and P.check_of(PS.VALIDATE_RUBRIC) == "validate"
     assert P.check_of(PS.EARLIER["product-spec/page/rubric"][0]) == "spec", "an unedited older line is the same check"
     assert P.check_of("  " + PS.SPEC_RUBRIC.replace(" ", "\n", 3)) == "spec", "spacing does not matter"
@@ -494,7 +495,7 @@ def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
     reasons = []
     for p in (0.95, 0.5, 0.05):
         reasons.append(P.judge_once(None, REQ, ATTACHMENT, engine=_engine(p, reason=""))["reason"])
-        for rubric in (PS.SPEC_RUBRIC, PS.REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
+        for rubric in (PS.SPEC_RUBRIC, PS.LEGACY_REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
             req = {"id": "r", "name": "Page", "rubric": rubric}
             for key in [part.key for part in P.CHECKS[P.check_of(rubric)]]:
                 reasons.append(P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({key: p}))["reason"])

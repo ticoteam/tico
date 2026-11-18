@@ -122,7 +122,7 @@ def warning_notes(c: sqlite3.Connection) -> list[tuple[str, str]]:
         (str(r[0]), str(r[1]))
         for r in c.execute(
             "SELECT to_actor, body FROM notes WHERE from_actor=? AND body LIKE 'Finance · budget warning%' ORDER BY rowid",
-            (H.KEEPER,),
+            (H.TICO_ACTOR,),
         )
     ]
 

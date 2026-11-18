@@ -185,7 +185,7 @@ def test_a_question_between_the_plan_and_the_yes_keeps_the_plan(api):
     with api.app.state.store.transaction() as c:
         room = H.conversation(c, get(api, "assistant")["room_id"])
         H._write_message(
-            c, H.KEEPER, "human:ana", "Ops finished a task", room, "notice", {"assistant": True}, None, None
+            c, H.TICO_ACTOR, "human:ana", "Ops finished a task", room, "notice", {"assistant": True}, None, None
         )
     assert say(api, "great, go ahead")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]

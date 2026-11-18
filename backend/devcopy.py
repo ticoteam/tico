@@ -132,6 +132,9 @@ EMPTY = (
     "compact_first",
     "model_logins",
     "model_login_cleared",
+    "claude_logins",
+    "claude_login_leases",
+    "claude_login_parks",  # full Claude logins' refresh leases and parked turns: the copy refreshes nothing
     # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
     "cloud_machine_deletions",
     "cloud_machine_enrollment_failures",
@@ -576,6 +579,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "page_links",
             "task_documents",
             "task_file_reviews",
             "task_links",
@@ -642,6 +646,7 @@ KEEP = (
             "growth_channels",
             "growth_cohorts",
             "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
+            "growth_line_uses",  # who used the Growth line on which day: the measure's counts, no content
             "growth_origins",
             "growth_settings",
             "growth_sync_runs",

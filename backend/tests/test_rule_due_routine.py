@@ -1,6 +1,6 @@
 """A rule's due date with its routine (backend/rule_due_routine.py, docs/dev/rules-plan.md §4): turning it on makes one "Before
 a due date" automation linked by routine_id, whose run opens the owner's task on time; completing that task marks the
-day Satisfied, a cancel or the keeper's close doesn't, and reopening takes it back; a day marked by hand is skipped; an
+day Satisfied, a cancel or Tico's close doesn't, and reopening takes it back; a day marked by hand is skipped; an
 edit moves the routine to the new row; removing the due date turns it off; Due soon follows its lead time."""
 
 import json
@@ -106,19 +106,19 @@ def test_completing_the_task_marks_the_day_and_reopening_takes_it_back(api):
     assert len(actions) == 2  # the mark and its removal are both on record
 
 
-def test_a_keeper_close_or_a_bots_close_marks_nothing_and_a_persons_close_does(api):
+def test_a_tico_close_or_a_bots_close_marks_nothing_and_a_persons_close_does(api):
     _, due = linked(api, first="2030-03-01", repeats="monthly", days=0)
     aid = due["routine_id"]
     tick(api, datetime(2030, 4, 1, 0, 0, 5, tzinfo=timezone.utc))
     march, april = tasks(api, aid)
-    write(api, move, H.KEEPER, march["id"], E.CLOSED)
+    write(api, move, H.TICO_ACTOR, march["id"], E.CLOSED)
     write(api, move, "bot:ops", april["id"], E.CLOSED)
     assert marks(api, due["id"]) == []
     tick(api, datetime(2030, 5, 1, 0, 0, 5, tzinfo=timezone.utc))
     may = tasks(api, aid)[-1]
     write(api, move, "human:ana", may["id"], E.CLOSED)
     assert [(m["due_on"], m["satisfied_by"]) for m in marks(api, due["id"])] == [("2030-05-01", "human:ana")]
-    write(api, move, "bot:ops", march["id"], E.REOPEN)  # the owner's done after the keeper's close
+    write(api, move, "bot:ops", march["id"], E.REOPEN)  # the owner's done after Tico's close
     write(api, done, "bot:ops", march["id"])
     assert sorted(m["due_on"] for m in marks(api, due["id"])) == ["2030-03-01", "2030-05-01"]
 

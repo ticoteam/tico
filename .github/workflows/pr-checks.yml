@@ -11,7 +11,7 @@
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
 # a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
-# no VM, on a pull request and in a group alike. Only the cosmetic timing receipt and the merge commit checks are
+# no VM, on a pull request and in a group alike. The timing receipt, flake artifact and merge commit checks are
 # queue-only (a pull request's own static checks and types jobs run the same list on its own head).
 # A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
 # the group's merged change reaches within two levels (release validation runs the rest), and the same Rust lint,
@@ -20,6 +20,7 @@
 # ahead of it. The static checks and types jobs run on the pull request only; the group's merge commit checks job runs every
 # static check again on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), beside the plan and the
 # tests, since a change queued ahead can break one (a migration timestamp, a route, a lint rule).
+# Python and browser legs retry up to five failures once. A Python leg passes if all remaining failures match on the base.
 # A failed `tests` leg cancels its whole run (its last step), in a queue group or a pull request. The
 # `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute. The failing
 # leg ends "cancelled" too (its own cancel stops it), so `checks` names the leg and step that failed.
@@ -30,6 +31,8 @@
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
 # A pull request's own push runs the cheap checks whether or not it comes from a fork. A fork's tests run only once a
 # maintainer queues it.
+# Each checkout (normally 6-19 s) gets three minutes and one retry: a fetch that stalls on a hosted runner fails in
+# minutes, not at its job's timeout, and does not drop the group (a stalled queue head blocks every group behind it).
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
 name: PR checks
 
@@ -68,10 +71,19 @@ jobs:
       desktop: ${{ steps.plan.outputs.desktop }}
       recorder: ${{ steps.plan.outputs.recorder }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -86,7 +98,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install (five minutes per attempt, one retry)
@@ -171,10 +183,19 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: Free disk only when under 30 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 30
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -195,7 +216,7 @@ jobs:
       # Every suite compiles the UI's TypeScript (scripts/ci_install.sh); only browser suites install Playwright.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - if: startsWith(matrix.suite, 'browser-')
@@ -231,8 +252,8 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        # --quarantine: a test listed in ci/quarantine/ (it failed and passed on one commit) runs but cannot fail the
-        # suite. Release validation never passes it (scripts/flake_quarantine.py).
+        # --quarantine runs listed pytest tests as non-strict xfail.
+        # Python legs check remaining failures on the base after the retry.
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run --quarantine "$SUITE"
       - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts' || matrix.suite == 'conformance')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -268,10 +289,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: New migrations have unique UTC timestamps; merged ones are unchanged
         env:
           BASE_BRANCH: ${{ github.base_ref }}
@@ -294,10 +324,10 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
-        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.9
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
       - name: Verification gates (scripts and ast-grep rules with fixtures)
@@ -347,10 +377,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -363,7 +402,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
-        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+        run: bash scripts/ci_install.sh types && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.9
       - name: Types (basedpyright baseline, strict new modules)
         env:
           PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
@@ -379,10 +418,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -395,7 +443,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install (five minutes per attempt, one retry)
@@ -423,10 +471,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: Free disk only when under 30 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 30
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -449,10 +506,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+        timeout-minutes: 3
       - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 40
       - name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
@@ -496,9 +562,17 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: stable
@@ -511,7 +585,7 @@ jobs:
         run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: The window's scripts (TypeScript, stripped into recorder/dist, which the desktop build embeds)
@@ -547,9 +621,17 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
         run: bash scripts/ci/free_disk.sh 40
       - id: python
@@ -566,7 +648,7 @@ jobs:
           key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '24.22.3'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build this source's server image locally; never publish
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -618,9 +700,17 @@ jobs:
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: checkout_first
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         continue-on-error: true
         with:
@@ -648,6 +738,17 @@ jobs:
           name: queue-timings
           path: durations.json
           retention-days: 7
+          if-no-files-found: ignore
+      - name: Collect flakes from leg retries
+        continue-on-error: true
+        run: python3 scripts/pr_checks.py flaky
+      - name: Upload queue flakes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        continue-on-error: true
+        with:
+          name: queue-flaky
+          path: flaky.json
+          retention-days: 14
           if-no-files-found: ignore
 
   checks:
@@ -709,10 +810,18 @@ jobs:
       # run under the tests above, on a queue group and on a ready pull request from this repository (the runs that have
       # the tests job; this job skips drafts). It runs after the last job, so it costs a checkout and two artifact
       # downloads. Its own step fails the check and lists each statement no test ran.
-      - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+      - id: checkout_first
+        if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+        timeout-minutes: 3
+        continue-on-error: true
+      - if: ${{ steps.checkout_first.outcome == 'failure' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+        timeout-minutes: 3
       - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

@@ -34,6 +34,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": false,
+      "output_style": null,
       "owner_id": "ana",
       "owners": [
         {
@@ -80,6 +81,7 @@
       "thread_mode": "personal",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": 9,
         "immediate": [
@@ -134,6 +136,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": false,
+      "output_style": null,
       "owner_id": "ben",
       "owners": [
         {
@@ -185,6 +188,7 @@
       "thread_mode": "shared",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": 9,
         "immediate": [
@@ -239,6 +243,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": false,
+      "output_style": null,
       "owner_id": "ana",
       "owners": [
         {
@@ -285,6 +290,7 @@
       "thread_mode": "personal",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": null,
         "immediate": [
@@ -339,6 +345,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": false,
+      "output_style": null,
       "owner_id": "ana",
       "owners": [
         {
@@ -385,6 +392,7 @@
       "thread_mode": "personal",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": null,
         "immediate": [
@@ -439,6 +447,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": false,
+      "output_style": null,
       "owner_id": "ana",
       "owners": [
         {
@@ -485,6 +494,7 @@
       "thread_mode": "personal",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": null,
         "immediate": [
@@ -547,6 +557,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": true,
+      "output_style": null,
       "owner_id": "ana",
       "owners": [
         {
@@ -610,6 +621,7 @@
       "thread_mode": "personal",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": null,
         "immediate": [
@@ -664,6 +676,7 @@
       "notes": 0,
       "onboarding_state": "",
       "online": false,
+      "output_style": null,
       "owner_id": "ben",
       "owners": [
         {
@@ -715,6 +728,7 @@
       "thread_mode": "personal",
       "turns_at_once": null,
       "update_subscriptions": [],
+      "verbosity": null,
       "wake": {
         "digest_hour": null,
         "immediate": [

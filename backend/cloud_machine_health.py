@@ -39,7 +39,7 @@ def file_card(c: sqlite3.Connection, bot: str, tried: str | None, at: float) -> 
         "Replace the machine, or check it.\n\n" + str(H.BOT_REVIEW_ID.format(id=bot))
     )
     try:
-        made = cast(dict[str, Any], H.task_create(c, H.KEEPER, title, body, owner, lint=False, deduplicate=False))
+        made = cast(dict[str, Any], H.task_create(c, H.TICO_ACTOR, title, body, owner, lint=False, deduplicate=False))
         return str(made["id"])
     except H.Refused:
         log.warning("Could not file the cloud-machine task for %s", bot)

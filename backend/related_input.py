@@ -431,7 +431,7 @@ def run(store: Any, now: str | None = None) -> int:
         if why:
             detail["error"] = why
         with store.transaction() as c:
-            call_id = str(H.event(c, H.KEEPER, "judge.call", detail.get("label"), detail)["id"]) if bots else None
+            call_id = str(H.event(c, H.TICO_ACTOR, "judge.call", detail.get("label"), detail)["id"]) if bots else None
             if scores is None:
                 _failed(c, key, why or "error", at)
             else:

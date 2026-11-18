@@ -87,7 +87,7 @@ def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_bac
         H.status_set(c, "human:ana", "ops", state="active", reason="reviewed")
     post(api, "chat/ops", {"text": "Back to the exports"})
     first = claim(api, r)["notes"]
-    assert len(first) == 50 and first[0]["from"] == H.KEEPER
+    assert len(first) == 50 and first[0]["from"] == H.TICO_ACTOR
     assert "lane is a person's (identity)" in first[0]["text"] and first[0]["text"].endswith(H.QUARANTINE_LIFTED)
 
 

@@ -19,8 +19,8 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
         mail = H.task_create(c, "human:ana", "Sort the inbox", "", "bot:inbox", lint=False, private=False)
         H.task_done(c, "bot:ops", public["id"], "Refreshed it", H.task(c, public["id"])["version"])
         H.task_close(c, "human:ben", secret["id"], "Acme layoffs draft")
-        H.status_set(c, H.KEEPER, "inbox", state="running", focus="Reading the owner's mail")
-        H.status_set(c, H.KEEPER, "inbox", state="idle", focus="")
+        H.status_set(c, H.TICO_ACTOR, "inbox", state="running", focus="Reading the owner's mail")
+        H.status_set(c, H.TICO_ACTOR, "inbox", state="idle", focus="")
     mine = post(api, "chat/ops", {"text": "Hello from Cara"}, token="cara-test")
     gone = post(api, "chat/ops", {"text": "Typo, deleted"}, token="cara-test")
     post(api, "chat/ops", {"text": "Owner-only note"})
@@ -122,7 +122,7 @@ def test_replay_names_a_deleted_bot_deleted_bot_never_its_id(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as c:
         H.task_create(c, "human:ana", "Draft the launch post", "", "bot:ops", lint=False, private=False)
-        H.status_set(c, H.KEEPER, "ops", state="running", focus="Drafting")
+        H.status_set(c, H.TICO_ACTOR, "ops", state="running", focus="Drafting")
     roster = H.bots  # the bot is gone from the roster, as after its removal; its history stays
     monkeypatch.setattr(H, "bots", lambda c, state=None: [b for b in roster(c, state) if b["id"] != "ops"])
     span = urlencode({"from": started.isoformat(), "to": (started + timedelta(minutes=2)).isoformat()})

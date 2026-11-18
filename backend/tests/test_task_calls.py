@@ -12,6 +12,7 @@ import pytest
 from backend import question_marks as Q
 from backend import task_delete
 from backend import task_engine as E
+from backend import task_followers
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -151,7 +152,7 @@ def test_a_person_says_a_bots_task_is_done_and_tico_finishing_one_needs_no_push(
     one = _new(c)
     assert H.task_done(c, BEN, one["id"], "Saw it live.", mover=True)["status"] == "done"
     two = _new(c, title="File the receipts")
-    assert H.task_done(c, H.KEEPER, two["id"], "The bot was archived.")["status"] == "done"
+    assert H.task_done(c, H.TICO_ACTOR, two["id"], "The bot was archived.")["status"] == "done"
 
 
 # ----------------------------------------------------------------------------- ask and answer
@@ -775,23 +776,41 @@ def test_a_bot_that_sends_no_version_is_refused_the_old_way_of_saying_done_too(c
     assert H.task_update(c, ANA, row["id"], status="done", note="Sent.")["status"] == "done"  # a person may
 
 
-def test_a_move_into_a_stage_someone_else_owns_does_what_a_reassignment_does(c):
+def test_qa_stage_moves_keep_the_developer_following_and_preserve_rank(c):
     stages = (
-        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-        {"name": "Check", "owner": HELPER, "requirements": [{"kind": "owner_done"}]},
+        {"name": "In progress", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"name": "Bot QA", "owner": HELPER, "requirements": [{"kind": "owner_done"}]},
+        {"name": "Human QA", "owner": BEN, "requirements": [{"kind": "owner_done"}]},
     )
     X.pipeline(c, "notes", "Notes", stages, manager=MANAGER)
     row = _new(c, pipeline="notes")
-    wake = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (row["id"] + ":%",)).fetchone()[0]
+    task_id = row["id"]
+    rank = -10.0
+    H.task_update(c, ANA, task_id, rank=rank, mover=True)
+
+    def check(stage, owner):
+        task = E.task(c, task_id)
+        assert (task["stage"]["name"], task["owner_id"], task["assignee_id"], task["rank"]) == (
+            stage,
+            owner,
+            BUILDER,
+            rank,
+        )
+        assert {f["actor"] for f in task_followers.listed(c, task)} == {BUILDER, owner}
+
+    check("In progress", BUILDER)
+    wake = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (task_id + ":%",)).fetchone()[0]
     c.execute(
         "INSERT INTO task_delegations (task_id, delegate, requested_by, message_id, expires_at) VALUES (?,?,?,?,?)",
-        (row["id"], MANAGER, ANA, wake, "2099-01-01T00:00:00Z"),
+        (task_id, MANAGER, ANA, wake, "2099-01-01T00:00:00Z"),
     )
-    rank = H.task(c, row["id"])["rank"]
-    out = H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
-    assert (out["stage"]["name"], out["owner_id"]) == ("Check", HELPER)
-    assert c.execute("SELECT COUNT(*) FROM task_delegations WHERE task_id=?", (row["id"],)).fetchone()[0] == 0
-    assert H.task(c, row["id"])["rank"] != rank or rank is None  # at the end of the new owner's queue
+    H.task_done(c, BUILDER, task_id, "Drafted.", _version(c, task_id))
+    check("Bot QA", HELPER)
+    assert c.execute("SELECT COUNT(*) FROM task_delegations WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+    H.task_done(c, HELPER, task_id, "Checked.", _version(c, task_id))
+    check("Human QA", BEN)
+    H.task_move(c, ANA, task_id, "In progress", "Address QA feedback.", _version(c, task_id))
+    check("In progress", BUILDER)
 
 
 COUNSEL = "bot:counsel"

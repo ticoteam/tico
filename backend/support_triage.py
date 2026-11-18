@@ -295,7 +295,7 @@ def deliver_one(store, auth, row, found, why):
             )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "support.held",
                 task["id"],
                 {"bot": row["bot"], "key": row["key"], "label": label, "spam": found["spam"], "to": person},
@@ -310,7 +310,7 @@ def deliver_one(store, auth, row, found, why):
             )
             task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"])
         for text in json.loads(now["later"] or "[]"):
-            H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
+            H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
         c.execute(
             "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
             (row["bot"], row["key"], task["id"], H.now()),
@@ -358,7 +358,7 @@ def hand_over(store, row):
         if not person:
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "support.dropped",
                 row["key"],
                 {"bot": row["bot"], "key": row["key"], "why": "no person to give it to"},
@@ -376,7 +376,7 @@ def hand_over(store, row):
             owner=person,
         )
         for text in json.loads(now["later"] or "[]"):
-            H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
+            H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
         c.execute(
             "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
             (row["bot"], row["key"], task["id"], H.now()),
@@ -386,7 +386,7 @@ def hand_over(store, row):
             "ON CONFLICT(bot,key) DO NOTHING",
             (row["bot"], row["key"], SET, 1, json.dumps({"waited": True, **(found or {})}, sort_keys=True), H.now()),
         )
-        H.event(c, H.KEEPER, "support.handed", task["id"], {"bot": row["bot"], "key": row["key"], "to": person})
+        H.event(c, H.TICO_ACTOR, "support.handed", task["id"], {"bot": row["bot"], "key": row["key"], "to": person})
         return task["id"]
 
 

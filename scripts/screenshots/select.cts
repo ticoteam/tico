@@ -48,7 +48,7 @@ const SHARED: string[] = [
   'ui/app/pill.ts', 'ui/app/live.ts', 'ui/app/motion.ts', 'ui/app/rails.ts', 'ui/app/stick-scroll.ts',
   'ui/app/org-fan.ts', 'ui/app/native.ts', 'ui/app/ask-panel.ts', 'ui/app/ask-rules.ts', 'ui/assistant.ts',
   'ui/app/search.ts', 'ui/app/viewer.ts', 'ui/tool-icons.ts', 'ui/assets/**', 'ui/vendor/fonts/**',
-  'ui/vendor/marked.min.js', 'ui/vendor/js-yaml.min.js', 'ui/vendor/livekit-client.umd.min.js',
+  'ui/vendor/marked.min.js', 'ui/vendor/livekit-client.umd.min.js',
 ];
 
 // Files of features no PAGES entry shows. A change to one says so in the reason instead of shooting every page. A

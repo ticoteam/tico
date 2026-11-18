@@ -18,11 +18,12 @@ const PLAN_POLL_MS = 2000, PLAN_ASK_MS = 3000, PLAN_DONE_MS = 1400;
 // A sign-in lives fifteen minutes on the server; one the page cannot read for longer than that has ended.
 const PLAN_LIFE_MS = 16 * 60000;
 // What the provider's page is called on its button.
-const PLAN_PROVIDER: Record<string, string> = {claude_token: 'Claude', codex_login: 'ChatGPT'};
+const PLAN_PROVIDER: Record<string, string> = {claude_token: 'Claude', claude_login: 'Claude', codex_login: 'ChatGPT'};
 // A code as the provider's page hands it back: long, one word. Shorter ones are typed and sent with Sign in.
 const PLAN_CODE = /^[A-Za-z0-9_\-#.~%+=/]{20,600}$/;
 const PLAN_PASTE: Record<string, {label: string; help: string}> = {
   claude_token: {label: 'Token', help: 'Run claude setup-token on a computer, then paste what it prints.'},
+  claude_login: {label: 'Token', help: 'Run claude setup-token on a computer, then paste what it prints.'},
   codex_login: {label: 'auth.json', help: 'From ~/.codex/auth.json on a computer signed in with codex login.'}};
 const planClock = (since: number) => { const s = Math.max(0, Math.floor((Date.now() - since) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const planLive = (state: string) => ['requested', 'starting', 'waiting', 'finishing'].includes(state);

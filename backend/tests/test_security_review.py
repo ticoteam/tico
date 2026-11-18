@@ -187,7 +187,7 @@ def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resume
     from backend import hubdb as H
     from backend.tests.helpers.api import assign, ready, runner
 
-    computer = runner(api)  # placed on a computer, not the keeper
+    computer = runner(api)  # placed on a computer, not Tico
     assign(api, computer, "ops")
     ready(api, computer, ["ops"])
     with api.app.state.store.transaction() as c:

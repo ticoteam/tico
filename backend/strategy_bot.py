@@ -156,11 +156,11 @@ def migrate(c):
     # knows only its own note, still passes it over in its streak.
     c.execute(
         "UPDATE goal_proposals SET decision_note=?, decided_by=? WHERE decision_note IN (?, ?)",
-        (strategy_suggest.WITHDRAWN, H.KEEPER, *OLD_WITHDRAWN),
+        (strategy_suggest.WITHDRAWN, H.TICO_ACTOR, *OLD_WITHDRAWN),
     )
     bot = H.bot(c, SLUG)
     if bot and (bot.get("display_name") or "").strip() in ("", *OLD_NAMES):
-        _rename(c, H.KEEPER, NAME)
+        _rename(c, H.TICO_ACTOR, NAME)
     # Before the scheduler's first pass: a Monday note the old level 1 started must not fire at Passive.
     reconcile(c)
     record = _record(c)
@@ -169,7 +169,7 @@ def migrate(c):
     record.update(on=True, migrated_at=H.now())
     record.pop("name_before", None)
     _save(c, record)
-    H.event(c, H.KEEPER, "strategy_bot.migrated", SLUG, {})
+    H.event(c, H.TICO_ACTOR, "strategy_bot.migrated", SLUG, {})
     return True
 
 
@@ -232,7 +232,7 @@ def _review(c, actor, record, raised=False):
         record.pop("review_settled", None)
         record.pop("review_raised", None)
         if row and not row["deleted_at"] and armed and row["enabled"] and not _review_touched(c, armed):
-            routines.update(c, H.KEEPER, REVIEW, {"enabled": False})
+            routines.update(c, H.TICO_ACTOR, REVIEW, {"enabled": False})
             H.event(c, actor, "strategy_bot.review_paused", REVIEW, {})
         return
     if not row or row["deleted_at"]:
@@ -244,7 +244,7 @@ def _review(c, actor, record, raised=False):
     # Only the owner's raise from Passive overrides a person's earlier start or pause; the default never does, and a
     # person's choice after the raise still wins.
     if not row["enabled"] and (raised or not _review_touched(c, since or "")):
-        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        routines.update(c, H.TICO_ACTOR, REVIEW, {"enabled": True})
         record["review_armed"] = H.now()
         H.event(c, actor, "strategy_bot.review_armed", REVIEW, {})
 
@@ -256,7 +256,7 @@ def _review_touched(c, since):
         c.execute(
             "SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND created_at>=? "
             "AND detail LIKE '%\"enabled\"%' LIMIT 1",
-            (REVIEW, H.KEEPER, since),
+            (REVIEW, H.TICO_ACTOR, since),
         ).fetchone()
         is not None
     )
@@ -273,7 +273,7 @@ def reconcile(c):
     if not proactive(c) and not record.get("review_armed"):
         return
     before = dict(record)
-    _review(c, H.KEEPER, record)
+    _review(c, H.TICO_ACTOR, record)
     if record != before:
         _save(c, record)
 

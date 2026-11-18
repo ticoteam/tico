@@ -43,8 +43,10 @@ Gateway meanwhile. The line under the computer's plan picker says which: "on the
 
 Instead of one plan, the picker can name a person under **People** ("Ana's plans · 3"): the computer then uses every
 plan that person owns for that tool, one at a time. A turn starts on the plan with usage left whose weekly reset comes
-soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan in a
-fresh session (never in the middle of one). A plan with no usage reading yet comes after those with one. When every plan
+soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan
+(never in the middle of one). Claude Code carries on the same conversation there; if it can't, the turn starts a new
+session told what was said since, and says so. Codex starts a fresh session. A plan near its limit (95%) comes last until
+it is back under 90% or that window resets. A plan with no usage reading yet comes after those with one. When every plan
 is at its limit, turns run as for a single plan at its limit: the computer's own login, then the Gateway, else they wait.
 A plan the person adds later joins on its own, and one given to someone else leaves. API keys have no owner and are
 never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
@@ -262,7 +264,8 @@ Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json`
 signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
 
 Adding a plan signs it in without pasting. Tico picks an online computer on the latest release with that tool
-installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
+installed, the person's own first, and runs the sign-in there: `claude auth login --claudeai` (a **full Claude login**,
+below) on a Linux computer that runs Tico's latest runner, else `claude setup-token`, or `codex login` in a folder of its
 own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
 computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
 the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer
@@ -319,9 +322,9 @@ plan, nothing moves. An API key is not a plan.
 | Role | | Claude only | ChatGPT only | Both |
 | --- | --- | --- | --- | --- |
 | Builder, Reviewer 1, every Owner, Feature Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
-| | tasks | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
-| The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
-| Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
+| | tasks | Opus 5.5, medium | GPT-6.2 Sol, high | Opus 5.5, medium |
+| The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.2 Sol, high | Opus 5.5, medium |
+| Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.2 Sol, high |
 | Librarian, Rules, Updates, Automations and Finance Owners (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
 
 A model the catalog does not offer yet is replaced by the set's first offered model on the same tool. A bot whose model a
@@ -350,6 +353,29 @@ deletes after, and sends back the week's percent and reset from that reply. A se
 Claude Code's `/usage` cannot read it; the prompt uses a few tokens of the plan. The token is used for that one read and
 is not kept there. One read runs at a time, and a plan can be read again a minute after the last. ChatGPT plans have no
 such button.
+
+#### Full Claude logins
+
+A Claude plan connected with `claude auth login --claudeai` is a full login, as Orca and t3code use: it is named by its
+account's email, and is one plan per account in the company (connecting the same account again reconnects that plan).
+A setup-token plan reconnected this way becomes a full login and keeps its owner, computers and history; pasting a
+setup-token into a full login's Reconnect turns it back. It is offered only from a Linux computer, since a Mac keeps the
+login in its Keychain, and runs only on computers whose runner says `claude_login_v1`.
+
+- **Turns** get only the login's short-lived access token, in a `.credentials.json` of their own (the process's
+  `CLAUDE_CONFIG_DIR`, with the rest of the computer's `~/.claude` linked in); never the refresh token.
+- **Refresh**: an access token lives about eight hours. When less than an hour is left, Tico leases the refresh to one
+  computer at a time. That computer refreshes a copy of the login, rewrites its own turns' file first, and keeps the new
+  login on disk until Tico has it; Tico then sends the new token to every other computer with turns on that plan. A
+  lease whose computer went quiet is never handed to another computer while the old token still works. A turn that the
+  rotation caught between its calls ("OAuth token revoked") resumes its session instead of failing, and the plan is not
+  marked for Reconnect.
+- **Usage**: every 15 minutes for a plan in use or next in line (and on **↻**), one computer reads the plan's 5-hour
+  window, its week and each model's week from Claude's usage endpoint. A refused read (429) waits as long as it is
+  told; neither it nor an offline computer ever marks Reconnect. A plan at 95% of a window comes after the others in
+  its owner's set until it is back under 90%; only a refusal holds it.
+- **Reconnect**: the login itself lasts about a month and refreshes do not extend it. A few days before it ends the row
+  shows **Reconnect by** and the date.
 
 ## The computers list
 

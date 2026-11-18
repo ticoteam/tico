@@ -16,6 +16,7 @@ from .store import H
 from . import models as M
 from .store import P
 from pathlib import Path
+import time
 from fastapi.responses import PlainTextResponse
 from .store import Problem
 from fastapi import Request
@@ -1026,14 +1027,21 @@ def register_completion(
 ):
     @app.post("/api/v2/attempts/{aid}/complete")
     def complete(request: Request, aid: str, body: M.Completion):
+        arrived = time.time()
         body = scrub_attempt(aid, body)
         from . import automations  # the turn's end acts for the turn (automations.for_attempt)
+        from .performance import note_timings
 
+        began = time.perf_counter()
         rc = completion_rule_check(request, aid, body)
+        rule_check_ms = round((time.perf_counter() - began) * 1000)
 
         def finish(c):
             with automations.for_attempt(c, aid):
-                return execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+                done = execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+            if body.timings is not None:
+                note_timings(c, aid, rule_check_ms, arrived)
+            return done
 
         return mutate(request, body, finish)
 

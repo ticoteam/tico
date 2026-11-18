@@ -137,7 +137,7 @@ def _finish(c, wait, state, reason):
     if done:
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'worktree.wait.' + state,
             wait['task_id'],
             {'wait': wait['id'], 'repo': wait['repo'], 'reason': reason[:500]},
@@ -302,7 +302,7 @@ def _serve_one(c, wait, full, default_org):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'worktree.wait.reserved',
             wait['task_id'],
             {'wait': wait['id'], 'link': link['link_id'], 'path': link['path']},

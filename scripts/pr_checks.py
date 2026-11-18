@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Conservative PR selection, measured Python and browser groups, and read-only check receipts."""
+"""Select PR checks, run measured test groups with bounded retries, and write check receipts."""
 
 import argparse
 import ast
@@ -14,7 +14,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
+
+if __package__:
+    from . import flake_quarantine
+else:
+    import flake_quarantine
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
@@ -2303,11 +2309,83 @@ def coverage_config(suite, root=ROOT):
     return path
 
 
+def browser_attempt(command, root, env):
+    """Stream the browser log and collect the script names from its failure lines."""
+    failed = []
+    with subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE, text=True, errors="replace") as process:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            match = re.match(r"^FAIL  ([\w.-]+\.(?:cts|cjs))(?=\s|$)", line)
+            if match:
+                failed.append(match[1])
+        return process.wait(), failed
+
+
+def pytest_command(workers, report):
+    return [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        workers,
+        *PYTEST_FLAGS,
+        "-o",
+        "junit_family=xunit1",
+        f"--junitxml={report}",
+    ]
+
+
+def check_base_failures(root, suite, retry_report, remaining):
+    """Record failures reproduced on the base and return the head SHA if they explain the failed retry."""
+    base = os.environ.get("BASE_SHA", "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        return None
+    messages = junit_failure_messages(retry_report)
+    # A test that vanished or was skipped on retry cannot be cleared by the base.
+    if not messages or messages.keys() != remaining or any("" in lines for lines in messages.values()):
+        return None
+    base_report = retry_report.with_name(f"{suite}-base.xml").resolve()
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        if base == commit:
+            return None
+        for path in dict.fromkeys(test.split("::", 1)[0] for test in messages):
+            subprocess.run(["git", "cat-file", "-e", f"{base}:{path}"], cwd=root, check=True)
+        with TemporaryDirectory(prefix="tico-pr-base-") as temp:
+            worktree = Path(temp) / "base"
+            try:
+                subprocess.run(["git", "worktree", "add", "--detach", str(worktree), base], cwd=root, check=True)
+                command = [*pytest_command("0", base_report), "--quarantine", *messages]
+                status = subprocess.run(command, cwd=worktree, check=False, timeout=300).returncode
+            finally:
+                subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if status != 1 or junit_failure_messages(base_report) != messages:
+        return None
+    tests = list(messages)
+    warnings = [
+        f"{test} fails the same way on {base[:10]}; this change did not break it. "
+        "Release validation and main-red track the fix."
+        for test in tests
+    ]
+    for warning in warnings:
+        print(f"::warning title=Already failing underneath this change::{warning}", flush=True)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a") as stream:
+            stream.write("\n".join(warnings) + "\n")
+    record = {"suite": suite, "tests": tests, "base": base, "commit": commit}
+    base_report.with_name(f"base-broken-{suite}.json").write_text(json.dumps(record) + "\n")
+    return commit
+
+
 def run(plan_path, suite, root=None, quarantine=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
     `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
     `quarantine` (PR checks and the merge queue only, never release validation) runs the tests in ci/quarantine/ as
-    non-strict xfail (scripts/flake_quarantine.py)."""
+    non-strict xfail. Python and browser legs retry up to five failures once and record them if all pass."""
     root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
@@ -2318,42 +2396,39 @@ def run(plan_path, suite, root=None, quarantine=False):
         from .diff_coverage import extract
     else:
         from diff_coverage import extract
-    lines = plan.get("coverage", {}).get("lines", {})
-    measured = bool(lines) and suite != "selection" and not suite.startswith("browser-")
-    data = root / "ci-results" / f"coverage-{suite}.data"
     if suite == "selection":
         if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
+    results = root / "ci-results"
+    results.mkdir(exist_ok=True)
+    report = results / f"{suite}.xml"
+    retry_report = results / f"{suite}-retry.xml"
+    flaky_report = results / f"flaky-{suite}.json"
+    browser_failures = results / f"failed-{suite}.txt"
+    browser = suite.startswith("browser-")
+    slow = suite == "conformance" or suite.split("-")[0] == "contracts"
+    measured = bool(plan.get("coverage", {}).get("lines")) and not browser
+    data = results / f"coverage-{suite}.data"
     env = None
-    if suite.startswith("browser-"):
+    if browser:
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
-        command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS), *files]
+        browser_command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS)]
+        command = [*browser_command, *files]
         # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cts); this interpreter has the
         # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
         env = {
             **os.environ,
-            "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json"),
+            "TICO_UI_TIMINGS": str(results / f"{suite}.json"),
             "TICO_PYTHON": sys.executable,
         }
     else:
         if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "-n",
-            os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)),
-            *PYTEST_FLAGS,
-            "-o",
-            "junit_family=xunit1",
-            f"--junitxml=ci-results/{suite}.xml",
-        ]
-        if suite == "conformance" or suite.split("-")[0] == "contracts":
+        command = pytest_command(os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)), report.relative_to(root))
+        if slow:
             command += ["-m", "slow"]
             # A content sweep runs as the release gate runs it (CONTENT_SWEEPS): the job names its environment, or, in an
             # incremental release plan, the plan's `sweeps` do.
@@ -2375,19 +2450,80 @@ def run(plan_path, suite, root=None, quarantine=False):
             env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
         command += files
         print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
-    (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
-    result = subprocess.run(command, cwd=root, env=env)
+    failed = []
+    if quarantine:
+        for path in (
+            report,
+            retry_report,
+            flaky_report,
+            browser_failures,
+            results / f"{suite}-base.xml",
+            results / f"base-broken-{suite}.json",
+        ):
+            path.unlink(missing_ok=True)
+    if browser and quarantine:
+        status, failed = browser_attempt(command, root, env)
+        if status and failed:
+            browser_failures.write_text("\n".join(failed) + "\n")
+    else:
+        status = subprocess.run(command, cwd=root, env=env).returncode
     if measured:
-        extract(plan, data, root / "ci-results" / f"coverage-{suite}.json")
+        extract(plan, data, results / f"coverage-{suite}.json")
         data.unlink(missing_ok=True)
-    if result.returncode == 0 and not suite.startswith("browser-"):
-        cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
+    if status == 0 and not browser:
+        cases = list(ET.parse(report).iter("testcase"))
         # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
         ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
         if not ran:
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
-    return result.returncode or rust
+    if not quarantine or slow or rust or status != 1:
+        return status or rust
+    if not browser:
+        failed = list(
+            dict.fromkeys(
+                flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+                for case in junit_failures(report)
+            )
+        )
+        # Collection errors can have JUnit cases without a test node id.
+        if any("::" not in test for test in failed):
+            return status
+    if not 0 < len(failed) <= flake_quarantine.MAX_FAILURES_PER_JOB:
+        return status
+    commit = None
+    if browser:
+        # Checking browser failures against the base would need a UI build of the base.
+        retry_env = {**env, "TICO_UI_TIMINGS": str(results / f"{suite}-retry.json")}
+        retry_status, remaining = browser_attempt([*browser_command, *failed], root, retry_env)
+        if retry_status:
+            if remaining:
+                browser_failures.write_text("\n".join(remaining) + "\n")
+            return retry_status
+        browser_failures.unlink(missing_ok=True)
+    else:
+        retry = [*pytest_command("0", retry_report.relative_to(root)), "--quarantine", *failed]
+        retry_status = subprocess.run(retry, cwd=root, env=None, check=False).returncode
+        if retry_status not in (0, 1):
+            return retry_status
+        try:
+            passed = flake_quarantine.passed_tests(retry_report.read_bytes())
+        except (ET.ParseError, OSError):
+            return retry_status or status
+        if retry_status:
+            commit = check_base_failures(root, suite, retry_report, set(failed) - passed)
+            if commit is None:
+                return retry_status
+            failed = [test for test in failed if test in passed]
+            if not failed:
+                return 0
+        elif not passed.issuperset(failed):
+            return status
+    commit = commit or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    flaky_report.write_text(json.dumps({"suite": suite, "tests": failed, "commit": commit}) + "\n")
+    for test in failed:
+        print(f"Flaky (failed, then passed on retry): {test}", flush=True)
+    return 0
 
 
 def cargo_tests(crates):
@@ -2513,18 +2649,33 @@ def junit_ran(path):
     return path.is_file() and any(case.find("skipped") is None for case in ET.parse(path).iter("testcase"))
 
 
+def junit_failures(path):
+    try:
+        cases = ET.parse(path).iter("testcase")
+    except (ET.ParseError, OSError):
+        return
+    yield from (case for case in cases if case.find("failure") is not None or case.find("error") is not None)
+
+
+def junit_failure_messages(path):
+    messages = defaultdict(set)
+    for case in junit_failures(path):
+        test = flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+        for outcome in case:
+            if outcome.tag in ("failure", "error"):
+                lines = outcome.get("message", "").splitlines()
+                first = lines[0] if lines else ""
+                messages[test].add(" ".join(re.sub(r"\b0x[0-9a-fA-F]+\b", "", first).split()))
+    return messages
+
+
 def junit_failed(paths, limit=3):
     """The first failing tests in pytest JUnit reports, as "file.py::test", for the error a fail-fast cancel prints."""
     names = []
     for path in paths:
-        try:
-            cases = ET.parse(path).iter("testcase")
-        except (ET.ParseError, OSError):
-            continue
-        for case in cases:
-            if case.find("failure") is not None or case.find("error") is not None:
-                module = case.get("classname", "").rsplit(".", 1)[-1]
-                names.append(f"{module}.py::{case.get('name', '')}" if module else case.get("name", ""))
+        for case in junit_failures(path):
+            module = case.get("classname", "").rsplit(".", 1)[-1]
+            names.append(f"{module}.py::{case.get('name', '')}" if module else case.get("name", ""))
     return names[:limit] + ([f"and {len(names) - limit} more"] if len(names) > limit else [])
 
 
@@ -2680,7 +2831,7 @@ def main():
     execute.add_argument(
         "--quarantine",
         action="store_true",
-        help="run ci/quarantine/ tests as non-strict xfail (PR checks and the queue)",
+        help="run ci/quarantine/ tests as non-strict xfail and retry small failures once",
     )
     mine = sub.add_parser(
         "local", help="run the tests a pull request's checks would select, here, and print a receipt for its head"
@@ -2690,9 +2841,10 @@ def main():
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
     ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
     ran.add_argument("report")
-    failed = sub.add_parser("failed", help="print the first failing tests in the JUnit reports in a folder")
+    failed = sub.add_parser("failed", help="print the first failing tests or browser scripts reported in a folder")
     failed.add_argument("folder")
     sub.add_parser("durations")
+    sub.add_parser("flaky", help="combine the legs' successful retries into flaky.json")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
     cancel = sub.add_parser("cancel-superseded")
@@ -2720,14 +2872,32 @@ def main():
             print(f"{args.report}: every test skipped or none ran", file=sys.stderr)
             return 1
     elif args.action == "failed":
-        print(", ".join(junit_failed(sorted(Path(args.folder).glob("*.xml")))))
+        folder = Path(args.folder)
+        reports = sorted(path for path in folder.glob("*.xml") if not path.stem.endswith("-base"))
+        failed = junit_failed(path for path in reports if path.stem.endswith("-retry")) or junit_failed(reports)
+        if not failed:
+            failed = [
+                name for path in sorted(folder.glob("failed-browser-*.txt")) for name in path.read_text().splitlines()
+            ]
+        print(", ".join(failed))
     elif args.action == "local":
         return local(base=args.base, jobs=args.jobs, ready=args.ready)
     elif args.action == "durations":
-        measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
+        results = Path("ci-results")
+        measured = durations(
+            (path for path in results.glob("python-*.xml") if not path.stem.endswith(("-retry", "-base"))),
+            (path for path in results.glob("browser-*.json") if not path.stem.endswith("-retry")),
+        )
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
+    elif args.action == "flaky":
+        records = [json.loads(path.read_text()) for path in sorted(Path("ci-results").glob("flaky-*.json"))]
+        output = Path("flaky.json")
+        if records:
+            output.write_text(json.dumps(records, indent=2) + "\n")
+        else:
+            output.unlink(missing_ok=True)
     elif args.action == "cancel-superseded":
         # Never this run: it is numbered below its own run number and its id is excluded here as well.
         runs = [

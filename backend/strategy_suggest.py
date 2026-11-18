@@ -351,7 +351,7 @@ def withdraw(c):
     c.execute(
         "UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
         "WHERE status='pending' AND kind=?",
-        (H.KEEPER, H.now(), WITHDRAWN, KIND),
+        (H.TICO_ACTOR, H.now(), WITHDRAWN, KIND),
     )
 
 

@@ -248,6 +248,40 @@ def shown(c, title="Launch note", bot=None, task_id=None):
     return [f"page:{fid}"]
 
 
+def stub_document(c, task_id, requirement, file_id, by, version):
+    """Give a synthetic approval page its live document link, with the test supplying the submission and verdict."""
+    from backend import page_links as L
+    from backend import task_documents as D
+
+    settings = c.execute("SELECT settings FROM requirements WHERE id=?", (requirement,)).fetchone()[0]
+    document = json.loads(settings or "{}").get("document")
+    if not document:
+        return
+    now = H.now()
+    target = "task:" + task_id
+    c.execute(
+        "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+        "last_activity_at, current_version, task_id) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET current_version=excluded.current_version",
+        (file_id, H.actor_id(by), target, file_id, document, now, now, version, task_id),
+    )
+    blob = H.new_id()
+    digest = "sha256:" + blob
+    c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,1,'page.html','text/html',?)",
+        (blob, by, digest, now),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+        "VALUES (?,?,?,?,1,'page.html','text/html',?,?)",
+        (file_id, version, blob, digest, by, now),
+    )
+    for old in L.pages_for(c, target, document):
+        if old != file_id:
+            L.unlink(c, old, target, document, by)
+    D.record(c, task_id, document, file_id, by)
+
+
 def say_done(c, row, by=None):
     """The owner says the stage's work is finished: one `done` answer on the stage's owner_done requirement. The task is
     not moved; call `task_engine.advance` for that."""

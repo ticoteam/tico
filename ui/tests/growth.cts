@@ -12,14 +12,22 @@ import type * as R from './support/redesign-e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cts') as R.Api;
 
-const REMOVED = /\/api\/v2\/(gtm|growth\/(ideas|segments|evidence|working|week|numbers))/;
+// growth/numbers is read again, once per view, by the Growth line (ui/app/growth-line.ts); the rest are gone.
+const REMOVED = /\/api\/v2\/(gtm|growth\/(ideas|segments|evidence|working|week))/;
 // The test hub's clock stands still here (evals/factory/world.py).
 const HUB_NOW = Date.UTC(2026, 9, 20, 9);
 const monthsAgo = (n: number) => { const d = new Date(HUB_NOW); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 7); };
 const MONTH = monthsAgo(0);
 // The month with no row at all, and the one where spend went unrecorded: gaps stay gaps.
 const NO_ROW = 6, NO_SPEND = 3;
+// A Growth page nobody arranged (backend/cards.py DEFAULTS): the Growth line over it says the month numbers and channels.
+const DEFAULT_CARDS = ['Funnel', 'Retention', 'Growth board'];
+// The cards as a team that pinned them before the line keeps them; the rest of this script reads them.
 const CARDS = ['Funnel', 'New customers', 'CAC', 'Spend', 'LTV:CAC', 'Payback', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'];
+const CLASSIC_ADDED: Array<[string, string, Record<string, string>]> = [
+  ...['new_customers', 'cac', 'spend', 'ltv_cac', 'payback_months', 'kept_d30'].map((metric): [string, string, Record<string, string>] => ['growth_number', 'small', {metric}]),
+  ['growth_channels', 'large', {}],
+];
 const CHANNELS: [string, string, string, string | null, number][] = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-manager', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
   ['local-pages', 'Local pages', 'testing', 'bot:engineering-manager', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
   ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-manager', .15]];
@@ -147,9 +155,10 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await page.locator('#side a[data-nav="growth"]').click();
   await arrive('#/growth', 'the sidebar');
   await grid();
-  assert.deepEqual(await headings(), CARDS, `${tag}: the default cards`);
+  assert.deepEqual(await headings(), DEFAULT_CARDS, `${tag}: the default cards`);
   assert.equal(await page.locator('.dash-head h1').innerText(), 'Growth', `${tag}: the title`);
-  assert.equal(await page.locator('#dash-grid .dash-none').count(), CARDS.length, `${tag}: each says it has nothing yet`);
+  assert.equal(await page.locator('#dash-grid .dash-none').count(), DEFAULT_CARDS.length, `${tag}: each says it has nothing yet`);
+  assert.equal(await page.locator('[data-gr-line]').isVisible(), false, `${tag}: no Growth line without a channel`);
   assert.equal(await page.locator('[data-gr-ns]').count(), 0, `${tag}: no North Star line`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker`);
   // The Growth board opens the Growth Experiments pipeline the growth packs file into, never General; none, no link.
@@ -169,6 +178,14 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await page.locator('[data-gr-back]').click();
   await arrive('#/growth', 'the back link');
 
+  // The cards as a team that arranged them before the Growth line keeps them: the Number cards and Channels, in place.
+  for (const [template, size, settings] of CLASSIC_ADDED) await ok(page, 'POST', 'cards', {template, size, settings, place: 'growth'});
+  const placed = (await ok<{pins: Array<{id: string; card: {template: string; settings?: {metric?: string}}}>}>(page, 'GET', 'places/growth')).pins;
+  const rank = (p: {card: {template: string; settings?: {metric?: string}}}) => p.card.template === 'growth_funnel' ? 0 : p.card.template === 'growth_number'
+    ? 1 + ['new_customers', 'cac', 'spend', 'ltv_cac', 'payback_months', 'kept_d30'].indexOf(p.card.settings?.metric || '') : p.card.template === 'growth_channels' ? 7
+    : p.card.template === 'growth_retention' ? 8 : 9;
+  await ok(page, 'POST', 'places/growth/order', {ids: [...placed].sort((a, b) => rank(a) - rank(b)).map(p => p.id)});
+
   // One month of only new customers: New customers and Channels show it; an unknown CAC is a dash.
   await ok(page, 'POST', 'growth/channels', {slug: 'flyers', name: 'Flyers', track: 'performance', stage: 'idea'});
   await ok(page, 'PUT', 'growth/cohorts', {channel: 'flyers', month: monthsAgo(1), new_customers: 9, quality: 'actual'});
@@ -178,6 +195,19 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.match(await card('CAC').innerText(), new RegExp(`None for ${long(monthsAgo(1))}`), `${tag}: no CAC that month`);
   assert.deepEqual(await row('flyers').locator('td.grc-n').allInnerTexts(), ['9', '', ''], `${tag}: the row's numbers (an empty cell shows nothing)`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker with one month`);
+  // The Growth line: one row for the channel, its sentence, and a number that opens where it comes from, under its row.
+  const line = page.locator('[data-gr-line]');
+  await line.locator('[data-grl-row="flyers"]').waitFor({timeout: t(10000)});
+  assert.match(await line.locator('[data-grl-headline]').innerText(), /brought 9 new customers/, `${tag}: the line's sentence`);
+  const newOne = line.locator('[data-grl-trace="flyers:new_customers"]');
+  await newOne.click();
+  assert.equal(await newOne.getAttribute('aria-expanded'), 'true', `${tag}: the trace says it is open`);
+  assert.match(await line.locator('[data-grl-trace-for="flyers"]').innerText(), /9 new customers from Typed by hand/, `${tag}: the trace names where the number comes from`);
+  // Nothing past the line's right edge at this width, the chat pane open or not (the columns stack to fit).
+  const edge = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi, .grl-c-eco, .grl-headline')].map(c => c.getBoundingClientRect().right)) - box.right; });
+  assert.ok(edge <= 1, `${tag}: the line's columns end inside it (${edge}px past)`);
+  await themed(page, `growth-${width}-line`);
+  noErrors('the Growth line');
   // Settings: the channel's Edit retires it after asking once more on the same button.
   await (await settings()).locator('[data-gs-edit="flyers"]').click();
   const retire = dialog().locator('[data-retire]');
@@ -197,6 +227,28 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // not beside the title: the header is one line (style guide "Top bars: one line").
   await reload();
   await page.locator('#dash-grid .grc-funnel').waitFor({timeout: t(15000)});
+  // The Growth line at desktop widths (this script runs on a phone, so the window is widened for it): eight channels and
+  // Unknown fit inside the line at 1280 and 1100 px; a source picks its rows and links them; CAC opens its trace.
+  {
+    const line = page.locator('[data-gr-line]'), was = page.viewportSize()!;
+    for (const w of [1280, 1100]) {
+      await page.setViewportSize({width: w, height: 900});
+      await line.locator('[data-grl-row="google-ads"]').waitFor({timeout: t(10000)});
+      const past = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi, .grl-c-eco, .grl-headline')].map(c => c.getBoundingClientRect().right)) - box.right; });
+      assert.ok(past <= 1, `${tag}: at ${w} px the line's columns end inside it (${past}px past)`);
+      const used = ((await line.locator('[data-grl-row="google-ads"]').getAttribute('data-grl-srcs')) || '').split(' ')[0];
+      const pick = line.locator(`[data-grl-strip][data-grl-pick="source:${used}"]`);
+      await pick.click();
+      assert.ok(await line.locator('.grl-row.grl-on').count() > 0, `${tag}: at ${w} px a source picks the rows it fills`);
+      assert.ok(await line.locator('svg.grl-links path').count() > 0, `${tag}: at ${w} px and links them`);
+      const cac = line.locator('[data-grl-trace="google-ads:cac"]');
+      await cac.click();
+      assert.match(await line.locator('[data-grl-trace-for="google-ads"]').innerText(), /= \$[\d,]+ CAC/, `${tag}: at ${w} px CAC's trace writes the sum`);
+      await themed(page, `growth-${w}-line`);
+      await cac.click(); await pick.click();   // closed again: the rest of the script reads the page at rest
+    }
+    await page.setViewportSize(was);
+  }
   assert.deepEqual(await headings(), CARDS, `${tag}: the order`);
   const ns = page.locator('#dash-grid [data-gr-ns]');
   assert.match(await ns.innerText(), /North Star[\s\S]*Active homes[\s\S]*648[\s\S]*Target 1,000/, `${tag}: the North Star line, with its target`);

@@ -196,7 +196,7 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
 
 def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_session():
     # Nov 14 (one Product pipeline): the Product Owner and the Builder are one bot, so the code and the reasons are in
-    # context when it builds. It writes the Spec, owns Build and both Fixes, and never passes a person's approval.
+    # context when it builds. It writes the Spec, owns Build and Fixes, and never passes a person's approval.
     text = agent("feature-owner")
     assert card("feature-owner")["session"] == "task"
     assert yaml.safe_load((CATALOG / "feature-owner" / "bot.yaml").read_text())["session"] == "task"
@@ -205,7 +205,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         "Related input",
         "OK spec",
         "Build",
-        "Fixes 1 and Fixes 2",
+        "Fixes",
         "QA",
         "OK release",
         "Validate",
@@ -213,7 +213,7 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
         assert f"**{stage}" in text, stage
     assert "Pitch" not in text  # a feature starts as a chat; its first approval is the Spec (Nov 16)
     assert "A person approves the Spec and the Release report: you never pass those yourself." in text
-    assert '--doc "Release report"' in text
+    assert '--task <id> --as "Release report"' in text
     for playbook in ("write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook

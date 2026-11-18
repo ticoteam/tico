@@ -472,7 +472,7 @@ def redeem_invite(c, token, issuer, sub, email):
     if claimed.rowcount != 1:
         raise InviteRefused("spent")
     _link(c, reader["id"], [row["audience_id"]])
-    H.event(c, H.KEEPER, "reader.invite_used", row["id"], {"audience": row["audience_id"], "reader": reader["id"]})
+    H.event(c, H.TICO_ACTOR, "reader.invite_used", row["id"], {"audience": row["audience_id"], "reader": reader["id"]})
     return reader
 
 
@@ -602,7 +602,7 @@ def _file_task(c, owner, reader, edition, kind, text, verdict):
         # A question to the person on their own task (person_asks): no bot reads a reader's words unasked.
         row = person_asks.task_for(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             owner,
@@ -903,7 +903,7 @@ def _notices_done(store, edition_id, batch, status, body=None):
                 "UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
                 (status, H.now(), row["id"]),
             )
-        H.event(c, H.KEEPER, "reader.notices", edition_id, {"status": status, "readers": len(batch), **counts})
+        H.event(c, H.TICO_ACTOR, "reader.notices", edition_id, {"status": status, "readers": len(batch), **counts})
 
 
 def _notices_retry(store, batch):

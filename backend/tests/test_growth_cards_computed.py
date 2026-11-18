@@ -11,6 +11,9 @@ import pytest
 
 from backend import growth_computed as GX
 from backend.tests.helpers.api import get, headers, post, put
+from backend.tests.helpers.growth_cards import classic_cards  # noqa: F401 (the fixture)
+
+pytestmark = pytest.mark.usefixtures("classic_cards")  # these test the Number and Channels cards
 
 TODAY = date(2026, 11, 13)
 HEADER = ["customer_key", "became_customer", "channel", "segment", "churned"]

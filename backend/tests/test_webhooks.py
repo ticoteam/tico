@@ -483,7 +483,7 @@ def test_publish_to_one_endpoint_checks_the_actor_against_that_endpoint(api):
             W.publish(c, "custom.x", "s", {}, "human:priya", only=bens["id"])
         assert W.publish(c, "custom.x", "s", {}, "human:ben", only=bens["id"]) == 1
         assert W.publish(c, "custom.y", "s", {}, "human:ana", only=bens["id"]) == 1  # an admin may
-        assert W.publish(c, "custom.z", "s", {}, H.KEEPER, only=bens["id"]) == 1
+        assert W.publish(c, "custom.z", "s", {}, H.TICO_ACTOR, only=bens["id"]) == 1
         c.execute(
             "INSERT OR REPLACE INTO email_sending_policies VALUES('bot:ops','{\"mode\":\"on_their_own\"}',?,?)",
             (H.now(), "human:ana"),
@@ -503,9 +503,9 @@ def test_a_custom_event_about_a_private_task_is_refused_to_an_endpoint_whose_own
             c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False
         )
         with pytest.raises(W.Refused, match="may not read this"):
-            W.publish(c, "custom.x", private["id"], {"text": "sensitive"}, H.KEEPER, only=priyas["id"])
-        assert W.publish(c, "custom.x", private["id"], {"text": "sensitive"}, H.KEEPER, only=bens["id"]) == 1
-        assert W.publish(c, "custom.x", "not-a-task", {"text": "fine"}, H.KEEPER, only=priyas["id"]) == 1
+            W.publish(c, "custom.x", private["id"], {"text": "sensitive"}, H.TICO_ACTOR, only=priyas["id"])
+        assert W.publish(c, "custom.x", private["id"], {"text": "sensitive"}, H.TICO_ACTOR, only=bens["id"]) == 1
+        assert W.publish(c, "custom.x", "not-a-task", {"text": "fine"}, H.TICO_ACTOR, only=priyas["id"]) == 1
 
 
 def test_an_endpoint_whose_owner_has_left_hears_nothing(api, net, monkeypatch):
@@ -517,7 +517,7 @@ def test_an_endpoint_whose_owner_has_left_hears_nothing(api, net, monkeypatch):
         public = H.task_create(
             c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False
         )  # Ben is still a party
-    publish(api, "custom.note", "n1", {"text": "company news"}, H.KEEPER)
+    publish(api, "custom.note", "n1", {"text": "company news"}, H.TICO_ACTOR)
     assert sends(api, ben["id"]) == []
     assert {s["subject"] for s in sends(api, ana["id"])} >= {public["id"], "n1"}
 

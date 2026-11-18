@@ -157,12 +157,31 @@ MODEL_CATALOG = tuple(
             "deprecated": True,
         },
         {
+            "id": "gpt-6.2-sol",
+            "context_tokens": 1_050_000,
+            "label": "gpt 6.2 sol",
+            "runtime": "codex",
+            "provider": "openai",
+            "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
+            "default_effort": "medium",
+        },
+        {
             "id": "gpt-6.1-sol",
             "context_tokens": 1_050_000,
             "label": "gpt 6.1 sol",
             "runtime": "codex",
             "provider": "openai",
             "efforts": ("low", "medium", "high", "xhigh", "max"),
+            "default_effort": "medium",
+            "deprecated": True,
+        },
+        {
+            "id": "gpt-6.2-astra",
+            "context_tokens": 1_050_000,
+            "label": "gpt 6.2 astra",
+            "runtime": "codex",
+            "provider": "openai",
+            "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
             "default_effort": "medium",
         },
         # Offered on Codex (Product opened it, 2026-11-11; it was held under Dev 693). The Tico AI Gateway still holds
@@ -256,6 +275,15 @@ MODEL_CATALOG = tuple(
             "default_effort": "high",
         },
         {
+            "id": "claude-fable-5-2",
+            "context_tokens": 1_000_000,
+            "label": "fable 5.2",
+            "runtime": "claude",
+            "provider": "anthropic",
+            "efforts": ("low", "medium", "high", "xhigh", "max"),
+            "default_effort": "high",
+        },
+        {
             "id": "claude-fable-5-1",
             "context_tokens": 1_000_000,
             "label": "fable 5.1",
@@ -263,6 +291,7 @@ MODEL_CATALOG = tuple(
             "provider": "anthropic",
             "efforts": ("low", "medium", "high", "xhigh", "max"),
             "default_effort": "high",
+            "deprecated": True,
         },
         {
             "id": "claude-haiku-5-5",
@@ -521,13 +550,16 @@ def with_compact_default(config):
 # counted as input). A bot that names a model by another id than these gets no estimate.
 # Sources, read 2026-09-29 (Anthropic re-read 2026-10-17):
 #   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes";
-#              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
+#              0.025x input on Fable 5.2 and 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
+#              claude-fable-5-2 read 2026-11-17 (pricing page: $8 in, $0.20 cache hit, $40 out per 1M)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
 #              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
 #              gpt-6.1-terra at 272,000 or more prompt tokens: Tico's approved long-prompt rate (LONG_PROMPT below).
 #              OpenRouter's public list (read 2026-11-05) gives openai/gpt-6.1-terra an override at min_prompt_tokens
 #              272000 of $2.00 in / $0.10 cached / $7.50 out per 1M. A citation only: it changes no rate here.
+#              gpt-6.2-sol ($2 / $0.10 / $10) and gpt-6.2-astra ($8 / $0.40 / $40) read 2026-11-17 from their
+#              model pages (short context; long-context rates, as for gpt-6.1-sol and gpt-6-astra, are not modelled)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
@@ -561,6 +593,7 @@ class _Priced(dict):
 
 PRICES = _Priced(
     {
+        "claude-fable-5-2": (8.0, 0.20, 40.0),
         "claude-fable-5-1": (10.0, 0.25, 50.0),
         "claude-fable-5": (10.0, 1.0, 50.0),
         "claude-opus-5-5": (4.0, 0.20, 20.0),
@@ -570,9 +603,11 @@ PRICES = _Priced(
         "claude-sonnet-5": (2.0, 0.20, 10.0),
         "claude-haiku-5-5": (0.10, 0.01, 0.50),
         "claude-haiku-4-5": (1.0, 0.10, 5.0),
+        "gpt-6.2-astra": (8.0, 0.40, 40.0),
         "gpt-6-astra": (10.0, 1.0, 50.0),
         "gpt-6-sol": (2.0, 0.20, 10.0),
         "gpt-6-luna": (0.10, 0.01, 0.50),
+        "gpt-6.2-sol": (2.0, 0.10, 10.0),
         "gpt-6.1-sol": (2.0, 0.10, 10.0),
         "gpt-6.1-terra": (
             1.25,

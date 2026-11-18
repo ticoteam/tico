@@ -373,7 +373,7 @@ def stop_running(c, error=INTERRUPTED):
             "UPDATE lens_runs SET status='failed', finished_at=?, error=? WHERE id=?",
             (H.now(), S.dumps(error), row["id"]),
         )
-        S._event(c, H.KEEPER, "lens_done", {"run_id": row["id"], "lens": row["lens"], "status": "failed"})
+        S._event(c, H.TICO_ACTOR, "lens_done", {"run_id": row["id"], "lens": row["lens"], "status": "failed"})
 
 
 # ----------------------------------------------------------------------------- the model

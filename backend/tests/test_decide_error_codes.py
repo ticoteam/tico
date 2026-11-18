@@ -83,7 +83,7 @@ def test_listening_audits_the_code_not_the_echoed_post(api):
     save(api, source_id(api, made["id"]), [item(1, SECRET)])
     L.run_pass(api.app.state.store, None, echoing())
     assert [(r["status"], r["tries"]) for r in sql(api, "SELECT status, tries FROM listening_items")] == [("new", 1)]
-    ((target, detail),) = events(api, H.KEEPER)
+    ((target, detail),) = events(api, H.TICO_ACTOR)
     assert target == "listening." + made["id"] and detail["error"] == "invalid" and "7Q4X" not in json.dumps(detail)
 
 

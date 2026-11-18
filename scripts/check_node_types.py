@@ -22,7 +22,7 @@ rules:
    (declare const window: Window & typeof globalThis & {...}).
 4. tsc reports nothing in any project: any diagnostic fails.
 
-Runs in a few seconds. The pinned TypeScript is fetched with npx, as scripts/check_ui_strict.py does.
+Runs in a few seconds with the pinned TypeScript compiler installed by npm ci.
 """
 
 import argparse
@@ -33,7 +33,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc"]
+# The TypeScript 6 API package also installs a compiler. Use the pinned TypeScript 7 package directly.
+TSC = ["node", str(ROOT / "node_modules/typescript/bin/tsc")]
 BASE = "tsconfig.node.json"
 PROJECTS = (
     "scripts/tsconfig.json",

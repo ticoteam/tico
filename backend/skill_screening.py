@@ -454,7 +454,7 @@ def finish(store, row, stamp, outcome):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "skill.screened",
             row["id"],
             {

@@ -232,6 +232,11 @@ def request_plan_read(c, sid, actor):
     sub = MS.row(c, sid)
     if not sub:
         raise Problem('not_found', 'Subscription not found', 404)
+    if sub['kind'] == 'claude_login' and sub['status'] != 'needs_reconnect':
+        from . import claude_login
+
+        # A full login's usage is read from its computers with its access token (claude_login.ask_usage).
+        return claude_login.ask_usage(c, sid, actor)
     if sub['kind'] != 'claude_token':
         raise Problem(
             'unavailable',
@@ -276,6 +281,8 @@ def plan_pending(c, runner):
     out = []
     for row in rows:
         request = (json.loads(row['value'] or '{}')).get('request') or {}
+        if request.get('kind') == 'oauth_usage':
+            continue  # a full login's read, polled with its token (backend/claude_login.py)
         if request.get('state') == 'requested' and request.get('runner_id') == runner and request['expires_at'] > now:
             out.append(
                 {

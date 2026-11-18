@@ -19,6 +19,7 @@ interface GrowthChannelRow extends ChannelRef {
   source_id: string | null;
   guardrail_kpi_id: string | null;
   guardrail_max: number | null;
+  input_kpi_id?: string | null;
   why: string;
 }
 interface GrowthCohortSources { spend?: string; new_customers?: string; }
@@ -47,12 +48,12 @@ interface GrowthOrigin {
   differs?: { typed: number | null; chosen: string | null; computed?: number | null } | null;
 }
 interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; kind?: string | null; fills?: string[]; }
-interface GrowthKpi { id: string; name: string; }
+interface GrowthKpi { id: string; name: string; growth_role?: string | null; }
 /** The form's fields by name, as the dialogs read them (grDialog hands the form element); K is the names the dialog reads. */
 type GrowthFormFields<K extends string> = HTMLFormControlsCollection & Record<K, { value: string }>;
 type SettingsField = 'unit' | 'revenue_month' | 'margin_pct';
 type CohortField = 'month' | 'spend' | 'bot_cost' | 'new_customers' | 'quality' | 'src_spend' | 'src_new' | 'revenue_month' | 'margin_pct' | GrowthKeptField;
-type ChannelField = 'name' | 'slug' | 'track' | 'stage' | 'owner_ref' | 'budget_month' | 'source_id' | 'guardrail_kpi_id' | 'guardrail_max' | 'why';
+type ChannelField = 'name' | 'slug' | 'track' | 'stage' | 'owner_ref' | 'budget_month' | 'source_id' | 'guardrail_kpi_id' | 'guardrail_max' | 'input_kpi_id' | 'why';
 interface ChannelBody {
   slug?: string;
   name: string;
@@ -63,6 +64,7 @@ interface ChannelBody {
   source_id: string | null;
   guardrail_kpi_id: string | null;
   guardrail_max: number | null;
+  input_kpi_id?: string | null;
   why: string;
 }
 
@@ -208,12 +210,13 @@ async function gcChannelDialog(state: GrowthState, c: GrowthChannelRow | null = 
     ${grField('Numbers from', `<select name="source_id">${grOpts(live.map(s => [s.id, `${s.system} · ${s.truth_for}`]), c?.source_id, '—')}</select>`)}
     <div class="gr-pair">${grField('Guardrail', `<select name="guardrail_kpi_id">${grOpts(kp.map(k => [k.id, k.name]), c?.guardrail_kpi_id, '—')}</select>`)}
     ${grField('Max', `<input name="guardrail_max" inputmode="decimal" value="${esc(c?.guardrail_max ?? '')}">`)}</div>
+    ${grField('Moves', `<select name="input_kpi_id">${grOpts(kp.filter(k => k.growth_role === 'input' || k.id === c?.input_kpi_id).map(k => [k.id, k.name]), c?.input_kpi_id, 'No KPI linked')}</select>`)}
     ${grField('Why', `<textarea name="why" rows="2" maxlength="1000">${esc(c?.why || '')}</textarea>`)}
     ${c ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
   const dlg = grDialog(c ? c.name : 'New channel', body, c ? 'Save' : 'Add', async form => {
     const el = form.elements as GrowthFormFields<ChannelField>, v = (n: ChannelField) => el[n].value.trim();
     const out: ChannelBody = {name: v('name'), track: v('track'), stage: v('stage'), owner_ref: v('owner_ref') || null, budget_month: grNum(v('budget_month')),
-      source_id: v('source_id') || null, guardrail_kpi_id: v('guardrail_kpi_id') || null, guardrail_max: grNum(v('guardrail_max')), why: v('why')};
+      source_id: v('source_id') || null, guardrail_kpi_id: v('guardrail_kpi_id') || null, guardrail_max: grNum(v('guardrail_max')), input_kpi_id: v('input_kpi_id') || null, why: v('why')};
     if (!out.name) throw new Error('A name');
     if (c) await patch(`/v2/growth/channels/${encodeURIComponent(c.slug)}`, out);
     else {

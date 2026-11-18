@@ -43,10 +43,12 @@ def test_a_new_task_is_its_title_and_a_first_message_from_whoever_wrote_it(compa
 def test_what_tico_files_for_a_bot_is_its_instructions_not_a_message(company):
     with company.transaction() as c:
         X.bot(c, "cpo")
-        made = H.task_create(c, H.KEEPER, "Set yourself up", "Run your setup: read the docs.", "bot:cpo", lint=False)
+        made = H.task_create(
+            c, H.TICO_ACTOR, "Set yourself up", "Run your setup: read the docs.", "bot:cpo", lint=False
+        )
         assert H.task_request(c, made["id"]) is None
         assert task_wakes.instructions(c, made["id"]) == "Run your setup: read the docs."
-        assert all(sender != H.KEEPER for sender, _ in _said(c, made["id"]))
+        assert all(sender != H.TICO_ACTOR for sender, _ in _said(c, made["id"]))
 
 
 def test_the_api_takes_a_message_and_refuses_a_description(api):
@@ -75,7 +77,7 @@ def test_the_migration_posts_a_persons_description_first_and_keeps_bot_instructi
         X.place(c, "cpo")
         asked = _old(c, ANA, "Add the export button", "On the reports page.", "bot:cpo")
         later = H.task_comment(c, ANA, asked["id"], "Also a CSV option.")
-        filed = _old(c, H.KEEPER, "Check the backups", "Bot id: cpo\nRead the last report.", "bot:cpo")
+        filed = _old(c, H.TICO_ACTOR, "Check the backups", "Bot id: cpo\nRead the last report.", "bot:cpo")
         setup = _old(c, ANA, "Set yourself up", "Run your setup: read the docs.", "bot:cpo", status="done")
         plain = _old(c, ANA, "Order paper", "Order paper", "bot:cpo")
         unread = c.execute(
@@ -102,7 +104,7 @@ def test_the_migration_posts_a_persons_description_first_and_keeps_bot_instructi
         # What Tico filed for a bot: its instructions, in no timeline.
         assert H.task_request(c, filed["id"]) is None
         assert task_wakes.instructions(c, filed["id"]) == "Bot id: cpo\nRead the last report."
-        assert all(sender != H.KEEPER for sender, _ in _said(c, filed["id"]))
+        assert all(sender != H.TICO_ACTOR for sender, _ in _said(c, filed["id"]))
         # A finished setup's steps: dropped; the template keeps them.
         assert H.task_request(c, setup["id"]) is None and task_wakes.instructions(c, setup["id"]) == ""
         # Words that only repeat the title: nothing to post.

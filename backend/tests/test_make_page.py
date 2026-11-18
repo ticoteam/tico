@@ -428,11 +428,14 @@ def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
     fid = original.json()["page"]["file_id"]
     post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     _, second, _ = start(api, t["id"], person="cara-test", machine=machine)
-    # The shared publishing bot grants no rights to rename, archive, delete or arrange Ben's page.
+    # Task commenters may archive the page; the shared bot grants no file-management rights.
     token = second["token"]
-    for path, body in (("files/" + fid, {"title": "Cara's title"}), ("pages/" + fid, {"archived": True})):
+    for path, body, expected in (
+        ("files/" + fid, {"title": "Cara's title"}, 403),
+        ("pages/" + fid, {"archived": True}, 200),
+    ):
         refused = api.patch("/api/v2/" + path, json=body, headers=headers(token))
-        assert refused.status_code == 403, refused.text
+        assert refused.status_code == expected, refused.text
     refused = api.delete("/api/v2/files/" + fid, headers=headers(token))
     assert refused.status_code == 403, refused.text
     pin = get(api, "places/task:" + t["id"], token)["pins"][0]
@@ -449,9 +452,9 @@ def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
 
 
 @pytest.mark.parametrize(
-    "person,another_task,expected", [("cara-test", False, 403), ("cara-test", True, 404), ("ben-test", True, 404)]
+    "person,another_task,expected", [("cara-test", False, 200), ("cara-test", True, 404), ("ben-test", True, 404)]
 )
-def test_make_page_replacement_requires_person_management_and_the_same_task(api, person, another_task, expected):
+def test_make_page_replacement_requires_write_rights_and_the_same_task(api, person, another_task, expected):
     t = task(api, private=False)
     machine, first, _ = start(api, t["id"])
     original = page(api, first, task=t["id"])
@@ -464,6 +467,12 @@ def test_make_page_replacement_requires_person_management_and_the_same_task(api,
     refused = page(api, attempt, task=target["id"], name="replacement.html", replaces=fid)
     assert refused.status_code == expected, refused.text
     original = get(api, "pages/" + fid, "ben-test")["page"]
+    if expected == 200:
+        replacement = refused.json()["page"]["file_id"]
+        assert original["replaced_by_id"] == replacement and original["version"] == 1
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM pages").fetchone()[0] == 2
+        return
     assert original["replaced_by_id"] is None and original["version"] == 1
     assert [p["page"]["file_id"] for p in get(api, "places/task:" + t["id"], "ben-test")["pins"]] == [fid]
     with api.app.state.store.read() as c:

@@ -78,5 +78,5 @@ def test_switching_a_computers_login_frees_the_bots_limited_on_it(api, monkeypat
     assert status(api)["state"] == "limited"
     # The actor model_login.report passes: a roster actor, so the status write is accepted.
     with api.app.state.store.transaction() as c:
-        execution.lift_after_login_switch(c, api.app.state.store.settings, H.KEEPER, machine["runner_id"], "fake")
+        execution.lift_after_login_switch(c, api.app.state.store.settings, H.TICO_ACTOR, machine["runner_id"], "fake")
     assert status(api)["state"] != "limited"

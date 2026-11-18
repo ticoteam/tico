@@ -88,11 +88,11 @@ def route(c, key, title, body, about=None):
     if not devops_id:
         text += " There is no active DevOps bot, so it came to the pipeline's manager."
     made = H.task_create(
-        c, H.KEEPER, title[:150], text, owner, deduplicate=False, lint=False, private=True if hidden else None
+        c, H.TICO_ACTOR, title[:150], text, owner, deduplicate=False, lint=False, private=True if hidden else None
     )
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "blocker.routed",
         key,
         {"task": made["id"], "owner": owner, **({"about": about["id"]} if about and not hidden else {})},

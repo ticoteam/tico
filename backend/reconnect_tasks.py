@@ -270,13 +270,13 @@ def start(c: Any, tool_id: str, why: str) -> Row:
     )
     try:
         task: Row = H.task_create(
-            c, H.KEEPER, title_of(tool), body, owner, lint=False, deduplicate=False, private=False
+            c, H.TICO_ACTOR, title_of(tool), body, owner, lint=False, deduplicate=False, private=False
         )
     except H.Refused:
         log.warning("Could not file the reconnect task for tool %s", tool_id)
         return None
     rid = _card(c, task, owner, person, tool, key) if person and key else None
-    H.event(c, H.KEEPER, EVENT, tool_id, {"task": task["id"], "request": rid, "person": person, "why": why})
+    H.event(c, H.TICO_ACTOR, EVENT, tool_id, {"task": task["id"], "request": rid, "person": person, "why": why})
     return task
 
 
@@ -292,12 +292,12 @@ def close(c: Any, tool_id: str, why: str, done: bool = True) -> Row:
         return None
     try:
         if done:
-            H.task_done(c, H.KEEPER, task["id"], why)
+            H.task_done(c, H.TICO_ACTOR, task["id"], why)
         else:
-            H.task_close(c, H.KEEPER, task["id"], why)
+            H.task_close(c, H.TICO_ACTOR, task["id"], why)
     except H.Refused:
-        H.task_close(c, H.KEEPER, task["id"], why)
-    H.event(c, H.KEEPER, "tool.reconnect_task_closed", tool_id, {"task": task["id"], "why": why})
+        H.task_close(c, H.TICO_ACTOR, task["id"], why)
+    H.event(c, H.TICO_ACTOR, "tool.reconnect_task_closed", tool_id, {"task": task["id"], "why": why})
     return task
 
 

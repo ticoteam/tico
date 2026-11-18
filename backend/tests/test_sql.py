@@ -810,7 +810,7 @@ def test_direct_run_messages_keep_denied_attempt_provenance(api, world, source):
         elif source == 'carried':
             c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
-            H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'tasks': [hidden['id']]})
+            H.event(c, H.TICO_ACTOR, 'task.next-run.carried', aid, {'tasks': [hidden['id']]})
     with store.read() as c:
         who = Identity('bot:ops', 'bot', attempt_id=aid)
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -956,7 +956,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
         elif source == 'carried':
             c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
-            H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
+            H.event(c, H.TICO_ACTOR, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     for token in callers:
         assert seen(token) == (False, False), token
 
@@ -991,7 +991,7 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
 
     # Retained next-run provenance survives independently of attempts.task_id.
     with store.transaction() as c:
-        event = H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
+        event = H.event(c, H.TICO_ACTOR, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     assert rows('attempts', aid) == []
     with store.transaction() as c:
         c.execute('DELETE FROM events WHERE id=?', (event['id'],))

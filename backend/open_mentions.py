@@ -39,13 +39,13 @@ def _in(values: Iterable[str]) -> str:
 
 # A reply to a message of the recipient's in the same thread root, as threads._replied_author reads it: the reply target's
 # sender decides, not the delivery's winning reason (a reply that also addresses the person may keep another reason, since
-# threads.plan ranks the reasons). A keeper's message is read as the message it carries.
+# threads.plan ranks the reasons). A Tico message is read as the message it carries.
 REPLIED_TO_RECIPIENT = (
     "(EXISTS (SELECT 1 FROM messages p JOIN conversations pc ON pc.id=p.conversation_id "
     "WHERE p.id=m.in_reply_to AND p.sender_id=d.recipient AND COALESCE(pc.root_id,pc.id)=COALESCE(cv.root_id,cv.id)) "
     "OR EXISTS (SELECT 1 FROM messages p JOIN messages k ON k.id=json_extract(CASE WHEN json_valid(p.refs) THEN p.refs END,'$.carries') "
     "JOIN conversations kc ON kc.id=k.conversation_id "
-    f"WHERE p.id=m.in_reply_to AND p.sender_id='{H.KEEPER}' AND k.sender_id=d.recipient "
+    f"WHERE p.id=m.in_reply_to AND p.sender_id='{H.TICO_ACTOR}' AND k.sender_id=d.recipient "
     "AND COALESCE(kc.root_id,kc.id)=COALESCE(cv.root_id,cv.id)))"
 )
 

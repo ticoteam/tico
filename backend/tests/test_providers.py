@@ -74,7 +74,7 @@ def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime
 
 
 def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none(api):
-    """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.1 Sol High"): the bot's
+    """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.2 Sol High"): the bot's
     reasoning_effort, else an older config `effort`, else its stored row; none, or no runtime, sends none."""
     from backend.store import encode
     from backend.tests.helpers.api import put
@@ -85,7 +85,7 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
         {"enabled": ["openai", "anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "expected_revision": 0},
     )
     configs = {
-        "ops": ({"runtime": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "high", "effort": "low"}, "max"),
+        "ops": ({"runtime": "codex", "model": "gpt-6.2-sol", "reasoning_effort": "high", "effort": "low"}, "max"),
         "cpo": ({}, ""),
         "assistant": ({"effort": "xhigh"}, "low"),
         "inbox": ({}, "medium"),
@@ -100,7 +100,7 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
         for bot in configs
     }
     assert said == {
-        "ops": ("codex", "gpt-6.1-sol", "high"),
+        "ops": ("codex", "gpt-6.2-sol", "high"),
         "cpo": ("claude", "claude-opus-5-5", ""),
         "assistant": ("claude", "claude-opus-5-5", "xhigh"),
         "inbox": ("claude", "claude-opus-5-5", "medium"),
@@ -129,6 +129,19 @@ def test_gpt_6_1_terra_is_offered_on_codex_at_the_approved_rate(api):
     task_models.refuse_retired(row)
     listed = api.get("/api/v2/models", headers={"Authorization": "Bearer ana-test"}).json()["models"]
     assert "gpt-6.1-terra" in [m["id"] for m in listed]
+
+
+def test_the_newest_fable_and_sol_are_offered_and_their_predecessors_retired():
+    """Fable 5.2 (released 2026-11-09) and Sol 6.2 are offered and priced; Fable 5.1 and Sol 6.1 stay readable for
+    bots already on them but are retired, so no new pick can land there. Astra 6.2 is offered beside retired Astra 6."""
+    for new, old in (("claude-fable-5-2", "claude-fable-5-1"), ("gpt-6.2-sol", "gpt-6.1-sol")):
+        assert not P.MODEL_BY_ID[new].get("deprecated") and P.MODEL_BY_ID[old]["deprecated"], new
+        assert new in [r["id"] for r in P.provider_models(P.MODEL_BY_ID[new]["provider"])]
+        assert P.price_of(new)
+    assert not P.MODEL_BY_ID["gpt-6.2-astra"].get("deprecated") and P.MODEL_BY_ID["gpt-6-astra"]["deprecated"]
+    assert P.price_of("gpt-6.2-astra") == (8.0, 0.40, 40.0)
+    assert P.complete_choice(["openai"], model="gpt-6.2-sol") == ("codex", "gpt-6.2-sol")
+    assert P.complete_choice(["anthropic"], model="claude-fable-5-2") == ("claude", "claude-fable-5-2")
 
 
 def test_the_gateway_still_holds_terra_so_a_live_hq_tier_for_it_stays_hidden(monkeypatch):

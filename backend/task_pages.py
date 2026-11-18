@@ -5,8 +5,8 @@ The owner attaches a page (a Tico file, `page:<file id>`, at a version) to one p
 `tico task attach <task> page:<file id>[@<version>] --req "<requirement>"`, the MCP tool `tico_task_attach` with `req`,
 or `POST /api/v2/tasks/{tid}/pages` {requirement, page, version}. With no version, the file's newest one is pinned.
 
-- One page counts per requirement and visit: attaching again replaces the last one (`replaced_at`). A new version is a
-  new attach, and it starts the verdict and any OK over.
+- A document requirement counts every page linked with its role; each page keeps its own submitted version.
+  Other page requirements keep one page per visit. A new version starts its verdict and any document OK over.
 - A requirement `at_head` keeps the linked items' versions (`item_versions`: item_sources.github.heads) as they were
   when the page was attached.
 - Attaching owes Jev a verdict (page_verdicts.owe) and counts as progress (C4).
@@ -41,13 +41,66 @@ def _one(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> Row | N
     return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
 
 
-def current(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
-    """The page that counts for a requirement on a visit (a `requirement_pages` row), or None when none is attached."""
-    return _one(
-        conn,
-        "SELECT * FROM requirement_pages WHERE visit_id=? AND requirement_id=? AND replaced_at IS NULL",
+# Submission and standing use the same live set. A page can still open from a link after archiving.
+LIVE_DOCUMENT = (
+    "FROM page_links l JOIN bot_files f ON f.id=l.page_id JOIN pages p ON p.file_id=f.id "
+    "WHERE p.archived=0 AND p.deleted_at IS NULL AND f.archived=0 AND f.state<>'deleted' AND f.current_version>0 "
+)
+
+
+def live_documents(conn: "sqlite3.Connection", task_id: str, document: str) -> dict[str, int]:
+    return {
+        str(file_id): int(version)
+        for file_id, version in conn.execute(
+            "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id",
+            ("task:" + task_id, document),
+        )
+    }
+
+
+def current_pages(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> list[Row]:
+    """All submitted pages on a requirement, newest submission first."""
+    cursor = conn.execute(
+        "SELECT rp.* FROM requirement_pages rp JOIN requirements r ON r.id=rp.requirement_id "
+        "JOIN visits v ON v.id=rp.visit_id WHERE rp.visit_id=? AND rp.requirement_id=? AND rp.replaced_at IS NULL "
+        "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS (SELECT 1 "
+        + LIVE_DOCUMENT
+        + "AND l.page_id=rp.file_id AND l.target='task:'||v.task_id AND l.role=json_extract(r.settings,'$.document'))) "
+        "ORDER BY rp.created_at DESC,rp.rowid DESC",
         (visit_id, requirement_id),
     )
+    names = [d[0] for d in cursor.description]
+    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+
+def current(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
+    """The newest submitted page, for callers displaying the single-page summary."""
+    pages = current_pages(conn, visit_id, requirement_id)
+    return pages[0] if pages else None
+
+
+def version_key(pages: list[Row]) -> str:
+    """The version key covers the whole submission, so another page changing makes a shown key stale."""
+    return ",".join(sorted(f"{p['file_id']}@{p['version']}" for p in pages))
+
+
+def answer_pages(conn: "sqlite3.Connection", task_id: str, answer: Row) -> dict[str, int]:
+    """The exact page versions an answer covered, scoped to its task. Older single-page answers still read."""
+    found = conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='answer' "
+        "AND json_extract(data,'$.answer_id')=? LIMIT 1",
+        (task_id, answer["id"]),
+    ).fetchone()
+    data: Row = json.loads(found[0] or "{}") if found else {}
+    if "pages" in data:
+        return {str(p["file_id"]): int(p["version"]) for p in data["pages"]}
+    old = _one(
+        conn,
+        "SELECT file_id,version FROM requirement_pages WHERE visit_id=? AND requirement_id=? "
+        "AND version=? AND created_at<=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        (answer["visit_id"], answer["requirement_id"], answer.get("page_version"), answer["created_at"]),
+    )
+    return {str(old["file_id"]): int(old["version"])} if old else {}
 
 
 def newest_for_task(conn: "sqlite3.Connection", task_id: str, stage_id: str) -> Row | None:
@@ -232,19 +285,18 @@ def attach(
     document = TR.document_of(found)
     if document:
         _as_document(conn, by, task_id, document, file_id)
+        made = _submit_pages(conn, row, found, document, file_id, version, by, saying=saying)
+        if made is None:
+            _refuse(conn, by, "task_requirement", "No such page", task_id)
+        return made
     return _pin(conn, row, found, file_id, version, by, saying)
 
 
 def _as_document(conn: "sqlite3.Connection", by: str, task_id: str, document: str, file_id: str) -> None:
-    """A page attached to a document approval is that document: the task's own file of that name, or, while the task
-    has none, it becomes it. Another file is refused: the approval is for the task's one document of that name."""
+    """Attaching to a document approval adds the page's role link; a role may name many pages."""
     from . import task_documents as TD
 
-    found = _one(conn, "SELECT file_id FROM task_documents WHERE task_id=? AND name=?", (task_id, document))
-    if found and found["file_id"] != file_id:
-        _refuse(conn, by, "task_requirement", WRITE_DOCUMENT.format(task=task_id, document=document), task_id)
-    if not found:
-        TD.record(conn, task_id, document, file_id)
+    TD.record(conn, task_id, document, file_id, by)
 
 
 # What a bot is told when it attaches another file to a document approval: the document is written, not attached.
@@ -253,11 +305,26 @@ WRITE_DOCUMENT = (
 )
 
 
-def submit(conn: "sqlite3.Connection", task_id: str, document: str, file_id: str, version: int, by: str) -> Row | None:
-    """A new version of a task document, written while the task is in a stage that names it for approval, is the
-    submission: it is pinned to that approval as `attach` pins a page, and the decision model checks it. Anywhere else,
-    or written by a bot that neither owns nor holds the task, it is just a new version: None. The pinned
-    `requirement_pages` row otherwise."""
+def submit_linked(conn: "sqlite3.Connection", file_id: str, version: int | None, by: str) -> dict[tuple[str, str], Row]:
+    """Refresh each task that uses this page as a document. Without a version, its archive status changed."""
+    submitted: dict[tuple[str, str], Row] = {}
+    for target, document in conn.execute(
+        "SELECT target,role FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
+        "AND role NOT IN ('writer','related') ORDER BY target,role",
+        (file_id,),
+    ).fetchall():
+        task_id = str(target)[5:]
+        name = str(document)
+        if made := submit(conn, task_id, name, file_id, version, by):
+            submitted[(task_id, name)] = made
+    return submitted
+
+
+def submit(
+    conn: "sqlite3.Connection", task_id: str, document: str, file_id: str, version: int | None, by: str
+) -> Row | None:
+    """Refresh the open stage's matching approval. A publish supplies its version; a link or archive edit reconciles
+    membership. A publish by a bot that neither owns nor holds the task leaves the submission as it is."""
     from . import hubdb_core
     from . import task_engine as E
     from . import task_requirements as TR
@@ -273,16 +340,61 @@ def submit(conn: "sqlite3.Connection", task_id: str, document: str, file_id: str
     )
     if found is None:
         return None
-    if by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
+    if version is not None and by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
         return None
     _, context, _ = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     if not all(heads.values()):
-        return None  # a PR not read yet: a version written now stays unsubmitted rather than fail the write
-    return _pin(conn, row, found, file_id, version, by, {})
+        return None  # a PR not read yet: leave the write in place until the page can be submitted
+    return _submit_pages(conn, row, found, document, file_id, version, by)
 
 
-def _pin(conn: "sqlite3.Connection", row: Row, found: Row, file_id: str, version: int, by: str, saying: Row) -> Row:
+def _submit_pages(
+    conn: "sqlite3.Connection",
+    row: Row,
+    found: Row,
+    document: str,
+    file_id: str,
+    version: int | None,
+    by: str,
+    *,
+    saying: Row | None = None,
+) -> Row | None:
+    """Pin the live document set before evaluating the task. Link and archive edits leave other submissions alone."""
+    from . import task_engine as E
+
+    pages = live_documents(conn, row["id"], document)
+    if version is not None:
+        if file_id not in pages:
+            return None
+        pages[file_id] = version
+    else:
+        for page in current_pages(conn, row["visit"]["id"], found["id"]):
+            if page["file_id"] != file_id:
+                pages.pop(page["file_id"], None)
+
+    result: Row | None = None
+    for pid, number in pages.items():
+        selected = pid == file_id
+        made = _pin(conn, row, found, pid, number, by, (saying or {}) if selected else {}, advance=False)
+        if selected:
+            result = made
+    if E.advance(conn, row["id"]) is None:
+        E.changed(conn, row["id"], by)
+    return result
+
+
+def _pin(
+    conn: "sqlite3.Connection",
+    row: Row,
+    found: Row,
+    file_id: str,
+    version: int,
+    by: str,
+    saying: Row,
+    *,
+    advance: bool = True,
+) -> Row:
     """Pin one page version to a page requirement of the task's open visit: the `requirement_pages` row, the decision
     model's check owed on it, the task's history, then the task advances or is told it changed."""
     from . import hubdb
@@ -304,7 +416,11 @@ def _pin(conn: "sqlite3.Connection", row: Row, found: Row, file_id: str, version
     document = TR.document_of(found)
     key = V.rubric_hash(rubric, context, rules)
     visit_id = row["visit"]["id"]
-    was = current(conn, visit_id, found["id"])
+    was = (
+        next((p for p in current_pages(conn, visit_id, found["id"]) if p["file_id"] == file_id), None)
+        if document
+        else current(conn, visit_id, found["id"])
+    )
     if was and (was["file_id"], int(was["version"]), was.get("rubric_hash")) == (file_id, version, key):
         return was
     now = H.now()
@@ -354,7 +470,7 @@ def _pin(conn: "sqlite3.Connection", row: Row, found: Row, file_id: str, version
         E._event(  # pyright: ignore[reportPrivateUsage]
             conn,
             task_id,
-            core.KEEPER,
+            core.TICO_ACTOR,
             "ok_kept",
             None,
             f"{name}'s OK (version {was_version}) carried to version {version}: same commits",
@@ -365,6 +481,6 @@ def _pin(conn: "sqlite3.Connection", row: Row, found: Row, file_id: str, version
             f"{name}'s OK at {TR.short_heads(json.loads(kept.get('heads') or '{}'))} stands. "
             f"This version is kept on the task and doesn't ask {name} again."
         )
-    if E.advance(conn, task_id) is None:
+    if advance and E.advance(conn, task_id) is None:
         E.changed(conn, task_id, by)
     return made

@@ -224,13 +224,13 @@ def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monk
 def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped_rubrics():
     """The three pages Jev was unsure of on Acme (Nov 11) and the two it passed are cases, built by the page step's own
     builder (page_verdicts.job_of): the page's text, the stage's shipped rubric, the PR and its newest commit."""
-    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC
+    from backend.pipeline_settings import LEGACY_REVIEW_RUBRIC, QA_RUBRIC
 
     cases = {c["id"]: c for c in run.chosen(run.load(), "acme-*")}
     assert set(cases) == {"acme-review-1", "acme-review-2", "acme-fixes-2", "acme-spec", "acme-validate"}
     assert all(c["expected"] == "met" for c in cases.values())
     state = adapter.state_for(cases["acme-review-1"])
-    assert state["requirement"]["rubric"] == REVIEW_RUBRIC and state["requirement"]["older_evidence_ok"] is True
+    assert state["requirement"]["rubric"] == LEGACY_REVIEW_RUBRIC and state["requirement"]["older_evidence_ok"] is True
     assert (state["work"]["repo"], state["work"]["pr"]) == ("ticoteam/pipeline-sandbox", 38)
     head = state["work"]["context"]["heads"]["ticoteam/pipeline-sandbox#38"]
     assert state["attachment"]["text"].startswith(f"Reviewed commit {head}")
@@ -248,9 +248,9 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
     """The nineteen good pages Jev was too often unsure of on rc.4 (Nov 11) and the traps cut from them: each with the
     stage's shipped rubric, the page shown as made for the work as it is now, and a pre-release page with the PR's newest
     commit beside it (task_pages.judged_against)."""
-    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
+    from backend.pipeline_settings import LEGACY_REVIEW_RUBRIC, QA_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
 
-    shipped = {QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
+    shipped = {QA_RUBRIC, LEGACY_REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
     live = run.chosen(run.load(), "live-*")
     traps = run.chosen(run.load(), "trap-*")
     assert len(live) == 19 and all(c["expected"] == "met" for c in live)

@@ -132,7 +132,7 @@ def test_a_task_in_a_pipeline_with_another_active_manager_is_left_to_that_manage
 
 def _twin(c, title):
     """Two open tasks Tico filed for the builder with one title (only Tico may file a second with a title in use)."""
-    return tuple(_new(c, title, owner=BUILDER, by=H.KEEPER, deduplicate=False) for _ in range(2))
+    return tuple(_new(c, title, owner=BUILDER, by=H.TICO_ACTOR, deduplicate=False) for _ in range(2))
 
 
 def test_two_open_tasks_with_one_title_requester_and_owner_are_a_duplicate_and_on_ice_ones_are_not(c):
@@ -142,7 +142,7 @@ def test_two_open_tasks_with_one_title_requester_and_owner_are_a_duplicate_and_o
     assert f"same title, requester and owner as {first}" in check["words"]
     assert f"tico task relate {second} {first} --kind duplicate_of" in check["words"]
     third, _ = _twin(c, "Book the Acme review")
-    H.task_snooze(c, H.KEEPER, third, "Not this quarter", None)
+    H.task_snooze(c, H.TICO_ACTOR, third, "Not this quarter", None)
     assert _report(c)["items"] == 0
 
 

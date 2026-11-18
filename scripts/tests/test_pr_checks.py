@@ -2,6 +2,7 @@
 
 import ast
 from collections import Counter
+from contextlib import nullcontext
 from functools import partial
 import json
 import math
@@ -113,6 +114,16 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
         '</testsuite></testsuites>'
     )
     assert checks.durations([xml]) == {"a.py": 4, "b.py": 3}
+
+
+def test_durations_use_only_the_initial_python_report(tmp_path, monkeypatch):
+    report = '<testsuite><testcase file="a.py" time="2"/></testsuite>'
+    for suffix in ("", "-retry", "-base"):
+        source(tmp_path, f"ci-results/python-1{suffix}.xml", report)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "durations"])
+    assert checks.main() == 0
+    assert json.loads((tmp_path / "durations.json").read_text()) == {"a.py": 2}
 
 
 def test_a_plan_packs_by_the_seconds_the_last_green_queue_groups_measured_averaged_per_file(tmp_path, monkeypatch):
@@ -2476,6 +2487,9 @@ def test_a_fail_fast_cancel_names_the_first_failing_tests(tmp_path, monkeypatch,
         '</testcase><testcase classname="backend.tests.test_ok" name="test_fine"/>'
         '<testcase classname="backend.tests.test_b" name="test_err"><error message="y"/></testcase></testsuite>'
     )
+    (tmp_path / "python-7-base.xml").write_text(
+        '<testsuite><testcase classname="backend.tests.test_base" name="test_unrelated"><error/></testcase></testsuite>'
+    )
     (tmp_path / "broken.xml").write_text("<testsuite")
     assert checks.junit_failed([tmp_path / "python-7.xml"], limit=1) == [
         "test_thread_halfway.py::test_bounded",
@@ -2666,6 +2680,313 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     assert "scripts/pr_checks.py run --quarantine" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
         assert "quarantine" not in (workflows / name).read_text(), name
+
+
+@pytest.fixture
+def python_retry_leg(tmp_path, monkeypatch):
+    test_file = "backend/tests/test_x.py"
+    source(tmp_path, test_file, "")
+    monkeypatch.delenv("BASE_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n")
+
+    def run(
+        first,
+        retry=None,
+        *,
+        quarantine=True,
+        suite="python-1",
+        first_status=1,
+        retry_status=0,
+        base=None,
+        base_status=1,
+        base_file_exists=True,
+        **extra,
+    ):
+        plan = {"matrix": {"include": [{"suite": suite, "files": [test_file]}]}, **extra}
+        target = tmp_path / "plan.json"
+        target.write_text(json.dumps(plan))
+        calls = []
+
+        def fake(command, cwd, env=None, *, check=False, timeout=None):
+            calls.append((command, env))
+            if command[0] == "git":
+                assert cwd == tmp_path and check
+                if command[1] == "cat-file" and not base_file_exists:
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0)
+            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+            if report.endswith("-base.xml"):
+                assert timeout == 300 and cwd != tmp_path and Path(report).is_absolute()
+                if base_status is None:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                xml, status = base, base_status
+            elif report.endswith("-retry.xml"):
+                xml, status = retry, retry_status
+            else:
+                xml, status = first, first_status
+            if xml is not None:
+                (cwd / report).write_text(xml)
+            return SimpleNamespace(returncode=status)
+
+        monkeypatch.setattr(checks.subprocess, "run", fake)
+        return checks.run(target, suite, root=tmp_path, quarantine=quarantine), calls
+
+    return run
+
+
+def retry_junit(*cases):
+    return (
+        "<testsuite>"
+        + "".join(
+            f'<testcase classname="backend.tests.test_x" name="{name}">{outcome}</testcase>' for name, outcome in cases
+        )
+        + "</testsuite>"
+    )
+
+
+def test_a_python_retry_passes_only_the_failed_ids_and_preserves_the_first_report_and_coverage(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    from scripts import diff_coverage
+
+    results = tmp_path / "ci-results"
+    first = retry_junit(("test_ok", ""), ("test_a[case one]", "<failure/>"), ("test_b", "<error/>"))
+    retry = retry_junit(("test_a[case one]", ""), ("test_b", ""))
+    extracted = []
+
+    def extract(plan, data, out):
+        assert (results / "python-1.xml").read_text() == first
+        assert not (results / "python-1-retry.xml").exists()
+        extracted.append((data, out))
+
+    monkeypatch.setattr(diff_coverage, "extract", extract)
+    status, ((initial, env), (again, retry_env)) = python_retry_leg(
+        first, retry, coverage={"lines": {"backend/example.py": [1]}}
+    )
+    assert status == 0
+    assert "--cov=backend" in initial and env["COVERAGE_FILE"] == str(results / "coverage-python-1.data")
+    assert extracted == [(results / "coverage-python-1.data", results / "coverage-python-1.json")]
+    assert "-n" in again and again[again.index("-n") + 1] == "0"
+    assert "--quarantine" in again and set(checks.PYTEST_FLAGS) <= set(again)
+    assert not any(arg.startswith("--cov") for arg in again) and retry_env is None
+    assert again[-2:] == ["backend/tests/test_x.py::test_a[case one]", "backend/tests/test_x.py::test_b"]
+    assert (results / "python-1.xml").read_text() == first
+    assert (results / "python-1-retry.xml").read_text() == retry
+    assert json.loads((results / "flaky-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": again[-2:],
+        "commit": "a" * 40,
+    }
+    log = capsys.readouterr().out
+    for test in again[-2:]:
+        assert f"Flaky (failed, then passed on retry): {test}" in log.splitlines()
+
+
+def test_a_python_retry_that_still_fails_names_the_remaining_test_and_leaves_no_flake(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1)
+    assert status == 1 and len(calls) == 2
+    assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
+    capsys.readouterr()
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(tmp_path / "ci-results")])
+    assert checks.main() == 0
+    assert capsys.readouterr().out.strip() == "test_x.py::test_b"
+
+
+def test_a_python_leg_passes_when_the_base_matches_and_records_a_flaky_retry_pass(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    base_sha = "b" * 40
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    failure = ("test_a", '<failure message="bad  value at 0x7fa100&#10;head detail"/>')
+    first = retry_junit(failure, ("test_b", "<failure/>"))
+    retry = retry_junit(failure, ("test_b", ""))
+    base = retry_junit(("test_a", '<error message="bad value at 0x7fa200&#10;base detail"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1, base=base)
+    assert status == 0
+    cat, add, test, remove = [command for command, _ in calls[2:]]
+    worktree = add[-2]
+    test_id = "backend/tests/test_x.py::test_a"
+    results = tmp_path / "ci-results"
+    assert cat == ["git", "cat-file", "-e", f"{base_sha}:backend/tests/test_x.py"]
+    assert add == ["git", "worktree", "add", "--detach", worktree, base_sha]
+    assert remove == ["git", "worktree", "remove", "--force", worktree]
+    assert test == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        "0",
+        *checks.PYTEST_FLAGS,
+        "-o",
+        "junit_family=xunit1",
+        f"--junitxml={(results / 'python-1-base.xml').resolve()}",
+        "--quarantine",
+        test_id,
+    ]
+    assert (results / "python-1-base.xml").read_text() == base
+    assert json.loads((results / "base-broken-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": [test_id],
+        "base": base_sha,
+        "commit": "a" * 40,
+    }
+    assert json.loads((results / "flaky-python-1.json").read_text())["tests"] == ["backend/tests/test_x.py::test_b"]
+    warning = (
+        f"{test_id} fails the same way on {base_sha[:10]}; this change did not break it. "
+        "Release validation and main-red track the fix."
+    )
+    assert f"::warning title=Already failing underneath this change::{warning}" in capsys.readouterr().out.splitlines()
+    assert summary.read_text() == warning + "\n"
+
+
+@pytest.mark.parametrize("base_outcome, base_status", [("", 0), ('<failure message="wrong value"/>', 1)])
+def test_a_python_leg_stays_red_when_the_base_does_not_match(
+    python_retry_leg, tmp_path, monkeypatch, base_outcome, base_status
+):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    base = retry_junit(("test_a", base_outcome))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=base, base_status=base_status)
+    assert status == 1 and len(calls) == 6
+    assert not (tmp_path / "ci-results/base-broken-python-1.json").exists()
+
+
+def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_file_exists=False)
+    assert status == 1 and len(calls) == 3
+    assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
+
+
+@pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
+def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1)
+    assert status == 1 and len(calls) == 2
+
+
+def test_a_base_timeout_removes_the_worktree_and_keeps_the_leg_red(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_status=None)
+    assert status == 1 and len(calls) == 6
+    worktree = calls[3][0][-2]
+    assert calls[-1][0] == ["git", "worktree", "remove", "--force", worktree]
+
+
+def test_a_python_retry_that_skips_a_failed_test_leaves_the_leg_red(python_retry_leg, tmp_path):
+    first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", "<skipped/>"))
+    status, calls = python_retry_leg(first, retry)
+    assert status == 1 and len(calls) == 2
+    assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
+
+
+def test_a_python_leg_with_more_than_five_failures_does_not_retry(python_retry_leg):
+    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(quarantine.MAX_FAILURES_PER_JOB + 1)])
+    status, calls = python_retry_leg(first)
+    assert status == 1 and len(calls) == 1
+
+
+def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retry(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    first = retry_junit(("test_a", '<failure message="assert False"/>'))
+    for suite, enabled in (("python-1", False), ("contracts-1", True), ("conformance", True)):
+        status, calls = python_retry_leg(first, suite=suite, quarantine=enabled)
+        assert status == 1 and len(calls) == 1
+        assert ("--quarantine" in calls[0][0]) == enabled
+
+
+@pytest.mark.parametrize(
+    "report",
+    [None, "<testsuite", '<testsuite><testcase name="backend/tests/test_x.py"><error/></testcase></testsuite>'],
+)
+def test_a_python_leg_without_a_report_of_failed_test_ids_does_not_retry(python_retry_leg, report):
+    status, calls = python_retry_leg(report)
+    assert status == 1 and len(calls) == 1
+
+
+@pytest.mark.parametrize("retry_status", [0, 1])
+def test_browser_retry_streams_the_log_and_runs_only_the_failed_scripts(tmp_path, monkeypatch, capsys, retry_status):
+    target = tmp_path / "plan.json"
+    target.write_text(json.dumps({"jobs": [{"name": "browser-1", "files": ["ok", "broken", "also-broken"]}]}))
+    first = ["ok    ok.cts (1.0s)\n", "FAIL  broken.cts (1.0s)\n", "      FAIL  ok.cts\n", "FAIL  also-broken.cjs\n"]
+    second = ["ok    broken.cts (1.0s)\n", "FAIL  also-broken.cjs\n" if retry_status else "ok    also-broken.cjs\n"]
+    calls = []
+
+    def popen(command, **kwargs):
+        calls.append((command, kwargs["env"]))
+        output, status = (first, 1) if len(calls) == 1 else (second, retry_status)
+        return nullcontext(SimpleNamespace(stdout=output, wait=lambda: status))
+
+    monkeypatch.setattr(checks.subprocess, "Popen", popen)
+    monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "b" * 40 + "\n")
+    assert checks.run(target, "browser-1", root=tmp_path, quarantine=True) == retry_status
+    (initial, env), (again, retry_env) = calls
+    assert again == [*initial[:4], "broken.cts", "also-broken.cjs"]
+    results = tmp_path / "ci-results"
+    assert env["TICO_UI_TIMINGS"] == str(results / "browser-1.json")
+    assert retry_env == {**env, "TICO_UI_TIMINGS": str(results / "browser-1-retry.json")}
+    assert capsys.readouterr().out.startswith("".join(first + second))
+    flaky = results / "flaky-browser-1.json"
+    if retry_status:
+        assert not flaky.exists()
+        monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(results)])
+        assert checks.main() == 0
+        assert capsys.readouterr().out.strip() == "also-broken.cjs"
+    else:
+        assert json.loads(flaky.read_text()) == {
+            "suite": "browser-1",
+            "tests": ["broken.cts", "also-broken.cjs"],
+            "commit": "b" * 40,
+        }
+
+
+def test_the_flaky_command_combines_leg_reports_and_only_the_queue_uploads_them(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "flaky"])
+    output = tmp_path / "flaky.json"
+    assert checks.main() == 0 and not output.exists()
+    reports = [
+        {"suite": "browser-1", "tests": ["chat.cts"], "commit": "b" * 40},
+        {"suite": "python-1", "tests": ["backend/tests/test_x.py::test_a"], "commit": "b" * 40},
+    ]
+    for report in reports:
+        source(tmp_path, f"ci-results/flaky-{report['suite']}.json", json.dumps(report))
+    assert checks.main() == 0
+    assert json.loads(output.read_text()) == reports
+
+    jobs = workflow_jobs()["jobs"]
+    leg_upload = next(
+        s for s in jobs["tests"]["steps"] if s.get("with", {}).get("name") == "results-${{ matrix.suite }}"
+    )
+    assert leg_upload["with"]["path"] == "ci-results/*" and "always()" in leg_upload["if"]
+    timings = jobs["timings"]
+    assert "github.event_name == 'merge_group'" in timings["if"]
+    download, collect, upload = (
+        next(i for i, s in enumerate(timings["steps"]) if s.get("with", {}).get("pattern") == "results-*"),
+        next(i for i, s in enumerate(timings["steps"]) if s.get("run") == "python3 scripts/pr_checks.py flaky"),
+        next(i for i, s in enumerate(timings["steps"]) if s.get("with", {}).get("name") == "queue-flaky"),
+    )
+    assert download < collect < upload
+    assert timings["steps"][download]["with"]["merge-multiple"] is True
+    assert timings["steps"][collect]["continue-on-error"] and timings["steps"][upload]["continue-on-error"]
+    assert timings["steps"][upload]["with"] == {
+        "name": "queue-flaky",
+        "path": "flaky.json",
+        "retention-days": 14,
+        "if-no-files-found": "ignore",
+    }
 
 
 def light_tree(root):
@@ -3158,3 +3479,18 @@ def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_p
     timings.write_text(json.dumps({name: 1000.0 for name in checks.CONTRACT_TESTS}))  # 400 s a VM: past the target
     checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
     assert "::warning::A contracts VM is planned for 400s" in capsys.readouterr().out
+
+
+def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
+    # A stalled fetch at the queue head once held five green groups for its job's whole 25-minute timeout.
+    for name, job in workflow_jobs()["jobs"].items():
+        steps = job.get("steps", [])
+        at = [i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")]
+        if not at:
+            continue
+        assert len(at) == 2 and at[1] == at[0] + 1, name
+        first, retry = steps[at[0]], steps[at[1]]
+        assert first["id"] == "checkout_first" and first["continue-on-error"] is True, name
+        assert retry["if"] == "${{ steps.checkout_first.outcome == 'failure' }}", name
+        assert first["timeout-minutes"] == retry["timeout-minutes"] == 3, name
+        assert first["uses"] == retry["uses"] and first["with"] == retry["with"], name

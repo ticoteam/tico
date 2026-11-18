@@ -845,7 +845,7 @@ def test_a_bot_left_in_setup_warns_once_its_held_work_is_old_is_stuck_for_a_day_
     api = environment()
     add_bot(api, "held")
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:held")  # from before an upgrade
+        task = H.task_create(c, H.TICO_ACTOR, "Ticket 42", "", "bot:held")  # from before an upgrade
         c.execute(
             "INSERT INTO bot_config(bot,owner_id,onboarding_state) VALUES('held','ana','needs_setup') ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'"
         )
@@ -885,9 +885,9 @@ def test_a_bot_left_in_setup_warns_once_its_held_work_is_old_is_stuck_for_a_day_
     with api.app.state.store.transaction() as c:
         # An install from before the reminders were retired still holds ops's open "Finish onboarding" task: it has its ask.
         reminder = H.task_create(
-            c, H.KEEPER, "Finish onboarding ops", "Still onboarding.", "human:quinn", deduplicate=False, lint=False
+            c, H.TICO_ACTOR, "Finish onboarding ops", "Still onboarding.", "human:quinn", deduplicate=False, lint=False
         )
-        H.event(c, H.KEEPER, "bot.setup_reminder", "ops", {"task": reminder["id"], "owner": "human:quinn"})
+        H.event(c, H.TICO_ACTOR, "bot.setup_reminder", "ops", {"task": reminder["id"], "owner": "human:quinn"})
         assert H._open_setup_reminder(c, "ops")["owner_id"] == "human:quinn"
         told = setup_stuck.nudge(c)
         assert told == {"tess": ["human:quinn"], "rob": ["human:quinn"]}
@@ -1121,7 +1121,7 @@ def test_listening_health_names_a_source_whose_read_was_blocked(environment):
 
     with api.app.state.store.transaction() as c:
         flow = {"name": "Standups", "owner": "person:" + automations.top_person(c), "trigger": trigger, "steps": [NOTE]}
-        automations._save(c, H.KEEPER, "auto_heard", F.check(flow), None)
+        automations._save(c, H.TICO_ACTOR, "auto_heard", F.check(flow), None)
     read("blocked", "Sign in again")
     check = health_of(api)[1]["listening"]
     assert check["status"] == "warn" and "Sign in again" in check["summary"]

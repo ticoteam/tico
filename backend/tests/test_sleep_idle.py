@@ -108,7 +108,7 @@ def add_routine(api, due, key="r1"):
     with api.app.state.store.transaction() as c:
         aid = routines.create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "ops",
             {"title": "Morning check", "cron": "0 9 * * *", "timezone": "UTC", "text": "Look around"},
             key=key,
@@ -334,7 +334,7 @@ def test_a_sleeping_company_wakes_for_its_release_hour_and_stays_up_for_one_not_
 def maintenance_bucket(api, at, schedule=None):
     """Resume Maintenance with a finished full run in the current bucket. No saved schedule means the hourly default."""
     with api.app.state.store.transaction() as c:
-        maintenance.save_settings(c, H.KEEPER, schedule=schedule, paused=False)
+        maintenance.save_settings(c, H.TICO_ACTOR, schedule=schedule, paused=False)
         start = sleep_idle.stamp(maintenance.bucket(schedule or "hourly", at).timestamp())
         c.execute(
             "INSERT INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at,finished_at,result) "
@@ -442,11 +442,11 @@ def test_pausing_maintenance_removes_its_wake_and_resuming_restores_it(api, hq):
     hq.clock[0] = at.timestamp()
     maintenance_bucket(api, at)
     with api.app.state.store.transaction() as c:
-        maintenance.save_settings(c, H.KEEPER, paused=True)
+        maintenance.save_settings(c, H.TICO_ACTOR, paused=True)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "" and sleep_idle.wake_time(c, hq.clock[0]) is None
     with api.app.state.store.transaction() as c:
-        maintenance.save_settings(c, H.KEEPER, paused=False)
+        maintenance.save_settings(c, H.TICO_ACTOR, paused=False)
     with api.app.state.store.read() as c:
         wake = at.replace(hour=5, minute=0) + timedelta(days=1)
         assert sleep_idle.wake_time(c, hq.clock[0]) == wake.timestamp()
@@ -499,7 +499,7 @@ def test_a_live_maintenance_run_keeps_the_server_up_even_when_paused(api, hq):
     hq.clock[0] = at.timestamp()
     maintenance_bucket(api, at)
     with api.app.state.store.transaction() as c:
-        maintenance.save_settings(c, H.KEEPER, paused=True)
+        maintenance.save_settings(c, H.TICO_ACTOR, paused=True)
         c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key='update'")
         c.execute(
             "UPDATE maintenance_runs SET started_at=?, heartbeat_at=?, finished_at=NULL, result='' WHERE id='mr1'",
