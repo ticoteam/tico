@@ -389,8 +389,8 @@ function settingsChoicePanelHTML(spec: SettingsChoiceSpec) {
       <label class="mp-row mp-compact" data-choice-compact-row hidden><span>Compact</span><select data-choice-compact aria-label="Compact"></select></label>
       <label class="mp-row mp-compact" data-choice-style-row hidden><span>Output style</span><select data-choice-style aria-label="Output style"></select></label>
       <label class="mp-row mp-compact" data-choice-verbosity-row hidden><span>Verbosity</span><select data-choice-verbosity aria-label="Verbosity"></select></label>
-      <p class="mp-note" data-choice-note role="status"></p>
     </div></details>
+    <p class="mp-note" data-choice-note role="status"></p>
     <div class="settings-choice-blocks" data-choice-blocks></div>
     <div class="mp-foot">${spec.readonly ? '<button type="button" class="ghost" data-choice-cancel>Done</button>'
       : '<button type="button" class="ghost" data-choice-cancel>Cancel</button><button type="submit" class="primary" data-choice-apply disabled>Apply</button>'}</div>
