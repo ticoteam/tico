@@ -12,10 +12,12 @@ import sqlite3
 from . import bot_settings as BS
 
 TABLES = ("bots", "bot_config", "bot_settings")
-STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug"})
-# Every column of `bots` but `last_turn_at`: a finished turn writes that one, and moving the clock on every turn threw
-# the shared rows away all the time on a busy server. A shared `bots` row's `last_turn_at` may therefore be older than
-# the snapshot's; hubdb.bots, its one reader, reads it fresh (migration 20261118211741).
+# Every bot's settings and declaration. `bots` itself is read once per snapshot instead (read_cache.rows): a finished
+# turn writes its `last_turn_at`, so a shared copy would be out of date after every turn.
+STATEMENTS = frozenset({BS.ROW_SQL})
+# Every column of `bots` but `last_turn_at` moves the clock, for the values `shared` builds from a bot's id or slug
+# (views.entries). The turn's write moved it too, which threw the shared settings and entries away on every finished
+# turn on a busy server (migration 20261118211741).
 BOTS_CLOCKED = ("id", "slug", "display_name", "effort", "state", "created_at")
 
 

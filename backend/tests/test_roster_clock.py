@@ -33,11 +33,13 @@ def test_later_snapshots_share_the_rows_until_a_roster_table_changes(api):
     changed, ran = snapshot_rows(store)
     assert ran == 1 and changed[0]["reports_to"] == "human:ben"
     bots, ran = snapshot_rows(store, "SELECT * FROM bots ORDER BY slug")
-    assert ran == 1 and snapshot_rows(store, "SELECT * FROM bots ORDER BY slug") == (bots, 0)
+    assert ran == 1 and snapshot_rows(store, "SELECT * FROM bots ORDER BY slug") == (bots, 1)  # never shared
+    assert snapshot_rows(store) == (changed, 0)
     with store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Renamed' WHERE slug=?", (bots[0]["slug"],))
     renamed, ran = snapshot_rows(store, "SELECT * FROM bots ORDER BY slug")
     assert ran == 1 and renamed[0]["display_name"] == "Renamed"
+    assert snapshot_rows(store)[1] == 1  # a bots column other than last_turn_at moves the clock
     with store.read() as c:
         assert H.bots(c)[0]["display_name"] == "Renamed"
 
@@ -129,8 +131,8 @@ def test_a_restart_that_changes_nothing_leaves_the_change_counters_where_they_we
 
 
 def test_a_finished_turn_keeps_the_shared_rows_and_every_reader_sees_its_time(api):
-    """A turn's `bots.last_turn_at` write moves no clock, so no whole-roster read runs again after it, and the bot list
-    still shows the new time; any other `bots` column still moves the clock. The trigger names every column but
+    """A turn's `bots.last_turn_at` write moves no clock, so the shared settings and entries are not read or built again
+    after it, and the bot list (read in each snapshot) shows the new time; any other `bots` column still moves the clock. The trigger names every column but
     `last_turn_at`, so a column added later moves the clock too or this fails."""
     from backend import hubdb, roster_clock
 
@@ -143,18 +145,21 @@ def test_a_finished_turn_keeps_the_shared_rows_and_every_reader_sees_its_time(ap
     snapshot_rows(store)
     bots, _ = snapshot_rows(store, "SELECT * FROM bots ORDER BY slug")
     slug, before = bots[0]["id"], _counters(store)[0]
+    entries = []
+    with store.read() as c:
+        from backend import views
+
+        entries.append(views.entries(c, shared=True))
     with store.transaction() as c:
         row = hubdb.turn_start(c, "bot:" + slug, slug, trigger="message", trigger_kind="message")
         hubdb.turn_finish(c, "bot:" + slug, row["id"], "ok", "done")
         finished = c.execute("SELECT last_turn_at FROM bots WHERE id=?", (slug,)).fetchone()[0]
     assert finished and _counters(store)[0] == before
     assert snapshot_rows(store)[1] == 0
-    ran = []
     with store.read() as c:
-        c.set_trace_callback(lambda sql: ran.append(sql) if sql == "SELECT * FROM bots ORDER BY slug" else None)
+        assert views.entries(c, shared=True) is entries[0]
         listed = {b["id"]: b for b in H.bots(c)}
-        c.set_trace_callback(None)
-        assert listed[slug]["last_turn_at"] == finished and not ran
+        assert listed[slug]["last_turn_at"] == finished
         assert listed == {r["id"]: dict(r) for r in c.execute("SELECT * FROM bots")}
     with store.transaction() as c:
         c.execute("UPDATE bots SET effort='high' WHERE id=?", (slug,))
