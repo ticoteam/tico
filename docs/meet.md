@@ -270,6 +270,13 @@ gzip to about 29 MB, the size of the layer it adds to the server image. The reco
 under the 40 MB at which a separate recorder image would be worth it. These sizes come from the pinned wheels, not from
 a built image.
 
+### On Tico Cloud (a cell)
+
+A cell runs one LiveKit for every company on the host, turned on with `python3 -m setup cell init --meet-domain
+<TURN host>`. `setup cell` then writes the `TICO_MEET_*` keys into each company's `.env`, and its router sends `/rtc`
+on every company host to LiveKit. The design, the production steps in order and the rollback are in
+[cell.md, Tico Meet](cell.md#tico-meet).
+
 ## Not built
 
 - **Voice beyond one process.** Each call's media and voice live in the one process that holds it (How a call

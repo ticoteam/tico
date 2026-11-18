@@ -43,6 +43,9 @@ then that folder's own `python3 -m setup cell update` run as a child, which take
 service never runs `cell init`: that restarts it, and the router and the tunnel stay with staff (HQ's core install).
 The status and diagnostics say the host's core lags until then.
 
+Tico Meet (`cell init --meet-domain`): every MEET_RENEW_EVERY it also restarts the cell's LiveKit after Caddy renewed
+its TURN certificate, once no room is open (setup/cell.py `Cell.meet_renew`), so a renewal never drops a call.
+
 Isolation. One process (systemd unit tico-cell-updater, `cell init`), one listener per company. It runs as root, as
 staff's cell commands do, because the work is `update`: Docker and the company's root-owned folder. A unit, not a
 container, so no container ever holds the Docker socket.
@@ -659,11 +662,26 @@ class Service:
                 except OSError as e:
                     log(f"{slug}: cannot listen on {self.bind(index)}: {e.strerror or e}")
 
+    def meet_renew(self) -> None:
+        """Tico Meet's renewed TURN certificate: LiveKit is restarted once no room is open (setup/cell.py
+        `Cell.meet_renew`). A failure is logged and asked again next time; it never stops the updater."""
+        try:
+            done = self.make_cell().meet_renew()
+        except Exception as e:  # noqa: BLE001  the companies' updates go on whatever this does
+            log(f"tico meet: the certificate check failed: {type(e).__name__}")
+            return
+        if done == "restarted":
+            log("tico meet: restarted LiveKit with its renewed certificate")
+
     def run(self) -> None:
         signal.signal(signal.SIGTERM, lambda *_: self.stopping.set())
         log(f"serving {self.root} (core {self.core() or 'unknown'})")
+        renewed = -C.MEET_RENEW_EVERY
         while True:
             self.scan()
+            if time.monotonic() - renewed >= C.MEET_RENEW_EVERY:
+                renewed = time.monotonic()
+                self.meet_renew()
             if self.stopping.wait(RESCAN):
                 break
         for listener in list(self.listeners.values()):

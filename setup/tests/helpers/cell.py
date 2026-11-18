@@ -38,6 +38,9 @@ class FakeSystem:
         self.hosts = {}  # host -> slug, for a host that is not <slug>.<anything>
         self.unpublished = set()  # tags GitHub has no release for; None: GitHub does not answer
         self.probes = []  # (host, port) of each health probe
+        self.livekit_started = None  # the cell LiveKit's {{.State.StartedAt}}; None: no such container
+        self.rooms = 0  # what ListRooms answers (a count), or None when LiveKit does not answer
+        self.tokens = []  # each token ListRooms was asked with
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -75,6 +78,10 @@ class FakeSystem:
                     if not want or s == want
                 ),
             )
+        if argv[:2] == ["docker", "inspect"] and argv[-1] == cell.MEET_CONTAINER:
+            if self.livekit_started is None:
+                return Result(1, "", f"Error: No such object: {cell.MEET_CONTAINER}")
+            return Result(0, self.livekit_started + "\n")
         if argv[:3] == ["docker", "image", "inspect"]:
             return Result(0 if argv[-1] in self.images else 1)
         if "--project-name" in argv:
@@ -108,6 +115,10 @@ class FakeSystem:
         if self.ps.get(slug, ("",))[0] != "running":
             return 502
         return self.health.get(host, 200)
+
+    def meet_rooms(self, token):
+        self.tokens.append(token)
+        return self.rooms
 
     def port_free(self, port):
         return port not in self.busy_ports

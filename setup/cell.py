@@ -13,6 +13,8 @@ instance:
     <root>/cell.json                        the host: the domain every company is a name under, the router's port
     <root>/edge.yaml, router/Caddyfile      the router (Caddy, plain HTTP on 127.0.0.1:8080) and the one tunnel
     <root>/tunnel/, tunnel.env (0600)       cloudflared's routes and its token
+    <root>/meet.env (0600), meet/           Tico Meet (`init --meet-domain`): the cell's LiveKit key pair, the
+                                            certificate Caddy's config and its certificates
     <root>/companies/<slug>/.env            0600, the server's settings
     <root>/companies/<slug>/compose.yaml    the stock compose.yaml, unchanged
     <root>/companies/<slug>/compose.cell.yaml   memory limit, data folder, networks: what makes it one of many
@@ -75,10 +77,13 @@ All Docker and system calls go through one `System`, so the tests run every comm
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import datetime
 import errno
 import fcntl
+import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -110,6 +115,8 @@ ROUTER_IMAGE = "caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099
 TUNNEL_IMAGE = (
     "cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d"
 )
+# Tico Meet's media server, the same pinned image as compose.yaml's `livekit` (a test keeps them equal).
+MEET_IMAGE = "livekit/livekit-server:v1.8.4@sha256:621fd87bd64a0c83e1f2418ee0323eb920d00acdd73e5f79b303c64f6cc532af"
 ROUTER_ADDRESS, ROUTER_PORT = "127.0.0.1", 8080
 ROUTER_CONTAINER, EDGE_PROJECT = "tico-cell-router", "tico-cell"
 ROUTER_HEALTH_HOST, ROUTER_HEALTH_PATH = "cell-health.invalid", "/cell-healthz"
@@ -165,6 +172,15 @@ READER_COOKIE_GLOB = "*tico_reader=*"
 # __Host- names of the session and sign-in cookies, and this install's local session.
 APP_COOKIES_RE = "(?:^|;)[ ]*(?:__Host-)?tico_(?:session|login|local_session)[^=;]*=[^;]*"
 
+# What `cell_env` writes for Tico Meet while the cell has it on, and removes while it is off.
+MEET_ENV_KEYS = (
+    "TICO_MEET_URL",
+    "TICO_MEET_INTERNAL_URL",
+    "TICO_MEET_DOMAIN",
+    "TICO_MEET_API_KEY",
+    "TICO_MEET_API_SECRET",
+)
+
 # --env-file: what a moved install brings. Never carried: keys the cell sets itself (with a value, in this render: see
 # `add`), the ones below (the cell's own or read back from .env by the next `add`, so a carried one would feed back),
 # and what belongs to a single-company install only.
@@ -217,9 +233,31 @@ CELL_ENV_KEYS = frozenset(
         "TICO_EXPECTED_AWS_ROLE",
         "TICO_READER_ORIGIN",
         "TICO_COMPANY_PAGE_DIR",
+        *MEET_ENV_KEYS,
     }
 )
 CELL_ENV_PREFIXES = ("TICO_CADDY", "TICO_TUNNEL")
+# Tico Meet on the cell (`init --meet-domain`, docs/cell.md "Tico Meet"): one LiveKit for every company, one key pair.
+# LiveKit and the Caddy that gets its TURN certificate run in the edge project on the host's network. Browsers reach
+# LiveKit's signal at wss://<company host>/rtc through the tunnel and the router; servers reach its API on their own
+# default network's gateway (as they reach their updater). The public ports below are what the cell's security group
+# opens (infra/cell-meet/cell-meet.yaml); MEET_PORT (the API and signal) and MEET_CERTS_HTTPS stay closed.
+MEET_ENV = "meet.env"  # <root>/meet.env, 0600: LIVEKIT_KEYS=<key>: <secret>, made once and kept
+MEET_DIR = "meet"  # <root>/meet/: caddy/Caddyfile (the certificate Caddy's config) and certs/ (its storage)
+MEET_CONTAINER, CERTS_CONTAINER = "tico-cell-livekit", "tico-cell-certs"
+MEET_PORT = 7880
+MEET_RTC_TCP, MEET_UDP_FIRST, MEET_UDP_LAST = 7881, 50000, 50100
+MEET_TURN_UDP, MEET_TURN_TLS = 3478, 443  # nothing on a cell binds 443: the tunnel is outbound only
+MEET_CERTS_HTTP, MEET_CERTS_HTTPS = 80, 8443  # the certificate Caddy: HTTP-01 on 80; its own https port is unused
+MEET_PUBLIC_PORTS = (
+    ("tcp", MEET_CERTS_HTTP, MEET_CERTS_HTTP),
+    ("tcp", MEET_TURN_TLS, MEET_TURN_TLS),
+    ("udp", MEET_TURN_UDP, MEET_TURN_UDP),
+    ("tcp", MEET_RTC_TCP, MEET_RTC_TCP),
+    ("udp", MEET_UDP_FIRST, MEET_UDP_LAST),
+)
+# Caddy's storage for a Let's Encrypt certificate (`cert_issuer acme`), under certs/ on the host and /certs in LiveKit.
+MEET_CERT_PATH = "caddy/certificates/acme-v02.api.letsencrypt.org-directory/{d}/{d}"
 IMPORT_STAGING = ".data-import"  # beside data/: an import is unpacked here, then renamed into place
 
 # Index i: port 20000+i, default network the i-th /24 of 10.208.0.0/12, edge network the i-th /28 of 10.224.0.0/16.
@@ -237,6 +275,7 @@ DAEMON_JSON = "etc/docker/daemon.json"
 DAEMON_SETTINGS = {"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "3"}, "live-restore": True}
 
 HEALTH_TIMEOUT = 300
+MEET_RENEW_EVERY = 600.0  # seconds between the cell updater's checks for a renewed TURN certificate (Cell.meet_renew)
 SNAPSHOTS_KEPT = 2
 DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
 STOPPED = ("", "exited", "created", "dead")  # container states in which nothing has the database open
@@ -319,6 +358,25 @@ class System:
             return status
         except (OSError, http.client.HTTPException):
             return 0
+
+    def meet_rooms(self, token: str) -> int | None:
+        """How many rooms the cell's LiveKit has open (ListRooms on its API, on loopback); None when it does not answer."""
+        try:
+            c = http.client.HTTPConnection(ROUTER_ADDRESS, MEET_PORT, timeout=5)
+            c.request(
+                "POST",
+                "/twirp/livekit.RoomService/ListRooms",
+                body=b"{}",
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+            )
+            r = c.getresponse()
+            body = r.read(1 << 20)
+            c.close()
+            if r.status != 200:
+                return None
+            return len(json.loads(body or b"{}").get("rooms") or [])
+        except (OSError, http.client.HTTPException, ValueError, AttributeError):
+            return None
 
     def port_free(self, port: int) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -554,6 +612,12 @@ def parser() -> Parser:
         help="the domain of the companies' page hosts (docs/company-page.md), "
         "one wildcard route for all of them; kept when left out, \"\" clears it",
     )
+    i.add_argument(
+        "--meet-domain",
+        metavar="HOST",
+        help="Tico Meet's TURN hostname, such as meet-cell-1.tico.team (a DNS-only A record to this host): runs "
+        "LiveKit for every company (docs/cell.md \"Tico Meet\"); kept when left out, \"\" turns it off",
+    )
     a = cmd("add", "create or converge one company's server; answers once /healthz answers through the router")
     a.add_argument("--company", required=True, metavar="SLUG")
     a.add_argument("--domain", required=True, help="<slug>.<the cell's domain>, or with --own-domain any hostname")
@@ -721,7 +785,7 @@ def networks(index: int) -> dict[str, str]:
     }
 
 
-def router_config(companies: list[dict], routes: list[dict] = ()) -> str:
+def router_config(companies: list[dict], routes: list[dict] = (), meet: bool = False) -> str:
     """The router's Caddyfile: each company's domain and aliases to its loopback port, anything else a 404. Plain HTTP on
     loopback only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used.
 
@@ -737,7 +801,8 @@ def router_config(companies: list[dict], routes: list[dict] = ()) -> str:
     itself (header_up replaces any copy the visitor sent). A stopped one is answered 503 at once.
 
     A page host (page_site) serves its three public paths from disk first, and only those; see page_site. Routes
-    (`cell route`, route_site) come after every company, before the catch-all."""
+    (`cell route`, route_site) come after every company, before the catch-all. With Tico Meet on (`meet`), a running
+    company's /rtc goes to the cell's LiveKit (company_site)."""
     lines = [
         "# Written by `python3 -m setup cell`; regenerated whenever a company is added, removed, stopped, started, "
         "put to sleep or woken. Do not edit.",
@@ -752,7 +817,7 @@ def router_config(companies: list[dict], routes: list[dict] = ()) -> str:
     ]
     for c in sorted(companies, key=lambda c: c["domain"]):
         sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in [c["domain"], *c.get("aliases", [])])
-        lines += company_site(c, sites)
+        lines += company_site(c, sites, meet)
         if c.get("page_host"):
             lines += page_site(c)
     for r in sorted(routes, key=lambda r: r["name"]):
@@ -770,8 +835,11 @@ HELD = [f"\t\tlb_try_duration {HOLD_FOR}", f"\t\tlb_try_interval {HOLD_EVERY}"]
 HELD_ERRORS = ["\thandle_errors {", "\t\theader Retry-After 5", f"\t\trespond \"{HOLD_BODY}\" 503", "\t}"]
 
 
-def company_site(c: dict, sites: str) -> list[str]:
-    """One company's domain (and aliases) block: its server, the wake service while it sleeps, or a 503 when stopped."""
+def company_site(c: dict, sites: str, meet: bool = False) -> list[str]:
+    """One company's domain (and aliases) block: its server, the wake service while it sleeps, or a 503 when stopped.
+    With Tico Meet on, a running company's /rtc (LiveKit's signal WebSocket, which checks its own token) goes to the
+    cell's LiveKit first, held as the server is and kept open across a reload; everything else goes to the server.
+    Without it the block is what it was before Tico Meet, byte for byte, so an upgrade does not reload the router."""
     state = c.get("state")
     if state == "stopped":
         return [f"{sites} {{", "\trespond \"This Tico company is stopped.\" 503", "}", ""]
@@ -788,17 +856,27 @@ def company_site(c: dict, sites: str) -> list[str]:
             "}",
             "",
         ]
-    return [
-        f"{sites} {{",
+    server = [
         f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
         "\t\theader_up X-Forwarded-Proto https",
         *HELD,
         f"\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
         "\t}",
-        *HELD_ERRORS,
-        "}",
-        "",
     ]
+    if meet:
+        server = [
+            "\t@rtc path /rtc /rtc/*",
+            "\thandle @rtc {",
+            f"\t\treverse_proxy {ROUTER_ADDRESS}:{MEET_PORT} {{",
+            *("\t" + line for line in HELD),
+            f"\t\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
+            "\t\t}",
+            "\t}",
+            "\thandle {",
+            *("\t" + line for line in server),
+            "\t}",
+        ]
+    return [f"{sites} {{", *server, *HELD_ERRORS, "}", ""]
 
 
 def page_site(c: dict) -> list[str]:
@@ -955,9 +1033,9 @@ def tunnel_config(domain: str, hosts: list[str] = (), page_domain: str | None = 
     return "\n".join(lines + ["  - service: http_status:404"]) + "\n"
 
 
-def edge_compose(root: Path, tunnel: bool) -> str:
+def edge_compose(root: Path, tunnel: bool, meet_domain: str | None = None) -> str:
     """The router and the tunnel: on the host's network, so they reach each company's loopback port; nothing else. The
-    router also reads the page folders, read-only."""
+    router also reads the page folders, read-only. With `meet_domain`, Tico Meet too (meet_services)."""
     lines = [
         "# Written by `python3 -m setup cell init`: the shared host's front door. Companies are separate projects.",
         f"name: {EDGE_PROJECT}",
@@ -997,8 +1075,152 @@ def edge_compose(root: Path, tunnel: bool) -> str:
             f"      - {root}/tunnel:/etc/cloudflared:ro",
             "    depends_on: [router]",
         ]
+    if meet_domain:
+        lines += meet_services(root, meet_domain)
     lines += ["volumes:", "  router-data:", "  router-config:"]
     return "\n".join(lines) + "\n"
+
+
+def meet_services(root: Path, domain: str) -> list[str]:
+    """Tico Meet's two edge services, on the host's network like the router (no docker-proxy for 101 UDP ports):
+
+    - `certs`: Caddy (the router's pinned image) holding the TURN certificate for `domain`, by HTTP-01 only on port 80,
+      so no DNS credential is ever on the shared host. It serves nothing else; its admin API is off (the router's is on
+      localhost:2019) and its own https port is MEET_CERTS_HTTPS, which the security group keeps closed. The domain is
+      in its environment, so a new one recreates it.
+    - `livekit`: LiveKit with the cell's key pair from meet.env, TURN over TLS on 443 with that certificate (read-only),
+      TURN over UDP and the media ports. It reads the certificate only when it starts: the cell updater restarts it
+      after a renewal, once no room is open (Cell.meet_renew)."""
+    return [
+        "  certs:",
+        f"    image: {ROUTER_IMAGE}",
+        f"    container_name: {CERTS_CONTAINER}",
+        "    network_mode: host",
+        "    restart: unless-stopped",
+        "    init: true",
+        "    security_opt: [\"no-new-privileges:true\"]",
+        "    cap_drop: [ALL]",
+        "    cap_add: [NET_BIND_SERVICE]",
+        "    read_only: true",
+        "    tmpfs: [/tmp, /config]",
+        "    environment:",
+        f"      TICO_MEET_DOMAIN: {domain}",
+        "    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]",
+        "    volumes:",
+        f"      - {root}/{MEET_DIR}/caddy:/etc/caddy:ro",
+        f"      - {root}/{MEET_DIR}/certs:/data",
+        "  livekit:",
+        f"    image: {MEET_IMAGE}",
+        f"    container_name: {MEET_CONTAINER}",
+        "    network_mode: host",
+        "    restart: unless-stopped",
+        "    init: true",
+        "    security_opt: [\"no-new-privileges:true\"]",
+        "    cap_drop: [ALL]",
+        "    cap_add: [NET_BIND_SERVICE]",  # TURN over TLS on 443
+        "    read_only: true",
+        "    tmpfs: [/tmp]",
+        f"    env_file: [{root}/{MEET_ENV}]",
+        "    environment:",
+        "      LIVEKIT_CONFIG: |",
+        *("        " + line for line in livekit_config(domain).splitlines()),
+        "    volumes:",
+        f"      - {root}/{MEET_DIR}/certs:/certs:ro",
+        "    depends_on: [certs]",
+    ]
+
+
+def livekit_config(domain: str) -> str:
+    """LiveKit's config: compose.yaml's `livekit`, with TURN over TLS on 443 and the certificate where Caddy keeps it."""
+    cert = "/certs/" + MEET_CERT_PATH.format(d=domain)
+    return (
+        "\n".join(
+            [
+                f"port: {MEET_PORT}",
+                "rtc:",
+                f"  tcp_port: {MEET_RTC_TCP}",
+                f"  port_range_start: {MEET_UDP_FIRST}",
+                f"  port_range_end: {MEET_UDP_LAST}",
+                "  use_external_ip: true",
+                "turn:",
+                "  enabled: true",
+                f"  domain: {domain}",
+                f"  tls_port: {MEET_TURN_TLS}",
+                f"  udp_port: {MEET_TURN_UDP}",
+                f"  cert_file: {cert}.crt",
+                f"  key_file: {cert}.key",
+                "  external_tls: false",
+                "logging:",
+                "  json: true",
+            ]
+        )
+        + "\n"
+    )
+
+
+def certs_caddyfile() -> str:
+    """The certificate Caddy's config. The same for every domain (it reads TICO_MEET_DOMAIN from its environment)."""
+    return (
+        "\n".join(
+            [
+                "# Written by `python3 -m setup cell init --meet-domain`: gets and renews the TURN certificate. Do not edit.",
+                "{",
+                "\tadmin off",
+                "\tpersist_config off",
+                f"\thttp_port {MEET_CERTS_HTTP}",
+                f"\thttps_port {MEET_CERTS_HTTPS}",
+                "\tcert_issuer acme {",
+                "\t\tdisable_tlsalpn_challenge",
+                "\t}",
+                "}",
+                "",
+                "{$TICO_MEET_DOMAIN} {",
+                "\trespond \"Tico Meet\" 200",
+                "}",
+            ]
+        )
+        + "\n"
+    )
+
+
+def meet_keys(text: str) -> tuple[str, str]:
+    """The cell's LiveKit key pair from meet.env's LIVEKIT_KEYS (`<key>: <secret>`); ("", "") when it is not one."""
+    key, sep, secret = envfile.parse(text).get("LIVEKIT_KEYS", "").partition(": ")
+    if not sep or not re.fullmatch(r"API[A-Za-z0-9]{8,64}", key) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", secret):
+        return "", ""
+    return key, secret
+
+
+def new_meet_env() -> str:
+    """A new key pair for meet.env. LiveKit wants a secret of at least 32 characters."""
+    key, secret = "API" + secrets.token_hex(8), secrets.token_urlsafe(32)
+    return (
+        "# Written by `python3 -m setup cell init --meet-domain`: the cell's LiveKit key pair. Holds a secret: keep it "
+        "private (0600).\n"
+        f"LIVEKIT_KEYS={key}: {secret}\n"
+    )
+
+
+def meet_token(key: str, secret: str, now: float) -> str:
+    """A one-minute HS256 token for LiveKit's server API that may only list rooms (backend/call_media.py signs alike)."""
+
+    def b64(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    claims = {"iss": key, "sub": "tico-cell", "nbf": int(now) - 10, "exp": int(now) + 60, "video": {"roomList": True}}
+    head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    body = b64(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode())
+    mac = hmac.new(secret.encode(), f"{head}.{body}".encode("ascii"), hashlib.sha256).digest()
+    return f"{head}.{body}.{b64(mac)}"
+
+
+def docker_time(value: str) -> float | None:
+    """`docker inspect`'s {{.State.StartedAt}} (RFC 3339 in UTC, nanoseconds) as a Unix time; None when it is not one."""
+    m = re.fullmatch(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?Z", value.strip())
+    if not m:
+        return None
+    t = datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+    return t.timestamp() + float(m.group(2) or 0)
 
 
 def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
@@ -1068,16 +1290,28 @@ def updater_url(index: int) -> str:
     return f"http://{networks(index)['default_gateway']}:{UPDATER_PORT}"
 
 
-def cell_env(values: dict[str, str], c: dict) -> dict[str, str]:
+def cell_env(values: dict[str, str], c: dict, meet: dict | None = None) -> dict[str, str]:
     """`values` (a company's .env) with the cell's updater keys: its updater's address and the cell marker, and no
     TICO_UPDATES=tico, which an older core wrote (it turns Update now and the update keys off). COMPOSE_PROFILES comes
-    from the record: `slack` when its Slack gateway is on, else none."""
-    out = {k: v for k, v in values.items() if k != "TICO_UPDATES"}
+    from the record: `slack` when its Slack gateway is on, else none.
+
+    Tico Meet (`meet`, Cell.meet: the cell's TURN domain and key pair, or None while it is off): browsers connect to
+    the company's own host (the router sends /rtc to LiveKit), and its server calls LiveKit's API on its default
+    network's gateway, as it calls its updater. Off, the keys are removed, so calls answer meet_unavailable."""
+    out = {k: v for k, v in values.items() if k != "TICO_UPDATES" and k not in MEET_ENV_KEYS}
     out.update(
         TICO_UPDATER_URL=updater_url(c["index"]),
         TICO_CELL="1",
         COMPOSE_PROFILES=SLACK_SERVICE if c.get("slack") else "",
     )
+    if meet:
+        out.update(
+            TICO_MEET_URL=f"wss://{c['domain']}",
+            TICO_MEET_INTERNAL_URL=f"http://{networks(c['index'])['default_gateway']}:{MEET_PORT}",
+            TICO_MEET_DOMAIN=meet["domain"],
+            TICO_MEET_API_KEY=meet["key"],
+            TICO_MEET_API_SECRET=meet["secret"],
+        )
     return out
 
 
@@ -1178,6 +1412,28 @@ class Cell:
             raise CellError(
                 "not_initialized", "this host has no cell: run `python3 -m setup cell init` first"
             ) from None
+
+    def saved_cell(self) -> dict:
+        """cell.json, or {} before the first `init`."""
+        try:
+            return json.loads((self.root / "cell.json").read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def meet(self) -> dict | None:
+        """Tico Meet while the cell has it on (`init --meet-domain`): {"domain", "key", "secret"}, else None. The secret
+        joins the ones every answer and error is scrubbed of."""
+        domain = self.saved_cell().get("meet_domain")
+        if not domain:
+            return None
+        key, secret = meet_keys(_read(self.root / MEET_ENV))
+        if not key:
+            raise CellError(
+                "meet_failed", f"Tico Meet is on but {self.root / MEET_ENV} holds no key pair: re-run `cell init`"
+            )
+        if secret not in self.secrets:
+            self.secrets.append(secret)
+        return {"domain": domain, "key": key, "secret": secret}
 
     def load(self, slug: str) -> dict | None:
         try:
@@ -1323,11 +1579,13 @@ class Cell:
                 )
             self.system.sleep(HEALTH_POLL)
 
-    def write_router(self) -> bool:
+    def write_router(self, meet: bool | None = None) -> bool:
         """Regenerate the Caddyfile from every company not removed and reload the router. A config the router refuses
-        is replaced by the one it had, so a bad change never takes every company down."""
+        is replaced by the one it had, so a bad change never takes every company down. `meet` is whether Tico Meet is
+        on (default: what cell.json says)."""
         path = self.root / "router" / "Caddyfile"
-        text = router_config(self.live_companies(), self.routes())
+        meet = bool(self.saved_cell().get("meet_domain")) if meet is None else meet
+        text = router_config(self.live_companies(), self.routes(), meet)
         try:
             old = path.read_text()
         except OSError:
@@ -1527,10 +1785,20 @@ class Cell:
             page_domain = (args.page_domain or "").strip().lower().strip(".") or None
         if page_domain and (not st.DOMAIN_RE.fullmatch(page_domain) or page_domain == domain):
             raise CellError("bad_domain", "--page-domain is a plain domain of its own, such as tico.page")
+        # Tico Meet's TURN host: kept when left out, "" turns Tico Meet off (its key pair stays, for turning it on again).
+        meet_domain = saved.get("meet_domain")
+        if args.meet_domain is not None:
+            meet_domain = (args.meet_domain or "").strip().lower().strip(".") or None
+        if meet_domain and (not st.DOMAIN_RE.fullmatch(meet_domain) or meet_domain in (domain, page_domain)):
+            raise CellError("bad_domain", "--meet-domain is a plain hostname of its own, such as meet-cell-1.tico.team")
         with self.lock("cell"):
-            return self._init(saved, domain, token, page_domain)
+            if meet_domain:
+                self.refuse_taken("", {meet_domain} - {saved.get("meet_domain")})
+            return self._init(saved, domain, token, page_domain, meet_domain)
 
-    def _init(self, saved: dict, domain: str, token: str, page_domain: str | None = None) -> dict:
+    def _init(
+        self, saved: dict, domain: str, token: str, page_domain: str | None = None, meet_domain: str | None = None
+    ) -> dict:
         changed = []
         if self.system.run(["docker", "compose", "version"]).returncode:
             self.run(
@@ -1566,8 +1834,10 @@ class Cell:
             self.system.chown(f, TUNNEL_UID, TUNNEL_UID)
         caddyfile = self.root / "router" / "Caddyfile"
         if not caddyfile.exists():  # the first run; later ones go through write_router, which reloads
-            _write_atomic(caddyfile, router_config([c for c in self.companies() if c.get("state") != "removed"]))
-        if _write_atomic(self.root / "edge.yaml", edge_compose(self.root, tunnel)):
+            _write_atomic(caddyfile, router_config(self.live_companies(), meet=bool(meet_domain)))
+        if meet_domain:
+            changed += self.meet_files()
+        if _write_atomic(self.root / "edge.yaml", edge_compose(self.root, tunnel, meet_domain)):
             changed.append("edge")
         edge = self.edge()
         self.run([*edge, "up", "-d", "--remove-orphans"], "docker_failed", "starting the router and tunnel")
@@ -1579,17 +1849,18 @@ class Cell:
             if self.system.monotonic() - started > 60:
                 raise CellError("router_failed", f"the router does not answer on {ROUTER_ADDRESS}:{ROUTER_PORT}")
             self.system.sleep(0.5)
-        if self.write_router():
+        if self.write_router(meet=bool(meet_domain)):
             changed.append("router")
         if self.updater_service():
             changed.append("updater")
         if self.wake_service():
             changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
-        if page_domain:
-            cell["page_domain"] = page_domain
-        else:
-            cell.pop("page_domain", None)
+        for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain)):
+            if value:
+                cell[name] = value
+            else:
+                cell.pop(name, None)
         if cell != saved:
             _write_atomic(self.root / "cell.json", json.dumps(cell, indent=2, sort_keys=True) + "\n", 0o600)
             changed.append("cell.json")
@@ -1602,7 +1873,58 @@ class Cell:
             "companies": len(self.companies()),
             "changed": changed,
             **({"page_domain": page_domain} if page_domain else {}),
+            **({"meet_domain": meet_domain} if meet_domain else {}),
         }
+
+    def meet_files(self) -> list[str]:
+        """Tico Meet's files: the key pair (made once, 0600, never printed; its secret is scrubbed from every answer),
+        the certificate Caddy's config, and the folder that holds its certificates (root's only)."""
+        changed = []
+        path = self.root / MEET_ENV
+        if not meet_keys(_read(path))[0]:
+            _write_atomic(path, new_meet_env(), 0o600)
+            changed.append("meet keys")
+        os.chmod(path, 0o600)
+        self.secrets.append(meet_keys(_read(path))[1])
+        if _write_atomic(self.root / MEET_DIR / "caddy" / "Caddyfile", certs_caddyfile()):
+            changed.append("meet certificates")
+        certs = self.root / MEET_DIR / "certs"
+        certs.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.root / MEET_DIR, 0o700)
+        os.chmod(certs, 0o700)
+        return changed
+
+    def meet_renew(self, now: float | None = None) -> str:
+        """After Caddy renews the TURN certificate, restart LiveKit (it reads it only when it starts), but only while no
+        room is open, so no call is dropped. The cell updater asks every MEET_RENEW_EVERY; Caddy renews about 30 days
+        before expiry, so an empty moment comes long before the old certificate runs out. Answers what it did: off,
+        no_certificate, current, not_running, busy (rooms open, LiveKit did not answer, or another cell command holds
+        the cell) or restarted."""
+        meet = self.meet()
+        if not meet:
+            return "off"
+        try:
+            issued = (
+                (self.root / MEET_DIR / "certs" / (MEET_CERT_PATH.format(d=meet["domain"]) + ".crt")).stat().st_mtime
+            )
+        except OSError:
+            return "no_certificate"  # not issued yet: LiveKit restarts by itself until it is (restart: unless-stopped)
+        r = self.system.run(["docker", "inspect", "--format", "{{.State.StartedAt}}", MEET_CONTAINER])
+        started = docker_time(r.stdout) if r.returncode == 0 else None
+        if started is None:
+            return "not_running"
+        if issued <= started:
+            return "current"
+        if self.system.meet_rooms(meet_token(meet["key"], meet["secret"], time.time() if now is None else now)) != 0:
+            return "busy"
+        try:
+            with self.lock("cell", timeout=0):
+                self.run([*self.edge(), "restart", "livekit"], "docker_failed", "restarting LiveKit")
+        except CellError as e:
+            if e.code == "busy":
+                return "busy"
+            raise
+        return "restarted"
 
     def daemon_settings(self) -> bool:
         """Log rotation and live restore (a Docker restart leaves every company running). Keys already set are kept."""
@@ -1693,6 +2015,7 @@ class Cell:
         started = self.system.monotonic()
         slug = check_slug(args.company, new=True)
         cell = self.load_cell()
+        meet = self.meet()
         domain = (args.domain or "").strip().lower()
         if args.own_domain:
             domain = check_host(domain, "--domain", cell["domain"])
@@ -1897,7 +2220,7 @@ class Cell:
                 )
                 if host:
                     env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
-                env = cell_env(env, c)
+                env = cell_env(env, c, meet)
                 # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
                 written = {k for k, v in env.items() if v}
                 extra = self.extra_env(slug) if carried is None else carried
@@ -2235,7 +2558,11 @@ class Cell:
         return c, ready, True
 
     def refuse_taken(self, slug: str, mine: set[str]) -> None:
-        """domain_taken when another company or a route already answers on one of `mine`."""
+        """domain_taken when another company or a route already answers on one of `mine`, or it is Tico Meet's TURN host
+        (a DNS-only record to this host, not the tunnel)."""
+        meet = self.saved_cell().get("meet_domain")
+        if meet and meet in mine:
+            raise CellError("domain_taken", f"{meet} is this cell's Tico Meet host")
         for other in self.live_companies():
             clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
             if clash:
@@ -2340,7 +2667,7 @@ class Cell:
             else:
                 c.pop("slack", None)
             files = self.write_compose(c)
-            env = _with_tag(env_text, c["version"], self.extra_env(slug), c)
+            env = _with_tag(env_text, c["version"], self.extra_env(slug), c, self.meet())
             files = _write_atomic(d / ".env", env, 0o600) or files
             if changed:
                 self.save(c)
@@ -2375,12 +2702,13 @@ class Cell:
             env_text = _read(d / ".env")
             self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
             extra = self.extra_env(slug)
+            meet = self.meet()  # before anything stops: a cell whose Tico Meet keys are missing changes nothing
             running = c.get("state") not in ("stopped", "sleeping")  # one that is not stays as it is
             pending = c.get("pending")
             self.taken = (pending or {}).get("snapshot", "")
             if c["version"] == args.version:
                 changed = self.write_compose(c)
-                changed = _write_atomic(d / ".env", _with_tag(env_text, c["version"], extra, c), 0o600) or changed
+                changed = _write_atomic(d / ".env", _with_tag(env_text, c["version"], extra, c, meet), 0o600) or changed
                 if running and (pending or changed):
                     ready = self.launch(c, started, args.timeout)
                 else:
@@ -2400,7 +2728,7 @@ class Cell:
                 return self.answer(c, self.wait_healthy(c, started, args.timeout) if running else 0, True)
             try:
                 self.write_compose(c)
-                _write_atomic(d / ".env", _with_tag(env_text, args.version, extra, c), 0o600)
+                _write_atomic(d / ".env", _with_tag(env_text, args.version, extra, c, meet), 0o600)
             except CellError as e:
                 raise self.restarted(c, e, running) from None
             except OSError as e:
@@ -2644,11 +2972,13 @@ def _read(path: Path) -> str:
         return ""
 
 
-def _with_tag(env_text: str, version: str, extra: dict[str, str] | None = None, c: dict | None = None) -> str:
+def _with_tag(
+    env_text: str, version: str, extra: dict[str, str] | None = None, c: dict | None = None, meet: dict | None = None
+) -> str:
     """The same .env with another release, written exactly as `add` would write it (carried settings fill only keys
-    the .env leaves unset, as in `add`; with `c`, the cell's updater keys as `add` writes them)."""
+    the .env leaves unset, as in `add`; with `c`, the cell's updater and Tico Meet keys as `add` writes them)."""
     values = {**(extra or {}), **envfile.parse(env_text), "TICO_TAG": version}
-    return envfile.render(cell_env(values, c) if c else values)
+    return envfile.render(cell_env(values, c, meet) if c else values)
 
 
 def main(
