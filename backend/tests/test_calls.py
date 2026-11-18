@@ -240,9 +240,12 @@ def test_the_list_says_whether_this_server_can_start_a_call(meet):
     cid = thread(meet)
     assert get(meet, f"threads/{cid}/calls")["available"] is True
     assert get(meet, "config")["features"]["tico_meet"] is True
+    # The app draws its first page from GET /api/me's config, so it carries the same features.
+    assert meet.get("/api/me", headers=headers("ana-test")).json()["config"]["features"]["tico_meet"] is True
     meet.app.state.call_media = None
     assert get(meet, f"threads/{cid}/calls")["available"] is False
     assert get(meet, "config")["features"]["tico_meet"] is False
+    assert meet.get("/api/me", headers=headers("ana-test")).json()["config"]["features"]["tico_meet"] is False
     refused = meet.post(f"/api/v2/threads/{cid}/calls", json={}, headers=headers("ana-test"))
     assert refused.status_code == 503 and refused.json()["error"]["code"] == "meet_unavailable"
 
