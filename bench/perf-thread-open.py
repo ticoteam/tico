@@ -47,19 +47,23 @@ WRITES = re.compile(r"^\s*(INSERT|UPDATE|DELETE|REPLACE)\b", re.I)
 
 
 def _run(c, key, bot, message_id):
-    """A completed run of `bot` woken by `message_id`; its id."""
+    """A completed run of `bot` woken by `message_id` (on the job the post queued, if it queued one); (run id, job id)."""
     aid = "run-" + key
-    c.execute(
-        "INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,?,'completed',?,?)",
-        ("job-" + key, message_id, bot, H.now(), aid),
-    )
+    row = c.execute("SELECT id FROM jobs WHERE message_id=?", (message_id,)).fetchone()
+    job = row[0] if row else "job-" + key
+    if not row:
+        c.execute(
+            "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,'queued',?)",
+            (job, message_id, bot, H.now()),
+        )
     c.execute(
         "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
         "started_at,finished_at) VALUES(?,?,?,'rn',0,?,'completed',?,?,?,?)",
-        (aid, "job-" + key, bot, aid, H.now(), H.now(), H.now(), H.now()),
+        (aid, job, bot, aid, H.now(), H.now(), H.now(), H.now()),
     )
+    c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, job))
     c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, message_id))
-    return aid
+    return aid, job
 
 
 _STARTED = [time.perf_counter()]  # when the last seed phase ended
@@ -127,14 +131,14 @@ def seed(api):
         dm = out.get("thread_id") or out.get("conversation_id")
         for k in range(DM_REPLIES):
             asked = threads.post(c, "human:ana", dm, f"Question {k}, see task {tasks[k]}")
-            aid = _run(c, f"dm{k}", "assistant", asked["id"])
+            aid, job = _run(c, f"dm{k}", "assistant", asked["id"])
             threads.post(
                 c,
                 "bot:assistant",
                 dm,
                 f"Answer {k}",
                 in_reply_to=asked["id"],
-                refs={"turn_id": aid, "run": {"attempt_id": aid, "job_id": f"job-dm{k}"}, "task": tasks[k]},
+                refs={"turn_id": aid, "run": {"attempt_id": aid, "job_id": job}, "task": tasks[k]},
             )
         for who in ("human:ben", "human:cara"):
             with contextlib.suppress(Problem, H.Refused):
@@ -230,19 +234,21 @@ def main(argv):
         with tempfile.TemporaryDirectory(prefix=".tmp-open-", dir=ROOT) as directory:
             install = api_client(Path(directory), None)
             api = next(install)
-            t = time.perf_counter()
-            paths = seed(api)
-            print(f"seeded in {time.perf_counter() - t:.1f}s")
-            with api.app.state.store.read() as c:
-                c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                counts = {
-                    n: c.execute(f"SELECT count(*) FROM {n}").fetchone()[0]
-                    for n in ("conversations", "messages", "tasks", "question_marks", "thread_members", "attempts")
-                }
-            print(counts)
-            with contextlib.closing(api.app.state.store.connect()) as c:
-                c.execute("VACUUM INTO ?", (str(target / "hub.db"),))
-            install.close()
+            try:  # close the app even when seeding fails, or its threads keep the process alive
+                t = time.perf_counter()
+                paths = seed(api)
+                print(f"seeded in {time.perf_counter() - t:.1f}s")
+                with api.app.state.store.read() as c:
+                    c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    counts = {
+                        n: c.execute(f"SELECT count(*) FROM {n}").fetchone()[0]
+                        for n in ("conversations", "messages", "tasks", "question_marks", "thread_members", "attempts")
+                    }
+                print(counts)
+                with contextlib.closing(api.app.state.store.connect()) as c:
+                    c.execute("VACUUM INTO ?", (str(target / "hub.db"),))
+            finally:
+                install.close()
         (target / "paths.json").write_text(json.dumps(paths))
         return 0
     if mode == "measure":
