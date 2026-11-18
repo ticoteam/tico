@@ -746,7 +746,7 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
 /// A Connect's screen after the code went in, as one line for the runner's log: links, the typed code and anything
 /// token-shaped taken out (`redact`), the last 240 characters. A code that the CLI accepted but then stops on (a
 /// question, a choice, an error with no retry) shows here; before, the log went quiet between code_written and cancel.
-fn screen_digest(raw: &str, typed: &str) -> String {
+pub(crate) fn screen_digest(raw: &str, typed: &str) -> String {
     let mut text = plain(raw);
     if !typed.is_empty() {
         text = text.replace(typed, "");
