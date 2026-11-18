@@ -32,7 +32,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import hubdb as H, task_privacy
+from . import hubdb as H
 from .auth import validate_identity
 from .config import DEFAULT_COMPANY_NAME
 from .health import GITHUB_HEALTH, note_github_token
@@ -2397,9 +2397,6 @@ def install_github_app(app, settings, store):
                     ):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
-            if who.attempt_id and task_privacy.private_meeting_run(c, who.attempt_id):
-                # A private meeting's turn reads its repositories and pushes to none (task_privacy.PRIVATE_MEETING_WRITES).
-                grants = [{'full_name': g['full_name'], 'access': 'read'} for g in grants]
             if own_unused and not grants:
                 # Nothing on GitHub for this bot: no token, and no refusal for its computer to report every turn.
                 return {

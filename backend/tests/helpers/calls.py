@@ -141,7 +141,7 @@ def _restricted(api, prefix):
 
 
 def private_lanes_ready(api, machine, bot):
-    """A current runner that takes a private meeting's turns: a call is a private meeting (execution.PRIVATE_LANES)."""
+    """Advertise readiness with the older runner's private-lane capability."""
     return post(
         api,
         "runners/heartbeat",

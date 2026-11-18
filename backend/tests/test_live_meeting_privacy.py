@@ -346,17 +346,6 @@ def file_metadata_responses(api, token):
     return responses, existing["id"]
 
 
-def test_private_meeting_execution_cannot_publish_unversioned_file_metadata(live, derived):
-    _mid, attempt = derived
-    responses, fid = file_metadata_responses(live, attempt["token"])
-    assert {name: r.status_code for name, r in responses.items()} == {"link": 403, "edit": 403, "upload": 403}, {
-        name: (r.status_code, r.text) for name, r in responses.items()
-    }
-    public = get(live, "bots/ops/files")["files"]
-    assert next(row for row in public if row["id"] == fid)["title"] == "Public synthetic reference"
-    assert not any(row["title"] == "Synthetic meeting context" for row in public)
-
-
 def test_runner_control_write_guard_does_not_scan_execution_provenance(live, derived):
     _mid, attempt = derived
     statements = []
@@ -370,19 +359,8 @@ def test_runner_control_write_guard_does_not_scan_execution_provenance(live, der
     assert not statements, f"runner control guard performed {len(statements)} provenance queries"
 
 
-def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(live, derived):
+def test_private_meeting_reply_and_room_file_remain_readable_to_members(live, derived):
     mid, attempt = derived
-    responses = publication_responses(live, attempt["token"])
-    assert {name: r.status_code for name, r in responses.items()} == dict.fromkeys(responses, 403), {
-        name: (r.status_code, r.text) for name, r in responses.items()
-    }
-    with live.app.state.store.read() as c:
-        who = Identity("bot:ops", "bot", attempt_id=attempt["id"])
-        assert task_privacy.private_execution(c, who)
-        for recipient in ("human:ana", "bot:finance"):
-            with pytest.raises(Problem) as refused:
-                task_privacy.require_destination(c, who, recipient, None, {})
-            assert refused.value.code == "privacy"
     turn = attempt["message"]["refs"]["live_meeting"]["turn_id"]
     reply = post(
         live,
@@ -400,26 +378,9 @@ def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(li
     get(live, f"files/{fid}", expected=404)
 
 
-def test_private_meeting_execution_is_told_why_a_shared_write_is_refused_and_still_reads(live, derived):
-    mid, attempt = derived
-    writes = {
-        "docs": {"title": "Embargo", "body": "The press embargo lifts Nov 17."},
-        "pages": {},
-        "tasks": {"owner": "ops", "title": "Embargo"},
-        "messages": {"to": "finance", "text": "Embargo Nov 17"},
-    }
-    for path, body in writes.items():
-        r = live.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
-        assert r.status_code == 403 and r.json()["error"]["detail"] == task_privacy.PRIVATE_MEETING_REFUSAL, (
-            path,
-            r.text,
-        )
-    assert get(live, f"live-meetings/{mid}", token=attempt["token"])["id"] == mid
-    assert "files" in get(live, "bots/ops/files", token=attempt["token"])
-
-
-def test_team_meeting_execution_keeps_ordinary_publication(live):
-    mid = post(live, "live-meetings", {"title": "Synthetic team plan"}, token="ben-test")["id"]
+@pytest.mark.parametrize("visibility", ["private", "team"])
+def test_meeting_execution_can_use_its_normal_write_permissions(live, visibility):
+    mid = post(live, "live-meetings", {"title": "Synthetic plan", "visibility": visibility}, token="ben-test")["id"]
     attach(live, mid, "ops", token="ben-test")
     chunk(live, mid, 1, 0, 1000, "Ops, review this synthetic team plan", token="ben-test")
     machine = runner(live)
@@ -427,6 +388,13 @@ def test_team_meeting_execution_keeps_ordinary_publication(live):
     ready(live, machine, ["ops"])
     attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
     assert attempt["message"]["refs"]["live_meeting"]["meeting_id"] == mid
+    doc = post(
+        live,
+        "docs",
+        {"title": "Synthetic review", "body": "Schedule a reliability review."},
+        token=attempt["token"],
+    )["doc"]
+    assert get(live, f"docs/{doc['id']}")["doc"]["body"] == "Schedule a reliability review."
     responses = publication_responses(live, attempt["token"])
     assert {name: r.status_code for name, r in responses.items()} == dict.fromkeys(responses, 200), {
         name: (r.status_code, r.text) for name, r in responses.items()
@@ -468,40 +436,6 @@ def test_meeting_context_read_does_not_allow_unscoped_room_writes(live, visibili
     with live.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
     assert [m["id"] for m in get(live, f"conversations/{cid}/messages", token="ben-test")] == seen
-
-
-@pytest.mark.parametrize("surface", ["comment", "file_link"])
-def test_meeting_visibility_is_rechecked_under_the_write_lock(live, monkeypatch, surface):
-    mid = post(live, "live-meetings", {"title": "Synthetic transition during request"}, token="ben-test")["id"]
-    attach(live, mid, "ops", token="ben-test")
-    chunk(live, mid, 1, 0, 1000, "Ops, review this synthetic plan", token="ben-test")
-    machine = runner(live)
-    assign(live, machine, "ops")
-    ready(live, machine, ["ops"])
-    attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
-    task = post(
-        live,
-        "tasks",
-        {"owner": "ops", "title": "Review synthetic team plan", "body": "Check the synthetic plan.", "private": False},
-    )
-    store = live.app.state.store
-    write = store.mutate
-    path = f"/api/v2/tasks/{task['id']}/comments" if surface == "comment" else "/api/v2/files/links"
-    body = (
-        {"text": "Synthetic scoped context"}
-        if surface == "comment"
-        else {"url": "https://acme.example/synthetic-context", "title": "Synthetic scoped context", "task": task["id"]}
-    )
-
-    def narrowed_before_write(identity, operation, key, body, fn, check=None):
-        if operation == path:
-            with store.transaction() as c:
-                c.execute("UPDATE live_meetings SET visibility='private' WHERE id=?", (mid,))
-        return write(identity, operation, key, body, fn, check=check)
-
-    monkeypatch.setattr(store, "mutate", narrowed_before_write)
-    response = live.post(path, json=body, headers=headers(attempt["token"]))
-    assert response.status_code == 403, response.text
 
 
 def delegated_connect(api, attempt, body, key):

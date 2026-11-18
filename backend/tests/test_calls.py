@@ -9,7 +9,7 @@ import pytest
 from backend import audit_log, call_items, call_media, calls, events, live_privacy, teammate_access, threads
 from backend.auth import Identity
 from backend.store import H, Problem
-from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
 from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
 from backend.tests.helpers.visuals import task_with_file
@@ -54,6 +54,39 @@ def drafted(items):
     """The Gateway's chat answer when the model drafts these action items."""
     content = json.dumps({"items": items})
     return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+
+def test_a_private_call_turn_can_create_a_task_and_post_to_its_thread(meet):
+    cid = post(
+        meet,
+        "threads",
+        {"title": "Reliability review", "audience": "members", "members": ["human:ben", "bot:ops"]},
+    )["id"]
+    call = start_call(meet, cid, speak_replies=False)
+    join(meet, call["id"])
+    post(meet, f"calls/{call['id']}/bots", {"bots": ["ops"]})
+    mid = call["meeting_id"]
+    assert get(meet, f"live-meetings/{mid}")["visibility"] == "private"
+    post(meet, f"live-meetings/{mid}/chat", {"text": "Ops, file a task for the reliability review."})
+    machine = runner(meet)
+    assign(meet, machine, "ops")
+    ready(meet, machine, ["ops"], ["task_lanes_v2"])
+    attempt = post(meet, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert attempt["message"]["refs"]["live_meeting"]["meeting_id"] == mid
+    assert attempt["lane"] == "main"
+    post(meet, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-call-turn"}, token=machine["token"])
+
+    task = post(
+        meet,
+        "tasks",
+        {"owner": "ops", "title": "Book the reliability review", "private": False},
+        token=attempt["token"],
+    )
+    assert get(meet, f"tasks/{task['id']}", token="cara-test")["task"]["title"] == "Book the reliability review"
+    post(meet, f"threads/{cid}/messages", {"text": "The review is on my list."}, token=attempt["token"])
+    assert "The review is on my list." in thread_texts(meet, cid, token="ben-test")
+    get(meet, f"live-meetings/{mid}", token="cara-test", expected=404)
+    get(meet, f"conversations/{cid}/messages", token="cara-test", expected=404)
 
 
 def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_and_the_action_items(

@@ -282,7 +282,7 @@ pub struct Settings {
     pub require_existing_session: bool,
     /// Where Claude Code keeps its auto memory for this turn: `memory/claude/` in the turn's checkout of the bot's
     /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
-    /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).
+    /// None keeps auto memory off for a stateless bot or a turn outside a durable checkout.
     pub memory_dir: Option<String>,
     /// The bot's Claude Code output style (`output_style` in its config: Concise, Explanatory, Learning, Proactive),
     /// given to Claude as `outputStyle` in the turn's one `--settings`. None is Claude Code's own Default; every other

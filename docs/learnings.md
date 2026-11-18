@@ -17,8 +17,8 @@ heading says rules), then the newest entries: sections by the date in their head
 What a bot remembers between turns is its repository's `memory/`, which you read here and can edit. A bot may
 read `memory/learnings.md` and `memory/decisions.md` when its work needs them; it saves a working rule it is given at
 the top of `memory/learnings.md` and other learnings at the top of the log. Nothing steers a bot from outside its repository: Claude Code's
-auto memory is kept in the repository's `memory/claude/` (`autoMemoryDirectory`, set by the runner; a stateless bot or a
-private meeting's copy keeps none, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`), and the runner turns off Codex's memories
+auto memory is kept in the repository's `memory/claude/` (`autoMemoryDirectory`, set by the runner; a stateless bot or
+a turn in a disposable checkout keeps none, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`). The runner turns off Codex's memories
 (`features.memories = false` on every thread) and the Gemini CLI's `save_memory` tool; a GEMINI.md the CLI saved
 before is set aside before each turn, so no turn loads it.
 

@@ -1372,11 +1372,6 @@ class Files:
             raise Problem("validation", "scope is task or bot", 422)
         if who.role == "runner":
             task, wanted = "", ""  # what the runner publishes stays where the turn ran
-        if attempt and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt)):
-            # Reusing unchanged bytes must not retitle an older, wider-scoped file version.
-            if task or wanted == "bot" or not conversation:
-                raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
-            return "conversation:" + conversation, None, conversation, attempt
         if task:
             acting = (
                 who if who.role == "bot" else Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=attempt)
@@ -2021,13 +2016,7 @@ class Files:
                 )
                 attempt = who.attempt_id
                 if who.role in ("bot", "runner"):
-                    turn_conversation, _, attempt = self.write_turn(c, who, bot, fields)
-                    if (
-                        attempt
-                        and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt))
-                        and (not turn_conversation or scope != "conversation:" + turn_conversation)
-                    ):
-                        raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
+                    _, _, attempt = self.write_turn(c, who, bot, fields)
             elif human_page:
                 task = linked_task or None
                 scope, conversation, attempt = ("task:" + task if task else "bot"), None, ""

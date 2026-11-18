@@ -1373,62 +1373,22 @@ def test_a_chunk_that_arrives_after_its_window_closed_is_routed_once_by_the_next
     assert later == []
 
 
-def test_only_a_private_meetings_turn_tells_the_bot_it_cannot_save_or_share_it(live):
+@pytest.mark.parametrize("visibility", ["private", "team"])
+def test_meeting_turn_runs_in_the_normal_lane_with_its_own_history(live, visibility):
     machine = runner(live)
     assign(live, machine, "ops")
-    ready(live, machine, ["ops"])
-    prompts = {}
-    for visibility in ("private", "team"):
-        meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
-        attach(live, meeting["id"], "ops")
-        chunk(live, meeting["id"], 1, 0, 1000, "Ops, remember the word Tangerine")
-        attempt = claimed_turn(live, machine)
-        prompts[visibility] = attempt["message"]["body"]
-        post(
-            live,
-            f"attempts/{attempt['id']}/complete",
-            {"outcome": "completed", "text": "Noted.", "last_seq": 0},
-            token=machine["token"],
-        )
-    rule = "This meeting is private: you cannot save or share anything from it"
-    assert rule in prompts["private"] and rule not in prompts["team"]
-    assert "the meeting's owner can share its notes and action items after the meeting" in prompts["private"]
+    ready(live, machine, ["ops"], ["task_lanes_v2"])
+    meeting = post(live, "live-meetings", {"title": "Planning", "visibility": visibility, "cooldown_seconds": 0})
+    attach(live, meeting["id"], "ops")
+    chunk(live, meeting["id"], 1, 0, 1000, "Ops, can you track the review action items?")
+    attempt = claimed_turn(live, machine)
+    assert attempt["lane"] == "main"
+    assert attempt["config"]["session"] == "task"
+    assert attempt["message"]["id"] in [message["id"] for message in attempt["history"]]
 
 
-def test_a_private_meetings_turns_run_in_its_own_lane_whose_checkout_goes_when_it_ends(live):
-    """The runner keeps a private meeting's checkout apart from the bot's (runner-rs/src/sessions.rs, private lanes):
-    the server hands its turns that lane and says when the meeting ended. A team meeting's turns stay in the main lane."""
-    machine = runner(live)
-    assign(live, machine, "ops")
-    ready(live, machine, ["ops"], ["task_lanes_v2", "private_lanes_v1"])
-    turns = {}
-    for visibility in ("private", "team"):
-        meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
-        attach(live, meeting["id"], "ops")
-        chunk(live, meeting["id"], 1, 0, 1000, "Ops, the press embargo lifts Nov 17 9am PT. Got it?")
-        attempt = claimed_turn(live, machine)
-        turns[visibility] = (meeting["id"], attempt)
-        assert attempt["message"]["body"] in [m["body"] for m in attempt["history"]], "its own lane reads its room"
-        post(
-            live,
-            f"attempts/{attempt['id']}/complete",
-            {"outcome": "completed", "text": "Got it.", "last_seq": 0},
-            token=machine["token"],
-        )
-    mid, attempt = turns["private"]
-    conv = attempt["conversation"]["id"]
-    assert (attempt["lane"], turns["team"][1]["lane"]) == ("private:" + conv, "main")
-    mine = {"bot": "ops", "task": "private-" + conv}
-    sessions = [mine, {"bot": "ops", "task": "private-" + turns["team"][1]["conversation"]["id"]}]
-    asked = lambda: post(live, "runners/me/session-tasks", {"sessions": sessions}, token=machine["token"])["sessions"]
-    assert asked() == [{**mine, "status": "open"}]
-    post(live, f"live-meetings/{mid}/control", {"action": "end"})
-    assert asked() == [{**mine, "status": "done"}]
-
-
-def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says_why_once(live):
-    """runner-rs sessions::PRIVATE_COPY_FAILED: a computer that can make no private copy of the bot's repository would
-    fail every retry alike, so the turn ends, the job is not resumed, and the meeting gets one plain notice."""
+def test_an_attempt_on_the_retired_meeting_lane_can_finish_and_its_checkout_can_be_swept(live):
+    """An attempt leased before a hub upgrade can still report an old checkout failure and sweep its worktree."""
     machine = runner(live)
     assign(live, machine, "ops")
     ready(live, machine, ["ops"])
@@ -1439,6 +1399,12 @@ def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says
     def fails(text):
         chunk(live, mid, len(get(live, f"live-meetings/{mid}")["router"]["turns"]) + 1, 0, 1000, text)
         attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+        # Persisted attempts keep the lane they received before the hub upgrade.
+        with live.app.state.store.transaction() as c:
+            c.execute(
+                "UPDATE attempts SET lane=? WHERE id=?",
+                ("private:" + attempt["conversation"]["id"], attempt["id"]),
+            )
         error = (
             "A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, "
             "and none could be made here (could not add the task's worktree: fatal: invalid reference)"
@@ -1489,6 +1455,15 @@ def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says
             "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository",
         )
     ], "said once"
+    mine = {"bot": "ops", "task": "private-" + first["conversation"]["id"]}
+    sessions = {"sessions": [mine]}
+    assert post(live, "runners/me/session-tasks", sessions, token=machine["token"])["sessions"] == [
+        {**mine, "status": "open"}
+    ]
+    post(live, f"live-meetings/{mid}/control", {"action": "end"})
+    assert post(live, "runners/me/session-tasks", sessions, token=machine["token"])["sessions"] == [
+        {**mine, "status": "done"}
+    ]
 
 
 def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkeypatch):
