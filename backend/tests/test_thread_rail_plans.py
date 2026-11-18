@@ -1,7 +1,8 @@
 """The rail's slow statements, rewritten to start from the rows they can return, answer as the SQL they replace did.
 
-The old SQL stays here as the oracle: readable_sql's legacy term with a task room's participants read first, the rail's
-two title lists over every open root with the finished-task check first, and Catch up's walk with that check first.
+The old SQL stays here as the oracle: readable_sql built whole for each statement with a task room's participants read
+first, the rail's two title lists over every open root with the finished-task check first, and Catch up's walk with
+that check first and every finished task's root tested row by row.
 Each reader's rail (every page), Catch up and readable set are compared whole. Fictional people only: ana (owner), ben
 (bot admin) and cara."""
 
@@ -48,9 +49,10 @@ def old_rail_lists(c, v, marks):
 
 
 def old_walk_where(c, v, rest, args):
-    """Catch up's walk as it was: the finished-task check first, the reader's membership before something new."""
-    old = [rest[0], rest[2], rest[1], rest[3]]
-    return [thread_rail.root_open(c, v, " AND ".join(old), args), *old], "1"
+    """Catch up's walk as it was: the finished-task check first, readable built whole, the reader's membership before
+    something new, and no pass over finished tasks' roots on lists."""
+    old = [threads.readable_sql(c, v, "r"), rest[2], rest[0], rest[3]]
+    return [thread_rail.root_open(c, v, " AND ".join(old), args), *old], "1", {}
 
 
 def _root(c, task_id):
@@ -127,9 +129,9 @@ def test_the_open_thread_index_holds_exactly_the_rows_its_terms_name(api):
 
 
 def test_readable_sql_reads_task_rooms_as_before(api):
-    """readable_sql tests a legacy task room before its scope and participants, and every reader reads the same rows
-    as with the old order: legacy rooms of each scope, with and without a task (one private to ana), the reader among
-    the participants or not, unreadable participants, and sub-threads under each."""
+    """readable_sql tests a legacy task room before its scope and participants, built whole or row by row (per_row),
+    and every reader reads the same rows as with the old SQL: legacy rooms of each scope, with and without a task (one
+    private to ana), the reader among the participants or not, unreadable participants, and sub-threads under each."""
     _seed(api)
     with api.app.state.store.transaction() as c:
         public = H.task_create(c, "human:ana", "Public", "", "human:ben", lint=False)["id"]
@@ -163,6 +165,11 @@ def test_readable_sql_reads_task_rooms_as_before(api):
                 want = {r[0] for r in c.execute(f"SELECT id FROM {table} WHERE {old}")}
                 assert got == want, (actor, alias, got ^ want)
                 assert 0 < len(got) < total, (actor, len(got))
+                if alias:
+                    rows = threads.readable_sql(c, v, alias, per_row=True)
+                    assert ("rd.id=COALESCE" in rows) == (actor != "bot:ops"), rows[:200]
+                    each = {r[0] for r in c.execute(f"SELECT id FROM {table} WHERE {rows}")}
+                    assert each == want, (actor, "per_row", each ^ want)
 
 
 def test_the_rail_and_catch_up_answer_as_the_old_sql(api, monkeypatch):
@@ -173,7 +180,9 @@ def test_the_rail_and_catch_up_answer_as_the_old_sql(api, monkeypatch):
     paths = ("threads/rail", "threads/catch-up")
     new = {(p, t): _pages(api, t, p) for p in paths for t in READERS.values()}
     real = threads.readable_sql
-    monkeypatch.setattr(threads, "readable_sql", lambda *a, **kw: old_readable_sql(real(*a, **kw)))
+    monkeypatch.setattr(
+        threads, "readable_sql", lambda *a, **kw: old_readable_sql(real(*a, **{**kw, "per_row": False}))
+    )
     monkeypatch.setattr(thread_rail, "_rail_lists", old_rail_lists)
     monkeypatch.setattr(thread_rail, "_walk_where", old_walk_where)
     for (path, token), pages in new.items():
@@ -203,3 +212,7 @@ def test_the_rails_lists_read_the_open_thread_index_in_title_order(api):
             plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, {"me": v.actor, **extra})]
             assert any(re.search(r"\bSCAN r USING INDEX conversations_open_thread_titles\b", p) for p in plan), plan
             assert not any("TEMP B-TREE FOR ORDER BY" in p for p in plan), plan
+            # Each row's root and task by id: no statement-long list of every readable root or task.
+            assert not [
+                p for p in plan if re.match(r"SCAN (r|rd|rt|t|tasks|conversations)\b(?! USING INDEX conv)", p)
+            ], plan

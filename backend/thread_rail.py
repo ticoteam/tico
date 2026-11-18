@@ -96,11 +96,12 @@ def root_open(c, v, within=None, args=None):
     return f"{OPEN_ROOT} AND {task_open(c, v, within, args)}"
 
 
-def task_open(c, v, within=None, args=None, source="conversations r"):
+def task_open(c, v, within=None, args=None, source="conversations r", per_row=False):
     """root_open's task half alone (`within` and `args` as there; `source` the FROM its revival check reads), for a
-    query that puts it after its cheaper terms: SQLite tests a WHERE's correlated subqueries in the order written."""
+    query that puts it after its cheaper terms: SQLite tests a WHERE's correlated subqueries in the order written.
+    `per_row`: T.task_open_sql's, for a query that reaches the check for few rows."""
     revived = T.revived_roots(c, v) if within is None else T.revived_within(c, v, within, args, source=source)
-    return T.task_open_sql(c, v, "r", revived)
+    return T.task_open_sql(c, v, "r", revived, per_row=per_row)
 
 
 ACTIVITY = (
@@ -327,9 +328,9 @@ def _rail_lists(c, v, marks):
     reader reads, pinned for them or (Threads) not pinned and theirs (`marks`: their member names). Both read the
     open-thread index (_RAIL_KIND admits only its audiences, so its terms change no answer) and test the finished-task
     check last, after every cheaper term."""
-    readable = T.readable_sql(c, v, "r")
+    readable = T.readable_sql(c, v, "r", per_row=True)  # the index's few hundred rows, each looked up by id
     base = [OPEN_THREADS, _RAIL_KIND, readable]
-    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM)
+    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM, per_row=True)
     return (
         OPEN_THREADS_FROM,
         " AND ".join([*base, PINNED_SQL, open_task]),
@@ -893,17 +894,19 @@ def _walk(c, v, flags, after=None):
     is_mention = "r.id IN (SELECT value FROM json_each(:mentions))"
     audience = _audience()
     # Cheapest first, as SQLite tests a WHERE's correlated subqueries in the order written: something new (an index
-    # seek or two) before the reader being in the root (its members, followers and participants).
+    # seek or two), then readable (each root looked up by id), then the reader being in the root (its members,
+    # followers and participants).
     rest = [
-        T.readable_sql(c, v, "r"),
         f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
+        T.readable_sql(c, v, "r", per_row=True),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
         # A muted root shows only for a mention.
         f"({is_mention} OR NOT EXISTS (SELECT 1 FROM thread_followers mf WHERE mf.thread_id=r.id "
         "AND mf.actor=:me AND mf.notify='muted'))",
     ]
-    where, open_task = _walk_where(c, v, rest, args)
+    where, open_task, more = _walk_where(c, v, rest, args)
+    args.update(more)
     scanned = int(after[3]) if after else 0
     left = [CATCH_UP_HIDDEN]
     for rank, phase in ((0, is_mention), (1, f"NOT {is_mention}")):
@@ -961,10 +964,21 @@ def _walk(c, v, flags, after=None):
 
 
 def _walk_where(c, v, rest, args):
-    """(the walk's WHERE terms, its finished-task check): open roots that pass `rest`, the check to be tested last, after
-    every cheaper term. Only the finished-task roots this walk could list have their posts checked: the reader's, with
-    something new."""
-    return [OPEN_ROOT, *rest], task_open(c, v, " AND ".join(rest), args)
+    """(the walk's WHERE terms, its finished-task check, their args): open roots that pass `rest`, the check to be
+    tested last, after every cheaper term. Only the finished-task roots this walk could list have their posts checked:
+    the reader's, with something new (T.revival_scope, one read of every finished task's root). The batches then pass
+    over every other finished-task root by its task's status, before any other per-row term: most of a company's roots
+    are finished tasks', and only those `rest` admits could be listed."""
+    roots, revived = T.revival_scope(c, v, " AND ".join(rest), args)
+    finished = (
+        "(r.task_id IS NULL OR r.id IN (SELECT value FROM json_each(:finished_in_scope)) OR NOT EXISTS (SELECT 1 "
+        f"FROM tasks ft WHERE ft.id=r.task_id AND ft.status IN ({T.FINISHED_TASKS})))"
+    )
+    return (
+        [OPEN_ROOT, finished, *rest],
+        T.task_open_sql(c, v, "r", revived, per_row=True),
+        {"finished_in_scope": json.dumps(sorted(roots))},
+    )
 
 
 def _is_bot_home(row, v):
