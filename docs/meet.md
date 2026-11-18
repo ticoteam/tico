@@ -195,6 +195,11 @@ Tico Meet.
 **Calling a bot.** The call button in a DM with one bot, and Call on a bot's card in the org chart, start a Tico Meet
 call in the viewer's DM with that bot, with the bot in it, and join it.
 
+**Call now.** The Meetings page's **Call now** (only where the server runs Tico Meet, `features.tico_meet` in the config)
+picks people and bots and starts a Tico Meet call with the bots in it: in the viewer's DM when one teammate is picked,
+else in a new thread with them all, named for the call's title or, without one, for who is in it. Its meeting window
+opens and joins it.
+
 **Who answers.** In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that
 bot) the bot answers every utterance. In any other voice call, a group DM with two people and a bot among them, only a
 bot whose name was said answers; the router's other windows and its decisions on chat do not run in a voice call. A

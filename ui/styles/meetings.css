@@ -71,6 +71,12 @@
 /* The page's header is the one page header (ui/app/page-head.ts, hook .notes-head); only its own pieces are styled here. */
 #meet-live-now{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 #meet-live-now .pill{line-height:16px}   /* the Beta pill sits inside without growing the button */
+/* Call now beside Add notes: the phone mark and the verb; on a phone the mark alone, a square the row's height. */
+#meet-call-now{display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:var(--ctl);white-space:nowrap}
+@media (max-width:760px){#meet-call-now{justify-content:center;width:var(--ctl);padding:0}#meet-call-now>span{display:none}}
+.meet-call-who{display:flex;flex-wrap:wrap;gap:6px}
+.meet-call-who:empty{display:none}
+.meet-call-dialog input[name=title]{box-sizing:border-box;width:100%}
 .ph #notes-search{width:240px;flex:0 1 240px}
 /* Sources in the ⋯ menu carries a dot when a source needs a look; the closed ⋯ carries it too. */
 .ph-more.meet-src-trouble{position:relative}

@@ -96,7 +96,8 @@ async function pageNotes(): Promise<void> {
       + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
       + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
     more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
-    primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
+    primary: (meetCallable() ? `<button class="ghost" type="button" id="meet-call-now" aria-label="Call now" title="Call now">${CALL_SVG}<span>Call now</span></button>` : '')
+      + '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
@@ -118,6 +119,8 @@ async function pageNotes(): Promise<void> {
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
   $('#meet-live-now').onclick = () => pageLiveMeetings();
+  const callNow = document.getElementById('meet-call-now');
+  if (callNow) callNow.onclick = () => meetCallNow();
   const dialog: HTMLDialogElement = $('#notes-modal');
   const closeNote = () => meetShow(state, false);
   $('#notes-modal-close').onclick = closeNote;
@@ -156,6 +159,34 @@ async function pageNotes(): Promise<void> {
   // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
   state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
+}
+
+// Call now is there only where this server runs Tico Meet: the meeting window and calls with bots are Tico Meet's.
+const meetCallable = (): boolean => (S.config.features as {tico_meet?: boolean} | undefined)?.tico_meet === true;
+// Call now: the people and bots to call, picked in the who picker, and an optional title; Start makes the call
+// (thread-call.ts callTeammates), which opens its meeting window, and a refusal shows here.
+function meetCallNow(): void {
+  const chosen: string[] = [];
+  const dialog = whDialog('Call now', `${whoPickerHTML({placeholder: 'Add a person or bot'})}<div class="meet-call-who" data-call-who></div>
+    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title">`, '<button type="submit" class="primary" disabled>Start</button>');
+  dialog.classList.add('meet-call-dialog');
+  const who = dialog.querySelector<HTMLElement>('[data-call-who]'), start = dialog.querySelector<HTMLButtonElement>('[type=submit]');
+  const teammates = () => threadAddable({groups: false});
+  const name = (a: string) => teammates().find(t => t.actor === a)?.label || actorName(a);
+  const paint = () => {
+    if (who) who.innerHTML = chosen.map(a => `<span class="nm-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(name(a))}</span><button type="button" data-remove aria-label="Remove ${esc(name(a))}">×</button></span>`).join('');
+    if (start) start.disabled = !chosen.length;
+  };
+  const picker = whoPickerWire(dialog, {
+    candidates: () => teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
+      email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)})),
+    onPick: c => { chosen.push(c.subject); paint(); }});
+  if (who) who.onclick = ev => {
+    const actor = eventElement(ev)?.closest('[data-remove]')?.closest<HTMLElement>('[data-actor]')?.dataset['actor'];
+    if (!actor) return;
+    chosen.splice(chosen.indexOf(actor), 1); paint(); picker?.refresh(); picker?.input.focus();
+  };
+  whSubmit(dialog, async data => { if (await callTeammates([...chosen], String(data.get('title') || '').trim())) dialog.close(); });
 }
 
 function meetReviewTabs(state: MeetState): void {

@@ -6,7 +6,7 @@
 // ends, Join opening the Meet) and on a phone the sheet at 390px, and a push link's `?call=` showing it without a sound;
 // Start and Join opening a blank tab in the click before any request (so a pop-up blocker lets it through), even when
 // the server did not say what it starts, sending it to the call's meeting window on a Tico Meet answer and closing it
-// on a failure.
+// on a failure; the Meetings page's Call now, there only with Tico Meet, calling a bot in its DM and opening the window.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots: meet-calls-<name>-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -475,6 +475,71 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/thread/t-dm');
     await page.locator('.thv-head .thv-call[data-call="start"]').waitFor();
     await page.waitForFunction(() => callTicoMeet());
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+
+  // ---- the Meetings page's Call now: there with Tico Meet, Start with the Ops bot opens a new Tico Meet call's window,
+  // and gone where the server has no Tico Meet
+  for (const phone of [false, true]) {
+    const {context, page, seen, mode} = await open(browser, {phone});
+    const config = {features: {tico_meet: true}};
+    const dm = {id: 't-dm', title: 'Ops', audience: 'personal', audience_group_id: null, dm_with: [{actor: 'bot:ops'}], dm_with_count: 1, last_seq: 0,
+      last_message_at: at(60), me: me(), members: [], live_call: null};
+    const dms: string[] = [];
+    const mine = new Set(['/api/me', '/api/employees', '/api/v2/meetings', '/api/meetings/sources', '/api/v2/threads/dm']);
+    await page.route(u => u.hostname === 'tico-ui.test' && mine.has(u.pathname), route => {
+      const url = new URL(route.request().url()), json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      if (url.pathname === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true, config});
+      if (url.pathname === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_chat: true, schedules: []}]);
+      if (url.pathname === '/api/v2/meetings') return json({meetings: [], pending_count: 0});
+      if (url.pathname === '/api/meetings/sources') return json({sources: []});
+      dms.push(url.searchParams.get('with') || '');
+      return json(dm);
+    });
+    await page.goto('https://tico-ui.test/#/meetings');
+    const call = page.locator('.ph #meet-call-now');
+    await call.waitFor();
+    assert.ok(await call.evaluate(b => !!b.nextElementSibling?.matches('#notes-manual')), 'beside Add notes');
+    assert.equal(await sideways(page), phone ? 390 : 1280, 'nothing sideways');
+    await themed(page, 'call-now-button', phone);
+    await call.click();
+    const dialog = page.locator('dialog.meet-call-dialog');
+    const start = dialog.locator('button[type="submit"]');
+    assert.ok(await start.isDisabled(), 'Start waits for someone to call');
+    assert.equal(await dialog.locator('input[name="title"]').inputValue(), '');
+    await dialog.locator('.who-pick-q').click();
+    const ops = page.locator('.who-pick-list [role="option"][data-who="bot:ops"]');
+    await ops.waitFor();
+    await themed(page, 'call-now-pick', phone);
+    await ops.click();
+    await dialog.locator('.nm-chip[data-actor="bot:ops"]').waitFor();
+    await themed(page, 'call-now-dialog', phone);
+    mode.start = 'tico';
+    await page.evaluate(() => { window.__order = []; });
+    if (phone) {
+      // A phone's meeting is this tab: it goes to the call's page, joined.
+      await start.click();
+      await page.waitForURL(u => u.hash === '#/call/ct?join=1');
+    } else {
+      const opened = context.waitForEvent('page');
+      await start.click();
+      const tab = await opened;
+      await tab.waitForURL(u => u.hash === '#/call/ct?join=1', {waitUntil: 'commit'});
+      assert.equal(await tab.evaluate(() => window.name), 'tico-call-ct');
+      // The tab opened in the click, before any write, so a pop-up blocker lets it through.
+      assert.deepEqual(await page.evaluate(() => window.__order), ['open ', 'POST /api/v2/threads/t-dm/calls']);
+      await tab.close();
+    }
+    await dialog.waitFor({state: 'detached'});
+    assert.deepEqual(dms, ['bot:ops'], 'one bot is its DM');
+    assert.deepEqual(seen.starts, [{provider: 'tico', bots: ['ops']}]);
+    // No Tico Meet on this server: no Call now.
+    config.features.tico_meet = false; mode.ticoMeet = false;
+    await page.goto('https://tico-ui.test/#/meetings');
+    await page.reload();
+    await page.locator('.ph #notes-manual').waitFor();
+    assert.equal(await page.locator('#meet-call-now').count(), 0, 'no Call now without Tico Meet');
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

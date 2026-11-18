@@ -299,6 +299,47 @@ async function callBot(slug: string): Promise<void> {
     CALL_JOINS--;
   }
 }
+// Call teammates from anywhere (the Meetings page's Call now): one teammate is the viewer's DM with them (made when there
+// is none), more are a new thread with them all, named for the call's title, else for who is in it (a group needs a
+// name). A Tico Meet call starts there with the bots among them, and its meeting window opens and joins it, as the
+// header's Start does: the blank tab opens now, in the click, before anything is awaited. A live call already in that
+// DM is joined instead. Resolves to whether a call opened; a refusal is thrown for the caller to show.
+async function callTeammates(actors: string[], title = ''): Promise<boolean> {
+  const bots = actors.filter(a => a.startsWith('bot:')).map(a => a.slice(4));
+  let tab = callPhone() ? null : callTabOpen();
+  const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
+  const gen = ++CALL_GEN;
+  CALL_JOINS++;
+  try {
+    const r: (ThreadRow & {thread?: ThreadRow}) | null = actors.length === 1
+      ? await get('/v2/threads/dm?with=' + encodeURIComponent(actors[0]!), {fresh: true})
+      : await post('/v2/threads', {title: title || actors.map(a => actorName(a)).join(', ').slice(0, 200), audience: 'members', members: actors});
+    const t = r?.thread || r;
+    if (!t?.id || gen !== CALL_GEN) return false;
+    threadsPut(t);
+    let call: CallRecord | null | undefined, started = false;
+    try {
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`,
+        {provider: 'tico', ...(bots.length ? {bots} : {}), ...(title ? {title} : {})});
+      call = made?.call || made; started = true;
+    } catch (e) {
+      if (callCode(e) !== 'call_in_progress') throw e;
+      const list = await get<CallListReply>(`/v2/threads/${encodeURIComponent(t.id)}/calls?limit=1`, {fresh: true});
+      call = (list.calls || []).find(c => c.state === 'live');
+    }
+    if (!call?.id) return false;
+    if (call.provider === 'google_meet') { tabClose(); await callMeetJoin(call); return true; }
+    // Hidden or overtaken while the call was being made: the seat the start took goes back.
+    if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return false; }
+    const opened = tab; tab = null;
+    if (callWindowOpen(call, opened)) { callViewKeep(call); return true; }
+    await callJoin(t.id, call, threadTitle(t), gen);
+    return true;
+  } finally {
+    tabClose();
+    CALL_JOINS--;
+  }
+}
 
 // ----------------------------------------------------------------- in a call: ui/app/thread-call-live.ts, the thread-call-live page part
 
