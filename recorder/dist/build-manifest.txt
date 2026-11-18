@@ -1,0 +1,15 @@
+# Written by recorder/build-ui.cjs; build.rs checks dist/app against it. FNV-1a 64 hashes; paths from recorder/.
+esbuild	0.28.2
+input	build-ui.cjs	8e7ed7b2418dc046
+input	../package.json	b493967752c21940
+input	../package-lock.json	01708408be8c5767
+file	ui/app/app.css	3f94467c0c092992	dist/app/app.css	3f94467c0c092992
+file	ui/app/app.ts	fbc9c14590c8e994	dist/app/app.js	013c043754da94dc
+file	ui/app/fonts/LICENSE-inter.txt	843005b95ddabac7	dist/app/fonts/LICENSE-inter.txt	843005b95ddabac7
+file	ui/app/fonts/inter-variable.woff2	1200ea24f1ff80ee	dist/app/fonts/inter-variable.woff2	1200ea24f1ff80ee
+file	ui/app/icons.ts	44804b01350309f6	dist/app/icons.js	9a89716fd534f706
+file	ui/app/index.html	1a13fb49f3a131c3	dist/app/index.html	1a13fb49f3a131c3
+file	ui/app/update.css	6062106ee9263411	dist/app/update.css	6062106ee9263411
+file	ui/app/update.ts	35f7764d1adc6c93	dist/app/update.js	e59856e3e6770b54
+file	ui/preview/index.html	847afe927ffdd018	dist/preview/index.html	847afe927ffdd018
+file	ui/preview/mock.ts	c04d179ea5f2a0c8	dist/preview/mock.js	81efd90ce63a18c7
