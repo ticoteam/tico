@@ -154,16 +154,34 @@ def list(c, mailbox, q="", page_token="", limit=50):
     return _bounded({"messages": messages, "next_cursor": nxt, "q": q}, PAGE_MAX_BYTES)
 
 
+def _parts_mask(depth):
+    inner = "," + _parts_mask(depth - 1) if depth > 1 else ""
+    return "parts(mimeType,filename,body/size" + inner + ")"
+
+
+# A list row reads the parts tree without any part's bytes: format=metadata leaves out `parts`, so every row said it
+# had no attachment (a sent email with its PDF listed has_attachment false). Six levels hold mixed > related >
+# alternative and a forwarded message inside.
+LIST_FIELDS = (
+    "id,threadId,labelIds,snippet,internalDate,payload(mimeType,filename,headers,body/size," + _parts_mask(6) + ")"
+)
+LIST_HEADERS = frozenset(name.lower() for name in METADATA_HEADERS)
+
+
+def _listed(raw):
+    """One message read with LIST_FIELDS, its headers cut to the ones a metadata read gives."""
+    payload = raw.get("payload") if isinstance(raw, dict) else None
+    if isinstance(payload, dict) and isinstance(payload.get("headers"), builtins.list):
+        payload["headers"] = [
+            h for h in payload["headers"] if isinstance(h, dict) and str(h.get("name", "")).lower() in LIST_HEADERS
+        ]
+    return _message(raw)
+
+
 def _metadata(mailbox, token, ids):
     def one(mid):
-        return _message(
-            _get(
-                mailbox,
-                "messages/" + urllib.parse.quote(mid, safe=""),
-                token,
-                format="metadata",
-                metadataHeaders=METADATA_HEADERS,
-            )
+        return _listed(
+            _get(mailbox, "messages/" + urllib.parse.quote(mid, safe=""), token, format="full", fields=LIST_FIELDS)
         )
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:

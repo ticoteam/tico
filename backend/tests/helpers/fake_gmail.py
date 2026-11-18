@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import pytest
 
 from backend import gmail_live, gmail_watch, google_tokens, mail_facts, messaging
+from backend.tests.helpers.gmail_live import masked
 
 CURRENT = {}  # the fixture's fake, for put_mail
 REAL_TOKEN = google_tokens.token  # for a test that fakes the key behind the door instead
@@ -290,7 +291,9 @@ class FakeGmail:
                 data = box["raws"].get(raw["id"]) or b"From: " + self._header(raw, "from").encode() + b"\r\n\r\nHello"
                 return 200, {"id": raw["id"], "raw": base64.urlsafe_b64encode(data).decode()}
             raw = copy.deepcopy(raw)
-            if query.get("format") == ["metadata"]:
+            if "fields" in query:
+                masked(raw)
+            elif query.get("format") == ["metadata"]:  # Gmail's metadata read has no parts tree
                 raw["payload"].pop("parts", None)
             return 200, raw
         raise AssertionError("the fake Gmail has no route for " + path + " " + json.dumps(query))
