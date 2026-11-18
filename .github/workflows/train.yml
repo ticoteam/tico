@@ -69,7 +69,7 @@ jobs:
             scripts/release_notes.py
             scripts/release_increment.py
             scripts/pr_checks.py
-            scripts/flake_quarantine.py
+            scripts/flake_detect.py
             templates/catalog/release-notes-writer/software/rollout.py
           sparse-checkout-cone-mode: false
       - name: Wait for the validation run to finish
@@ -191,7 +191,7 @@ jobs:
             scripts/release_notes.py
             scripts/release_increment.py
             scripts/pr_checks.py
-            scripts/flake_quarantine.py
+            scripts/flake_detect.py
             templates/catalog/release-notes-writer/software/rollout.py
           sparse-checkout-cone-mode: false
       # With no artifact (the shots job ended before it uploaded), the download fails and the issue says the pictures

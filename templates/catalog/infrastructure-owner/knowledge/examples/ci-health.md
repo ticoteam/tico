@@ -16,7 +16,7 @@ Nothing was rerun, canceled or changed. First draft, not yet reviewed.
 | `e2e/checkout.spec: applies promo` | 3 | 88127, 88159 | waits on a fixed 2 s sleep |
 | `test_export_csv_large` | 2 (was 5) | 88150, 88172 | shared temp dir; the 2026-09-23 fix halved it |
 
-The QA Owner decides fix or quarantine for each.
+The QA Owner decides fix or delete for each, the same day.
 
 ## Slowest jobs (median, 14 days vs previous 14)
 - `ci.yml / test-api`: 11 min 30 s (was 7 min 50 s). Dependency install is not cached since the lockfile

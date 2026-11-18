@@ -1,6 +1,6 @@
 """A workflow job that checks out a sparse subset must carry every module its scripts import at load time.
 
-#4135: release jobs sparse-checked-out scripts/pr_checks.py without scripts/flake_quarantine.py, which it imports, and
+#4135: release jobs sparse-checked-out scripts/pr_checks.py without the flake module it imports (now scripts/flake_detect.py), and
 failed on a clean runner while every test (run in a full checkout) passed. This reads the workflows and the scripts'
 source only: no network, no checkout, no execution.
 """
@@ -124,6 +124,6 @@ def test_a_sparse_checkout_has_every_module_its_scripts_import(workflow, job, pa
 
 
 def test_the_guard_sees_a_missing_module(tmp_path):
-    # pr_checks.py imports flake_quarantine at load time; it is what #4135 left out of the release jobs.
-    assert ROOT / "scripts/flake_quarantine.py" in closure(ROOT / "scripts/pr_checks.py")
+    # pr_checks.py imports flake_detect at load time; its module is what #4135 left out of the release jobs.
+    assert ROOT / "scripts/flake_detect.py" in closure(ROOT / "scripts/pr_checks.py")
     assert invoked_scripts("", "python3 scripts/pr_checks.py durations") == {"scripts/pr_checks.py"}

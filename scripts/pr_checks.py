@@ -18,9 +18,9 @@ from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
 
 if __package__:
-    from . import flake_quarantine
+    from . import flake_detect
 else:
-    import flake_quarantine
+    import flake_detect
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
@@ -2366,7 +2366,7 @@ def check_base_failures(root, suite, retry_report, remaining):
             worktree = Path(temp) / "base"
             try:
                 subprocess.run(["git", "worktree", "add", "--detach", str(worktree), base], cwd=root, check=True)
-                command = [*pytest_command("0", base_report), "--quarantine", *messages]
+                command = [*pytest_command("0", base_report), *messages]
                 status = subprocess.run(command, cwd=worktree, check=False, timeout=300).returncode
             finally:
                 subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=True)
@@ -2390,11 +2390,13 @@ def check_base_failures(root, suite, retry_report, remaining):
     return commit
 
 
-def run(plan_path, suite, root=None, quarantine=False):
+def run(plan_path, suite, root=None, retry=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
     `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
-    `quarantine` (PR checks and the merge queue only, never release validation) runs the tests in ci/quarantine/ as
-    non-strict xfail. Python and browser legs retry up to five failures once and record them if all pass."""
+    `retry` (PR checks and the merge queue only, never release validation): Python and browser legs retry up to five
+    failures once and record each that then passed as flaky (flaky-<suite>.json, which the queue-flaky artifact carries
+    to scripts/flake_detect.py and the Release Owner). A flaky test is fixed at its root cause the same day or deleted;
+    nothing quarantines it."""
     root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
@@ -2445,8 +2447,6 @@ def run(plan_path, suite, root=None, quarantine=False):
             if extra:
                 env = {**os.environ, **extra}
                 print("Environment: " + " ".join(f"{k}={v}" for k, v in sorted(extra.items())), flush=True)
-        if quarantine:
-            command.append("--quarantine")
         if measured:
             # One data file per job, recording only the plan's statement files; extract() keeps the lines that ran.
             command += [
@@ -2458,10 +2458,10 @@ def run(plan_path, suite, root=None, quarantine=False):
             # On top of any environment the job already set (a content sweep's, above).
             env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
         command += files
-        print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
+        print("Test files: " + " ".join(files), flush=True)  # flake_detect.test_files: what a rerun ran again
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     failed = []
-    if quarantine:
+    if retry:
         for path in (
             report,
             retry_report,
@@ -2471,7 +2471,7 @@ def run(plan_path, suite, root=None, quarantine=False):
             results / f"base-broken-{suite}.json",
         ):
             path.unlink(missing_ok=True)
-    if browser and quarantine:
+    if browser and retry:
         status, failed = browser_attempt(command, root, env)
         if status and failed:
             browser_failures.write_text("\n".join(failed) + "\n")
@@ -2482,23 +2482,23 @@ def run(plan_path, suite, root=None, quarantine=False):
         data.unlink(missing_ok=True)
     if status == 0 and not browser:
         cases = list(ET.parse(report).iter("testcase"))
-        # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
+        # A test that ran: no skipped element, or an xfail (an expected failure ran), which JUnit writes as one.
         ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
         if not ran:
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
-    if not quarantine or slow or rust or status != 1:
+    if not retry or slow or rust or status != 1:
         return status or rust
     if not browser:
         failed = list(
             dict.fromkeys(
-                flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+                flake_detect.nodeid_of(case.get("classname", ""), case.get("name", ""))
                 for case in junit_failures(report)
             )
         )
         # Collection errors can have JUnit cases without a test node id.
         if any("::" not in test for test in failed):
             return status
-    if not 0 < len(failed) <= flake_quarantine.MAX_FAILURES_PER_JOB:
+    if not 0 < len(failed) <= flake_detect.MAX_FAILURES_PER_JOB:
         return status
     commit = None
     if browser:
@@ -2511,12 +2511,12 @@ def run(plan_path, suite, root=None, quarantine=False):
             return retry_status
         browser_failures.unlink(missing_ok=True)
     else:
-        retry = [*pytest_command("0", retry_report.relative_to(root)), "--quarantine", *failed]
-        retry_status = subprocess.run(retry, cwd=root, env=None, check=False).returncode
+        again = [*pytest_command("0", retry_report.relative_to(root)), *failed]
+        retry_status = subprocess.run(again, cwd=root, env=None, check=False).returncode
         if retry_status not in (0, 1):
             return retry_status
         try:
-            passed = flake_quarantine.passed_tests(retry_report.read_bytes())
+            passed = flake_detect.passed_tests(retry_report.read_bytes())
         except (ET.ParseError, OSError):
             return retry_status or status
         if retry_status:
@@ -2669,7 +2669,7 @@ def junit_failures(path):
 def junit_failure_messages(path):
     messages = defaultdict(set)
     for case in junit_failures(path):
-        test = flake_quarantine.nodeid_of(case.get("classname", ""), case.get("name", ""))
+        test = flake_detect.nodeid_of(case.get("classname", ""), case.get("name", ""))
         for outcome in case:
             if outcome.tag in ("failure", "error"):
                 lines = outcome.get("message", "").splitlines()
@@ -2838,9 +2838,9 @@ def main():
     execute.add_argument("--plan", default="ci-plan.json")
     execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
     execute.add_argument(
-        "--quarantine",
+        "--retry",
         action="store_true",
-        help="run ci/quarantine/ tests as non-strict xfail and retry small failures once",
+        help="retry up to five failed tests once and record each that then passed as flaky (PR checks and the queue)",
     )
     mine = sub.add_parser(
         "local", help="run the tests a pull request's checks would select, here, and print a receipt for its head"
@@ -2879,7 +2879,7 @@ def main():
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head, light=args.light, prefetch=True)
     elif args.action == "run":
-        return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
+        return run(args.plan, args.suite, Path(args.root), retry=args.retry)
     elif args.action == "junit-ran":
         if not junit_ran(args.report):
             print(f"{args.report}: every test skipped or none ran", file=sys.stderr)

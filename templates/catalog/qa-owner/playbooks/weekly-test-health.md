@@ -1,7 +1,7 @@
 # Weekly test health report
 
 Schedule: Tuesdays at 09:00 team time (routine `weekly-test-health`), after setup. Also run by hand. Budget 45 minutes.
-Nothing on GitHub changes, and no test is skipped, quarantined or deleted by this run.
+Nothing on GitHub changes, and no test is skipped or deleted by this run.
 
 ---
 
@@ -22,11 +22,11 @@ Nothing on GitHub changes, and no test is skipped, quarantined or deleted by thi
 3. **Find the flaky tests.** A flaky candidate is a commit with a failed run and then a passed run, with no new commit between
    them. Read the failed log and name the test. Apply the threshold in `knowledge/thresholds.md` (starting default: two such
    flips in two weeks). A candidate whose log cannot be read is "unknown", not flaky. Classify each failure with
-   `skills/classify-a-test-failure/SKILL.md`. Update the register: still flipping, fixed, or past its deadline.
-4. **Decide each flaky test.** For each test in the register with no decision, or past its deadline, follow
-   `skills/decide-fix-or-quarantine/SKILL.md` and record the decision with its owner and deadline. A quarantine is recorded
-   here and carried out by a person unless the task asks for it and a granted Tool allows it.
-5. **Find skipped and quarantined tests past their deadline.** List each one with its ticket, its age and its owner.
+   `skills/classify-a-test-failure/SKILL.md`. Update the register: still flipping, fixed, or deleted.
+4. **Decide each flaky test.** For each test in the register with no decision, or still flipping after its fix, follow
+   `skills/fix-or-delete-flaky-test/SKILL.md` and record the decision (fix or delete) with its owner and the date. It is
+   carried out by a person unless the task asks for it and a granted Tool allows it.
+5. **Find skipped tests.** List each one with why it is skipped, its age and its owner.
 6. **Find paths with no test.** For each must-test path, read the test code and say whether a test asserts its behaviour
    (`skills/prove-a-test-catches-the-bug/SKILL.md`). A path with no such test is named, not counted as covered.
 7. **Check slow suites against the threshold.** A suite is slow when its median passes the threshold in
@@ -43,8 +43,8 @@ Nothing on GitHub changes, and no test is skipped, quarantined or deleted by thi
 `reports/YYYY-MM-DD-test-health.md`, in this order, in the shape of `knowledge/examples/test-health.md`:
 
 - **Headline:** the merge suite's flaky failure rate, and the slowest suite's median with its change.
-- **Flaky tests:** test, flips with run ids and dates, suspected cause, owner, decision and deadline.
-- **Past deadline:** skipped or quarantined tests whose deadline has passed, with their tickets.
+- **Flaky tests:** test, flips with run ids and dates, root cause, owner, decision and date.
+- **Skipped:** each skipped test and why.
 - **Paths with no test:** each must-test path that has no test asserting its behaviour.
 - **Suites:** median over the last 14 days against the 14 before.
 - **Product bugs handed over:** each with its failing test, runs and Engineering task link.
@@ -55,6 +55,6 @@ Nothing on GitHub changes, and no test is skipped, quarantined or deleted by thi
 ## Done when
 
 - Every suite in `knowledge/suites.md` appears with its runs and medians, or is named as unreadable.
-- Each flaky test names the runs (id, commit, date) where it flipped, and has a recorded decision with an owner and a deadline.
+- Each flaky test names the runs (id, commit, date) where it flipped, and has a recorded decision (fix or delete) with an owner and a date.
 - Each product bug is handed over with a link, and each fix plan names an owner and a way to verify it.
 - The report is published and the task is closed, with the headline and the report path in the note.

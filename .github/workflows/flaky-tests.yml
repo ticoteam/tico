@@ -1,21 +1,18 @@
-# Flaky tests (scripts/flake_quarantine.py). Read-only: it never pushes, opens a pull request or touches the queue.
-# - detect (daily, and on demand): reads the last days of PR-check runs and lists each test that failed and passed on the
-#   same commit (a rerun attempt, or two runs of one commit). Each one not quarantined yet gets a proposed entry file,
-#   uploaded as the quarantine-proposals artifact; the summary gives the command that writes them into a branch.
-# - report (weekly, and on demand): lists every quarantined test with its age and ticket, and fails when one has been
-#   quarantined longer than 14 days or an entry is malformed. It fails this job only: PR checks and the merge queue
-#   never read it.
+# Flaky tests (scripts/flake_detect.py), daily and on demand. Read-only: it never pushes, opens a pull request or touches
+# the queue. It reads the last days of PR-check runs and queue retries and lists, in the job summary, each test that
+# failed and passed on the same commit (a retry, a rerun attempt, or two runs of one commit), with its commit and runs.
+# It fails when it finds one: a red run is the signal. A flaky test is fixed at its root cause the same day, or deleted;
+# nothing quarantines it. PR checks and the merge queue never read this job.
 # GitHub-hosted runners (free for this public repository), like PR checks.
 name: Flaky tests
 
 on:
   schedule:
     - cron: '23 6 * * *'
-    - cron: '47 15 * * 1'
   workflow_dispatch:
     inputs:
       days:
-        description: Days before today to read as well (detect)
+        description: Days before today to read as well
         required: false
         default: '1'
         type: string
@@ -25,12 +22,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: flaky-tests-${{ github.event.schedule || 'dispatch' }}
+  group: flaky-tests
   cancel-in-progress: false
 
 jobs:
   detect:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 6 * * *' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -46,27 +42,4 @@ jobs:
           DAYS: ${{ inputs.days || '1' }}
         run: |
           set -o pipefail
-          python3 scripts/flake_quarantine.py detect --repo "$GITHUB_REPOSITORY" --days "$DAYS" --write "$RUNNER_TEMP/proposals" \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: quarantine-proposals
-          path: ${{ runner.temp }}/proposals/
-          retention-days: 14
-          if-no-files-found: ignore
-
-  report:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '47 15 * * 1' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.15'
-      - name: Quarantined tests and their age
-        run: |
-          set -o pipefail
-          python3 scripts/flake_quarantine.py report --max-age-days 14 | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/flake_detect.py detect --repo "$GITHUB_REPOSITORY" --days "$DAYS" | tee -a "$GITHUB_STEP_SUMMARY"

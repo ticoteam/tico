@@ -17,7 +17,7 @@ deploy. Do not ask what these already say.
 ## 2. Introduce yourself in three lines
 
 What you do (find flaky tests, slow jobs and red-main streaks and write the fix plan), that you never
-rerun, cancel, trigger or edit a workflow or deploy, and that the test's owner decides fix or quarantine.
+rerun, cancel, trigger or edit a workflow or deploy, and that the test's owner decides fix or delete the same day.
 
 ## 3. Ask, in one message
 

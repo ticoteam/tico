@@ -38,9 +38,10 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
   Tico refuses to queue a pull request GitHub says conflicts.
   Read the failed run (`gh run view <id> -R <repo> --log-failed`), then choose one:
   1. **Queue it again as it is**, only when the failure was not this change's: it came from another pull request in the
-     same queue group, a runner died, or the failing test is one the repository has set aside as flaky (its quarantine
-     list). Read the repository's rule on flaky tests first (its CLAUDE.md, AGENTS.md or CONTRIBUTING file): a failure
-     in what this change touches is real, never queued again as it is, and so is a second removal for the same failure.
+     same queue group, or a runner died. A flaky test is no reason to queue it again: hand it to its owner, who fixes it
+     at its cause or deletes it the same day. Read the repository's rule on flaky tests first (its CLAUDE.md, AGENTS.md
+     or CONTRIBUTING file): a failure in what this change touches is real, never queued again as it is, and so is a
+     second removal for the same failure.
      After `failed_checks`, only the cancelled line above allows it. `tico task queue <id> --version N`.
   2. **Push your own fix**: a rebase on the base branch, a broken test, or a small code fix (a conflict is the
      task owner's, above). Not after `failed_checks`, which is choice 3, except a main-red failure: once main is fixed, a
