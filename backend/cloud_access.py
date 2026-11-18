@@ -166,22 +166,27 @@ def spend(before, balance, at):
     """(samples, spend_day_micros) after an answer with `balance` at `at` (ISO): an hourly sample is added, those older
     than SPEND_WINDOW dropped, and the spend per day is the fall from the oldest to now once SPEND_MIN apart. A rise
     (credit landed) starts again from this one and keeps the last spend; a fall too short to read keeps it as well."""
-    kept = [s for s in (before or {}).get("samples") or [] if isinstance(s, dict) and H.parse_ts(s.get("at"))]
+    timed = []  # (sample, when) for each readable one
+    for sample in (before or {}).get("samples") or []:
+        when = H.parse_ts(sample.get("at")) if isinstance(sample, dict) else None
+        if when is not None and type(sample.get("balance_micros")) is int:
+            timed.append((sample, when))
     rate = (before or {}).get("spend_day_micros")
     rate = rate if type(rate) is int and rate > 0 else None
     now = H.parse_ts(at)
     if now is None:
-        return kept, rate
-    if kept and balance > kept[-1]["balance_micros"]:
-        kept = []
-    kept = [s for s in kept if now - H.parse_ts(s["at"]) <= SPEND_WINDOW]
-    if not kept or now - H.parse_ts(kept[-1]["at"]) >= SAMPLE_EVERY:
-        kept.append({"balance_micros": balance, "at": at})
-    oldest = kept[0]
-    elapsed = now - H.parse_ts(oldest["at"])
+        return [sample for sample, _ in timed], rate
+    if timed and balance > timed[-1][0]["balance_micros"]:
+        timed = []
+    timed = [(sample, when) for sample, when in timed if now - when <= SPEND_WINDOW]
+    if not timed or now - timed[-1][1] >= SAMPLE_EVERY:
+        timed.append(({"balance_micros": balance, "at": at}, now))
+    oldest, since = timed[0]
+    elapsed = now - since
     if elapsed >= SPEND_MIN:
         fall = oldest["balance_micros"] - balance
         rate = int(fall * (timedelta(days=1) / elapsed)) if fall > 0 else None
+    kept = [sample for sample, _ in timed]
     return kept, rate
 
 
@@ -221,7 +226,7 @@ def apply(store, cloud, at=None):
                 {"from": was, "to": now, "reason": (cloud or {}).get("reason")},
             )
         low = days_left(kept)
-        if low is not None and days_left(before) is None:
+        if kept is not None and low is not None and days_left(before) is None:
             H.event(
                 c,
                 H.KEEPER,
