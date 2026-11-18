@@ -377,22 +377,14 @@ def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
 
 
 def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, str]]:
-    """(PR ref, commit) pairs the review reads: the PR heads saved when it was filed (check_models.record), then each
-    "PR <url> at <commit>" in a message about the review, whoever wrote it (the filer's request or the owner's notes)."""
+    """(PR ref, commit) pairs the review reads. A commit named in a message about the review ("PR <url> at <commit>",
+    whoever wrote it: the filer's request or the owner's notes) is what it was asked to read, so for that PR it is the
+    only one. A PR no message names falls back to the head saved when the review was filed (check_models.record): the
+    PR may have moved on between the request and the filing, and the saved head must not stand in for a named one."""
+    from .hubdb import MESSAGE_TASK_SQL
     from .item_sources import github as F
 
     named: list[tuple[str, str]] = []
-    for (data,) in conn.execute(
-        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
-        "AND data IS NOT NULL ORDER BY created_at, id",
-        (review["id"],),
-    ).fetchall():
-        heads = _json_object(data).get("heads")
-        if isinstance(heads, dict):
-            saved = cast("dict[str, object]", heads)
-            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
-    from .hubdb import MESSAGE_TASK_SQL
-
     # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
     for (body,) in conn.execute(
         "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
@@ -402,6 +394,16 @@ def _named_commits(conn: "sqlite3.Connection", review: Row) -> list[tuple[str, s
     ).fetchall():
         for repo, number, sha in REVIEW_NAMES_RE.findall(str(body or "")):
             named.append((F.pr_ref(repo, int(number)), sha.lower()))
+    said = {ref for ref, _ in named}
+    for (data,) in conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
+        "AND data IS NOT NULL ORDER BY created_at, id",
+        (review["id"],),
+    ).fetchall():
+        heads = _json_object(data).get("heads")
+        if isinstance(heads, dict):
+            saved = cast("dict[str, object]", heads)
+            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha and ref not in said)
     return named
 
 

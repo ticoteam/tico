@@ -342,6 +342,22 @@ def test_a_review_gate_counts_only_a_second_review_check_of_the_newest_commit(c,
     assert gate().state == R.MET
 
 
+def test_a_review_gate_counts_the_commit_the_request_named_not_a_newer_head(c, general, monkeypatch):
+    # The filer picks head A and asks for a review of A; the PR moves on to B before the review is filed, so B is the
+    # head saved at filing. The review read A: finishing it never meets the gate for B.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    a, b = "a" * 40, "b" * 40
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": b})
+    row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    _says(c, row, ANA, a)
+    check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"])
+    X.say_done(c, row)
+    E.advance(c, row["id"])
+    gate = R.standings(c, E.task(c, parent["id"]))[1]
+    assert gate.state == R.NOT_MET and "did not read the newest commit" in gate.line
+
+
 def test_a_review_gate_reads_the_commit_from_the_filers_request(c, general, monkeypatch):
     # A review filed for another bot, before the PR head was read: its request, written by the filer, names the
     # commit, and the review's owner never repeats it.
