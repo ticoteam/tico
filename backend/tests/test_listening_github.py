@@ -51,7 +51,7 @@ class FakeGitHub:
             }
         )
 
-    def release(self, rid, tag, when, name="", body="", draft=False, prerelease=False):
+    def release(self, rid, tag, when, name="", body="", draft=False, prerelease=False, commit_at=None):
         self.releases.append(
             {
                 "id": rid,
@@ -60,7 +60,7 @@ class FakeGitHub:
                 "body": body,
                 "draft": draft,
                 "prerelease": prerelease,
-                "created_at": gh(when),
+                "created_at": gh(commit_at or when),  # GitHub's created_at is the date of the release's commit
                 "published_at": None if draft else gh(when),
                 "author": {"login": "sam"},
                 "html_url": f"https://github.com/acme/widgets/releases/tag/{tag}",
@@ -281,8 +281,22 @@ def test_more_releases_than_a_read_lists_carry_on_and_ones_deleted_meanwhile_ski
         run(api, at(hour * 65))
     ids = sorted(int(i["native_id"].split(":")[-1]) for i in items(api, aid))
     assert ids == [*range(1, 16), 20]  # 10 to 15 were saved before they were deleted
-    row = source(api, aid)
-    assert row["status"] == "ok" and "carry" not in json.loads(row["snapshot"])
+    assert source(api, aid)["status"] == "ok"
+
+
+def test_a_release_published_now_from_an_old_commit_deep_in_the_list_is_one_item(api, github, monkeypatch):
+    monkeypatch.setattr(LG, "PER_PAGE", 2)
+    monkeypatch.setattr(LG, "MAX_PAGES", 2)
+    for n in range(1, 12):  # 11 releases from before the source started: six pages
+        github.release(n, f"v1.{n}.0", at(n - 600))
+    aid = made(api, sources=({**WIDGETS, "follow": "releases"},))
+    run(api, START)
+    # A backport made from a commit older than all of them is published after the source started: it is listed last.
+    github.release(30, "v0.9.1", at(20), commit_at=at(-900))
+    for hour in range(1, 7):
+        run(api, at(hour * 65))
+    assert [i["native_id"] for i in items(api, aid)] == ["gh:acme/widgets#release:30"]
+    assert source(api, aid)["status"] == "ok"
 
 
 def test_more_new_prs_between_two_reads_than_a_read_lists_lose_none(api, github, monkeypatch):

@@ -6,6 +6,7 @@ the source's cursor, kept in its `snapshot` as JSON (`{"follow": "prs"|"releases
 
 - The first read, and the first after `follow` changed, only sets the cursor: as a Page source, a GitHub source starts
   from now on and makes no item of what was there before.
+- Releases are swept: see `_releases`.
 - Pull requests are listed most recently updated first. A merged PR's `updated_at` is never before its `merged_at`, so
   the listing stops at the first PR updated before the cursor: nothing past it can have been merged since.
 - A read GitHub refuses part way (a rate limit, an error) saves nothing and keeps the old cursor, so the next read
@@ -288,32 +289,37 @@ def _prs(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Lis
 
 
 def _releases(repo: str, token: str, since: str | None, carry: dict[str, Any]) -> Listing:
-    """Releases published after `since` (pre-releases too, drafts never), from the releases listed newest first."""
+    """Releases published after `since`, the time the source started (pre-releases too, drafts never).
+
+    GitHub lists releases by the date of the commit each was made from, not by when it was published: a release
+    published today from an older commit (a backport, an old draft) lies anywhere in the list. So no row marks where
+    older publications start, and `since` never moves: each read lists page 1, where most new releases are, and the
+    next pages of a sweep through the whole list (`carry["sweep"]`, the page it carries on from), starting over at
+    page 2 at its end. A release published since the source started is found within one sweep; one read again is
+    saved once by its id."""
     found: dict[str, Item] = {}
-    newest: str | None = str(carry.get("newest") or "") or None
 
     def page_of(n: int) -> list[Any]:
         return _list(_get(f"/repos/{repo}/releases?per_page={PER_PAGE}&page={n}", token, repo))
 
-    def take(release: Any) -> None:
-        nonlocal newest
-        published = _iso(release.get("published_at"))
-        if release.get("draft") or not published:
-            return
-        newest = max(newest or published, published)
-        if since and published > since:
+    def take(rows: list[Any]) -> None:
+        for release in rows:
+            published = _iso(release.get("published_at"))
+            if release.get("draft") or not published or not since or published <= since:
+                continue
             item = _release_item(repo, release)
             found[str(item["native_id"])] = item
 
-    def order(release: Any) -> str | None:  # GitHub lists releases by when they were made; a draft has no publish time
-        return _iso(release.get("created_at") or release.get("published_at"))
-
-    if not since:
-        for release in page_of(1):
-            take(release)
-        return Listing([], newest, {})
-    left = _listing(page_of, order, take, since, carry)
-    return Listing(list(found.values()), newest, {**left, "newest": newest} if left else {})
+    rows = page_of(1)  # the first read too: a repository Tico can't see is Blocked at once
+    take(rows)
+    sweep = int(carry.get("sweep") or 2)
+    if not since or len(rows) < PER_PAGE:  # the first read, or the whole list is one page
+        return Listing(list(found.values()), None, {})
+    for _ in range(MAX_PAGES - 1):
+        rows = page_of(sweep)
+        take(rows)
+        sweep = 2 if len(rows) < PER_PAGE else sweep + 1
+    return Listing(list(found.values()), None, {"sweep": sweep})
 
 
 def read(target: str, follow: str, snapshot: str | None, now: str, token: str = "") -> Result:
@@ -343,6 +349,14 @@ def read(target: str, follow: str, snapshot: str | None, now: str, token: str = 
             "snapshot": None,
             "error": f"Could not read {repo}: {type(exc).__name__}",
         }
+    if follow == "releases":  # `since` stays the time the source started (`_releases`)
+        keep: dict[str, Any] = {
+            "follow": follow,
+            "since": since or now,
+            **({"carry": listing.carry} if listing.carry else {}),
+        }
+        items = [] if not since else sorted(listing.items, key=lambda item: item["posted_at"] or "")
+        return {"status": "ok", "items": items, "snapshot": json.dumps(keep), "error": ""}
     if not since:  # the first read: where later ones start, and no items
         return {
             "status": "ok",
