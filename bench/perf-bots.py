@@ -69,6 +69,12 @@ def seed(api):
     with store.transaction() as c:
         for n, slug in enumerate(BOTS):
             X.bot(c, slug, computer=False)
+            if n == 7:  # bot-test's agent credential
+                c.execute(
+                    "INSERT INTO agents(bot,harness,token_hash,created_at,created_by,last_seen_at) "
+                    "VALUES(?,'hermes','h',?,'human:ana',?)",
+                    (slug, H.now(), H.now()),
+                )
             runner = f"r{n % 4}"
             c.execute(
                 "INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
@@ -251,7 +257,7 @@ def report(api):
             r, seen, ms = measure(api, path, token)
             answers[f"{token} {path}"] = [r.status_code, r.json()]
             print(
-                f"{path:44s} {token:9s} {r.status_code} {len(seen):6d} statements {ms:9.1f} ms {len(r.content) / 1024:8.1f} KB"
+                f"{path[:44]:44s} {token:9s} {r.status_code} {len(seen):6d} statements {ms:9.1f} ms {len(r.content) / 1024:8.1f} KB"
             )
             if os.environ.get("STATEMENTS"):
                 for q, k in collections.Counter(shape(q) for q in seen).most_common(8):

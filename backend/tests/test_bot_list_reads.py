@@ -199,8 +199,8 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
         c.execute("UPDATE bot_config SET owner_ids=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
         BS.write(c, 'ops', {'name': 'ops', 'runtime': 'fake', 'private_tasks_default': True, 'model': 'm2'})
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")
-        # Cpo is private to people, but it writes to Ops below, so Ops may answer it (teammate_access.replies);
-        # product-design stays private to Ops.
+        # Cpo is private to people, but it writes to Scout below, so Scout may answer it (teammate_access.replies);
+        # product-design stays private to Scout.
         T.restrict(c, "product-design", see={"people": ["ana"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
         c.execute(
             "INSERT INTO agents(bot,harness,token_hash,created_at,created_by,last_seen_at) VALUES(?,?,?,?,?,?)",
@@ -216,7 +216,7 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     T.post(api, "chat/ops", {"text": "hello"})
     from backend.auth import Identity
 
-    store.settings.test_identities["ops-bot-test"] = Identity("bot:ops", "bot", agent="hermes")
+    store.settings.test_identities["scout-test"] = Identity("bot:scout", "bot", agent="hermes")
     T.post(api, "chat/finance", {"text": "hi"}, token="ben-test")
     with store.transaction() as c:
         for bot, to in (("ops", "ops"), ("finance", "finance"), ("ops", "finance")):
@@ -245,10 +245,10 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
         )
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-            "VALUES(?,?,'bot:cpo','bot:ops','chat','hi','{}',?)",
+            "VALUES(?,?,'bot:cpo','bot:scout','chat','hi','{}',?)",
             (H.new_id(), cid, H.now()),
         )
-    for token in ("ana-test", "ben-test", "cara-test", "ops-bot-test"):
+    for token in ("ana-test", "ben-test", "cara-test", "scout-test"):
         listed = T.get(api, "bots", token=token)
         assert listed == per_bot_list(api, token), token
         for row in listed:
@@ -264,8 +264,8 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     ana = {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}
     assert ana["ops"]["status"]["focus"] == "the secret" and ana["ops"]["goal_active"] and ana["scout"]["agent"]
     assert sum(ana["ops"]["task_flow"].values()) == 1
-    ops = {row["slug"]: row for row in T.get(api, "bots", token="ops-bot-test")}
-    assert ops["cpo"]["access"]["write"]  # private to people, but it wrote to Ops
+    scout = {row["slug"]: row for row in T.get(api, "bots", token="scout-test")}
+    assert scout["cpo"]["access"]["write"]  # private to people, but it wrote to Scout
 
 
 def statements(api, method, path, token, body=None):
