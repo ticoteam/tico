@@ -284,20 +284,18 @@ def test_what_github_reports_of_the_installation_is_kept_for_health_and_forgotte
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,)).fetchone()
 
 
-def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_write_one(api, gh):
+@pytest.mark.parametrize("visibility", ["private", "team"])
+def test_a_meeting_turn_uses_the_bots_existing_repository_grants(api, gh, visibility):
     connect(api)
     runner_token(api, "cmo")
     with api.app_state.store.transaction() as c:
-        for rid, visibility in (("m-private", "private"), ("m-team", "team")):
-            c.execute(
-                "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at,visibility) "
-                "VALUES(?,'human:ana','Plan','live',30000,?,?,?,?)",
-                (rid, H.now(), H.now(), H.now(), visibility),
-            )
-        conv = H.open_conversation(c, H.TICO_ACTOR, ["bot:cmo"], room_key="live-meeting:m-private")
-        H.feed(
-            c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-private", "turn_id": "t1"}}
+        c.execute(
+            "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at,visibility) "
+            "VALUES('m-plan','human:ana','Plan','live',30000,?,?,?,?)",
+            (H.now(), H.now(), H.now(), visibility),
         )
+        conv = H.open_conversation(c, H.TICO_ACTOR, ["bot:cmo"], room_key="live-meeting:m-plan")
+        H.feed(c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-plan", "turn_id": "t1"}})
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
@@ -306,12 +304,8 @@ def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_wr
         )
     r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200, r.text
-    assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "read"
-    assert {t["access"] for t in r.json()["tokens"]} == {"read"}
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE live_meetings SET visibility='team' WHERE id='m-private'")
-    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
-    assert r.status_code == 200 and gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
+    assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
+    assert {t["access"] for t in r.json()["tokens"]} == {"write"}
 
 
 def test_turn_token_reads_pull_request_checks_and_statuses(api, gh):
