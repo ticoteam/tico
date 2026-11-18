@@ -79,6 +79,23 @@ SCHEMAS.update(
                 "items": {"type": "object"},
                 "description": "Bots a usage limit holds now (the caller may read them): bot, since",
             },
+            update={
+                **obj(
+                    {},
+                    history=items(
+                        obj(
+                            {
+                                "version": "s",
+                                "since": {"type": "string", "description": "When this server first started on it (UTC)"},
+                            },
+                            required=["version", "since"],
+                        )
+                    ),
+                ),
+                "description": "This server's release and the update notice (current, latest, ...), and history: the "
+                "releases it ran, oldest first, up to 500, each {version, since}; a restart on the same release adds "
+                "none and a rollback adds its own (the since query limits it)",
+            },
         ),
         "HeartbeatStep": obj(
             {
