@@ -876,15 +876,58 @@ class Bridge:
         if event["op"] == "store" and event.get("author") != "human" and (not link["read_only"] or self._own(event)):
             return "bot"  # Tico's own posts are never carried in; other apps' only into a read-only link
         with self.store.transaction() as c:
-            c.execute(
-                "INSERT OR IGNORE INTO slack_inbound_events (link_id,event_key,event,created_at) VALUES (?,?,?,?)",
-                (link["id"], _event_key(event), json.dumps(event, sort_keys=True), H.now()),
-            )
+            told = self._queue(c, link, event)
+        self._tell_masked(link, told)
         try:
             return self.drain(link["id"])
         except Exception as exc:  # noqa: BLE001 the queue is kept; the next pass carries it in
             LOG.error("Slack inbound carry failed: %s", SE.describe(exc))
             return "queued"
+
+    def _queue(self, c, link, event):
+        """Queue one inbound event. On a task's conversation its text is kept with each key as a mark before it is
+        stored (backend/task_text_keys.py): a stalled or suspended link keeps the queue, never the key. Returns
+        [(channel, Slack user)] to tell where the key still is: empty when nothing was masked."""
+        said = str(event.get("text") or "")
+        told = []
+        if said:
+            task = task_text_keys.task_of_thread(c, str(link.get("thread_id") or ""))
+            author, user = self._queued_author(c, link, event)
+            text = task_text_keys.mask_on_task(c, task, author, said)
+            if text != said:
+                event = {**event, "text": text}
+                told.append((event["channel"], user))
+        c.execute(
+            "INSERT OR IGNORE INTO slack_inbound_events (link_id,event_key,event,created_at) VALUES (?,?,?,?)",
+            (link["id"], _event_key(event), json.dumps(event, sort_keys=True), H.now()),
+        )
+        return told
+
+    def _queued_author(self, c, link, event):
+        """(actor, Slack user) of a queued event, for its audit row and its note: the roster person the Slack user maps
+        to, or the author of the message an edit changes; Tico when neither is known yet."""
+        user = str(event.get("user_id") or "")
+        if not user and event.get("op") == "edit":
+            found = c.execute(
+                "SELECT m.slack_user_id FROM slack_message_links l JOIN slack_link_members m "
+                "ON m.link_id=? AND 'human:' || m.person_id=l.actor "
+                "WHERE l.channel_id=? AND l.ts=? AND l.direction='in' LIMIT 1",
+                (link["id"], event.get("channel"), event.get("ts")),
+            ).fetchone()
+            user = str(found[0]) if found else ""
+        person = (
+            c.execute(
+                "SELECT person_id FROM slack_link_members WHERE link_id=? AND slack_user_id=? LIMIT 1", (link["id"], user)
+            ).fetchone()
+            if user
+            else None
+        )
+        return (H.human_actor(person[0]) if person else H.TICO_ACTOR), user
+
+    def _tell_masked(self, link, told):
+        """Tell each author whose key was kept as a mark where it still is, after the commit (read-only links too)."""
+        for channel, user in told:
+            self._note(link, channel, user, task_text_keys.told("slack"), always=True)
 
     def drain(self, link_id):
         """Carry in one link's queued events, oldest first, while the link is active. It stops at an event that cannot
@@ -937,10 +980,11 @@ class Bridge:
         gateway's persist makes it, so the wake rule sees it."""
         return G.humanize(text, {self.gw.bot_user_id: self.settings.assistant_name})[: G.TEXT_CHARS]
 
-    def _note(self, link, channel, user, text):
+    def _note(self, link, channel, user, text, *, always=False):
         """A private note to the author, sent after the commit that decided it. Nothing here stops ingestion. A
-        read-only link says nothing in Slack."""
-        if not user or link.get("read_only"):
+        read-only link says nothing in Slack, except `always`: a key kept as a mark, whose author must know where it
+        still is (backend/task_text_keys.py)."""
+        if not user or (link.get("read_only") and not always):
             return
         try:
             self.slack.post_ephemeral(channel, user, text)
@@ -1112,7 +1156,7 @@ class Bridge:
             return "refused"
         if posted_now:
             if keyed:
-                self._note(link, channel, event.get("user_id"), task_text_keys.told("slack"))
+                self._note(link, channel, event.get("user_id"), task_text_keys.told("slack"), always=True)
             return "posted"
         if held and not carry_import:
             self._note(link, channel, event.get("user_id"), "Tico held this message, so it did not reach the thread.")
@@ -1211,7 +1255,8 @@ class Bridge:
         except Problem as exc:
             return f"refused: {exc.code}"
         if note:
-            self._note(link, event["channel"], self._author_user(link["id"], row), note)
+            keyed = note == task_text_keys.told("slack")
+            self._note(link, event["channel"], self._author_user(link["id"], row), note, always=keyed)
         return outcome
 
     def _apply_revision(self, event, link, row, msg, body, deleted, edited, gate):
@@ -1238,7 +1283,13 @@ class Bridge:
                     return "retry", None
                 if verdict and "held" in verdict:
                     return "held", "Tico held this edit, so the message in the thread was not changed."
-            return _apply_edit(c, self.core(), row, body, deleted=deleted, edited=edited, team=self.gw.team_id), None
+            outcome = _apply_edit(c, self.core(), row, body, deleted=deleted, edited=edited, team=self.gw.team_id)
+            # An edit whose key was kept as a mark (threads.apply_revision): its author is told where it still is.
+            kept = _one(c, "SELECT body FROM messages WHERE id=?", (row["message_id"],)) if outcome == "edited" else None
+            mark = task_text_keys.MARK
+            if kept and str(kept["body"] or "").count(mark) > str(body or "").count(mark):
+                return outcome, task_text_keys.told("slack")
+            return outcome, None
 
     # --- outbound
     def outbound(self):
@@ -1803,12 +1854,9 @@ class Bridge:
             if row:
                 events.append({"event_id": f"catch-up:{channel}:{ts}", "team_id": self.gw.team_id, **row})
         with self.store.transaction() as c:
-            for event in events:
-                c.execute(
-                    "INSERT OR IGNORE INTO slack_inbound_events (link_id,event_key,event,created_at) VALUES (?,?,?,?)",
-                    (link["id"], _event_key(event), json.dumps(event, sort_keys=True), H.now()),
-                )
+            told = [t for event in events for t in self._queue(c, link, event)]
             c.execute("UPDATE slack_thread_links SET read_ts=? WHERE id=?", (newest, link["id"]))
+        self._tell_masked(link, told)
         return {"link": link["id"], "state": "done", "events": len(events), "carried": self.drain(link["id"])}
 
     def _import_one(self, link, m, person_id, text):
