@@ -1628,7 +1628,10 @@ Today: the Engineering and Product pipelines.
 
 Rules:
 
-- The list is the columns turned on their side: grouped by stage, in order.
+- The list is the columns turned on their side: grouped by stage, in order. Each run of empty stages, even one, is
+  one quiet line of stage chips in its place (names only; a chip opens the stage's editor), and a pipeline with nothing
+  open is one empty state: a drawing, "No open tasks in Engineering" and New task. Neither while searching or
+  filtering, nor while more tasks are still to load. The columns and the phone keep every stage.
 - Search and filter work on both views and on every pipeline, General included.
 - Filters: Owner, Waiting on, Stage, Asked by, Tag, Due, Late, Pushed past. "What can Sam do?" is Waiting on: Sam.
 - Done and Closed are not columns. They are behind the archive button, with Snoozed.
