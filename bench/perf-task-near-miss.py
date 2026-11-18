@@ -16,7 +16,7 @@ import time
 
 from backend.auth import near_task_sql
 from backend.tests.helpers.api import setup_attempt
-from backend.tests.helpers.task_near_miss import edited, old_resolve_task, outcome, random_ids, seed
+from backend.tests.helpers.task_near_miss import edited, old_resolve_task, outcome, people, random_ids, seed
 
 SIZES = (50_000, 200_000)
 OLD_RUNS, NEW_RUNS = 3, 15
@@ -60,6 +60,8 @@ def plans(store, auth, caller, who, typed):
 def test_near_miss_time_by_task_count(api):
     store, auth = api.app.state.store, api.app.state.auth
     _, _, attempt = setup_attempt(api)
+    with store.transaction() as c:
+        people(c)
     tokens = {"owner": "ana-test", "member": "eve-test", "bot": attempt["token"]}
     who = {
         name: auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/tasks/x/comments", "POST")
