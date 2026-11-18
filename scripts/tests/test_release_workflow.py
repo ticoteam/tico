@@ -301,7 +301,8 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     assert "--root candidate" in plan_step["run"] and "--carried" in plan_step["run"]
     # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
     assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
-    assert jobs["gate"]["strategy"]["fail-fast"] is False
+    # An incremental validation stops at its first failed part; a full one runs every part, to name every failure.
+    assert jobs["gate"]["strategy"]["fail-fast"] == "${{ inputs.anchor != '' }}"
     # The measured timings run only in a full validation.
     assert jobs["test-timings"]["if"] == "inputs.anchor == ''"
     # The daily advisory scan: full validations only, outside the verdict (release-check needs neither it nor the CLIs).
@@ -330,12 +331,11 @@ def test_an_incremental_validation_runs_its_critical_path_on_runson_and_its_test
     for name in ("native-linux", "images"):
         step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
         assert step["if"] == "vars.TICO_CI_HOSTED == 'true'", name
-    # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.
-    gate_step = next(step for step in jobs["gate"]["steps"] if step.get("name", "").startswith("Free disk"))
-    assert gate_step["run"] == "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc"
-    assert gate_step["if"] == (
-        "vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')"
-    )
+    # The gate's hosted parts start with about 85 GB free: no clean-up step on the critical path (47-143 s each). The
+    # capacity preflight removes the unused SDKs only when a runner has less than the 35 GiB the gate needs.
+    assert not [step for step in jobs["gate"]["steps"] if "Free disk" in step.get("name", "")]
+    preflight = next(step for step in jobs["gate"]["steps"] if "capacity preflight" in step.get("name", ""))
+    assert "hosted_release_check.py prepare" in preflight["run"]
 
 
 def test_a_failed_poll_of_this_runs_jobs_is_one_more_poll_not_a_failed_validation():

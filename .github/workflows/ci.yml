@@ -310,7 +310,10 @@ jobs:
     # Every part runs on 4 vCPUs; more shards, not bigger VMs, for speed.
     timeout-minutes: 45
     strategy:
-      fail-fast: false
+      # An incremental validation stops at its first failed part: the run is red either way, and the train moves on
+      # minutes sooner. Its cancelled parts ran nothing, so such a run is no anchor (release_train.py cut_short); the
+      # next validation selects from the anchor before it. A full validation runs every part, to name every failure.
+      fail-fast: ${{ inputs.anchor != '' }}
       # The VMs: the full validation's (release_increment.full_matrix), or an incremental plan's (--plan).
       matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
     # An incremental validation's python and browser VMs run on hosted runners; its product and desktop VMs need the
@@ -339,10 +342,10 @@ jobs:
       TICO_GIT_CHECK_PRIVATE_KEY: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_PRIVATE_KEY || '' }}
       TICO_GIT_CHECK_INSTALLATION_ID: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_INSTALLATION_ID || '' }}
       TICO_GIT_CHECK_REPOSITORY: ${{ matrix.part == 'python' && secrets.TICO_GIT_CHECK_REPOSITORY || '' }}
+    # No disk clean-up step: hosted ubuntu-24.04 runners start with about 85 GB free, and the capacity preflight below
+    # (hosted_release_check.py prepare) removes the unused SDKs only when / has less than the 35 GiB the gate needs.
+    # Removing them anyway cost each hosted part 47-143 s on the release's critical path.
     steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - name: Validate inputs before checkout
         env:
           TICO_HOSTED_ENVIRONMENT: ${{ runner.environment }}
