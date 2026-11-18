@@ -8,4 +8,4 @@ pytest-cov==7.1.0  # the merge queue's diff coverage gate (scripts/diff_coverage
 coverage==7.17.0  # the same gate's statement analysis; pinned with pytest-cov
 time-machine>=2.16,<3  # the factory simulation's fake clock (evals/factory)
 
-websockets>=16,<17  # real Rust screen relay contract client
+websockets>=17,<18  # real Rust screen relay contract client
