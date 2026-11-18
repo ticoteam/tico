@@ -297,6 +297,7 @@ to its one event, and writes that event before it changes the call.
    and posts one short prep note in the thread.
    The task goes to exactly that bot, it is private unless the thread is a company thread, and none is given when the
    booker can no longer read the thread. `prepped_at` is set in the same write, so the tasks are given once.
+   A bot attached after that sweep gets its prep task as soon as it is added.
 5. **The start.** The meeting window shows the start time and Join. The first join reads the event live: a cancelled
    one refuses the join and cancels the call (`call_cancelled`, 409), a moved one moves it, and a calendar that cannot
    be read lets the join go on. That join starts the call: it is live from then, with the bots it was booked with, and
@@ -316,7 +317,10 @@ Not done: repeating scheduled calls and replies to the invitation in Tico.
 | Leave | The person who joined, even after losing access to the thread |
 | End | The connector |
 | Change a scheduled call's time, cancel it | Its booker and the thread's managers |
-| Anything | Bots are refused. BotOps acts as the person it works for |
+| Read a bot's brief | People who can read the thread and see the bot, and the attached bot itself |
+| Add to a bot's brief | The attached bot, including during a private task |
+
+BotOps acts as the person it works for when using call controls.
 
 Errors: `meet_unavailable` (503) when no call provider is available to the caller, Google will not make the space,
 Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot join. `not_tico_meet` (409) for a token

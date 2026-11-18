@@ -2253,7 +2253,7 @@ def install_live_meetings(app, store, auth, write):
                     "meeting.bot_joined",
                     {"bots": added, "joined_by": who.actor, "rights": "meeting_read_and_reply"},
                 )
-                app.state.call_prep.attached_to_meeting(c, rid)
+                app.state.call_prep.attached_to_meeting(c, rid, added)
             return {"id": rid, "bots": attached, "added": added, "event_id": _meeting(c, rid)["next_event_id"]}
 
         return mutate(request, body, work)

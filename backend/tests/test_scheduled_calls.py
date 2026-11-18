@@ -7,12 +7,13 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+import time_machine
 
 from backend import calendar_api, calendar_store, call_prep, calls, gcal_live, gcal_watch, migrations
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.calls import join, meet, thread  # noqa: F401
-from backend.tests.helpers.live_meetings import live  # noqa: F401
+from backend.tests.helpers.live_meetings import attach, chunk, live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 
 ANA = "ana@acme.example"
@@ -280,7 +281,7 @@ def test_without_google_the_private_event_goes_on_the_bookers_tico_calendar(meet
 def test_the_sweep_preps_the_exact_bot_once_and_at_once_inside_thirty_minutes(meet, google):
     google.connected.add(ANA)
     cid = thread(meet)
-    later = schedule(meet, cid, minutes=120, bots=["ops"])
+    later = schedule(meet, cid, minutes=120, bots=["finance"])
     soon = schedule(meet, cid, minutes=10, bots=["ops"])
     assert sweep(meet) == {"prepped": 1}
     # The thread is a private one (a chat between Ana, Ben and Ops): the task is private too.
@@ -300,11 +301,42 @@ def test_the_sweep_preps_the_exact_bot_once_and_at_once_inside_thirty_minutes(me
     token = turn["token"]
     post(meet, f"attempts/{turn['id']}/started", {"thread_id": "synthetic-prep"}, token=computer["token"])
     facts = {"text": "The checkout rollout reached 45% on Tuesday."}
-    post(meet, f"calls/{later['id']}/bot-notes", facts, token=token, expected=403)
+    post(meet, f"calls/{later['id']}/bot-notes", facts, token=token, expected=404)
     assert post(meet, f"calls/{soon['id']}/bot-notes", facts, token=token) == {"ok": True}
     assert get(meet, f"calls/{soon['id']}/bot-notes?bot=ops", token="ben-test") == facts
     assert join(meet, soon["id"])["call"]["state"] == "live"
     assert len(_prep_tasks(meet)) == 1
+
+
+def test_a_late_bot_gets_scheduled_prep_before_anyone_joins(meet, google):
+    call = schedule(meet, thread(meet), minutes=10, bots=["ops"])
+    assert sweep(meet) == {"prepped": 1}
+    meeting_id = call["meeting_id"]
+    assert attach(meet, meeting_id, "ops", "finance")["added"] == ["finance"]
+    assert attach(meet, meeting_id, "finance")["added"] == []
+    assert get(meet, f"calls/{call['id']}")["state"] == "scheduled"
+    assert _prep_tasks(meet) == [
+        ("Prepare for Acme planning", "bot:ops", 1),
+        ("Prepare for Acme planning", "bot:finance", 1),
+    ]
+    join(meet, call["id"])
+    assert len(_prep_tasks(meet)) == 2
+
+
+def test_a_pending_reply_skips_its_own_starved_scheduled_prep(meet, google):
+    now = datetime.now(timezone.utc)
+    with time_machine.travel(now, tick=False):
+        call = schedule(meet, thread(meet), minutes=30, bots=["ops"], speak_replies=False)
+        assert sweep(meet) == {"prepped": 1}
+
+    with time_machine.travel(now + timedelta(minutes=31), tick=False):
+        join(meet, call["id"])
+        computer = runner(meet)
+        assign(meet, computer, "ops")
+        ready(meet, computer, ["ops"], capabilities=["private_lanes_v1"])
+        chunk(meet, call["meeting_id"], 1, 0, 45_000, "Can we cover reliability next?")
+        reply = claim(meet, computer, "ops")
+        assert reply["message"]["refs"]["live_meeting"]["meeting_id"] == call["meeting_id"]
 
 
 def test_a_bot_booked_by_its_slug_is_held_and_prepped_by_its_id(meet, google):

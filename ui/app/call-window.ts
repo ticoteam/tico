@@ -549,13 +549,16 @@ async function cwBriefRead(st: CwState, bot: string): Promise<void> {
   }
   if (CW === st && st.brief === brief) cwPeopleDraw(st);
 }
-liveOn('threads', (event: ThreadsEvent & {call_id?: string}) => {
-  const st = CW;
-  if (!st || event?.kind !== 'call.notes' || event.call_id !== st.id) return;
+function cwBriefSoon(st: CwState): void {
+  if (!st.brief) return;
   liveSoon('call-brief:' + st.id, () => {
     if (CW === st && st.brief) void cwBriefRead(st, st.brief.bot);
   }, 200);
+}
+liveOn('threads', (event: ThreadsEvent & {call_id?: string}) => {
+  if (CW && event?.kind === 'call.notes' && event.call_id === CW.id) cwBriefSoon(CW);
 });
+liveOn('reset', () => { if (CW) cwBriefSoon(CW); });
 function cwBarDraw(st: CwState, v: CallRecord | null): void {
   const bar = st.el.querySelector<HTMLElement>('.cw-bar'); if (!bar) return;
   const here = cwHere(st);

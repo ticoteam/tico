@@ -151,9 +151,11 @@ hook it does nothing. `payload` = `{"title": "<caller name>", "body": "# <thread
 
 - `call_bot_notes` keeps a bounded brief and the prep task ID per call and bot. The scheduled sweep records its
   task there. Starting a live call, attaching bots, or starting a scheduled call early queues prep for the bots
-  with no brief or prep task yet, in the same transaction as the call change.
+  with no brief or prep task yet, in the same transaction as the call change. Bots attached to a scheduled call
+  after its prep sweep get scheduled prep immediately.
 - `GET /api/v2/calls/{id}/bot-notes?bot=<id-or-slug>` reads the brief under the call's access rules.
-  `POST /api/v2/calls/{id}/bot-notes` appends as an attached bot. `call_notes.text(c, call_id, bot_id)` reads it
+  `POST /api/v2/calls/{id}/bot-notes` appends as an attached bot, including from a private task.
+  `call_notes.text(c, call_id, bot_id)` reads it
   using the bot's stable ID. `call_notes.append(c, call_id, bot_id, note)` writes an authorized addition and a
   `call.notes` change in the caller's transaction.
 

@@ -1685,13 +1685,10 @@ def guard_write(c, who, path, auth):
     # These controls already enforce their own run ownership and never publish company content.
     if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/")):
         return
+    if re.fullmatch(r"/api/v2/calls/[^/]+/bot-notes", path):
+        return  # the call-notes route enforces the bot's identity and current attachment
     if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
         return
-    bot_notes = re.fullmatch(r"/api/v2/calls/([^/]+)/bot-notes", path)
-    if bot_notes:
-        from . import call_notes
-
-        return call_notes.private_write(c, who, bot_notes[1])
     meetings = meeting_sources(c).attempt(who.attempt_id)
     if private_meetings(c, meetings):
         # A meeting turn is one scoped reply, not an ordinary task or company publisher.

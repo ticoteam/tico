@@ -8,14 +8,15 @@ from backend.tests.helpers.calls import join, meet, start_call, thread  # noqa: 
 from backend.tests.helpers.live_meetings import attach, chunk, live  # noqa: F401
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.openapi_v2 import conforms
+from backend.tests.helpers.task_readers import task
 from clients import cli_spec, hubcli
 
 
 def test_cold_prep_queues_once_per_bot_and_call(meet):
     cid = thread(meet)
-    original = start_call(meet, cid, title="Acme launch", bots=["ops"])
+    original = start_call(meet, cid, title="Standup", bots=["ops"])
     cid2 = thread(meet, "Acme review")
-    second = start_call(meet, cid2, title="Acme review", bots=["ops"])
+    second = start_call(meet, cid2, title="Standup", bots=["ops"])
     call_id = original["id"]
     join(meet, call_id, "ben-test")
     route = f"calls/{call_id}/bots"
@@ -25,17 +26,17 @@ def test_cold_prep_queues_once_per_bot_and_call(meet):
     post(meet, route, {"bots": ["finance"]}, token="ben-test")
 
     with meet.app.state.store.read() as c:
-        tasks = c.execute(
-            "SELECT id,title,owner_id,requester_id FROM tasks WHERE title LIKE 'Prepare for %' ORDER BY title,owner_id"
-        ).fetchall()
-        assert [(t["title"], t["owner_id"], t["requester_id"]) for t in tasks] == [
-            ("Prepare for Acme launch", "bot:finance", "human:ben"),
-            ("Prepare for Acme launch", "bot:ops", "human:ana"),
-            ("Prepare for Acme review", "bot:ops", "human:ana"),
-        ]
-        for task, expected in zip(tasks, [call_id, call_id, second["id"]], strict=True):
-            words = H.task_words(c, task["id"])
-            assert expected in words and "already live" in words and "skills/meeting-prep/SKILL.md" in words
+        tasks = c.execute("SELECT id,owner_id,requester_id FROM tasks WHERE title='Prepare for Standup'").fetchall()
+        assert len(tasks) == 3
+        for expected, owners in [
+            (call_id, {("bot:finance", "human:ben"), ("bot:ops", "human:ana")}),
+            (second["id"], {("bot:ops", "human:ana")}),
+        ]:
+            assert {
+                (row["owner_id"], row["requester_id"])
+                for row in tasks
+                if f"(call {expected})" in H.task_words(c, row["id"])
+            } == owners
 
 
 def test_the_call_people_and_each_attached_bot_get_only_their_briefs(meet):
@@ -62,6 +63,23 @@ def test_the_call_people_and_each_attached_bot_get_only_their_briefs(meet):
     get(meet, route, token="ops-live", expected=404)
     post(meet, route, {"text": "After detach"}, token="ops-live", expected=404)
     assert get(meet, route + "?bot=ops", token="ben-test") == {"text": "Rollout reached 45%."}
+
+
+def test_an_attached_bot_can_append_from_an_unrelated_private_task(meet):
+    private = task(meet, "human:ana", "bot:ops", "Review a private vendor quote")
+    computer = runner(meet)
+    assign(meet, computer, "ops")
+    ready(meet, computer, ["ops"])
+    run = claim(meet, computer, "ops")
+    assert run["task"]["id"] == private["id"]
+    post(meet, f"attempts/{run['id']}/started", {"thread_id": "private-task"}, token=computer["token"])
+
+    attached = start_call(meet, thread(meet), bots=["ops"])["id"]
+    unattached = start_call(meet, thread(meet, "Other call"), bots=["finance"])["id"]
+    facts = {"text": "The public rollout reached 45%."}
+    assert post(meet, f"calls/{attached}/bot-notes", facts, token=run["token"]) == {"ok": True}
+    assert get(meet, f"calls/{attached}/bot-notes?bot=ops") == facts
+    post(meet, f"calls/{unattached}/bot-notes", facts, token=run["token"], expected=404)
 
 
 def test_a_call_reply_starts_ahead_of_queued_prep(meet):

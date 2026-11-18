@@ -223,14 +223,20 @@ class Prep:
     def live(self, c: Any, row: Row) -> None:
         self._tasks(c, row, live=True)
 
-    def attached_to_meeting(self, c: Any, meeting_id: str) -> None:
+    def attached_to_meeting(self, c: Any, meeting_id: str, added: list[str]) -> None:
         row = c.execute(
-            "SELECT * FROM calls WHERE live_meeting_id=? AND state='live' AND ending_at IS NULL", (meeting_id,)
+            "SELECT * FROM calls WHERE live_meeting_id=? AND ending_at IS NULL "
+            "AND (state='live' OR (state='scheduled' AND prepped_at IS NOT NULL))",
+            (meeting_id,),
         ).fetchone()
-        if row:
+        if row is None:
+            return
+        if row["state"] == "live":
             self.live(c, dict(row))
+        else:
+            self._tasks(c, dict(row), live=False, added=added)
 
-    def _tasks(self, c: Any, row: Row, *, live: bool) -> list[str]:
+    def _tasks(self, c: Any, row: Row, *, live: bool, added: list[str] | None = None) -> list[str]:
         bots = c.execute(
             "SELECT b.bot,b.joined_by,n.prep_task_id,LENGTH(n.text) AS note_length "
             "FROM live_meeting_bots b LEFT JOIN call_bot_notes n ON n.call_id=? AND n.bot_id=b.bot "
@@ -240,13 +246,16 @@ class Prep:
         if not bots:
             return []
         private = bool(self.calls.thread_private(c, row["thread_id"]))
+        from_attachment = live or added is not None
         tasks: list[str] = []
         for bot in bots:
             bot_id: str = bot["bot"]
-            requester: str = bot["joined_by"] if live else row["connector_actor"]
-            if live and (bot["prep_task_id"] or bot["note_length"]):
+            if added is not None and bot_id not in added:
                 continue
-            if live and not self.calls.attachment_standing(c, requester, row["thread_id"], bot_id):
+            requester: str = bot["joined_by"] if from_attachment else row["connector_actor"]
+            if from_attachment and (bot["prep_task_id"] or bot["note_length"]):
+                continue
+            if from_attachment and not self.calls.attachment_standing(c, requester, row["thread_id"], bot_id):
                 continue
             owner = "bot:" + bot_id
             # A bot that cannot take the task (paused, gone, refused by a rule, handed elsewhere) costs only its own.
@@ -260,7 +269,12 @@ class Prep:
                     owner,
                     conversation_id=row["thread_id"],
                     lint=False,
-                    deduplicate=False,
+                    same=lambda conn, task_id: (
+                        conn.execute(
+                            "SELECT 1 FROM call_bot_notes WHERE call_id=? AND prep_task_id=?", (row["id"], task_id)
+                        ).fetchone()
+                        is not None
+                    ),
                     private=private,
                     wake_refs={"call_prep": row["id"]},
                     instructions=instructions(row, live),
