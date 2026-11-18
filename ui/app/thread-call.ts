@@ -24,7 +24,12 @@ interface CallRecord {
   // The bots in the call: slugs, or (an older voice view) each bot with what it is doing and its words now; what each is
   // doing now comes in `voice` (null without voice).
   bots?: (string | CallBotRaw)[]; voice?: CallVoiceView | null;
+  // What shows on the stage, as this viewer may see it (null for nothing; absent from an older server), and how many
+  // times it changed: a read with a lower `stage_n` is older (docs/meet.md, Sharing).
+  stage?: CallStageView | null; stage_n?: number;
 }
+// A screen, or a Tico file: its id, version and title, or only `no_access` when the viewer may not read it.
+interface CallStageView { kind: 'screen' | 'file'; by: string; at?: string | null; file_id?: string; version?: number; title?: string; no_access?: boolean; }
 // A bot in a call as the server may send it: `state` is listening, waiting, thinking, making_voice or speaking.
 interface CallBotRaw { slug?: string; state?: string | null; caption?: string | null; }
 interface CallListReply { calls?: CallRecord[]; available?: boolean; providers?: string[]; }
@@ -34,12 +39,10 @@ interface CallJoinReply { call?: CallRecord; token: string; url: string; }
 interface CallThreadInfo { call?: CallRecord | null; none?: boolean; off?: boolean; removed?: boolean; providers?: string[]; }
 // The parts of LiveKit's room, participants and tracks this file reads.
 interface CallPublication { source?: unknown; track?: { stop?: () => void; mediaStreamTrack?: { stop?: () => void } } | null; }
-// `attributes`: what each person says of themself to the room; `showing` is what they show on the stage (CALL_SHOW).
-interface CallParticipant { identity: string; isSpeaking?: boolean; isMicrophoneEnabled?: boolean; attributes?: Record<string, string>; }
+interface CallParticipant { identity: string; isSpeaking?: boolean; isMicrophoneEnabled?: boolean; }
 interface CallTrack { kind: string; source: unknown; attach(): HTMLMediaElement; detach(): HTMLMediaElement[]; }
 interface CallLocal {
-  identity?: string; isSpeaking?: boolean; attributes?: Record<string, string>;
-  setAttributes?(attributes: Record<string, string>): Promise<unknown>;
+  identity?: string; isSpeaking?: boolean;
   setMicrophoneEnabled(on: boolean): Promise<unknown>;
   setScreenShareEnabled(on: boolean, options: {audio: boolean}): Promise<unknown>;
   trackPublications?: Map<string, CallPublication>;
@@ -60,7 +63,7 @@ interface LivekitNamespace {
     ParticipantDisconnected: string; LocalTrackUnpublished: string; Disconnected: string;
     // Read by the meeting window (who speaks, who is muted, sound blocked); an older client may not have them.
     ActiveSpeakersChanged?: string; TrackMuted?: string; TrackUnmuted?: string; AudioPlaybackStatusChanged?: string;
-    LocalTrackPublished?: string; ParticipantAttributesChanged?: string;
+    LocalTrackPublished?: string; Reconnecting?: string; Reconnected?: string;
   };
   Track: {Source: {ScreenShare: unknown}};
   DisconnectReason?: {PARTICIPANT_REMOVED: unknown};
@@ -69,8 +72,9 @@ interface LivekitNamespace {
 interface CallState {
   id: string; threadId: string; title: string; connector: string | undefined; room: CallRoom;
   token: string; url: string; muted: boolean; sharing: boolean; leaving: boolean; timer: number; gen: number;
-  // What this tab shows on the stage ('' | 'screen' | 'file:<id>') and since when (ms): told to the room (callShow).
-  showing: string; showingAt: number;
+  // The stage (thread-call-live.ts): `stageN` is the call view's `stage_n` this tab's own last write left, `staging` the
+  // writes still on their way, and `reconnecting` while LiveKit reconnects (its unpublishing then is not a stop).
+  stageN: number; staging: number; reconnecting: boolean;
 }
 
 const CALL_LIB = '/vendor/livekit-client.umd.min.js';
@@ -97,9 +101,6 @@ const CALL_SETTLED = new Set<string>();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end',
   window: 'open_in_new', more: 'expand_more'};
-// What each person shows on the stage, as their own LiveKit attributes (docs/meet.md, Sharing): `showing` is '', 'screen'
-// or 'file:<id>', `showing_at` when it started (ms). The newest wins for everyone; a late joiner reads them on joining.
-const CALL_SHOW = 'showing', CALL_SHOW_AT = 'showing_at';
 // The call's Tico voice in the LiveKit room (backend/call_media.py RECORDER_PREFIX): never shown as a person.
 const CALL_VOICE_PREFIX = 'tico-recorder-';
 

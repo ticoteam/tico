@@ -12,6 +12,7 @@ from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401
 from backend.tests.helpers.call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
 from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
+from backend.tests.helpers.visuals import task_with_file
 from clients import gateway
 from backend.tests.helpers.calls import (
     PCM_EIGHT_SECONDS,
@@ -612,3 +613,134 @@ def test_a_rejoined_person_who_later_loses_the_thread_is_taken_out_of_the_room_a
         "the sweep takes Ben out of the room after he loses the thread"
     )
     assert "human:ben" not in media.rooms[room]
+
+
+# --- the stage (docs/meet.md, Sharing): one record on the call, checked against each viewer's own rights
+
+
+def _stage_call(api, *tokens):
+    """A live call in a thread between Ana (who starts it), Ben, Cara and the Ops bot; `tokens` join it."""
+    with api.app.state.store.transaction() as c:
+        cid = H.open_conversation(
+            c, "human:ana", ["human:ben", "human:cara", "bot:ops"], kind="chat", subject="Acme launch"
+        )["id"]
+    call_id = start_call(api, cid)["id"]
+    for token in tokens:
+        join(api, call_id, token)
+    return cid, call_id
+
+
+def _stage(api, call_id, token):
+    return get(api, f"calls/{call_id}", token=token)["stage"]
+
+
+def _show(api, call_id, token, **body):
+    return api.put(f"/api/v2/calls/{call_id}/stage", json=body, headers=headers(token))
+
+
+def _unshow(api, call_id, token):
+    return api.request("DELETE", f"/api/v2/calls/{call_id}/stage", json={}, headers=headers(token))
+
+
+def test_a_shown_file_needs_its_presenter_to_read_it_and_names_nothing_to_a_viewer_who_cannot(meet):
+    _, ben_file, version = task_with_file(meet, private=True, name="plan.html", text="<p>Acme plan</p>")  # Ana, Ben
+    _, call_id = _stage_call(meet, "ana-test", "ben-test", "cara-test")
+
+    refused = _show(meet, call_id, "cara-test", kind="file", file_id=ben_file)
+    assert refused.status_code == 404, "Cara may not read the file, so she may not show it"
+    assert _stage(meet, call_id, "ana-test") is None
+
+    shown = _show(meet, call_id, "ben-test", kind="file", file_id=ben_file)
+    assert shown.status_code == 200, shown.text
+    seen = shown.json()["stage"]
+    assert seen["kind"] == "file" and seen["by"] == "human:ben"
+    assert seen["file_id"] == ben_file and seen["version"] == version and seen["title"]
+    assert _stage(meet, call_id, "ana-test")["file_id"] == ben_file
+    hidden = _stage(meet, call_id, "cara-test")
+    assert hidden["kind"] == "file" and hidden["no_access"] is True
+    assert "file_id" not in hidden and "title" not in hidden and "version" not in hidden
+    assert ben_file not in json.dumps(get(meet, f"calls/{call_id}", token="cara-test"))
+    assert any(row["kind"] == "call.stage" and row["subject_id"] == call_id for row in _changes(meet))
+
+
+def test_the_newest_stage_write_wins_and_only_its_presenter_or_the_connector_clears_it(meet):
+    _, call_id = _stage_call(meet, "ana-test", "ben-test")
+
+    assert _show(meet, call_id, "ana-test", kind="screen").status_code == 200
+    first = get(meet, f"calls/{call_id}", token="ben-test")
+    assert first["stage"]["kind"] == "screen" and first["stage"]["by"] == "human:ana"
+    assert _show(meet, call_id, "ben-test", kind="screen").status_code == 200
+    second = get(meet, f"calls/{call_id}", token="ana-test")
+    assert second["stage"]["by"] == "human:ben", "Ben's newer share replaces Ana's"
+    assert second["stage_n"] > first["stage_n"]
+
+    # Cara reads the thread but is not in the call: she can neither show nor stop.
+    assert _show(meet, call_id, "cara-test", kind="screen").status_code == 403
+    assert _unshow(meet, call_id, "cara-test").status_code == 403
+    assert _stage(meet, call_id, "ana-test")["by"] == "human:ben"
+
+    # A stop from someone in the call who is not showing changes nothing (Ana's stop sent after Ben took over).
+    join(meet, call_id, "cara-test")
+    assert _unshow(meet, call_id, "cara-test").status_code == 200
+    assert _stage(meet, call_id, "ana-test")["by"] == "human:ben"
+    stopped = _unshow(meet, call_id, "ben-test")
+    assert stopped.status_code == 200 and stopped.json()["stage"] is None
+    assert stopped.json()["stage_n"] > second["stage_n"], "a stop counts too, so a read from before it is older"
+
+    assert _show(meet, call_id, "cara-test", kind="screen").status_code == 200
+    assert _unshow(meet, call_id, "ana-test").json()["stage"] is None, "the connector may clear anyone's"
+
+    assert _show(meet, call_id, "ben-test", kind="screen").status_code == 200
+    post(meet, f"calls/{call_id}/leave", {}, token="ben-test")
+    assert _stage(meet, call_id, "ana-test") is None, "a presenter who leaves takes their share with them"
+
+
+def test_a_shown_file_turns_to_no_access_for_a_viewer_who_loses_it_mid_share(meet):
+    task_id, file_id, _ = task_with_file(meet, private=False, name="plan.html", text="<p>Acme plan</p>")
+    _, call_id = _stage_call(meet, "ana-test", "ben-test", "cara-test")
+    assert _show(meet, call_id, "ben-test", kind="file", file_id=file_id).status_code == 200
+    assert _stage(meet, call_id, "cara-test")["file_id"] == file_id
+
+    made_private = meet.post(f"/api/v2/tasks/{task_id}", json={"private": True}, headers=headers("ben-test"))
+    assert made_private.status_code == 200, made_private.text
+
+    hidden = _stage(meet, call_id, "cara-test")
+    assert hidden["no_access"] is True and "file_id" not in hidden
+    assert _stage(meet, call_id, "ana-test")["file_id"] == file_id
+
+
+def test_losing_the_thread_removes_the_person_even_when_livekit_does_not_answer(meet):
+    cid, call_id = _stage_call(meet, "ana-test", "ben-test")
+    meet.app.state.calls.sweep()
+    media = meet.app.state.call_media
+    media.down = True
+    with meet.app.state.store.transaction() as c:
+        owner = meet.app.state.calls.auth.identity_for_actor(c, "human:ana")
+        threads.remove_member(c, owner, cid, "human:ben")
+    meet.app.state.calls.sweep()
+    ben = [p for p in get(meet, f"calls/{call_id}")["participants"] if p["actor"] == "human:ben"][0]
+    assert ben["removed_at"], "Ben is out of the call though LiveKit did not answer"
+    media.down = False
+    meet.app.state.calls.sweep()
+    assert ("tico-call-" + call_id, "human:ben") in media.removed
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [b"{not json", b"[1, 2]", b'{"participants": "ana"}', b'{"participants": [1]}', b" " * 1_000_001],
+    ids=["not-json", "not-an-object", "not-a-list", "not-objects", "too-large"],
+)
+def test_a_participant_list_livekit_garbles_is_a_read_that_did_not_answer(monkeypatch, answer):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, n=-1):
+            return answer[:n] if n >= 0 else answer
+
+    monkeypatch.setattr(call_media.urllib.request, "urlopen", lambda request, timeout=None: Response())
+    with pytest.raises(call_media.MediaUnavailable):
+        call_media.LiveKitMedia(CONFIG).participants("tico-call-x")

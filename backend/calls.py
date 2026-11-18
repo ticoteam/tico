@@ -239,6 +239,42 @@ class CallBots(Contract):
     bots: list[str] = Field(min_length=1, max_length=BOT_LIMIT)
 
 
+class CallStage(Contract):
+    """What to show on a Tico Meet call's stage: your screen, or a Tico file you may read (docs/meet.md, Sharing)."""
+
+    kind: Literal["screen", "file"]
+    file_id: str | None = Field(default=None, max_length=200)
+
+
+def _stage_stored(row):
+    """`calls.stage` as stored (JSON): what shows and `n`, the count of stage writes; {} for a call never shared on."""
+    try:
+        found = json.loads(row.get("stage") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _stage_record(row):
+    """What shows on the call's stage, or None for nothing."""
+    found = _stage_stored(row)
+    if found.get("kind") not in ("screen", "file") or not found.get("by"):
+        return None
+    return found
+
+
+def _stage_n(row):
+    try:
+        return int(_stage_stored(row).get("n") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _present(participant):
+    """Whether a participant row is someone in the call now: joined, not left, not removed."""
+    return bool(participant) and participant["left_at"] is None and participant["removed_at"] is None
+
+
 def _call(c, call_id):
     row = c.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
     if not row:
@@ -416,8 +452,37 @@ class Calls:
             "speak_replies": bool(row["speak_replies"]),
             "voice": self.voice.view(call_id, bots, voiced),
             "holds": holds,
+            "stage": self._stage_view(c, row, who),
+            "stage_n": _stage_n(row),
             **self.provider_fields(c, row, who),
         }
+
+    def _stage_view(self, c, row, who):
+        """The stage as `who` sees it, checked on every read: a file they may not read (now) is only `no_access`, with
+        nothing that names it. Nothing shows once the call is no longer live or its presenter has left."""
+        stage = _stage_record(row)
+        if not stage or row["state"] != "live" or row["ending_at"]:
+            return None
+        if not _present(_participant(c, row["id"], stage["by"])):
+            return None
+        shown = {"kind": stage["kind"], "by": stage["by"], "at": stage.get("at")}
+        if stage["kind"] == "screen":
+            return shown
+        file = self._stage_file(c, who, stage.get("file_id"))
+        if file is None:
+            return {**shown, "no_access": True}
+        return {**shown, "file_id": file["id"], "version": int(stage.get("version") or 0), "title": file["title"]}
+
+    def _stage_file(self, c, who, file_id):
+        """The file's row when `who` may read it now, else None."""
+        files = getattr(self.app.state, "files", None)
+        if files is None or not file_id:
+            return None
+        try:
+            row = files.visible_file(c, who, file_id)
+        except Problem:
+            return None
+        return None if row["state"] == "deleted" else row
 
     @staticmethod
     def _in_call(row, participant):
@@ -784,6 +849,7 @@ class Calls:
                 (H.now(), int(_google(row)), call_id, who.actor),
             )
             self._record(c, who.actor, call_id, row["thread_id"], "call.left", {"actor": who.actor})
+            self._drop_stage(c, row, who.actor)
         if not current:
             return {"id": call_id, "left": True}
         return self.view(c, call_id, who)
@@ -802,6 +868,60 @@ class Calls:
             live_meetings._end_open_turns(c, row["live_meeting_id"])
             self._record(c, who.actor, call_id, row["thread_id"], "call.ending", {})
         return self.view(c, call_id, who)
+
+    def set_stage(self, c, who, call_id, kind, file_id=None):
+        """Show the caller's screen or a Tico file on the stage, for everyone in the call. Only someone in the call may,
+        and a file only when they may read it; its current version is what shows. The newest write wins: it replaces
+        whatever showed, whoever showed it."""
+        row = self._stage_call(c, who, call_id)
+        stage = {"kind": kind, "by": who.actor, "at": H.now(), "n": _stage_n(row) + 1}
+        if kind == "file":
+            file = self._stage_file(c, who, file_id)
+            if file is None:
+                raise Problem("not_found", "File not found", 404)
+            stage.update(file_id=file["id"], version=int(file["current_version"]))
+        elif file_id:
+            raise Problem("validation_error", "A screen takes no file_id", 422)
+        c.execute("UPDATE calls SET stage=?,updated_at=? WHERE id=?", (json.dumps(stage), H.now(), call_id))
+        self._record(
+            c, who.actor, call_id, row["thread_id"], "call.stage", {"kind": kind, "file_id": stage.get("file_id")}
+        )
+        return self.view(c, call_id, who)
+
+    def clear_stage(self, c, who, call_id):
+        """Stop showing: the presenter's own stop, or the connector's. Anyone else's leaves the stage as it is (a stop
+        sent after someone else took the stage changes nothing)."""
+        row = self._stage_call(c, who, call_id, ending_ok=True)
+        stage = _stage_record(row)
+        if stage and who.actor in (stage["by"], row["connector_actor"]):
+            self._drop_stage(c, row, stage["by"])
+        return self.view(c, call_id, who)
+
+    def _stage_call(self, c, who, call_id, ending_ok=False):
+        """The call for a stage write: a Tico Meet call the caller reads and is in now (or started)."""
+        human_only(who)
+        self.auth.domain(who)
+        row = _call(c, call_id)
+        if not readable(c, who.actor, row["thread_id"]):
+            raise Problem("not_found", "Call not found", 404)
+        if _google(row):
+            raise Problem("not_tico_meet", "This call is a Google Meet: share in Meet", 409)
+        if not ending_ok:
+            _require_open(row)
+        connector_stop = ending_ok and who.actor == row["connector_actor"]
+        if not connector_stop and not _present(_participant(c, call_id, who.actor)):
+            raise Problem("not_joined", "Join the call to show something in it", 403)
+        return row
+
+    def _drop_stage(self, c, row, actor):
+        """Clear the stage when `actor` is the one showing on it. The count goes on, so a read can tell an older one."""
+        current = _call(c, row["id"])
+        stage = _stage_record(current)
+        if not stage or stage["by"] != actor:
+            return
+        cleared = json.dumps({"n": _stage_n(current) + 1})
+        c.execute("UPDATE calls SET stage=?,updated_at=? WHERE id=?", (cleared, H.now(), row["id"]))
+        self._record(c, actor, row["id"], row["thread_id"], "call.stage", {"kind": None})
 
     def retry_action_items(self, c, who, call_id):
         """The connector asks again for action items the Gateway could not make. Nothing is drafted here: the call is
@@ -1452,9 +1572,10 @@ class Calls:
                 )
                 if not attachment_standing(c, r["joined_by"], row["thread_id"], r["bot"])
             ]
+        # Who lost the thread is taken out first, whatever LiveKit answers below: a failed read never keeps them in.
+        with self.store.transaction() as c:
+            self._keep_to_thread(c, row, revoked, stale_bots)
         if _google(row):
-            with self.store.transaction() as c:
-                self._keep_to_thread(c, row, revoked, stale_bots)
             return True
         room = row["room_name"]
         exists = self.media.room_exists(room)
@@ -1473,7 +1594,6 @@ class Calls:
         with self.store.transaction() as c:
             if exists and row["media_seen_at"] is None:
                 c.execute("UPDATE calls SET media_seen_at=? WHERE id=?", (H.now(), call_id))
-            self._keep_to_thread(c, row, revoked, stale_bots)
             if present is not None:
                 ended = self._presence(c, _call(c, call_id), present)
         if ended:
@@ -1540,6 +1660,7 @@ class Calls:
             )
             if cursor.rowcount:
                 self._record(c, actor, call_id, row["thread_id"], "call.participant_removed", {"actor": actor})
+                self._drop_stage(c, row, actor)
         for slug in stale_bots:
             c.after_commit.append(lambda slug=slug: self.voice.cancel(call_id, slug))
             cancel_bot_turns(c, row["live_meeting_id"], slug, "attacher_lost_thread")
@@ -2103,6 +2224,29 @@ def install_calls(app, store, auth, write):
                 with store.read() as c:
                     return calls.view(c, call_id, who)
         return result
+
+    @app.put(
+        "/api/v2/calls/{call_id}/stage",
+        **api_v2(
+            "Calls",
+            "setCallStage",
+            "Show your screen or a Tico file you may read on a Tico Meet call's stage; the newest replaces what showed",
+            "Call",
+        ),
+    )
+    def set_call_stage(request: Request, call_id: str, body: CallStage):
+        who = request.state.identity
+        return write(request, body, lambda c: calls.set_stage(c, who, call_id, body.kind, body.file_id))
+
+    @app.delete(
+        "/api/v2/calls/{call_id}/stage",
+        **api_v2(
+            "Calls", "clearCallStage", "Stop showing on a call's stage: its presenter's, or the connector's", "Call"
+        ),
+    )
+    def clear_call_stage(request: Request, call_id: str, body: Empty):
+        who = request.state.identity
+        return write(request, body, lambda c: calls.clear_stage(c, who, call_id))
 
     @app.post(
         "/api/v2/calls/{call_id}/action-items/retry",

@@ -151,7 +151,15 @@ button.cw-face{cursor:pointer}
 .cw-pop-row:hover,.cw-pop-row:focus-visible{background:var(--hover)}
 .cw-pop-row .nav-icon{font-size:18px;color:var(--muted)}
 .cw-pop-lib{display:flex;flex-direction:column;max-height:min(320px,50vh)}
+.cw-pop .thv-lib-q:is(:focus,:focus-visible){outline:0;box-shadow:none;border:1px solid var(--muted)}
 
+/* a file in the chat: one 40px row as the task card, its mark in a square, no host line */
+.cw .md-card{height:40px;padding:0 12px 0 5px;border-radius:8px;background:var(--surface)}
+.cw .md-card:hover,.cw .md-card:focus-visible{border-color:var(--g4)}
+.cw .md-card-icon{display:grid;place-items:center;width:30px;height:30px;min-width:0;padding:0;border-radius:6px;background:var(--g2);font-size:0;letter-spacing:normal}
+.cw .md-card-icon::before{content:"description";font-family:"Material Symbols Outlined";font-weight:300;font-size:15px;line-height:var(--lh-none);color:var(--soft,var(--g7))}
+.cw .md-card-host{display:none}
+.cw .md-card-name{font-weight:500}
 /* a task in the chat: its state, its title, its owner */
 .cw-tcard{display:inline-flex;align-items:center;gap:8px;max-width:100%;box-sizing:border-box;height:40px;padding:0 12px 0 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
 .cw-tcard:hover{border-color:var(--g4)}
@@ -237,6 +245,9 @@ button.cw-face{cursor:pointer}
 /* light: the window white */
 :root[data-theme="light"] .cw{background:#fff}
 @media (prefers-color-scheme:light){:root[data-theme="system"] .cw{background:#fff}}
+:root[data-theme="light"] .cw-file{background:#fff}
+:root[data-theme="light"] .cw-file-head{background:var(--g1)}
+@media (prefers-color-scheme:light){:root[data-theme="system"] .cw-file{background:#fff}:root[data-theme="system"] .cw-file-head{background:var(--g1)}}
 
 /* a narrow window or a phone while someone shares: the screen above the tabs */
 @media (max-width:760px){
@@ -268,9 +279,11 @@ button.cw-face{cursor:pointer}
   .cw .thv-composer{margin:0 12px 12px}
   .cw .thv-ask .p-pill{min-height:44px}
   .cw.cw-wide .cw-full{position:absolute;top:6px;right:12px;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;background:transparent;color:#fff;cursor:pointer}
-  .cw-full span{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:rgba(23,23,23,.78)}
+  /* one chip in both themes; its hairline keeps it seen on a dark title row */
+  .cw-full span{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:rgba(23,23,23,.78);box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
   /* the full screen button sits over a file's title row */
   .cw.cw-wide .cw-file-head{padding-right:56px}
+  .cw.cw-wide .cw-thread{padding-top:8px}
   .cw-side::before{content:"";align-self:center;width:36px;height:4px;margin-top:8px;border-radius:2px;background:var(--g4)}
   .cw-bar{background:var(--surface);padding-bottom:max(34px,env(safe-area-inset-bottom))}
   .cw-ctl{width:56px;height:48px}

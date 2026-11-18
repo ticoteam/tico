@@ -184,7 +184,7 @@ function meetCallNow(): void {
   };
   const teams = (): WhoCandidate[] => (S.orgGroups || []).map(g => ({g, members: team(g)})).filter(t => t.members.length).map(({g, members}) => ({
     subject: 'group:' + g.id, kind: 'group', name: g.name || g.id, face: '<span class="meet-team-ic" aria-hidden="true"><span class="nav-icon">groups</span></span>',
-    trail: `<span class="meet-team-n" aria-label="${members.length}"><span class="meet-stack" aria-hidden="true">${members.slice(0, 3).map(a => actorAvatar(a, 18)).join('')}</span><span class="tnum">${members.length}</span></span>`}));
+    trail: `<span class="meet-team-n" aria-label="${members.length}"><span class="meet-stack" aria-hidden="true">${members.slice(0, 3).map(a => actorAvatar(a, 18)).join('')}</span><span class="tnum">${members.length}</span><span class="meet-team-add" aria-hidden="true"><span class="nav-icon">add</span></span></span>`}));
   const picker = whoPickerWire(dialog, {
     candidates: () => [...teams(), ...teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
       email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)}))],

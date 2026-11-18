@@ -5,7 +5,7 @@
    then Chat, Transcript and People, and the mic, share and Leave. Share is a small menu: Screen, or Show a Tico file
    (one of the company's files, drawn as the file view draws it). While something shows (someone else's screen, or a
    file) it grows to the wide layout, the stage beside the tabs, and goes back when it stops; one thing at a time, the
-   newest (callShown, ui/app/thread-call-live.ts). The chat's + links a file (its card) or a task (a task card). Once the call has ended the same
+   call view's `stage` (ui/app/thread-call-live.ts). The chat's + links a file (its card) or a task (a task card). Once the call has ended the same
    view is its notes: who was in it, how long, the summary, the action items (Create makes each a task linked to the
    call) and the transcript.
    The window joins only when it was opened to (`?join=1`, set by Start, Join and the call's card): a plain visit to its
@@ -38,8 +38,12 @@ interface CwState {
   task: '' | 'new' | 'link'; note: string; noteAt: number;
   // The share menu: closed, its two choices, or the file picker.
   pop: '' | 'menu' | 'file';
+  // The file on the stage as drawn (`id@version`, or `none` for No access), and the abort of its load.
+  fileKey: string; fileLoad: AbortController | null;
   // The tasks the chat's cards name, as read (null: not readable), once each.
   tasks: Map<string, CwTask | null>;
+  // Keeps the chat on its newest message while the layout around it changes size.
+  pin: ResizeObserver | null;
 }
 // A task a chat card names: what the card shows of it (GET /v2/tasks/{id}).
 interface CwTask { id?: string; title?: string; status?: string; owner_id?: string | null }
@@ -48,7 +52,7 @@ let CW: CwState | null = null;
 const CW_LIVE = '/v2/live-meetings/';
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CW_ICONS = {add: 'add', search: 'search', close: 'close', copy: 'content_copy', team: 'groups', check: 'check', link: 'link',
-  down: 'expand_more', open: 'open_in_new', mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', task: 'task_alt',
+  down: 'expand_more', open: 'open_in_new', mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', newTask: 'add_circle',
   file: 'description', lock: 'lock', done: 'check_circle', todo: 'radio_button_unchecked'};
 // The sound the browser held back until a tap (autoplay): a speaker, crossed out.
 const CW_SOUND_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/></svg>';
@@ -114,7 +118,7 @@ function pageCallWindow(id: string): void {
   const st: CwState = {id, el, tab: 'chat', threadId: '', title: '', join, chat: null, source: null, meeting: '', after: 0, eventId: 0,
     chunks: new Map(), bots: [], gone: new Set(), busy: new Set(), joinTried: false, missing: false, drawn: 0, wide: false, size: null,
     ended: false, notes: null, made: new Map(), tq: '', tsearch: false, notesTries: 0, task: '', note: '', noteAt: 0,
-    pop: '', tasks: new Map()};
+    pop: '', fileKey: '', fileLoad: null, tasks: new Map(), pin: null};
   CW = st;
   el.addEventListener('click', ev => { void cwClick(st, ev); });
   el.addEventListener('input', ev => {
@@ -135,6 +139,8 @@ function callWindowStop(): void {
   CW = null;
   st.source?.close();
   clearTimeout(st.after); clearTimeout(st.drawn);
+  st.fileLoad?.abort();
+  st.pin?.disconnect();
   threadUnmount(st.chat);
   // A shared screen goes back to the bar.
   const bar = $('#call-bar .call-screen');
@@ -237,10 +243,18 @@ function cwChatMount(st: CwState): void {
   st.chat = threadMount(host, {id: st.threadId, header: false, reach: false, placeholder: () => 'Message',
     // The call's own posts (its card, transcript and notes) are not part of its chat: they are the tabs and the notes.
     hide: m => !!m.refs?.call && !(m.refs as {live_meeting?: {chat_id?: string}}).live_meeting?.chat_id,
-    attachMore: {plus: true, items: [['link', 'Link a task', CW_ICONS.link], ['new', 'New task', CW_ICONS.task]], pick: k => { st.task = k === 'new' ? 'new' : 'link'; cwTaskDraw(st); }},
+    attachMore: {plus: true, items: [['link', 'Link a task', CW_ICONS.done], ['new', 'New task', CW_ICONS.newTask]], pick: k => { st.task = k === 'new' ? 'new' : 'link'; cwTaskDraw(st); }},
     // Link a file posts it at once: its link, which the chat draws as the file's card.
     libPick: f => { if (st.chat) void thvSend(st.chat, {text: `[${f.title.replace(/[[\]]/g, '')}](${API}/v2/files/${encodeURIComponent(f.id)})`}); },
     body: m => cwTaskBody(st, m)});
+  // The newest message stays in view while the chat's box changes size (a stage opening above it, the phone's peek):
+  // pinned to the end while it was at the end.
+  const box = host.querySelector<HTMLElement>('.thv-scroll');
+  if (!box || !window.ResizeObserver) return;
+  let end = true;
+  box.addEventListener('scroll', () => { end = box.scrollHeight - box.scrollTop - box.clientHeight < 8; }, {passive: true});
+  st.pin = new ResizeObserver(() => { if (end) box.scrollTop = box.scrollHeight; });
+  st.pin.observe(box);
 }
 
 // ----------------------------------------------------------------- reading the call
@@ -302,38 +316,52 @@ const cwCount = (faces: CwFace[]): number => faces.filter(f => f.on).length;
 // Bots the viewer may put in a call (the server checks again): active, chattable, writable, not the Assistant's helpers.
 const cwAddable = () => shownEmps().filter(e => e.status === 'active' && e.can_chat !== false && (!e.my_access || e.my_access.write) && !isAssistantHelper(e.name));
 const cwMayAdd = (slug: string): boolean => cwAddable().some(e => e.id === slug || e.slug === slug);
-// What the stage shows (callShown): someone else's screen, once it arrives here, or a Tico file, anyone's; one at a time.
-// Who shows it, '' for nothing.
+// What the stage shows: the call view's `stage`. Someone else's screen once it arrives here, or a Tico file, anyone's;
+// one at a time. A screen with no stage record (an older server, or a share the stage has not heard of yet) still
+// shows. Who shows it, '' for nothing.
 function cwStageDraw(st: CwState, live: boolean): string {
-  const top = live ? callShown(cwHere(st)) : null;
+  const v = cwView(st), stage = live ? v?.stage || null : null, me = myActor();
   const screen = st.el.querySelector<HTMLElement>('#cw-screen'), file = st.el.querySelector<HTMLElement>('#cw-file');
-  const fileId = top?.what.startsWith('file:') ? top.what.slice(5) : '';
-  const who = top?.what === 'screen' && !top.mine ? top.who : '';
+  const videos = [...screen?.querySelectorAll<HTMLVideoElement>('video') ?? []];
+  const who = !live || stage?.kind === 'file' ? '' : stage ? (stage.by === me ? '' : stage.by) : videos.at(-1)?.dataset.who || '';
   let video = false;
-  for (const v of screen?.querySelectorAll<HTMLVideoElement>('video') ?? []) { v.hidden = !who || v.dataset.who !== who; video ||= !v.hidden; }
+  for (const el of videos) { el.hidden = !who || el.dataset.who !== who || video; video ||= !el.hidden; }
   if (screen) screen.hidden = !video;
+  const shown = stage?.kind === 'file' ? stage : null;
   if (file) {
-    file.hidden = !fileId;
-    if (fileId && top) cwFileDraw(st, file, fileId, top.who);
-    else if (file.dataset.file) { file.dataset.file = ''; file.replaceChildren(); }
+    file.hidden = !shown;
+    if (shown) cwFileDraw(st, file, shown);
+    else if (st.fileKey) { st.fileLoad?.abort(); st.fileLoad = null; st.fileKey = ''; file.replaceChildren(); }
   }
-  return video ? who : fileId && top ? top.who : '';
+  return video ? who : shown ? shown.by : '';
 }
-// A Tico file on the stage: its title over it, then the file as the file view draws it (fileShowInto); "No access" for
-// someone who may not read it, and nothing of it is fetched.
-function cwFileDraw(st: CwState, box: HTMLElement, id: string, who: string): void {
-  const by = `${cwAv(who, 18)}<span>${esc(cwName(who))}</span>`;
-  if (box.dataset.file === id) { const b = box.querySelector<HTMLElement>('.cw-file-by'); if (b) patchHTML(b, by); return; }
-  box.dataset.file = id;
-  box.innerHTML = `<div class="cw-file-head"><span class="cw-file-t"></span><span class="cw-file-by">${by}</span></div><div class="cw-file-body"><div class="frv-preview" aria-busy="true"><div class="frv-skel"></div></div></div>`;
+// A Tico file on the stage: its title over it, then that version as the file view draws it (fileShowInto). Drawn again
+// only when the stage names another file or version; a load the next one replaced is aborted. "No access" for someone
+// who may not read it: the view names nothing of it, so nothing is fetched.
+function cwFileDraw(st: CwState, box: HTMLElement, stage: CallStageView): void {
+  const by = `${cwAv(stage.by, 18)}<span>${esc(cwName(stage.by))}</span>`;
+  const id = stage.no_access ? '' : stage.file_id || '';
+  const key = id ? `${id}@${stage.version || 0}` : 'none';
+  if (st.fileKey === key) { const b = box.querySelector<HTMLElement>('.cw-file-by'); if (b) patchHTML(b, by); return; }
+  st.fileLoad?.abort();
+  st.fileKey = key;
+  const head = (title: string) => `<div class="cw-file-head"><span class="cw-file-t">${esc(title)}</span><span class="cw-file-by">${by}</span></div>`;
+  if (!id) {
+    st.fileLoad = null;
+    box.innerHTML = `${head('')}<div class="cw-file-body"><div class="cw-noaccess muted">${cwIcon(CW_ICONS.lock)}<span>No access</span></div></div>`;
+    return;
+  }
+  const load = new AbortController();
+  st.fileLoad = load;
+  box.innerHTML = `${head(stage.title || '')}<div class="cw-file-body"><div class="frv-preview" aria-busy="true"><div class="frv-skel"></div></div></div>`;
   const body = box.querySelector<HTMLElement>('.cw-file-body > div'), title = box.querySelector<HTMLElement>('.cw-file-t');
   if (!body || !title) return;
-  const current = (): boolean => CW === st && box.dataset.file === id;
-  void Promise.resolve(fileShowInto(body, id, current)).then(info => {
+  const current = (): boolean => CW === st && st.fileLoad === load && !load.signal.aborted;
+  void Promise.resolve(fileShowInto(body, id, stage.version || null, load.signal)).then(info => {
     if (!current()) return;
     if (!info) { body.className = 'cw-noaccess muted'; body.removeAttribute('aria-busy'); body.innerHTML = `${cwIcon(CW_ICONS.lock)}<span>No access</span>`; return; }
-    title.textContent = info.title || info.name || 'File';
-  }, () => { if (current()) { body.className = 'cw-noaccess muted'; body.innerHTML = '<span>Could not open the file</span>'; } });
+    if (!title.textContent) title.textContent = info.title || info.name || 'File';
+  }, () => { if (current()) { body.className = 'cw-noaccess muted'; body.removeAttribute('aria-busy'); body.innerHTML = '<span>Could not open the file</span>'; } });
 }
 
 // ----------------------------------------------------------------- drawing
@@ -495,8 +523,8 @@ function cwBarDraw(st: CwState, v: CallRecord | null): void {
   }
   const btn = (k: string, icon: string, label: string, on = false, more = ''): string =>
     `<button type="button" class="cw-ctl${on ? ' on' : ''}" data-cw-ctl="${k}" aria-label="${esc(label)}" title="${esc(label)}" aria-pressed="${on}"${more}>${cwIcon(icon)}</button>`;
-  // Share: Stop while this tab shows something, else the menu (Screen, Show a Tico file).
-  const showing = here.sharing || !!here.showing;
+  // Share: Stop while this person shows something, else the menu (Screen, Show a Tico file).
+  const showing = here.sharing || callStageMine(here);
   patchHTML(bar, `${btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted)}${
     showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true) : btn('share', CW_ICONS.share, 'Share', false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`)}
     <span class="spacer"></span><button type="button" class="cw-leave" data-cw-ctl="leave"${here.leaving ? ' disabled' : ''}>Leave</button>`);
@@ -588,7 +616,8 @@ async function cwControl(st: CwState, k: string, button: HTMLElement): Promise<v
     if (!CALL) cwClose(st);
     return;
   }
-  if (k === 'share') { cwPop(st, st.pop ? '' : 'menu'); return; }
+  // Where the browser cannot share a screen (a phone), share is the file picker at once.
+  if (k === 'share') { cwPop(st, st.pop ? '' : callShareable() ? 'menu' : 'file'); return; }
   if (k === 'stop') { cwPop(st, ''); await callShowStop(); return; }
   await callBarAct(k, button);
 }
@@ -611,14 +640,15 @@ function cwPop(st: CwState, pop: CwState['pop']): void {
   }
   box.innerHTML = '<div class="cw-pop-lib"></div>';
   const pane = box.querySelector<HTMLElement>('.cw-pop-lib');
-  if (pane) void libPickerMount(pane, {links: true, placeholder: 'Find a file or page', close: () => cwPop(st, ''),
+  if (pane) void libPickerMount(pane, {links: true, bare: true, placeholder: 'Find a file or page', close: () => cwPop(st, ''),
     pick: f => { cwPop(st, ''); void callShowFile(f.id); }});
 }
 async function cwPopPick(st: CwState, k: string): Promise<void> {
   if (k === 'file') { cwPop(st, 'file'); return; }
   cwPop(st, '');
-  const button = st.el.querySelector<HTMLElement>('[data-cw-ctl="share"]');
-  if (k === 'screen' && button) await callBarAct('share', button);
+  if (k === 'screen' && CALL) { try { await callShareStart(CALL); } catch (e) {
+    if ((isErrorRecord(e) ? e.name : undefined) !== 'NotAllowedError') cwToast(errorMessage(e, 'Could not share the screen'), true);
+  } callBarDraw(); }
 }
 // A bot's face (or its People row): one tap puts it in the call; on one in the call it leaves at once, with Undo.
 async function cwBotToggle(st: CwState, slug: string, on: boolean): Promise<void> {

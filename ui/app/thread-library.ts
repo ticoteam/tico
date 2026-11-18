@@ -5,14 +5,16 @@
    A page part (ui/parts.json): it loads on the first Library pick, so a cold open of Home does not download it (P05b). */
 'use strict';
 // What a picker does with a pick and when it goes; `links`: files that are only a link (a Google file) are offered too.
-interface LibPickerOpts { pick: (f: ThvFileRow) => void; close: () => void; links?: boolean; placeholder?: string; }
+// `bare`: no ✕ of its own, for a picker its host closes (Escape, a click outside, its button again).
+interface LibPickerOpts { pick: (f: ThvFileRow) => void; close: () => void; links?: boolean; placeholder?: string; bare?: boolean; }
 // The picker in `pane`: the newest files the viewer may read, filtered as they type. ✕ or Escape closes it.
 async function libPickerMount(pane: HTMLElement, opts: LibPickerOpts): Promise<void> {
   const say = opts.placeholder || 'Find a file';
   pane.hidden = false;
-  pane.innerHTML = `<div class="thv-lib-top"><input type="search" class="thv-lib-q" placeholder="${esc(say)}" aria-label="${esc(say)}"><button type="button" class="ghost thv-lib-x" data-lib-close aria-label="Close">✕</button></div><div class="thv-lib-list"><div class="muted">Loading…</div></div>`;
+  pane.innerHTML = `<div class="thv-lib-top"><input type="search" class="thv-lib-q" placeholder="${esc(say)}" aria-label="${esc(say)}">${opts.bare ? '' : '<button type="button" class="ghost thv-lib-x" data-lib-close aria-label="Close">✕</button>'}</div><div class="thv-lib-list"><div class="muted">Loading…</div></div>`;
   const q = pane.querySelector('.thv-lib-q') as HTMLInputElement, list = pane.querySelector('.thv-lib-list') as HTMLElement;
-  (pane.querySelector('[data-lib-close]') as HTMLElement).onclick = opts.close;
+  const x = pane.querySelector<HTMLElement>('[data-lib-close]');
+  if (x) x.onclick = opts.close;
   pane.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); opts.close(); } };
   q.focus();
   let files: ThvFileRow[] = [];

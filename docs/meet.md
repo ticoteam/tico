@@ -107,13 +107,17 @@ visit to its address, such as a copied link, shows Join.
 - **Controls.** Mic, share and Leave. Share is a small menu: **Screen** (where the browser can share one) and **Show a
   Tico file**, a search of the company's files and pages that shows the pick to everyone in the call. While the viewer
   shows something, share is Stop. The connector also has End in the Leave menu.
-- **Sharing.** One thing shows at a time: someone's screen or a Tico file. Each person says what they show in their
-  own LiveKit participant attributes: `showing` is `screen` or `file:<id>` (empty for nothing) and `showing_at` when
-  it started (ms). Every client shows the newest; a person whose own share is overtaken stops it, so a new screen or
-  file replaces the one before. A late joiner reads the attributes as it joins. Stop (or the browser's own Stop
-  sharing) clears them. A file shows as the file view draws it, read with the viewer's own rights: someone who may not
-  read it sees "No access" and nothing of it is fetched. `showing_at` is the sharer's clock, kept after anything
-  already shown, so a later pick still wins over a clock that runs behind.
+- **Sharing.** One thing shows at a time: someone's screen or a Tico file. It is one record on the call, its `stage`
+  (`PUT /api/v2/calls/{call_id}/stage` with `kind` `screen`, or `file` and a `file_id`; `DELETE` to stop). Only
+  someone in the call may set it, a file only when they may read it, and the file's current version is what shows.
+  The newest write wins, as the server orders them: a new screen or file replaces the one before, and a person whose
+  screen is replaced stops sharing it. Stop (or the browser's own Stop sharing) stops the screen at once, then clears
+  the stage; a stop clears only the stopper's own share (the connector may clear anyone's), and a presenter who
+  leaves takes theirs with them. Each change is a `call.stage` change, so every open window reads the call again. The
+  call view's `stage` is checked against each viewer's own rights on every read: a file they may not read comes back
+  as `no_access` with nothing that names it, so nothing of it is fetched, and a viewer who loses it mid-share sees
+  "No access" from their next read. A file shows as the file view draws it, that exact version read with the viewer's
+  own rights.
   While someone else's screen or any file shows, the window switches to the wide layout: the stage on the left,
   the tabs on the right, or the stage above the tabs in a window too narrow for that. It goes back to small when
   sharing stops. The desktop app's window (it asks the app, `callWindowSize`, which only the call's own window may) and
@@ -135,8 +139,7 @@ A Google Meet call still opens Meet in a tab of its own.
    it. If the recorder cannot join, the call ends at once with `meet_unavailable`. The start may name bots (`bots`) to
    attach at once.
 2. **Join.** People who can read the thread join and get a token good for 5 minutes. It grants microphone and screen
-   share, never a camera and no data messages; a person may change their own participant attributes (what they show,
-   above). A join sent again with the same idempotency key gets its token back only
+   share, never a camera and no data messages. A join sent again with the same idempotency key gets its token back only
    while the person can still read the thread. A joined client refreshes its token with
    `POST /api/v2/calls/{call_id}/token` before it expires. Once End is pressed (`ending`) joins and token refreshes are
    refused (`409 call_ended`), and the thread rail no longer shows the call as live.
@@ -267,10 +270,12 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional; on for Tico Meet, off for Google Meet), `provider` (`auto`, `google_meet` or `tico`; default `auto`; bots or voice make it Tico Meet), `bots` (optional, up to 10 slugs attached at the start) |
 | `GET /api/v2/calls/ringing` | The live calls ringing the caller now |
-| `GET /api/v2/calls/{call_id}` | One call: state (`live`, `ending` or `ended`), connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, and `voice` (see Voice; `null` without voice) |
+| `GET /api/v2/calls/{call_id}` | One call: state (`live`, `ending` or `ended`), connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, `voice` (see Voice; `null` without voice) `stage` (see Sharing; `null` for nothing) and `stage_n` (how many times it changed, so a window can tell an older read from a newer one) |
 | `POST /api/v2/calls/{call_id}/join` | Join. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined (Tico Meet only) |
 | `POST /api/v2/calls/{call_id}/leave` | Leave |
+| `PUT /api/v2/calls/{call_id}/stage` | Show your screen or a Tico file on the stage (in the call, Tico Meet). Body: `kind` (`screen` or `file`), `file_id` for a file you may read (`404` otherwise). Replaces whatever showed |
+| `DELETE /api/v2/calls/{call_id}/stage` | Stop showing: the presenter's own, or the connector's for anyone's; anyone else's changes nothing |
 | `POST /api/v2/calls/{call_id}/end` | End (the connector). Answers the call `ended`, or `ending` while speech already heard is transcribed |
 | `GET /api/v2/calls/{call_id}/notes` | The call's own summary and action items (each `title` and `owner`), read from its items message under that message's rules; `pending` while still owed |
 | `POST /api/v2/calls/{call_id}/ring` | Ring a person into a live call. Body: `actor`. Someone who reads the thread keeps their role; anyone else is added to it first. Answers `actor` and `added` |
@@ -281,11 +286,12 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 The same operations are `tico call list|start|show|join|token|leave|end|retry` and `tico call bot add|remove` in the
 `tico` CLI, and `tico_call_list`, `tico_call_show`, `tico_call_start`, `tico_call_join`, `tico_call_token`, `tico_call_leave`,
 `tico_call_end`, `tico_call_retry`, `tico_call_bot_add` and `tico_call_bot_remove` over MCP. The OpenAPI operations are
-`listCalls`, `startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `endCall`, `retryCallActionItems`,
-`attachCallBots` and `detachCallBot`.
+`listCalls`, `startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `setCallStage`, `clearCallStage`,
+`endCall`, `retryCallActionItems`, `attachCallBots` and `detachCallBot`. The stage is set from the meeting window only:
+it shows what a person in the call shares.
 
 Changes are written to the change log on the `threads` topic: `call.started`, `call.joined`, `call.left`,
-`call.ended`, `call.bot_attached`, `call.bot_detached`, `call.participant_removed`, `call.post_refused`,
+`call.ended`, `call.stage`, `call.bot_attached`, `call.bot_detached`, `call.participant_removed`, `call.post_refused`,
 `call.action_items_given_up`, `call.action_items_retry` and `call.updated`. Each but `call.updated` has an audit row. A refusal's event tells the thread's
 readers that a post was refused, not what it said. The live
 event stream sends them with `GET /api/v2/events?topics=threads`, and only to people who can read the call's thread.

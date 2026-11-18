@@ -260,9 +260,12 @@ function frvLinkBody(box: HTMLElement, link: string, label: string): void {
   box.replaceChildren(frame);
   box.classList.add('frv-is-frame');
 }
-// One file, its latest version, drawn into `box` as this view draws it: the meeting window's stage (a Tico file shown in
-// a call, ui/app/call-window.ts). The file's info, or null when the viewer may not read it (nothing of it is fetched).
-async function fileShowInto(box: HTMLElement, id: string, current: () => boolean): Promise<FrvInfo | null> {
+// One version of a file drawn into `box` as this view draws it: the meeting window's stage (a Tico file shown in a call,
+// ui/app/call-window.ts). That exact version is read with the viewer's own rights, so a cached copy of another never
+// shows. `signal` aborts a draw a newer one replaced: nothing more is drawn. The file's info, or null when the viewer may
+// not read it.
+async function fileShowInto(box: HTMLElement, id: string, version: number | null, signal: AbortSignal): Promise<FrvInfo | null> {
+  const current = (): boolean => !signal.aborted && box.isConnected;
   const info = (await v2Get<{file?: FrvInfo}>(`/v2/files/${encodeURIComponent(id)}/info`, {fresh: true}))?.file || null;
   if (!info || !current()) return info;
   box.className = 'frv-preview';
@@ -271,11 +274,12 @@ async function fileShowInto(box: HTMLElement, id: string, current: () => boolean
   const link = info.locator === 'remote_link' && info.open?.type === 'external' ? info.open.url : '';
   if (link) { frvLinkBody(box, link, info.title || info.name || 'File'); return info; }
   let file: ViewedFile;
-  try { file = await viewFile(id, info.name || 'file', null); } catch (e) {
+  try { file = await viewFile(id, info.name || 'file', version); } catch (e) {
     if (current()) { box.removeAttribute('aria-busy'); box.innerHTML = `<p class="err frv-err">${esc(errorMessage(e, 'Could not open the file.'))}</p>`; }
     return info;
   }
-  if (current()) await frvBody(`${API}/v2/files/${encodeURIComponent(id)}`, box, file, frvKindOf(file.name, file.blob.type), current);
+  const href = `${API}/v2/files/${encodeURIComponent(id)}${version ? '?v=' + version : ''}`;
+  if (current()) await frvBody(href, box, file, frvKindOf(file.name, file.blob.type), current);
   return info;
 }
 async function frvBody(href: string, box: HTMLElement, file: ViewedFile, kind: string | null, current: () => boolean): Promise<void> {

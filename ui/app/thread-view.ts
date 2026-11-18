@@ -1322,7 +1322,7 @@ function thvContextDraw(view: ThvView) {
   (host.querySelector('.thv-ctx-x') as HTMLElement).onclick = () => { view.contextOff = true; thvContextDraw(view); view.composer?.el.querySelector<HTMLTextAreaElement>('.p-text')?.focus(); };
 }
 // The + menu's icons (names the icon font's subset holds: scripts/build-icon-font.py reads *_ICONS maps).
-const ATTACH_ICONS = {upload: 'description', library: 'article'};
+const ATTACH_ICONS = {upload: 'upload', library: 'link'};
 function thvComposerDraw(view: ThvView) {
   const host = view.el.querySelector('.thv-composer') as HTMLElement;
   const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);
