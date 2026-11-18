@@ -259,7 +259,9 @@ STRIPE_CONNECT = (  # money sent to connected accounts, and what came back of it
     "transfer_refund",
     "connect_collection_transfer",
 )
-STRIPE_CAPITAL = ("advance", "advance_funding", "financing_paydown")  # Stripe Capital: the loan in, repaid from sales
+# Stripe Capital repaid from sales. `advance` and `advance_funding` are left out: Stripe also uses them for instant
+# payouts made available early, so they are not reliably the loan coming in (unmapped: suspense, asked once).
+STRIPE_CAPITAL = ("financing_paydown",)
 STRIPE_RESERVE = (  # the balance held back and released
     "reserve_transaction",
     "reserved_funds",

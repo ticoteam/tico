@@ -93,19 +93,43 @@ def bank_deposit(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> bool:
 
 
 def batch_done(ctx: Ctx, money: Any) -> None:
-    """At the end of a batch: the waiting rows it may have completed post first, then the day's summary rows."""
+    """At the end of a batch: the waiting rows it may have completed post first, then the rows of kinds mapped since
+    they were asked about (resettle), then the day's summary rows."""
     for row in SK.stripe_waiting(ctx.c, str(money["id"]), WAITING, WAITING_MOST):
         settle(ctx, row, money, _txn(row))
+    resettle(ctx, money)
     _summarize(ctx, money)
+
+
+MAPPED = (
+    *F.STRIPE_CONNECT,
+    *F.STRIPE_CAPITAL,
+    *F.STRIPE_RESERVE,
+    *F.STRIPE_PLATFORM_FEES,
+    *F.STRIPE_OTHER_COSTS,
+    *F.STRIPE_COSTS,
+)  # the kinds an earlier Finance asked a person about row by row, and that post on their own now
+
+
+def resettle(ctx: Ctx, money: Any) -> None:
+    """Rows an earlier Finance left new and asked about one by one, of a kind that is mapped now (MAPPED): each settles
+    again, and its per-row ask is withdrawn once it is on its way into the books (not yet sent on to Tico's rules; one
+    already sent stays in the history, and the row leaves the review list as it posts). A row a posting rule still asks
+    about stays as it is. Repeating it changes nothing: a settled row is no longer new."""
+    for row in SK.stripe_unsettled(ctx.c, str(money["id"]), MAPPED, WAITING_MOST):
+        settle(ctx, row, money, _txn(row))
+        fresh = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
+        if fresh is not None and (fresh["entry_id"] or SK.loads(fresh["raw"]).get(SUMMARY)):
+            SK.withdraw_asks(ctx.c, banking.CATEGORY_EVENT, str(row["id"]))
 
 
 def stale(ctx: Ctx) -> None:
     """Asks about Stripe items that waited past STALE_DAYS: a payout with no deposit, a Stripe-looking deposit with no
     payout, and a refund, dispute or returned payout with nothing to reverse. Each is asked once. While a connection's
     backfill runs, a refund waiting for its older sale is expected and not asked about. Once a backfill that started at
-    `history_from` has ended, a row whose sale or payout never came is about one before that day: a refund, dispute or
-    restore posts against Revenue (its sale is in the opening balance), and a returned payout to Stripe suspense, asked
-    about once per kind."""
+    `history_from` has ended, a row whose sale or payout was never taken in is about one before that day: a refund,
+    dispute or restore posts against Revenue (its sale is in the opening balance), and a returned payout to Stripe
+    suspense, asked about once per kind. One whose sale is here but held waits for it."""
     cutoff = (dates.day(ctx.today) - timedelta(days=STALE_DAYS)).isoformat()
     for r in SK.stripe_transit(ctx.c, ctx.book.id, start=FAR_PAST, end=cutoff, amount=None, most=WAITING_MOST):
         _ask(ctx, str(r["id"]), "its payout has no bank deposit", "stale")
@@ -127,7 +151,10 @@ def stale(ctx: Ctx) -> None:
                 continue
             t = _txn(r)
             gross, _ = F.stripe_parts(t.raw)
+            link = str(t.raw.get("link") or "")
             if t.kind in F.STRIPE_UNWINDS:
+                if link and SK.stripe_source(ctx.c, str(m["id"]), F.STRIPE_CHARGES, link) is not None:
+                    continue  # its sale is here but held (asked, or waiting for its invoice): it waits for that sale
                 _ordinary(ctx, r, m, t, gross, _income(ctx))
             else:
                 _ordinary(ctx, r, m, t, gross, _line(ctx, m, SUSPENSE_LINE), unmapped=True)
@@ -360,6 +387,12 @@ def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
     if net:
         roles[len(lines)] = L.MONEY_ROLE
         lines.append(banking.feed_line(_gl_of(ctx, money).id, net))
+    if not lines:
+        # The rows cancel out to the cent (a transfer and its full reversal): nothing to post. They are done with no
+        # entry, as a zero row is, so the day never waits on an entry that cannot balance.
+        for r in rows:
+            SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "ignored", "updated_at": ctx.at})
+        return
     base = f"stripe:summary:{money['id']}:{day}"
     if SL.entry_by_source(ctx.c, ctx.book.id, "sync", base) is None:
         source_id = base

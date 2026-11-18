@@ -8,7 +8,7 @@ that failed is read again and nothing above or below it is skipped. Each balance
 so a repeat read changes nothing. A rehearsal copy calls nothing."""
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -117,8 +117,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     account's balance is one money account on a Stripe balance asset line, keyed by the Stripe account id: connecting the
     same account again picks its money account back up, so its history is never taken in twice. `probe` is what probe()
     read with that key. The key must see a balance in the book's currency: other currencies are not posted. History starts
-    at `history_from` (Jan 1 of this year when left out)."""
-    V.only(p, ("provider", "credential_id", "name", "probe", "history_from"))
+    at `history_from` (Jan 1 of this year when left out). `transfer_account_id` and `capital_account_id` name the lines
+    its Connect transfers and Capital paydowns post to from the first backfill on (as connection_settings sets them)."""
+    V.only(p, ("provider", "credential_id", "name", "probe", "history_from", *banking.STRIPE_LINE_SETTINGS))
     cred = V.text(p, "credential_id", 120)
     if any(
         str(r["credential_ref"] or "") == cred and str(r["status"]) != "disconnected" for r in SK.connections(ctx.c)
@@ -134,6 +135,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid(f"the Stripe key sees no balance in {base}")
     name = V.opt_text(p, "name", 120) or "Stripe"
     history = banking.history_from(ctx, p)
+    lines = {k: v for k, v in banking.stripe_lines(ctx, p, "stripe").items() if v}
     live = SK.money_account_by_provider_id(ctx.c, ctx.book.id, "stripe", acct)
     held = SK.get(ctx.c, "fin_connections", str(live["connection_id"] or "")) if live is not None else None
     if held is not None and str(held["status"]) != "disconnected":
@@ -149,7 +151,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 "credential_ref": cred,
                 "status": "active",
                 "name": name,
-                "settings": SK.dump({"backfilled": False, "account": acct, "history_from": history}),
+                "settings": SK.dump({"backfilled": False, "account": acct, "history_from": history, **lines}),
                 "next_sync_at": ctx.at,
                 "created_at": ctx.at,
                 "created_by": who,
@@ -303,6 +305,7 @@ def catch_up(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         now,
         stop=str(conf.get("boundary") or "") or None,
         backfill=False,
+        since=_since(conf),  # a cut history never reads before its day, whether or not a boundary is kept yet
     )
 
 
@@ -424,10 +427,21 @@ def _walk(
     return []
 
 
+SYNC_KEYS = ("head", "held", "boundary", "backfilled")  # the settings the sync writes; a person's are left as they are
+
+
+def _merged(c: Any, cid: str, conf: Mapping[str, Any], drop: Sequence[str] = ()) -> str:
+    """The connection's settings as they are now, with the keys the sync owns taken from `conf` (and `drop` removed): a
+    change made through connection_settings while Stripe was read is kept."""
+    fresh = {k: v for k, v in _settings(SK.get(c, "fin_connections", cid)).items() if k not in drop}
+    fresh.update({k: conf[k] for k in SYNC_KEYS if k in conf and k not in drop})
+    return SK.dump(fresh)
+
+
 def _save(store: Any, cid: str, now: str, conf: Mapping[str, Any], cursor: str, head: str | None) -> None:
     state = {**conf, "head": head} if head else dict(conf)
     with store.transaction() as c:
-        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(state), "updated_at": now})
+        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": _merged(c, cid, state), "updated_at": now})
 
 
 def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str | None, backfill: bool) -> None:
@@ -444,7 +458,8 @@ def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str
                     continue
                 banking.open_at(ctx, m, int(conf["held"]))
             done["backfilled"] = True
-        SK.update(c, "fin_connections", cid, {"settings": SK.dump(done), "cursor": None, "updated_at": now})
+        settings = _merged(c, cid, done, drop=("held", "head"))
+        SK.update(c, "fin_connections", cid, {"settings": settings, "cursor": None, "updated_at": now})
 
 
 def _take(store: Any, cid: str, acct: str, rows: list[dict[str, Any]], now: str, *, stop: str | None) -> list[str]:

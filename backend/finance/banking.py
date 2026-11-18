@@ -474,10 +474,21 @@ def opening_figure(ctx: Ctx, money: Any, balance: int) -> int:
 
 
 def _natural_day(ctx: Ctx, money: Any) -> str:
-    """The day before the account's first row the balance holds (covered history counts), or today with none. set_opening
-    caps it before the first raw-totals month."""
+    """The day before the account's first row the balance holds (covered history counts). With none: the day before its
+    connection's `history_from` when its history is cut there (every row from that day on comes after the opening, so
+    none is netted into it as one the balance already held), else today. set_opening caps it before the first raw-totals
+    month."""
     _, first = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
-    return (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+    if first:
+        return (dates.day(first) - timedelta(days=1)).isoformat()
+    return _cut_day(ctx, money) or ctx.today
+
+
+def _cut_day(ctx: Ctx, money: Any) -> str:
+    """The day before the connection's `history_from` ("" when its history is not cut): the latest day an opening of a
+    cut history is dated, as every row it takes in is from `history_from` on."""
+    cut = str(_conn_settings(ctx, money).get("history_from") or "")
+    return (dates.day(cut) - timedelta(days=1)).isoformat() if cut else ""
 
 
 def open_at(ctx: Ctx, money: Any, balance: int) -> str | None:
@@ -591,7 +602,9 @@ def _before_opening(ctx: Ctx, money: Any, t: F.FeedTxn) -> None:
         return
     earlier = (dates.day(t.txn_date) - timedelta(days=1)).isoformat()
     if entry is None:
-        set_opening(ctx, money, -t.amount, earlier)
+        # An opening brought to 0 kept no day: a cut history's comes back no later than the day before history_from,
+        # where it was, so late rows give the same day in any order.
+        set_opening(ctx, money, -t.amount, min(earlier, _cut_day(ctx, money) or earlier))
         return
     dated = str(entry["entry_date"])
     set_opening(ctx, money, opening_amount(ctx, money, dated) - t.amount, min(dated, earlier))
@@ -2069,6 +2082,22 @@ def money_account_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 STRIPE_LINE_SETTINGS = {"transfer_account_id": "expense", "capital_account_id": "liability"}
 
 
+def stripe_lines(ctx: Ctx, p: V.Payload, provider: str) -> dict[str, str]:
+    """The Stripe line settings `p` gives (STRIPE_LINE_SETTINGS), each an active line of its type, or "" to clear it."""
+    out: dict[str, str] = {}
+    for key, type_ in STRIPE_LINE_SETTINGS.items():
+        if key not in p:
+            continue
+        if provider != "stripe":
+            raise invalid(f"{key} is a Stripe connection's setting")
+        line = V.opt_text(p, key, 120) or ""
+        found = ctx.accounts.get(line)
+        if line and (found is None or not found.active or found.type != type_):
+            raise invalid(f"{key} is an active {type_} line in the books")
+        out[key] = line
+    return out
+
+
 def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
     users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`). On a Stripe
@@ -2085,16 +2114,7 @@ def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
             raise invalid("that is not a Mercury user on this connection")
         changes["card_user_id"] = user
-    for key, type_ in STRIPE_LINE_SETTINGS.items():
-        if key not in p:
-            continue
-        if str(row["provider"]) != "stripe":
-            raise invalid(f"{key} is a Stripe connection's setting")
-        line = V.opt_text(p, key, 120) or ""
-        found = ctx.accounts.get(line)
-        if line and (found is None or not found.active or found.type != type_):
-            raise invalid(f"{key} is an active {type_} line in the books")
-        changes[key] = line
+    changes.update(stripe_lines(ctx, p, str(row["provider"])))
 
     def apply(aid: str) -> Result:
         settings = {k: v for k, v in SK.loads(row["settings"]).items() if k not in changes}

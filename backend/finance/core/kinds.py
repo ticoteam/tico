@@ -465,6 +465,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("token_creator_email?", "str", ""),
         ("server_ip?", "str", ""),
         ("history_from?", "str", "the first day of its history, YYYY-MM-DD; default Jan 1"),
+        ("transfer_account_id?", "str", "Stripe"),
+        ("capital_account_id?", "str", "Stripe"),
     ),
     "connection_sync": (("connection_id", "str", ""),),
     "connection_disconnect": (("connection_id", "str", ""),),
