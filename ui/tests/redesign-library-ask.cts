@@ -1,4 +1,4 @@
-// Library on a real hub: Docs and Meetings have no Ask button (the style guide has no chat button in a top bar). The
+// Docs and Meetings on a real hub have no Ask button (the style guide has no chat button in a top bar). The
 // Assistant still sees each page: Meetings' chat is Ask itself, opened from its tab on the right edge (page-chat.ts),
 // and on Docs the sidebar's Assistant row opens it (Docs' own chat is its owner's, page-chat-pages.cts); no Librarian
 // rail, sidebar row or settings link. The Library and Company sidebar groups fold behind a chevron (kept per browser,
@@ -57,11 +57,17 @@ run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}
     await page.locator('#side a.nav-link[data-nav="library"]').click();
     await page.waitForFunction(() => location.hash.startsWith('#/library') || location.hash.startsWith('#/docs'));
     await page.waitForFunction(() => !document.getElementById('rd-lib')!.hidden, null, {timeout: t(5000)});
-    await page.locator('#rd-lib a.nav-link[data-nav="meetings"]').click();
-    await page.waitForFunction(() => location.hash.startsWith('#/meetings'));
+    await page.locator('#rd-lib a.nav-link[data-nav="tools"]').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/tools'));
     assert.equal(await libOpen(page), true, 'open while inside Library');
-    await at(page, '#/tasks');
+    // Meetings is a top-level row after Updates, not a Library page: going there folds Library again.
+    assert.deepEqual(await page.locator('#side .side-scroll > a.nav-link').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.nav)).then(navs => navs.slice(navs.indexOf('threads'), navs.indexOf('threads') + 3)),
+      ['threads', 'updates', 'meetings']);
+    await page.locator('#side .side-scroll > a.nav-link[data-nav="meetings"]').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/meetings'));
     await page.waitForFunction(() => document.getElementById('rd-lib')!.hidden, null, {timeout: t(5000)});
+    assert.equal(await page.locator('#side a.nav-link[data-nav="meetings"]').getAttribute('aria-current'), 'page');
+    await at(page, '#/tasks');
     await toggle.click();
     assert.equal(await libOpen(page), true);
     assert.equal(await page.evaluate(() => localStorage.getItem('tico.nav.library')), 'open');

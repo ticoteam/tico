@@ -217,8 +217,9 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 - `ui/app/calendar.ts` (page, route `#/calendar`, query `?who=…&view=day|3day|week|month|list&date=YYYY-MM-DD&q=…`),
   `ui/app/calendar-row.ts` (sidebar row), `ui/styles/calendar.css`; registered in `ui/app/router.ts` and
   `ui/index.html`. Spec §12.
-- Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Company (Strategy,
-  Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Tools, Meetings), Pipelines pins, Team.
+- Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Meetings, Company
+  (Strategy, Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Tools), Pipelines pins, Team.
+  Meetings is a top-level place of its own (calls and meetings), not a Library page.
   Directory leaves Library: an icon on the Team header opens `#/library/directory`. The Rules folder becomes one
   Rules row under Company (its Internal/External/Due/Suggested pages stay reachable from the Rules page).
 - Join (row, bubble, page, card): opens `meeting_url` in a new tab.
