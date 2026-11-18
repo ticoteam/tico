@@ -691,10 +691,12 @@ interface TaskChatState {
 }
 const TASK_EXECUTION_ONLY = new WeakSet<ModalDetail>();   // a last read's copy with only its run's line read again
 // The open task's own stream (taskLiveStart) reads the whole task again on each change of it, with its files
-// (taskLiveRead, taskModalShow): the page's task events need not read it a second time.
+// (taskLiveRead, taskModalShow): the page's task events need not read it a second time. Only while that stream is
+// open: one still connecting, or one that failed (refused, not a stream) and so never reconnects, carries nothing, and
+// the page's own events (a document, an ask, a link added) are then the only word of the change.
 function taskChatFollowsItself(state: TaskChatState): boolean {
   const live = state.dialog.taskLive;
-  return state.dialog.open && !!live?.shared && String(live.id) === String(state.id);
+  return state.dialog.open && live?.shared?.source?.readyState === EventSource.OPEN && String(live.id) === String(state.id);
 }
 // A change of the open task from the page's own stream (refresh.ts): read once, unless the task's stream reads it.
 function taskChatOthersChange(state: TaskChatState): void {
