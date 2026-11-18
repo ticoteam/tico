@@ -61,7 +61,7 @@ def _auto(c, settings, bot, authors):
     record = providers.load(c, settings)
     order = providers.check_order(record)
     refused = []
-    for row in [r for r in order if r["provider"] not in authors] + [r for r in order if r["provider"] in authors]:
+    for row in [r for r in order if r["maker"] not in authors] + [r for r in order if r["maker"] in authors]:
         model = providers.MODEL_BY_ID[row["model"]]
         harnesses = tuple(model.get("harnesses") or (row["runtime"],))
         harness = next((h for h in harnesses if runtime_of(h) == row["runtime"]), harnesses[0])
@@ -69,7 +69,7 @@ def _auto(c, settings, bot, authors):
         if can.get("can_run") is False:
             refused.append(can.get("problem") or row["runtime"])
             continue
-        if row["provider"] not in authors:
+        if row["maker"] not in authors:
             return row["runtime"], row["model"], ""
         names = sorted(providers.PROVIDER_BY_ID[p]["label"] for p in authors if p in providers.PROVIDER_BY_ID)
         return (
@@ -231,7 +231,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
         return None
     authors = authors_of(c, settings, parent_of(c, task_id))
     order = providers.check_order(providers.load(c, settings))
-    for row in [r for r in order if r["provider"] not in authors] + [r for r in order if r["provider"] in authors]:
+    for row in [r for r in order if r["maker"] not in authors] + [r for r in order if r["maker"] in authors]:
         if row["model"] == check["model"] or row["runtime"] in out:
             continue
         try:

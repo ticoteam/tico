@@ -503,6 +503,28 @@ def long_prompt_for(model):
     return _long_tuple(found["long_prompt"]) if found else None
 
 
+# The maker of the model a tier runs underneath, from the start of the catalog's model name. The Gateway sells models, it
+# does not make them: a second opinion "from another maker" must not count Claude Sonnet on the Gateway as different
+# from Claude Code (Nov 18: Tico Team's second reviews all ran on Gateway Sonnet, at API prices, as an "other maker").
+MAKER_PREFIXES = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("gemini", "google"),
+    ("grok", "xai"),
+    ("deepseek", "deepseek"),
+    ("kimi", "moonshot"),
+    ("llama", "meta"),
+    ("mistral", "mistral"),
+    ("inception", "inception"),
+)
+
+
+def maker_of(model):
+    """The maker of the model a Tico id runs underneath (`anthropic` for Claude Sonnet), or '' when unknown."""
+    name = str((resolve(model) or {}).get("model") or "").strip().lower()
+    return next((maker for prefix, maker in MAKER_PREFIXES if name.startswith(prefix)), "")
+
+
 def efforts_of(level):
     return ("low", "high", "max"), ("low" if level in ("xlow", "low") else "high")
 

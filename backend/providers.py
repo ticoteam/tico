@@ -1127,8 +1127,19 @@ def check_order(record):
     for row in rows:
         if row["model"] not in seen and not MODEL_BY_ID[row["model"]].get("deprecated"):
             seen.add(row["model"])
-            order.append(row)
+            order.append({**row, "maker": maker(row["model"])})
     return order
+
+
+def maker(model):
+    """The maker of a catalog model: its provider, or for a Gateway model the maker of the model underneath (the Gateway
+    sells models, it does not make them; the Gateway itself when the catalog does not say); '' for an unlisted model."""
+    row = MODEL_BY_ID.get(str(model or "").strip())
+    if not row:
+        return ""
+    if (PROVIDER_BY_ID.get(row["provider"]) or {}).get("gateway"):
+        return gateway_tiers.maker_of(row["id"]) or row["provider"]
+    return row["provider"] or ""
 
 
 def author_provider(author):
@@ -1136,9 +1147,8 @@ def author_provider(author):
     author = str(author or "").strip()
     if author in PROVIDER_BY_ID:
         return author
-    row = MODEL_BY_ID.get(author)
-    if row:
-        return row["provider"] or ""
+    if MODEL_BY_ID.get(author):
+        return maker(author)
     return runtime_provider(author)
 
 
@@ -1148,7 +1158,7 @@ def check_choice(record, author, available=None):
     second opinion from another provider is preferred; with none, the author's own provider still checks the work."""
     own = author_provider(author)
     rows = [row for row in check_order(record) if available is None or row["runtime"] in available]
-    for row in [r for r in rows if r["provider"] != own] + [r for r in rows if r["provider"] == own]:
+    for row in [r for r in rows if r["maker"] != own] + [r for r in rows if r["maker"] == own]:
         return row
     raise ProviderError(
         "check_model",

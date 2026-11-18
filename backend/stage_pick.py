@@ -174,8 +174,7 @@ def family(conn: "sqlite3.Connection", bot: str) -> str:
     runtime, model = providers.bot_choice(conn, None, config_row)
     model = model or config_row.get("model") or ""
     runtime = runtime or config_row.get("runtime") or ""
-    listed: Row = providers.MODEL_BY_ID.get(model) or {}
-    maker = listed.get("provider") if model else providers.runtime_provider(runtime)
+    maker = providers.maker(model) if model else providers.runtime_provider(runtime)
     return "" if not maker or maker in RESELLERS else str(maker)
 
 

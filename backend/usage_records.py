@@ -24,7 +24,7 @@ def family(part):
     catalog does not list is unknown (None) whatever ran it: Claude Code or Codex can run another maker's model."""
     from . import providers
 
-    maker = (providers.MODEL_BY_ID.get(part.get("model") or "") or {}).get("provider")
+    maker = providers.maker(part.get("model") or "")
     return maker if maker and maker not in RESELLERS else None
 
 

@@ -23,7 +23,7 @@ def test_the_owners_order_wins_and_the_authors_provider_is_skipped():
         "gpt-6-luna",
     ]
     assert P.check_choice(record, "anthropic")["model"] == "grok-4.6"
-    assert P.check_choice(record, "grok-4.6") == {"runtime": "codex", "model": "gpt-6.2-sol", "provider": "openai"}
+    assert P.check_choice(record, "grok-4.6") == {"runtime": "codex", "model": "gpt-6.2-sol", "provider": "openai", "maker": "openai"}
     # Grok is not signed in on any computer: the next in order.
     assert P.check_choice(record, "claude", available={"codex", "claude"})["model"] == "gpt-6.2-sol"
     # A one-entry order still finds another provider for work written on that entry's provider.
