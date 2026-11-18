@@ -453,8 +453,9 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         else:
             lines = calls.splitlines()
             unpack = lines.index(f"sudo tar -xpf {cache}/installed.tar -C /")
-            # The snapshot unpacks beside pip and npm, and is in place before the browsers install.
-            assert lines[unpack + 1] == "sudo ldconfig"
+            # The snapshot unpacks beside pip and npm (so their lines interleave in any order), and is in place
+            # before the browsers install.
+            assert lines.index("sudo ldconfig") > unpack
             assert unpack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
     # A cold cache: apt installs the packages (dpkg without fsync), and the snapshot is made from what changed and
     # moved into the cache folder the job saves.
