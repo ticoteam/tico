@@ -687,8 +687,21 @@ pub async fn apply(
     socket: Option<&Path>,
     state_dir: &Path,
 ) -> bool {
+    let granted = cache.get(client, json!({"bot": bot})).await;
+    apply_granted(env, granted, bot, socket, state_dir)
+}
+
+/// `apply` with the token already asked for (`TokenCache::get` with `{"bot": bot}`), so the ask can run beside a
+/// turn's other preparation.
+pub fn apply_granted(
+    env: &mut Env,
+    granted: Result<Value, ApiError>,
+    bot: &str,
+    socket: Option<&Path>,
+    state_dir: &Path,
+) -> bool {
     let mut reason = String::new();
-    let granted = match cache.get(client, json!({"bot": bot})).await {
+    let granted = match granted {
         Ok(g) => {
             if g["token"].as_str().unwrap_or_default().is_empty() {
                 reason = no_token_reason(&g, None);

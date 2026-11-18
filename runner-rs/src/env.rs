@@ -367,12 +367,33 @@ pub async fn environment(
     environment_with(ctx, attempt, vault, None).await
 }
 
+/// `environment` for a turn the runner runs: its credentials are read over `hub`'s connections, with the turn's own
+/// token, so a turn opens no new connection of its own to the hub.
+pub async fn turn_environment(
+    ctx: &EnvContext<'_>,
+    attempt: &Value,
+    vault: &mut Vault,
+    hub: &Client,
+) -> Result<Env, String> {
+    environment_from(ctx, attempt, vault, None, Some(hub)).await
+}
+
 /// `environment` with the grants already read (a watcher's, from `runner-watcher-credentials`).
 pub async fn environment_with(
     ctx: &EnvContext<'_>,
     attempt: &Value,
     vault: &mut Vault,
     granted: Option<Value>,
+) -> Result<Env, String> {
+    environment_from(ctx, attempt, vault, granted, None).await
+}
+
+async fn environment_from(
+    ctx: &EnvContext<'_>,
+    attempt: &Value,
+    vault: &mut Vault,
+    granted: Option<Value>,
+    hub: Option<&Client>,
 ) -> Result<Env, String> {
     let bot = attempt["bot"].as_str().unwrap_or_default();
     let token = attempt["token"].as_str().unwrap_or_default();
@@ -382,7 +403,10 @@ pub async fn environment_with(
         let granted = match granted {
             Some(g) => g,
             None => {
-                let client = Client::new(ctx.url, token, 15, 1)?;
+                let client = match hub {
+                    Some(hub) => hub.with_token(token, 1),
+                    None => Client::new(ctx.url, token, 15, 1)?,
+                };
                 client
                     .get("credential-runtime")
                     .await

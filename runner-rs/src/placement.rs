@@ -75,12 +75,14 @@ pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
         {
             return Ok(("skipped", "no upstream"));
         }
+        let began = std::time::Instant::now();
         if !git(path, &env, &["fetch", "--quiet", "--no-tags"], 60)
             .await?
             .0
         {
             return Ok(("kept", "could not reach GitHub"));
         }
+        crate::fetch_fresh::note(path, &env, began).await;
         if git(
             path,
             &env,

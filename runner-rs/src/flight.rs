@@ -29,11 +29,14 @@ pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 /// A git command at least this long is recorded (timeouts and commands that never ran always are).
 pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones). The `claude_*` marks are a
-/// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`.
-const PHASES: [&str; 16] = [
+/// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`. `refreshed` is
+/// its checkouts brought up to date, `skills_ready` its company skills staged.
+const PHASES: [&str; 18] = [
     "claimed",
+    "refreshed",
     "placed",
     "harness_started",
+    "skills_ready",
     "claude_spawned",
     "harness_spawned",
     "claude_init",
@@ -64,7 +67,15 @@ struct Turn {
     phases: Vec<(String, u64)>,
     /// Numbers about the turn beside its marks (`transcript_bytes`).
     facts: Map<String, Value>,
+    /// From the work frame last heard (`heard`) to this claim, when one was heard shortly before: the flight file's
+    /// record only, never the timings the server is sent.
+    heard_ms: Option<u64>,
 }
+
+/// When a work frame was last heard on the event stream (the `heard` mark, which names no attempt).
+static HEARD: Mutex<Option<Instant>> = Mutex::new(None);
+/// A claim this long after the last heard work frame was not woken by it.
+const HEARD_WITHIN: Duration = Duration::from_secs(60);
 
 static TURNS: Mutex<Option<HashMap<String, Turn>>> = Mutex::new(None);
 
@@ -145,12 +156,24 @@ fn record_ts(record: &Value) -> f64 {
 /// A turn reached `name` (`util::mark` calls this for every mark). `claimed` opens the turn; a later mark for a
 /// turn not open is ignored, so nothing builds up for turns this process never claimed.
 pub fn phase(name: &str, attempt: &str) {
-    if !TRACKING.load(Ordering::Relaxed) || attempt == "-" {
+    if !TRACKING.load(Ordering::Relaxed) {
+        return;
+    }
+    if name == "heard" {
+        *HEARD.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+    }
+    if attempt == "-" {
         return;
     }
     let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
     let turns = turns.get_or_insert_with(HashMap::new);
     if name == "claimed" {
+        let heard_ms = HEARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .map(|at| at.elapsed())
+            .filter(|gap| *gap < HEARD_WITHIN)
+            .map(|gap| gap.as_millis() as u64);
         if turns.len() >= 512 {
             // A worker that died before `turn_end` leaves its entry: the oldest go.
             let oldest = turns
@@ -168,6 +191,7 @@ pub fn phase(name: &str, attempt: &str) {
                 wall: now_ts(),
                 phases: vec![("claimed".into(), 0)],
                 facts: Map::new(),
+                heard_ms,
             },
         );
     } else if let Some(turn) = turns.get_mut(attempt) {
@@ -236,6 +260,9 @@ pub fn turn_end(attempt: &str, bot: &str, runtime: &str, outcome: &str, settled:
         json!(turn.at.elapsed().as_millis() as u64),
     );
     f.insert("phases".into(), Value::Object(phases));
+    if let Some(ms) = turn.heard_ms {
+        f.insert("heard_ms".into(), json!(ms));
+    }
     f.extend(turn.facts);
     emit("runner.turn", f);
 }
@@ -778,6 +805,10 @@ mod tests {
         assert!(t["phases"]["claude_spawned"].as_u64().unwrap() < 30, "{t}");
         assert!(t["phases"]["claude_result"].as_u64().unwrap() >= 30, "{t}");
         assert!(t["phases"].get("placed").is_none(), "{t}");
+        assert!(
+            t.get("heard_ms").is_none(),
+            "the server's timings take no heard gap: {t}"
+        );
         turn_end(&aid, "acme-seo", "claude", "completed", true);
         assert!(timings(&aid).is_none());
     }

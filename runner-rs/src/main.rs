@@ -50,6 +50,7 @@ mod env;
 mod events;
 mod execute;
 mod fallback;
+mod fetch_fresh;
 mod fetchrepo;
 mod files_publish;
 mod flight;
