@@ -797,6 +797,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
       <form class="task tc-form" id="task-create-form">
         <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
         <textarea name="message" aria-label="Message" placeholder="Message" rows="6"></textarea>
+        <p class="tc-readers" id="task-create-readers" role="status" hidden></p>
         <div class="tc-row">
           <div class="tc-pick"><span aria-hidden="true">For:</span>${giveToFieldHTML({name: 'owner', label: 'For', placeholder: 'Who is this for?', selected: forWho, task: parent})}</div>
           <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
@@ -818,8 +819,20 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
     pick.innerHTML = list.map(p => `<option value="${esc(p.id)}"${p.id === want || (!want && p.preset === 'general') ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
       || '<option value="">General</option>';
   };
-  if (TASK_PIPELINES) fill(TASK_PIPELINES);
-  void tasksPipelinesRead().then(list => { if (d.open && form.isConnected) fill(list); }).catch(() => {});
+  // Who else reads it as it moves, when it will be private (Product #449): said before Create, never a refusal.
+  const readers: HTMLElement = $('#task-create-readers', d);
+  let asked = 0;
+  const readersShow = () => {
+    const who = field<HTMLInputElement>('owner').value, n = ++asked;
+    if (!pick.value) { readers.hidden = true; return; }
+    void pipelinePrivateReaders(pick.value, {owner: who && !who.includes(':') ? 'bot:' + who : who, parent: parent?.id})
+      .then(r => { if (n !== asked) return; readers.textContent = r.line || ''; readers.hidden = !r.line; })
+      .catch(() => { if (n === asked) readers.hidden = true; });
+  };
+  pick.onchange = readersShow;
+  form.addEventListener('change', ev => { if ((ev.target as HTMLInputElement | null)?.name === 'owner') readersShow(); });
+  if (TASK_PIPELINES) { fill(TASK_PIPELINES); readersShow(); }
+  void tasksPipelinesRead().then(list => { if (d.open && form.isConnected) { fill(list); readersShow(); } }).catch(() => {});
   form.onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
     const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);

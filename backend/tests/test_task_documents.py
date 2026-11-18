@@ -72,7 +72,7 @@ def test_fixed_names_keep_their_spelling_and_a_bot_may_name_its_own(api, monkeyp
     again = write(api, tid, "release-notes", "<p>Notes, again</p>")
     assert (again["document"], again["file_id"], again["version"]) == ("Release notes", own["file_id"], 2)
     assert sorted(d["name"] for d in documents(api, tid)) == ["Email", "Invoice", "Release notes", "Release report"]
-    for bad in ("", "  ", "--", "x" * 41):
+    for bad in ("", "  ", "--", "x" * 41, "writer", "related"):
         write(api, tid, bad, "<p>Hi</p>", expected=422)
     monkeypatch.setattr(TD, "MOST", 4)
     assert "at most 4" in write(api, tid, "Research", "<p>Hi</p>", expected=422)["error"]["detail"]
@@ -110,8 +110,11 @@ def test_writing_a_document_says_so_in_the_task_history(api):
     assert [(e["new"], e["note"]) for e in events][-2:] == [("Spec", ""), ("Spec", "version 2")]
 
 
-def test_tico_task_attach_doc_sends_the_html_with_its_pictures(monkeypatch, tmp_path):
+def test_tico_task_attach_doc_is_the_page_publish_with_task_and_as(monkeypatch, tmp_path):
+    from urllib.parse import parse_qs, urlsplit
+
     from clients import bot_files as BF, hubcli, hubtools, remotecli
+    from clients.tico import APIError
 
     sent = []
 
@@ -124,24 +127,35 @@ def test_tico_task_attach_doc_sends_the_html_with_its_pictures(monkeypatch, tmp_
 
         def call(self, method, path, body=None, key=None, query=None, delegate=False):
             sent.append((method, path, body))
-            return {"document": "QA report", "version": 1}
+            return {"file_id": "file-1", "version": 1}
 
         def post(self, path, body=None, key=None):
             return self.call("POST", path, body)
+
+        def request(self, method, path, body=None, key=None, raw=None):
+            sent.append((method, path, raw))
+            return {"file_id": "file-1", "version": 1}
 
     (tmp_path / "qa.html").write_text('<h1>QA</h1><img src="shot.png">')
     (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
     monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: tmp_path)
     monkeypatch.setattr(remotecli, "Client", Client)
     monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
-    argv = ["task", "attach", "T-1", "qa.html", "--doc", "qa-report", "--note", "All rows match"]
+    argv = ["task", "attach", "T-1", "qa.html", "--doc", "qa-report"]
     remotecli.run(hubcli.parser().parse_args(argv))
-    method, path, body = sent[-1]
-    assert (method, path, body["document"], body["note"]) == ("POST", "tasks/T-1/files", "qa-report", "All rows match")
-    assert "<h1>QA</h1>" in body["text"] and "data:image/png;base64," in body["text"]
+    method, path, data = sent[-1]
+    url = urlsplit(path)
+    query = parse_qs(url.query)
+    assert (method, url.path) == ("POST", "/api/v2/pages")
+    assert query["task"] == ["T-1"] and query["as"] == ["qa-report"] and query["name"] == ["qa.html"]
+    assert b"<h1>QA</h1>" in data and b"data:image/png;base64," in data
+
+    noted = ["task", "attach", "T-1", "qa.html", "--doc", "QA report", "--note", "x"]
+    with pytest.raises(APIError, match="takes no --note"):
+        remotecli.run(hubcli.parser().parse_args(noted))
 
     hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
-    assert sent[-1][2] == {"document": "Spec", "text": "<p>Spec</p>"}
+    assert sent[-1] == ("POST", "pages", {"task": "T-1", "as": "Spec", "name": "spec.html", "text": "<p>Spec</p>"})
     with pytest.raises(ValueError, match="text, or path"):
         hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec"})
     (tmp_path / "notes.md").write_text("# Notes")
@@ -166,6 +180,23 @@ def test_an_ordinary_upload_named_like_a_document_starts_its_own_file(api):
     again = post(api, f"tasks/{tid}/files", {"name": "spec.html", "text": "<p>Ordinary, again</p>"})
     assert (again["file_id"], again["version"]) == (plain["file_id"], 2)
     assert documents(api, tid)[0]["version"] == 1
+
+
+def test_document_writes_make_a_page_and_links_without_task_document_rows(api):
+    tid = task(api, "human:ben", "Write a linked spec")
+    first = write(api, tid, "Spec", SPEC)
+    second = write(api, tid, "Spec", SPEC + "<p>Reviewed</p>", "ben-test")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM pages WHERE file_id=?", (first["file_id"],)).fetchone()
+        assert not c.execute("SELECT 1 FROM task_documents WHERE task_id=?", (tid,)).fetchone()
+        links = {
+            (r[0], r[1]) for r in c.execute("SELECT target,role FROM page_links WHERE page_id=?", (first["file_id"],))
+        }
+    assert {("task:" + tid, "Spec"), ("human:ana", "writer"), ("human:ben", "writer")} <= links
+    assert second["file_id"] == first["file_id"]
+    [doc] = documents(api, tid)
+    assert doc["page_id"] == first["file_id"] and doc["changed_since_ok"] is False
+    assert any(link["target"] == "task:" + tid and link["role"] == "Spec" for link in doc["links"])
 
 
 REPORT = "# How UI works today\n\nThe web app is one page.\n"
@@ -199,6 +230,11 @@ def test_a_report_published_and_attached_by_name_is_one_file_and_a_markdown_tab(
         "kind": "markdown",
         "version": 1,
     }
+    revised = post(api, f"tasks/{tid}/files", {"name": "How UI works today.md", "text": REPORT + "\nUpdated."})
+    assert (revised["file_id"], revised["version"]) == (named["file_id"], 2)
+    [doc] = documents(api, tid)
+    assert doc["kind"] == "markdown" and "page_id" not in doc
+    assert [v["n"] for v in doc["versions"]] == [2, 1]
 
     # Changed, they are two contents again; the dated one's tab drops the date, and an HTML document of the same name wins.
     publish(
@@ -235,3 +271,74 @@ def test_markdown_tab_names():
     assert markdown_name("2026-11-17-how-admin-tico-works-today.md") == "How admin tico works today"
     assert markdown_name("How admin-tico works today.md") == "How admin-tico works today"
     assert markdown_name("notes.MARKDOWN") == "Notes"
+
+
+def test_linked_document_files_and_context_fill_their_limits_with_readable_pages(api, monkeypatch):
+    from backend import files as file_store
+    from backend import task_context, task_documents
+    from backend.auth import Identity
+
+    tid = task(api, "human:ben", "List linked planning documents")
+    source = task(api, "human:ben", "Write planning documents")
+    original = write(api, source, "Spec", SPEC)["file_id"]
+    store = api.app.state.store
+    visible = [f"file-{i:024x}" for i in range(205)]
+    hidden = [f"file-{i:024x}" for i in range(205, 260)]
+    with store.transaction() as c:
+        old, recent = "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"
+        for ids, at, audience in ((visible, old, None), (hidden, recent, '{"people":["ana"]}')):
+            c.executemany(
+                "INSERT INTO bot_files(id,bot_id,task_id,scope,identity,title,kind,mime,locator,current_version,"
+                "first_activity_at,last_activity_at) SELECT ?,bot_id,task_id,scope,?,title,kind,mime,locator,1,?,? "
+                "FROM bot_files WHERE id=?",
+                [(fid, fid, at, at, original) for fid in ids],
+            )
+            c.executemany(
+                "INSERT INTO pages(file_id,created_at,updated_at,audience) VALUES(?,?,?,?)",
+                [(fid, at, at, audience) for fid in ids],
+            )
+            c.executemany(
+                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+                "SELECT ?,1,blob_id,digest,size,name,mime,actor,? FROM bot_file_versions WHERE file_id=?",
+                [(fid, at, original) for fid in ids],
+            )
+            c.executemany(
+                "INSERT INTO page_links VALUES(?,?,?,'Spec','human:ana',?)",
+                [(fid, fid, f"task:{tid}", at) for fid in ids],
+            )
+        newest = visible[0]
+        c.execute("UPDATE bot_files SET current_version=51,last_activity_at=? WHERE id=?", (recent, newest))
+        c.executemany(
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+            "SELECT ?,?,blob_id,digest,size,name,mime,actor,? FROM bot_file_versions WHERE file_id=?",
+            [(newest, v, recent, original) for v in range(2, 52)],
+        )
+        c.execute("INSERT INTO task_file_reviews(file_id,version,note) VALUES(?,51,'Latest note')", (newest,))
+
+    files = api.app.state.files
+    reader = Identity("human:cara", "human", "cara@acme.example")
+    with store.read_transaction() as c:
+        trace = []
+        c.set_trace_callback(trace.append)
+        docs = task_documents.listing(c, files, reader, tid)
+        result = files.task_listing(c, reader, tid, all_pages=True)["files"]
+        batches = []
+        prime_visible = file_store.prime_visible
+
+        def primed(c, rows):
+            batches.append(len(rows))
+            return prime_visible(c, rows)
+
+        monkeypatch.setattr(file_store, "prime_visible", primed)
+        context = task_context.listing(c, files.auth, reader, tid)["pages"]
+        c.set_trace_callback(None)
+    assert len(docs) == 50 and len(result) == 200 and len(context) == 10
+    assert batches == [50, 50]
+    for records, key in ((docs, "file_id"), (result, "id"), (context, "id")):
+        assert records[0][key] == newest
+        assert {record[key] for record in records} <= set(visible)
+    for records in (docs, result):
+        assert [v["n"] for v in records[0]["versions"]] == list(range(51, 1, -1))
+        assert records[0]["versions"][0]["note"] == "Latest note"
+    review_reads = [q for q in trace if "task_file_reviews" in q]
+    assert len(review_reads) <= 3, review_reads

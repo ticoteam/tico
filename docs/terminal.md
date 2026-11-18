@@ -96,10 +96,10 @@ refused, never overwritten (add `--version N` to pin the version you read yourse
 ```sh
 tico pipeline create support --name Support --manager success-manager --stage Triage --stage "Doing:success-manager"
 tico pipeline update product --goal "Specs a builder can build from" --manager product-manager
-tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2
+tico stage add engineering "Security review" --after engineering-review-1 --holder reviewer-2
 tico stage update product-ideas --no-by-hand --purpose "Ideas worth a spec"
 tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new --no-owns-task
-tico stage move engineering-review-2 --after engineering-review-1
+tico stage move engineering-fixes-1 --after engineering-review-1
 tico requirement list product-spec
 tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me
 tico requirement update <requirement id> --who-oks people_only
@@ -118,7 +118,7 @@ Removing takes the exact name of what goes, typed again; nothing is removed with
 open tasks are in the way:
 
 ```sh
-tico stage remove engineering-fixes-2 --confirm "Fixes 2"
+tico stage remove engineering-qa --confirm QA
 tico requirement remove <requirement id> --confirm "Spec page"   # its line, or its kind when it has none
 tico pipeline remove support --confirm Support                    # retired: its ended tasks stay
 ```

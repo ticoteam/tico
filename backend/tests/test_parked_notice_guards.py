@@ -10,7 +10,7 @@ def test_untrusted_notice_marker_is_removed_for_a_human_recipient(api):
         task = H.task_create(c, 'bot:ops', 'Restore the service', 'Synthetic held work', 'bot:cpo')
         msg = H._write_message(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'human:ana',
             'Synthetic news',
             H.conversation(c, task['conversation_id']),

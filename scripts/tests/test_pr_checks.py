@@ -2,6 +2,7 @@
 
 import ast
 from collections import Counter
+from contextlib import nullcontext
 from functools import partial
 import json
 import math
@@ -113,6 +114,94 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
         '</testsuite></testsuites>'
     )
     assert checks.durations([xml]) == {"a.py": 4, "b.py": 3}
+
+
+def test_durations_use_only_the_initial_python_report(tmp_path, monkeypatch):
+    report = '<testsuite><testcase file="a.py" time="2"/></testsuite>'
+    for suffix in ("", "-retry", "-base"):
+        source(tmp_path, f"ci-results/python-1{suffix}.xml", report)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "durations"])
+    assert checks.main() == 0
+    assert json.loads((tmp_path / "durations.json").read_text()) == {"a.py": 2}
+
+
+def test_a_plan_packs_by_the_seconds_the_last_green_queue_groups_measured_averaged_per_file(tmp_path, monkeypatch):
+    """One group's seconds for a file swing by 2x, so the plan averages the groups it restored (a file one group did not
+    run keeps the others' figure), and the queue's own timings job saves what the next plans read."""
+    a, b = "backend/tests/test_a.py", "backend/tests/test_b.py"
+    picked = {"python": [a, b], "browser": [], "caddy": False, "conformance": False, "rust": [], "contracts": False}
+    monkeypatch.setattr(checks, "selection", lambda *args, **kwargs: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *args, **kwargs: [])
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "collect", lambda: Counter({a: 1, b: 1}))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    for run, seconds in (("101", {a: 100.0, b: 10.0}), ("102", {a: 300.0, b: "text"}), ("103", {})):
+        (tmp_path / "previous" / run).mkdir(parents=True)
+        (tmp_path / "previous" / run / "durations.json").write_text(json.dumps(seconds))
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", tmp_path / "previous", head="head")
+    assert plan["timed_files"] == 2 and sum(plan["estimated_seconds"]) == 210.0  # a: (100 + 300) / 2, b: 10
+
+    jobs = workflow_jobs()["jobs"]
+    restore = next(s for s in jobs["plan"]["steps"] if s.get("name", "").startswith("Restore measured timings"))
+    for part in ("--workflow pr-checks.yml", "--event merge_group", "--status success", "--name queue-timings"):
+        assert part in restore["run"], part
+    select = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
+    assert "--timings previous-timings --light" in select["run"]
+    saved = {step.get("name") or step.get("uses", ""): step for step in jobs["timings"]["steps"]}
+    assert saved["Per-file seconds for the next plans"]["run"] == "python3 scripts/pr_checks.py durations"
+    upload = next(step for name, step in saved.items() if name.startswith("actions/upload-artifact@"))
+    assert upload["with"]["name"] == "queue-timings" and upload["with"]["path"] == "durations.json"
+    assert all(step.get("continue-on-error") for step in (saved["Per-file seconds for the next plans"], upload))
+
+
+def test_the_cli_plan_collects_tests_beside_the_dependency_map_and_stops_a_collection_it_does_not_need(
+    tmp_path, monkeypatch
+):
+    """On a hosted runner the collection and the map take about a minute each, so the CLI's plan starts the collection
+    first and reads it after the selection. A plan that selects no Python test stops it rather than waiting."""
+    from scripts import release_checks
+
+    order = []
+
+    class Collection:
+        returncode = 0
+        killed = False
+
+        def communicate(self):
+            order.append("read")
+            return "backend/tests/test_a.py::test_one\nbackend/tests/test_a.py::test_two\n", ""
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            order.append("stopped")
+
+    started = Collection()
+    monkeypatch.setattr(checks, "start_collect", lambda root=None: order.append("start") or started)
+    monkeypatch.setattr(release_checks, "validate_shard_coverage", lambda counts, selection, root: None)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: order.append("map") or "graph")
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "narrow", lambda picked, *args, **kwargs: picked)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    picked = {"python": ["backend/tests/test_a.py"], "browser": [], "caddy": False, "conformance": False, "rust": []}
+    monkeypatch.setattr(checks, "selection", lambda *args, **kwargs: {**picked, "contracts": False})
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True, prefetch=True)
+    assert order == ["start", "map", "read"] and plan["python"] == ["backend/tests/test_a.py"]
+
+    order.clear()
+    picked["python"] = []
+    checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True, prefetch=True)
+    assert order == ["start", "map", "stopped"] and started.killed
+    # Without prefetch (and for a change that needs no map) nothing starts early.
+    order.clear()
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_a.py": 1}))
+    picked["python"] = ["backend/tests/test_a.py"]
+    checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True)
+    assert order == ["map"]
 
 
 def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pytest(tmp_path, monkeypatch, mapped):
@@ -821,7 +910,7 @@ def test_command_sweeps_do_not_change_hub_counts_or_propagate_from_dependencies(
     changed = ["clients/dbquery.py"]
     picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
     light = checks.narrow(picked, changed, "merge_group", root=tmp_path, graph=graph)
-    assert test in light["python"] and light["narrow"]["tier"][test] == 3
+    assert test in light["python"] and light["narrow"]["tier"][test] == 5
     assert not sweeps & set(picked["python"])
     for module in ("clients/commands/strategy.py", "clients/commands/gone.py"):
         changed = [module]
@@ -855,7 +944,7 @@ def test_package_initialization_reaches_tests_through_one_helper_but_still_stops
     picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
     light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
     assert "backend/tests/test_demo.py" in light["python"]
-    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 4
+    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 6
     assert "backend/tests/test_other.py" not in light["python"]
     monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
     capped = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
@@ -1347,7 +1436,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, static, types, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 6  # plan, tests, static, types, merge, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1505,15 +1594,18 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         ("caddy-linux", "caddy"),
     ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
-    # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
-    assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
-    assert "github.event_name == 'pull_request'" not in jobs["timings"]["if"]
+    # Only the cosmetic timing receipt (nothing waits on it) and the merge commit checks (a pull request's own static
+    # checks and types jobs run the same list on its head) run in the merge queue alone.
+    for name in ("timings", "merge-checks"):
+        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
+        assert "github.event_name == 'pull_request'" not in jobs[name]["if"], name
     queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
-    assert queue_only == {"timings"}
+    assert queue_only == {"timings", "merge-checks"}
     assert set(jobs) == {
         "plan",
         "static",
         "types",
+        "merge-checks",
         "tests",
         "checks",
         "rust-lint",
@@ -1536,7 +1628,7 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
         queue_only = "github.event_name == 'merge_group'" in condition and "pull_request" not in condition
         assert queue_only or "!github.event.pull_request.draft" in condition, name
     # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
-    # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
+    # checks run on pull requests only: the merge queue runs them in its merge commit checks job.
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
     for name in ("static", "types"):
         assert (
@@ -2092,32 +2184,34 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
         assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
         # The plan decided: no step inside the job diffs the branch again.
         assert not any("git diff" in str(step.get("run", "")) for step in jobs[job]["steps"]), job
-    # The static checks VM runs on pull requests only; a queue group's plan checks its merge commit in its place.
+    # The static checks VM runs on pull requests only; a queue group's merge commit checks job runs in its place.
     assert "github.event_name == 'pull_request'" in jobs["static"]["if"]
 
 
-def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_selection(tmp_path):
+def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_tests(tmp_path):
     """Two pull requests can pass their own static checks and break a whole-tree one together (a route one removes and
-    the other calls), so a queue group runs those on its merge commit. The plan job starts them before the selection and
-    reports them after it, so they cost no VM and little wall time."""
+    the other calls), so a queue group runs those on its merge commit. They run on their own VM beside the plan and the
+    tests: nothing waits for them but the gate, so they hold no test VM back."""
     jobs = workflow_jobs()["jobs"]
-    steps = jobs["plan"]["steps"]
+    job = jobs["merge-checks"]
+    assert job["if"] == "${{ github.event_name == 'merge_group' }}" and "needs" not in job
+    assert "merge-checks" in jobs["checks"]["needs"]
+    assert "merge-checks" not in str(jobs["tests"]["needs"])
+    assert "merge_commit_checks" not in str(jobs["plan"])
+    steps = job["steps"]
     names = [str(step.get("name", "")) for step in steps]
-    start = names.index("Start the merge commit checks")
-    select = names.index("Select affected tests and size measured Python and browser groups")
-    report = names.index("Merge commit checks")
-    assert names.index("Install (five minutes per attempt, one retry)") < start < select < report
-    for index in (start, report):
-        assert steps[index]["if"] == "github.event_name == 'merge_group'"
-    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[start]["run"]
-    assert "set +e" in steps[start]["run"] and steps[start]["run"].rstrip().endswith("&")
-    assert steps[report]["timeout-minutes"] <= 10 and 'exit "$(cat' in steps[report]["run"]
+    install = names.index("Install (five minutes per attempt, one retry)")
+    run = names.index("Merge commit checks")
+    assert install < names.index("Cache pinned tools") < run == len(steps) - 1
+    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[run]["run"]
+    assert steps[run]["env"]["QUEUE_HEAD"] == "${{ github.event.merge_group.head_sha }}"
+    assert job["timeout-minutes"] <= 12
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
     # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
     # one pull request turns on can fail the other's new code).
     static = [str(step.get("run", "")) for job in ("static", "types") for step in jobs[job]["steps"] if step.get("run")]
     found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
-    found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
+    found -= {"scripts/ci_install.sh"}  # the static job's install, which the merge commit checks job has already done
     found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
     assert found >= {
         "scripts/check_migration_order.py",
@@ -2393,6 +2487,9 @@ def test_a_fail_fast_cancel_names_the_first_failing_tests(tmp_path, monkeypatch,
         '</testcase><testcase classname="backend.tests.test_ok" name="test_fine"/>'
         '<testcase classname="backend.tests.test_b" name="test_err"><error message="y"/></testcase></testsuite>'
     )
+    (tmp_path / "python-7-base.xml").write_text(
+        '<testsuite><testcase classname="backend.tests.test_base" name="test_unrelated"><error/></testcase></testsuite>'
+    )
     (tmp_path / "broken.xml").write_text("<testsuite")
     assert checks.junit_failed([tmp_path / "python-7.xml"], limit=1) == [
         "test_thread_halfway.py::test_bounded",
@@ -2582,7 +2679,314 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
     assert "scripts/pr_checks.py run --quarantine" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "quarantine" not in (workflows / name).read_text(), name
+        assert "--quarantine" not in (workflows / name).read_text(), name
+
+
+@pytest.fixture
+def python_retry_leg(tmp_path, monkeypatch):
+    test_file = "backend/tests/test_x.py"
+    source(tmp_path, test_file, "")
+    monkeypatch.delenv("BASE_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n")
+
+    def run(
+        first,
+        retry=None,
+        *,
+        quarantine=True,
+        suite="python-1",
+        first_status=1,
+        retry_status=0,
+        base=None,
+        base_status=1,
+        base_file_exists=True,
+        **extra,
+    ):
+        plan = {"matrix": {"include": [{"suite": suite, "files": [test_file]}]}, **extra}
+        target = tmp_path / "plan.json"
+        target.write_text(json.dumps(plan))
+        calls = []
+
+        def fake(command, cwd, env=None, *, check=False, timeout=None):
+            calls.append((command, env))
+            if command[0] == "git":
+                assert cwd == tmp_path and check
+                if command[1] == "cat-file" and not base_file_exists:
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0)
+            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+            if report.endswith("-base.xml"):
+                assert timeout == 300 and cwd != tmp_path and Path(report).is_absolute()
+                if base_status is None:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                xml, status = base, base_status
+            elif report.endswith("-retry.xml"):
+                xml, status = retry, retry_status
+            else:
+                xml, status = first, first_status
+            if xml is not None:
+                (cwd / report).write_text(xml)
+            return SimpleNamespace(returncode=status)
+
+        monkeypatch.setattr(checks.subprocess, "run", fake)
+        return checks.run(target, suite, root=tmp_path, quarantine=quarantine), calls
+
+    return run
+
+
+def retry_junit(*cases):
+    return (
+        "<testsuite>"
+        + "".join(
+            f'<testcase classname="backend.tests.test_x" name="{name}">{outcome}</testcase>' for name, outcome in cases
+        )
+        + "</testsuite>"
+    )
+
+
+def test_a_python_retry_passes_only_the_failed_ids_and_preserves_the_first_report_and_coverage(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    from scripts import diff_coverage
+
+    results = tmp_path / "ci-results"
+    first = retry_junit(("test_ok", ""), ("test_a[case one]", "<failure/>"), ("test_b", "<error/>"))
+    retry = retry_junit(("test_a[case one]", ""), ("test_b", ""))
+    extracted = []
+
+    def extract(plan, data, out):
+        assert (results / "python-1.xml").read_text() == first
+        assert not (results / "python-1-retry.xml").exists()
+        extracted.append((data, out))
+
+    monkeypatch.setattr(diff_coverage, "extract", extract)
+    status, ((initial, env), (again, retry_env)) = python_retry_leg(
+        first, retry, coverage={"lines": {"backend/example.py": [1]}}
+    )
+    assert status == 0
+    assert "--cov=backend" in initial and env["COVERAGE_FILE"] == str(results / "coverage-python-1.data")
+    assert extracted == [(results / "coverage-python-1.data", results / "coverage-python-1.json")]
+    assert "-n" in again and again[again.index("-n") + 1] == "0"
+    assert "--quarantine" in again and set(checks.PYTEST_FLAGS) <= set(again)
+    assert not any(arg.startswith("--cov") for arg in again) and retry_env is None
+    assert again[-2:] == ["backend/tests/test_x.py::test_a[case one]", "backend/tests/test_x.py::test_b"]
+    assert (results / "python-1.xml").read_text() == first
+    assert (results / "python-1-retry.xml").read_text() == retry
+    assert json.loads((results / "flaky-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": again[-2:],
+        "commit": "a" * 40,
+    }
+    log = capsys.readouterr().out
+    for test in again[-2:]:
+        assert f"Flaky (failed, then passed on retry): {test}" in log.splitlines()
+
+
+def test_a_python_retry_that_still_fails_names_the_remaining_test_and_leaves_no_flake(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1)
+    assert status == 1 and len(calls) == 2
+    assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
+    capsys.readouterr()
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(tmp_path / "ci-results")])
+    assert checks.main() == 0
+    assert capsys.readouterr().out.strip() == "test_x.py::test_b"
+
+
+def test_a_python_leg_passes_when_the_base_matches_and_records_a_flaky_retry_pass(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    base_sha = "b" * 40
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    failure = ("test_a", '<failure message="bad  value at 0x7fa100&#10;head detail"/>')
+    first = retry_junit(failure, ("test_b", "<failure/>"))
+    retry = retry_junit(failure, ("test_b", ""))
+    base = retry_junit(("test_a", '<error message="bad value at 0x7fa200&#10;base detail"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1, base=base)
+    assert status == 0
+    cat, add, test, remove = [command for command, _ in calls[2:]]
+    worktree = add[-2]
+    test_id = "backend/tests/test_x.py::test_a"
+    results = tmp_path / "ci-results"
+    assert cat == ["git", "cat-file", "-e", f"{base_sha}:backend/tests/test_x.py"]
+    assert add == ["git", "worktree", "add", "--detach", worktree, base_sha]
+    assert remove == ["git", "worktree", "remove", "--force", worktree]
+    assert test == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        "0",
+        *checks.PYTEST_FLAGS,
+        "-o",
+        "junit_family=xunit1",
+        f"--junitxml={(results / 'python-1-base.xml').resolve()}",
+        "--quarantine",
+        test_id,
+    ]
+    assert (results / "python-1-base.xml").read_text() == base
+    assert json.loads((results / "base-broken-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": [test_id],
+        "base": base_sha,
+        "commit": "a" * 40,
+    }
+    assert json.loads((results / "flaky-python-1.json").read_text())["tests"] == ["backend/tests/test_x.py::test_b"]
+    warning = (
+        f"{test_id} fails the same way on {base_sha[:10]}; this change did not break it. "
+        "Release validation and main-red track the fix."
+    )
+    assert f"::warning title=Already failing underneath this change::{warning}" in capsys.readouterr().out.splitlines()
+    assert summary.read_text() == warning + "\n"
+
+
+@pytest.mark.parametrize("base_outcome, base_status", [("", 0), ('<failure message="wrong value"/>', 1)])
+def test_a_python_leg_stays_red_when_the_base_does_not_match(
+    python_retry_leg, tmp_path, monkeypatch, base_outcome, base_status
+):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    base = retry_junit(("test_a", base_outcome))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=base, base_status=base_status)
+    assert status == 1 and len(calls) == 6
+    assert not (tmp_path / "ci-results/base-broken-python-1.json").exists()
+
+
+def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_file_exists=False)
+    assert status == 1 and len(calls) == 3
+    assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
+
+
+@pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
+def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1)
+    assert status == 1 and len(calls) == 2
+
+
+def test_a_base_timeout_removes_the_worktree_and_keeps_the_leg_red(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_status=None)
+    assert status == 1 and len(calls) == 6
+    worktree = calls[3][0][-2]
+    assert calls[-1][0] == ["git", "worktree", "remove", "--force", worktree]
+
+
+def test_a_python_retry_that_skips_a_failed_test_leaves_the_leg_red(python_retry_leg, tmp_path):
+    first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", "<skipped/>"))
+    status, calls = python_retry_leg(first, retry)
+    assert status == 1 and len(calls) == 2
+    assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
+
+
+def test_a_python_leg_with_more_than_five_failures_does_not_retry(python_retry_leg):
+    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(quarantine.MAX_FAILURES_PER_JOB + 1)])
+    status, calls = python_retry_leg(first)
+    assert status == 1 and len(calls) == 1
+
+
+def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retry(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    first = retry_junit(("test_a", '<failure message="assert False"/>'))
+    for suite, enabled in (("python-1", False), ("contracts-1", True), ("conformance", True)):
+        status, calls = python_retry_leg(first, suite=suite, quarantine=enabled)
+        assert status == 1 and len(calls) == 1
+        assert ("--quarantine" in calls[0][0]) == enabled
+
+
+@pytest.mark.parametrize(
+    "report",
+    [None, "<testsuite", '<testsuite><testcase name="backend/tests/test_x.py"><error/></testcase></testsuite>'],
+)
+def test_a_python_leg_without_a_report_of_failed_test_ids_does_not_retry(python_retry_leg, report):
+    status, calls = python_retry_leg(report)
+    assert status == 1 and len(calls) == 1
+
+
+@pytest.mark.parametrize("retry_status", [0, 1])
+def test_browser_retry_streams_the_log_and_runs_only_the_failed_scripts(tmp_path, monkeypatch, capsys, retry_status):
+    target = tmp_path / "plan.json"
+    target.write_text(json.dumps({"jobs": [{"name": "browser-1", "files": ["ok", "broken", "also-broken"]}]}))
+    first = ["ok    ok.cts (1.0s)\n", "FAIL  broken.cts (1.0s)\n", "      FAIL  ok.cts\n", "FAIL  also-broken.cjs\n"]
+    second = ["ok    broken.cts (1.0s)\n", "FAIL  also-broken.cjs\n" if retry_status else "ok    also-broken.cjs\n"]
+    calls = []
+
+    def popen(command, **kwargs):
+        calls.append((command, kwargs["env"]))
+        output, status = (first, 1) if len(calls) == 1 else (second, retry_status)
+        return nullcontext(SimpleNamespace(stdout=output, wait=lambda: status))
+
+    monkeypatch.setattr(checks.subprocess, "Popen", popen)
+    monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "b" * 40 + "\n")
+    assert checks.run(target, "browser-1", root=tmp_path, quarantine=True) == retry_status
+    (initial, env), (again, retry_env) = calls
+    assert again == [*initial[:4], "broken.cts", "also-broken.cjs"]
+    results = tmp_path / "ci-results"
+    assert env["TICO_UI_TIMINGS"] == str(results / "browser-1.json")
+    assert retry_env == {**env, "TICO_UI_TIMINGS": str(results / "browser-1-retry.json")}
+    assert capsys.readouterr().out.startswith("".join(first + second))
+    flaky = results / "flaky-browser-1.json"
+    if retry_status:
+        assert not flaky.exists()
+        monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(results)])
+        assert checks.main() == 0
+        assert capsys.readouterr().out.strip() == "also-broken.cjs"
+    else:
+        assert json.loads(flaky.read_text()) == {
+            "suite": "browser-1",
+            "tests": ["broken.cts", "also-broken.cjs"],
+            "commit": "b" * 40,
+        }
+
+
+def test_the_flaky_command_combines_leg_reports_and_only_the_queue_uploads_them(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "flaky"])
+    output = tmp_path / "flaky.json"
+    assert checks.main() == 0 and not output.exists()
+    reports = [
+        {"suite": "browser-1", "tests": ["chat.cts"], "commit": "b" * 40},
+        {"suite": "python-1", "tests": ["backend/tests/test_x.py::test_a"], "commit": "b" * 40},
+    ]
+    for report in reports:
+        source(tmp_path, f"ci-results/flaky-{report['suite']}.json", json.dumps(report))
+    assert checks.main() == 0
+    assert json.loads(output.read_text()) == reports
+
+    jobs = workflow_jobs()["jobs"]
+    leg_upload = next(
+        s for s in jobs["tests"]["steps"] if s.get("with", {}).get("name") == "results-${{ matrix.suite }}"
+    )
+    assert leg_upload["with"]["path"] == "ci-results/*" and "always()" in leg_upload["if"]
+    timings = jobs["timings"]
+    assert "github.event_name == 'merge_group'" in timings["if"]
+    download, collect, upload = (
+        next(i for i, s in enumerate(timings["steps"]) if s.get("with", {}).get("pattern") == "results-*"),
+        next(i for i, s in enumerate(timings["steps"]) if s.get("run") == "python3 scripts/pr_checks.py flaky"),
+        next(i for i, s in enumerate(timings["steps"]) if s.get("with", {}).get("name") == "queue-flaky"),
+    )
+    assert download < collect < upload
+    assert timings["steps"][download]["with"]["merge-multiple"] is True
+    assert timings["steps"][collect]["continue-on-error"] and timings["steps"][upload]["continue-on-error"]
+    assert timings["steps"][upload]["with"] == {
+        "name": "queue-flaky",
+        "path": "flaky.json",
+        "retention-days": 14,
+        "if-no-files-found": "ignore",
+    }
 
 
 def light_tree(root):
@@ -2667,6 +3071,32 @@ def light_plan(changed, event, repo_map, added):
     return checks.narrow(picked, changed, event, added=added, graph=repo_map)
 
 
+@pytest.mark.parametrize(
+    ("changed", "test"),
+    [
+        ("backend/mail.py", "ui/tests/e2e-tools.cts"),
+        ("backend/mail_actions.py", "ui/tests/redesign-e2e-automations.cts"),
+        ("backend/model_subscriptions.py", "ui/tests/computers-shared.cts"),
+        ("backend/threads.py", "backend/tests/test_sql_parity.py"),
+        ("templates/catalog/example/card.yaml", "backend/tests/test_recruiting.py"),
+    ],
+)
+def test_light_plans_keep_checks_with_an_explicit_input_link(tmp_path, changed, test):
+    smoke_tree(tmp_path)
+    for path in (changed, test, "backend/other.py"):
+        source(tmp_path, path, "")
+    graph = checks.DependencyMap(tmp_path)
+
+    def selected(path, event):
+        picked = checks.selection([path], event, root=tmp_path, graph=graph, core=[])
+        return checks.narrow(picked, [path], event, root=tmp_path, graph=graph)
+
+    suite, name = ("browser", Path(test).stem) if checks.is_browser(test) else ("python", test)
+    for event in checks.NARROW:
+        assert name in selected(changed, event)[suite]
+        assert name not in selected("backend/other.py", event)[suite]
+
+
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_a_new_ui_file_runs_the_release_shot_table_test_even_in_a_light_plan(event, repo_map):
     # Nov 13: #3335 added ui/app/browser-view.ts and ui/styles/browser-view.css, which no PAGES, SHARED or UNSHOWN entry
@@ -2735,6 +3165,56 @@ def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_alway
     )
 
 
+@pytest.mark.parametrize(
+    ("changed", "reader"),
+    [
+        ("backend/leaf.py", "from backend import leaf\ndef test_x(): pass\n"),
+        (
+            "backend/data/input.json",
+            'from pathlib import Path\ndef test_x(name): (Path("backend/data") / name).read_text()\n',
+        ),
+    ],
+)
+def test_the_budget_keeps_a_specific_dependency_ahead_of_a_broad_read(tmp_path, changed, reader):
+    smoke_tree(tmp_path)
+    linked = "backend/tests/test_linked.py"
+    broad = "backend/tests/test_broad.py"
+    source(tmp_path, changed, "")
+    source(tmp_path, linked, reader)
+    source(tmp_path, broad, "import subprocess\ndef test_x(): subprocess.run(['git', 'ls-files'])\n")
+    graph = checks.DependencyMap(tmp_path)
+    picked = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, [changed], "pull_request", root=tmp_path, graph=graph)
+    assert {broad, linked} <= set(light["python"])
+    kept, left = checks.cap_tests([broad, linked], light["narrow"]["tier"], {broad: 1, linked: 10}, budget=10)
+    assert kept == [linked] and left == [broad]
+
+
+def test_the_queue_reaches_a_third_hop_only_for_the_named_hub_and_input(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    threads = "backend/threads.py"
+    other = "backend/other.py"
+    store_test = "backend/tests/test_store_path.py"
+    sibling_test = "backend/tests/test_sibling_path.py"
+    source(tmp_path, threads, "")
+    source(tmp_path, other, "")
+    source(tmp_path, "backend/bridge.py", "from backend import threads, other\n")
+    for hub, test in (("store", store_test), ("sibling", sibling_test)):
+        source(tmp_path, f"backend/{hub}.py", "from backend import bridge\n")
+        source(tmp_path, test, f"from backend import {hub}\ndef test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+
+    def selected(path, event):
+        picked = checks.selection([path], event, root=tmp_path, graph=graph, core=[])
+        return checks.narrow(picked, [path], event, root=tmp_path, graph=graph)["python"]
+
+    group = selected(threads, "merge_group")
+    assert store_test in group and sibling_test not in group
+    assert store_test not in selected(other, "merge_group")
+    assert store_test not in selected(threads, "pull_request")
+
+
 def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_it_left(tmp_path, monkeypatch):
     files = {f"backend/tests/test_{i:02}.py": 1 for i in range(40)}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
@@ -2795,7 +3275,7 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
         record["left_transitive"] == ["backend/tests/test_outer.py"]
         and record["shards"] == checks.NARROW["merge_group"]["shards"]
     )
-    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 5
     # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
     assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
     assert "browser_left" not in record
@@ -2999,3 +3479,18 @@ def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_p
     timings.write_text(json.dumps({name: 1000.0 for name in checks.CONTRACT_TESTS}))  # 400 s a VM: past the target
     checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
     assert "::warning::A contracts VM is planned for 400s" in capsys.readouterr().out
+
+
+def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
+    # A stalled fetch at the queue head once held five green groups for its job's whole 25-minute timeout.
+    for name, job in workflow_jobs()["jobs"].items():
+        steps = job.get("steps", [])
+        at = [i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")]
+        if not at:
+            continue
+        assert len(at) == 2 and at[1] == at[0] + 1, name
+        first, retry = steps[at[0]], steps[at[1]]
+        assert first["id"] == "checkout_first" and first["continue-on-error"] is True, name
+        assert retry["if"] == "${{ steps.checkout_first.outcome == 'failure' }}", name
+        assert first["timeout-minutes"] == retry["timeout-minutes"] == 3, name
+        assert first["uses"] == retry["uses"] and first["with"] == retry["with"], name

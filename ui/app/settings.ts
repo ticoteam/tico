@@ -10,7 +10,7 @@ type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_a
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
   efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null; compact_default?: number};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
-type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
+type SettingsIssue = {kind?: string; title: string; detail: string; more?: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
 type SettingsHistory = {changes: SettingsChange[]; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
 type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; own_compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
@@ -673,6 +673,13 @@ async function loadSettings() {
     }
   }
 }
+// A card is one line (Chris, Nov 14: "remove 75% of the words … I'm okay with the tooltip"): the rest of what it says,
+// and its steps, are the line's tooltip on hover and open under it on a tap. Out of credit carries Add credit.
+function settingsIssueLine(issue: SettingsIssue): string {
+  const credit = issue.kind === 'cloud_credit' && S.me?.role === 'owner' ? cloudCreditLinkHTML() : '';
+  if (issue.more) return `<details class="settings-issue-more"><summary title="${esc(issue.more)}">${esc(issue.detail)}</summary><p>${esc(issue.more)}</p></details>${credit ? `<p>${credit}</p>` : ''}`;
+  return `<p>${esc(issue.detail)}${credit}</p>${issue.action && issue.action !== 'review' ? `<p>${esc(issue.action)}</p>` : ''}`;
+}
 function renderSettingsIssues() {
   const el = $('#settings-issues'); if (!el) return;
   // What needs a person heads the Health page (General's Health line counts it as urgent); the rest is listed under
@@ -680,7 +687,7 @@ function renderSettingsIssues() {
   const issues = (SETTINGS_DATA.issues || []).filter(needsPerson);
   const urgent = issues.length > 0;
   el.innerHTML = issues.length ? `<details class="card settings-issues" open><summary><span class="dot ${urgent ? 'failed' : ''}" aria-hidden="true"></span><strong>System checks <span class="tnum">${issues.length}</span></strong></summary>
-    <div>${issues.map(issue => `<div class="settings-issue"><div><strong>${esc(issue.title)}</strong>${needsPerson(issue) ? '' : ` <span class="tag">${issue.kind === 'uncertain_work' ? 'review later' : 'not urgent'}</span>`}<p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p>${esc(issue.action)}</p>` : ''}</div>${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div>`).join('')}</div></details>` : '';
+    <div>${issues.map(issue => `<div class="settings-issue"><div><strong>${esc(issue.title)}</strong>${needsPerson(issue) ? '' : ` <span class="tag">${issue.kind === 'uncertain_work' ? 'review later' : 'not urgent'}</span>`}${settingsIssueLine(issue)}</div>${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div>`).join('')}</div></details>` : '';
   el.querySelectorAll('[data-execution-review]').forEach((button: HTMLElement) => {
     button.onclick = () => executionReview(String(button.dataset.executionReview));
   });

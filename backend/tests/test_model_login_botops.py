@@ -143,7 +143,7 @@ def test_botops_never_switches_or_signs_out_for_the_person_it_works_for(api, bot
     finish(api, botops, ana)
     finish(api, botops, claim(api, botops, "botops"))  # the task's own "new task" notice
     with api.app.state.store.transaction() as c:
-        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
+        H.say(c, H.TICO_ACTOR, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
     later = claim(api, botops, "botops")
     for alias in ALIASES:
         for how in (task_id, ("query", task_id)):

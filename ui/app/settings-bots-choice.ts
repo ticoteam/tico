@@ -1,6 +1,7 @@
 /* ui/app/settings-bots-choice.ts — Settings > Bots: the one model picker (a bot's model, fallback and task model, a new
    bot's model, bulk change). Closed it is a short button ("Opus 5.5 MED 400K"); open it is one panel: Harness, Model
-   (each with its window), Effort and Compact, then Apply.
+   (each with its window) and Effort, then a folded More with Compact and, in a bot's own Model picker, Output style
+   (Claude Code) or Verbosity (Codex), then Apply.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -8,22 +9,31 @@
 // "Same as bot" first), the fallback's own (`fallback`, "Same as bot" first: the turn's window lowered to fit), every
 // selected bot's (`bulk`, "Keep each bot's" first, and settable with no model picked), or none.
 type SettingsCompactMode = '' | 'bot' | 'task' | 'fallback' | 'bulk';
-// A box's pick: its value ('harness::model::effort', '' for Same as bot / None) and its window (null: the model's
-// default, the bot's own or each bot's own, as the mode says).
-interface SettingsChoicePicker { value: () => string; compact: () => number | null; valid: () => boolean; changed: () => boolean; }
+// A bot's own turn settings for one harness each (backend/harnesses.py): Claude Code's output style and Codex's
+// verbosity; null is the harness's own. Kept on any harness, shown only on their own.
+interface SettingsTurnStyle { output_style: string | null; verbosity: string | null; }
+// A box's pick: its value ('harness::model::effort', '' for Same as bot / None), its window (null: the model's
+// default, the bot's own or each bot's own, as the mode says) and its turn style.
+interface SettingsChoicePicker { value: () => string; compact: () => number | null; style: () => SettingsTurnStyle; valid: () => boolean; changed: () => boolean; }
 // A [data-bot-choice] box keeps its pick, so the bot editor's Save reads a pick that was Applied but not saved, and
 // what Apply does with it (`onPick`: save it, or hold it).
-interface SettingsChoiceBox extends HTMLElement { picker?: SettingsChoicePicker; onPick?: (box: SettingsChoiceBox, value: string, compact: number | null) => Promise<void>; }
+interface SettingsChoiceBox extends HTMLElement { picker?: SettingsChoicePicker; onPick?: (box: SettingsChoiceBox, value: string, compact: number | null, style: SettingsTurnStyle) => Promise<void>; }
 // How a box is drawn: what it chooses, for which bot, and what it has now.
 interface SettingsChoiceSpec {
   bot?: SettingsBot | null | undefined; kind: string; name: string; current: string; compact?: number | null; readonly?: boolean;
-  none?: string; noEffort?: boolean; mode: SettingsCompactMode;
+  none?: string; noEffort?: boolean; mode: SettingsCompactMode; style?: SettingsTurnStyle | null;
 }
 
 // Where a conversation compacts (backend/providers.py COMPACT_SIZES).
 const SETTINGS_COMPACT_AT: [number, string][] = [[100000, '100k'], [150000, '150k'], [200000, '200k'], [250000, '250k'], [300000, '300k'],
   [400000, '400k'], [500000, '500k'], [600000, '600k'], [700000, '700k'], [800000, '800k'], [900000, '900k'], [1000000, '1M']];
 const SETTINGS_COMPACT_SIZES = SETTINGS_COMPACT_AT.map(([size]) => size);
+// Claude Code's built-in output styles and Codex's verbosity levels (backend/harnesses.py OUTPUT_STYLES, VERBOSITIES).
+const SETTINGS_OUTPUT_STYLES = ['Concise', 'Explanatory', 'Learning', 'Proactive'];
+const SETTINGS_VERBOSITIES = ['low', 'medium', 'high'];
+const settingsSameStyle = (a: SettingsTurnStyle, b: SettingsTurnStyle) => a.output_style === b.output_style && a.verbosity === b.verbosity;
+// A box's saved turn style, from its attributes.
+const settingsBoxStyle = (box: HTMLElement): SettingsTurnStyle => ({output_style: box.dataset.outputStyleCurrent || null, verbosity: box.dataset.verbosityCurrent || null});
 let SETTINGS_CHOICE_UID = 0;
 // The button whose panel is open (focus goes back to it when the panel closes).
 let SETTINGS_CHOICE_ANCHOR: HTMLElement | null = null;
@@ -92,13 +102,14 @@ function settingsBoxSpec(box: HTMLElement): SettingsChoiceSpec {
   return {bot: box.dataset.botChoice ? S.emps.find(row => row.id === box.dataset.botChoice) : null, kind: box.dataset.kind || 'model',
     name: box.dataset.name || 'Model', current: box.dataset.current || '', compact: Number(box.dataset.compactCurrent) || null,
     readonly: box.hasAttribute('data-readonly'), none: box.dataset.none || '', noEffort: box.hasAttribute('data-no-effort'),
-    mode: (box.dataset.compactMode || '') as SettingsCompactMode};
+    mode: (box.dataset.compactMode || '') as SettingsCompactMode, style: settingsBoxStyle(box)};
 }
 // A picker: a box with its closed button. The panel is drawn when it opens (settingsChoicePopover).
 function settingsChoiceBox(spec: SettingsChoiceSpec) {
   const words = settingsPickWords(spec, spec.current, spec.compact), who = spec.bot ? ` for ${spec.bot.display_name || spec.bot.slug}` : '';
   return `<div class="settings-choice" data-bot-choice="${esc(spec.bot?.id || '')}" data-kind="${esc(spec.kind)}" data-name="${esc(spec.name)}"
     data-current="${esc(spec.current)}" data-compact-current="${spec.compact || ''}" data-compact-mode="${spec.mode}"
+    data-output-style-current="${esc(spec.style?.output_style || '')}" data-verbosity-current="${esc(spec.style?.verbosity || '')}"
     ${spec.none ? `data-none="${esc(spec.none)}"` : ''} ${spec.noEffort ? 'data-no-effort' : ''} ${spec.readonly ? 'data-readonly' : ''}>
     <button type="button" class="sb-pick${spec.readonly ? ' ro' : ''}" data-choice-open aria-haspopup="dialog" aria-expanded="false"
       aria-label="${esc(`${spec.name}${who}: ${words.long}`)}" title="${esc(words.long)}"><span class="sb-pick-text${settingsChoiceFromValue(spec.current).model ? '' : ' muted'}">${esc(words.short)}</span><span class="sb-pick-caret" aria-hidden="true"></span></button>
@@ -111,7 +122,8 @@ function settingsChoiceSpecOf(e: SettingsBot, kind: SettingsChoiceKind): Setting
     selected.reasoning_effort || selected.effort) : '';
   const compact = kind === 'model' ? Number(e.compact_at) || null : kind === 'task' ? e.task_model?.compact_at || null : e.fallback?.compact_at || null;
   return {bot: e, kind, name: spec.name, current, compact, readonly: !settingsCanManageBot(e),
-    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind};
+    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind,
+    style: kind === 'model' ? {output_style: e.output_style || null, verbosity: e.verbosity || null} : null};
 }
 function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
   return settingsChoiceBox(settingsChoiceSpecOf(e, kind));
@@ -119,8 +131,8 @@ function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
 // In the bots table a model or fallback is its picker's closed button.
 const settingsChoiceCell = (e: SettingsBot, kind: SettingsChoiceKind) => settingsChoiceCombo(e, kind);
 
-// Wire the panel `form` for `box`: it starts from the box's pick and ends in `apply(value, compact)`.
-function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, apply: (value: string, compact: number | null) => void) {
+// Wire the panel `form` for `box`: it starts from the box's pick and ends in `apply(value, compact, style)`.
+function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, apply: (value: string, compact: number | null, style: SettingsTurnStyle) => void) {
   const spec = settingsBoxSpec(box), readonly = !!spec.readonly, mode = spec.mode, bot = spec.bot;
   const uid = ++SETTINGS_CHOICE_UID;
   const all = settingsAllChoices();
@@ -134,6 +146,9 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   const held = box.picker ? box.picker.value() : spec.current, savedCompact = spec.compact || null;
   let picked = settingsChoiceFromValue(held);
   let compact: number | null = box.picker ? box.picker.compact() : savedCompact;
+  // Output style and Verbosity: a bot's own Model picker only, each shown on its own harness and kept on any other.
+  const savedStyle = spec.style || {output_style: null, verbosity: null};
+  let style: SettingsTurnStyle = {...(box.picker ? box.picker.style() : savedStyle)};
   let note = '';
   if (viaTier && settingsIsTico(picked.model)) picked.harness = 'tico';
   let legacy = viaTier && picked.harness === 'tico' && !settingsTierParse(picked.model);   // an id the catalog lacks, until a control changes it
@@ -163,6 +178,9 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   const compactable = () => !!mode && (mode === 'bulk' && !picked.model ? true : !!runModel() && settingsCompacts(runHarness()));
   // A fallback on a harness that does not compact keeps no window of its own.
   const compactOut = () => compactable() ? compact : mode === 'fallback' ? null : savedCompact;
+  const styled = mode === 'bot' && !!bot;
+  const styleShown = () => styled && !!picked.model && real().harness === 'claude';
+  const verbosityShown = () => styled && !!picked.model && real().harness === 'codex';
   // A model change: a saved window past the new model's lowers to fit it; the default follows the model.
   const followModel = (before: string) => {
     note = '';
@@ -263,23 +281,41 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     select.innerHTML = option('', first, !compact) + sizes.map(size => option(size, settingsSizeWords(size), size === compact)).join('');
     select.disabled = readonly;
   };
+  // Output style and Verbosity, each a select starting on Default (none saved: the harness's own).
+  const paintStyle = () => {
+    const rows: [string, boolean, string[], string | null][] = [['style', styleShown(), SETTINGS_OUTPUT_STYLES, style.output_style],
+      ['verbosity', verbosityShown(), SETTINGS_VERBOSITIES, style.verbosity]];
+    rows.forEach(([name, shownRow, list, current]) => {
+      const row = part(`[data-choice-${name}-row]`), select = part(`[data-choice-${name}]`) as HTMLSelectElement;
+      row.hidden = !shownRow;
+      select.disabled = readonly || row.hidden;
+      if (row.hidden) return;
+      select.innerHTML = option('', 'Default', !current) + list.map(id => option(id, id, id === current)).join('');
+    });
+    part('[data-choice-more]').hidden = ['compact', 'style', 'verbosity'].every(name => part(`[data-choice-${name}-row]`).hidden);
+  };
+  // More opens by itself when something in it is not at its default.
+  const moreSet = () => (compactable() && !!compact) || (styleShown() && !!style.output_style) || (verbosityShown() && !!style.verbosity);
   const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
   const tierValid = () => { const t = settingsTierParse(picked.model);
     return !!t && (t.version === 'auto' || !!gw?.tiers[t.tier]?.versions.some(v => v.version === t.version)) && tierEfforts(t).list.includes(picked.effort) && !block('tico'); };
   const valid = () => (inTier() ? tierValid() : (choices.some(row => row.value === value()) && !block(picked.harness)))
     || (!picked.harness && !!spec.none);
-  const changed = () => value() !== spec.current || compactOut() !== savedCompact;
+  const changed = () => value() !== spec.current || compactOut() !== savedCompact || !settingsSameStyle(style, savedStyle);
   const applyButton = form.querySelector<HTMLButtonElement>('[data-choice-apply]');
   // Repaint from one row down, keeping the keyboard where it was.
   const paint = (from: 'all' | 'harness' | 'model' | 'effort') => {
     const active = document.activeElement, inside = !!active && form.contains(active);
     const again = active instanceof HTMLInputElement && active.type === 'radio' ? `input[name="${active.name}"]:checked`
-      : active instanceof HTMLElement ? ['data-tier-level', 'data-tier-fast', 'data-tier-version', 'data-choice-compact'].filter(name => active.hasAttribute(name)).map(name => `[${name}]`)[0] : '';
+      : active instanceof HTMLElement ? ['data-tier-level', 'data-tier-fast', 'data-tier-version', 'data-choice-compact', 'data-choice-style', 'data-choice-verbosity']
+        .filter(name => active.hasAttribute(name)).map(name => `[${name}]`)[0] : '';
     if (from === 'all') paintHarness();
     if (from === 'all' || from === 'harness') paintModel();
     else if (from === 'model' && inTier()) paintTier();
     if (from !== 'effort') paintEffort();
     paintCompact();
+    paintStyle();
+    if (from === 'all') (part('[data-choice-more]') as HTMLDetailsElement).open = moreSet();
     if (applyButton) applyButton.disabled = readonly || !valid() || !changed();
     form.dataset.value = value();   // the pick Apply would make, for a reader of the open panel
     if (inside && !form.contains(document.activeElement) && again) form.querySelector<HTMLElement>(again)?.focus();
@@ -314,6 +350,10 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
       const size = Number(target.value) || null;
       compact = size;
       note = ''; paint('effort');
+    } else if (target.matches('[data-choice-style]')) {
+      style = {...style, output_style: target.value || null}; paint('effort');
+    } else if (target.matches('[data-choice-verbosity]')) {
+      style = {...style, verbosity: target.value || null}; paint('effort');
     }
   });
   function pickModel(id: string) {
@@ -325,16 +365,16 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     picked = {harness: picked.harness, model: id,
       effort: list.includes(picked.effort) && !wasDefault ? picked.effort : (own !== undefined && list.includes(own) ? own : list[0] || '')};
   }
-  // Enter applies from any row; a button keeps its own Enter.
+  // Enter applies from any row; a button keeps its own Enter, and More's summary opens and closes.
   form.addEventListener('keydown', event => {
-    if (event.key !== 'Enter' || (event.target as HTMLElement).matches('button, textarea')) return;
+    if (event.key !== 'Enter' || (event.target as HTMLElement).matches('button, textarea, summary')) return;
     event.preventDefault();
     form.requestSubmit();
   });
   form.addEventListener('submit', event => {
     event.preventDefault();
     if (readonly || !valid() || !changed()) return;
-    apply(value(), compactOut());
+    apply(value(), compactOut(), {...style});
   });
   paint('all');
 }
@@ -345,7 +385,11 @@ function settingsChoicePanelHTML(spec: SettingsChoiceSpec) {
     <fieldset class="mp-row" data-choice-model><legend>Model</legend><div class="mp-list"></div></fieldset>
     <div class="settings-tier mp-row" data-choice-tier hidden></div>
     <fieldset class="mp-row" data-choice-effort><legend>Effort</legend><div class="mp-seg"></div></fieldset>
-    <label class="mp-row mp-compact" data-choice-compact-row hidden><span>Compact</span><select data-choice-compact aria-label="Compact"></select></label>
+    <details class="mp-more" data-choice-more><summary>More</summary><div class="mp-more-rows">
+      <label class="mp-row mp-compact" data-choice-compact-row hidden><span>Compact</span><select data-choice-compact aria-label="Compact"></select></label>
+      <label class="mp-row mp-compact" data-choice-style-row hidden><span>Output style</span><select data-choice-style aria-label="Output style"></select></label>
+      <label class="mp-row mp-compact" data-choice-verbosity-row hidden><span>Verbosity</span><select data-choice-verbosity aria-label="Verbosity"></select></label>
+    </div></details>
     <p class="mp-note" data-choice-note role="status"></p>
     <div class="settings-choice-blocks" data-choice-blocks></div>
     <div class="mp-foot">${spec.readonly ? '<button type="button" class="ghost" data-choice-cancel>Done</button>'
@@ -382,7 +426,7 @@ function settingsChoicePopover(anchor: HTMLElement) {
   const form = shown.querySelector<HTMLFormElement>('form')!;
   shown.querySelector<HTMLButtonElement>('[data-choice-cancel]')!.onclick = () => shown.hidePopover();
   // Apply closes the panel first: a model change continues in its own dialog.
-  settingsWireChoicePanel(form, box, (value, compact) => { shown.hidePopover(); void (box.onPick || settingsPickChoice)(box, value, compact); });
+  settingsWireChoicePanel(form, box, (value, compact, style) => { shown.hidePopover(); void (box.onPick || settingsPickChoice)(box, value, compact, style); });
   shown.showPopover();
   anchor.setAttribute('aria-expanded', 'true');
   tasksMenuPlace(shown, anchor);
@@ -394,13 +438,13 @@ document.addEventListener('click', event => {
 });
 // Give each box under `root` its pick and what Apply does: `onPick` saves at once (the bots table), or `hold` keeps
 // the pick on the box until a Save elsewhere (the bot editor, new bot, bulk change).
-function settingsWireCombos(root: ParentNode, onPick: ((box: SettingsChoiceBox, value: string, compact: number | null) => Promise<void>) | 'hold' = settingsPickChoice) {
+function settingsWireCombos(root: ParentNode, onPick: ((box: SettingsChoiceBox, value: string, compact: number | null, style: SettingsTurnStyle) => Promise<void>) | 'hold' = settingsPickChoice) {
   root.querySelectorAll<SettingsChoiceBox>('[data-bot-choice]').forEach(box => {
-    const saved = () => ({value: box.dataset.current || '', compact: Number(box.dataset.compactCurrent) || null});
+    const saved = () => ({value: box.dataset.current || '', compact: Number(box.dataset.compactCurrent) || null, style: settingsBoxStyle(box)});
     let pick = saved();
-    box.picker = {value: () => pick.value, compact: () => pick.compact, valid: () => true,
-      changed: () => pick.value !== saved().value || pick.compact !== saved().compact};
-    box.onPick = onPick === 'hold' ? async (_box, value, compact) => { pick = {value, compact}; settingsChoiceRepaint(box); } : onPick;
+    box.picker = {value: () => pick.value, compact: () => pick.compact, style: () => pick.style, valid: () => true,
+      changed: () => pick.value !== saved().value || pick.compact !== saved().compact || !settingsSameStyle(pick.style, saved().style)};
+    box.onPick = onPick === 'hold' ? async (_box, value, compact, style) => { pick = {value, compact, style}; settingsChoiceRepaint(box); } : onPick;
   });
 }
 // A box's closed button, after its pick changed: it says the pick, and the box tells its form (tico:choice).
@@ -418,12 +462,21 @@ function settingsFallbackBody(value: string, compact: number | null = null) {
   const choice = value ? settingsChoiceFromValue(value) : null;
   return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort, ...(compact ? {compact_at: compact} : {})} : null;
 }
-// Apply in the bots table: save the pick. A window alone saves at once and keeps the session; a model change asks
-// first and continues in its own dialog, after the window.
-async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact: number | null) {
+// Save a bot's output style and verbosity where they changed from `before`; the revision after them.
+async function settingsSaveTurnStyle(slug: string, before: SettingsTurnStyle, after: SettingsTurnStyle, revision: number) {
+  if (after.output_style !== before.output_style)
+    revision = (await post(`/v2/bots/${encodeURIComponent(slug)}/output-style`, {output_style: after.output_style, expected_revision: revision}))?.revision ?? revision + 1;
+  if (after.verbosity !== before.verbosity)
+    revision = (await post(`/v2/bots/${encodeURIComponent(slug)}/verbosity`, {verbosity: after.verbosity, expected_revision: revision}))?.revision ?? revision + 1;
+  return revision;
+}
+// Apply in the bots table: save the pick. A window or a style alone saves at once and keeps the session; a model change
+// asks first and continues in its own dialog, after them.
+async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact: number | null, style: SettingsTurnStyle = settingsBoxStyle(box)) {
   const slug = box.dataset.botChoice, e: SettingsBot | undefined = S.emps.find(row => row.id === slug);
   const current = box.dataset.current || '', savedCompact = Number(box.dataset.compactCurrent) || null;
-  if (!e || (value === current && compact === savedCompact)) return;
+  const savedStyle = settingsBoxStyle(box), restyled = !settingsSameStyle(style, savedStyle);
+  if (!e || (value === current && compact === savedCompact && !restyled)) return;
   if (box.dataset.kind === 'task') {
     const change: SettingsTaskChange = {};
     if (value !== current) change.choice = value ? settingsChoiceFromValue(value) : null;
@@ -450,7 +503,15 @@ async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact
   if (compact !== savedCompact) {
     try { revision = (await post(`/v2/bots/${encodeURIComponent(e.id)}/compact-at`, {compact_at: compact, expected_revision: revision}))?.revision ?? revision + 1; }
     catch (error) { toast(errorMessage(error, ''), true); return; }
-    if (!move) { await loadSettings(); toast(compact ? `${e.display_name} compacts at ${settingsSizeWords(compact)}` : `${e.display_name} compacts at its model's default`); return; }
+  }
+  if (restyled) {
+    try { revision = await settingsSaveTurnStyle(e.id, savedStyle, style, revision); }
+    catch (error) { await loadSettings(); toast(errorMessage(error, ''), true); return; }
+  }
+  if (!move) {
+    await loadSettings();
+    toast(restyled ? `${e.display_name} saved` : compact ? `${e.display_name} compacts at ${settingsSizeWords(compact)}` : `${e.display_name} compacts at its model's default`);
+    return;
   }
   await settingsBeginTransition(box, e, {kind: 'model', model: choice.model, effort: choice.effort,
     harness: choice.harness, expected_generation: e.machine?.generation || 0, expected_revision: revision});

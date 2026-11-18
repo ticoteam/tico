@@ -4,7 +4,9 @@
 from ..api_contract import ref
 from ._base import NUM_N, SCHEMAS, items, obj
 
-_SUB_KIND = {"enum": ["claude_token", "codex_login", "anthropic_key", "openai_key", "cursor_key", "meta_key"]}
+_SUB_KIND = {
+    "enum": ["claude_token", "claude_login", "codex_login", "anthropic_key", "openai_key", "cursor_key", "meta_key"]
+}
 
 
 _SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
@@ -37,6 +39,8 @@ SCHEMAS['ModelSubscription'] = obj(
                         'reason': {'type': ['string', 'null']},
                         'weekly_resets_at': 'n',
                         'weekly_used_pct': NUM_N,
+                        'near': 'b',
+                        'models': items(obj({'model': 's', 'used_percent': 'f', 'resets_at': 's'})),
                     },
                     required=['window', 'used_pct', 'cost_usd_month'],
                 ),
@@ -51,6 +55,7 @@ SCHEMAS['ModelSubscription'] = obj(
         'updated_at': 's',
         'order': {'type': ['integer', 'null']},
         'in_use_on': items({'type': 'string'}),
+        'reconnect_by': 'n',
     },
     required=[
         'id',

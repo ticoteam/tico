@@ -3,14 +3,16 @@
 //! the bot's repository.
 //!
 //! A turn may use its primary, named fallback and automatic candidates. Automatic values are fetched only at the
-//! hop boundary (`activate`); each process gets only its own (`start`). An
+//! hop boundary (`activate`); each process gets only its own (`start`), except a plan login kept in a home (a ChatGPT
+//! login), which every process of the turn gets for its own commands, so a bot on Claude can run `codex`. An
 //! environment subscription (`env`: a Claude setup-token as CLAUDE_CODE_OAUTH_TOKEN, an Anthropic key) is set in that
 //! process's environment, and the runtime's other sign-in variables are taken out of the turn's so the CLI cannot
 //! prefer one of them (Claude Code ranks ANTHROPIC_API_KEY above the token). The computer's own key for that runtime is
 //! not added (`Runner::turn_key`). A home subscription (`file`: a ChatGPT login or an OpenAI key, Codex's `auth.json`)
 //! gets a home of its own, `<bot state>/subscriptions/<id>/<runtime>`, kept on this computer between turns so the
 //! CLI's threads resume there; that process's CODEX_HOME points at it and its conversation key names it, so no thread
-//! begun on another login is resumed on it. The sign-in file itself is there only while a process of a turn handed
+//! begun on another login is resumed on it. A Claude plan's threads stay in the turn's own home, so every Claude plan
+//! shares one conversation key (`Delivered::binding`) and a move between plans resumes the thread. The sign-in file itself is there only while a process of a turn handed
 //! that subscription runs: written 0600 when that runtime starts (`start`), removed when the last turn holding that
 //! home lets go of it (the turn moves to another runtime, `finish`, the vault's drop for a turn that ends early), and
 //! swept from every home when the runner starts (`sweep`), so taking a subscription off a computer, or deleting it,
@@ -22,10 +24,18 @@
 //! list): a token whole, and a sign-in file whole and each secret string inside it (Codex's access, refresh and id
 //! tokens, its OPENAI_API_KEY), as handed, as kept here, as found in place, and as Codex refreshed it during the turn.
 //!
+//! A full Claude login (`claude_login`, backend/claude_login.py) is a home subscription too, with one difference: its
+//! file is Claude Code's `.credentials.json`, holding only a short-lived access token (never the refresh token), and its
+//! home is the process's CLAUDE_CONFIG_DIR rather than its HOME. Every other entry of the turn's own `~/.claude`
+//! (settings, skills, `projects` with the transcripts) is linked into that home, so the turn sees what it would see
+//! signed in as the computer, and its sessions stay where they always were. When the plan's token is refreshed (on
+//! this computer or another, claude_login.rs) the file in every home running on it is rewritten (`rewrite`) before the
+//! old token is revoked or, at worst, before the turn's next call.
+//!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -38,7 +48,15 @@ use crate::util::text_of;
 
 const MAX_VALUE: usize = 64 * 1024;
 /// The sign-in files a home subscription may hold; nothing else in its home is removed.
-const FILES: &[&str] = &["auth.json"];
+const FILES: &[&str] = &["auth.json", CREDENTIALS];
+/// Claude Code's sign-in file in its config directory.
+pub const CREDENTIALS: &str = ".credentials.json";
+/// What stays the subscription home's own in a full Claude login's config directory: everything else is linked to the
+/// turn's own `~/.claude`.
+const OWN: &[&str] = &[CREDENTIALS, ".claude.json"];
+/// Where a full Claude login keeps one config directory per turn: `subscriptions/<id>/turns/<turn>/claude`. Two turns
+/// on one plan here (two bots, two HOMEs) each link their own `~/.claude` in, so neither repoints the other's.
+const TURNS: &str = "turns";
 /// Left by an older runner, which kept the file between turns.
 const LEGACY_REVISION_FILE: &str = ".tico-revision";
 /// The shortest string inside a sign-in file masked on its own (tokens and keys are far longer).
@@ -56,6 +74,9 @@ pub struct Delivered {
     pub env: Option<String>,
     /// The CLI's own home (CODEX_HOME) for a home subscription, and its sign-in file there.
     pub home: Option<PathBuf>,
+    /// The variable the home is set in when it is not the runtime's profile home (a full Claude login:
+    /// CLAUDE_CONFIG_DIR, while HOME stays the turn's).
+    pub home_env: Option<String>,
     pub file: Option<PathBuf>,
     /// As the server handed it.
     value: String,
@@ -67,11 +88,44 @@ pub struct Delivered {
     pub held: bool,
 }
 
+/// The conversation key's suffix every subscription whose threads live in the turn's own home shares (`binding`).
+pub const SHARED_BINDING: &str = ":subscriptions";
+
 impl Delivered {
-    /// The conversation key's suffix: a thread begun on one sign-in (the computer's own, another subscription) is
-    /// never resumed on this one, and a home subscription's threads live in that home.
+    /// The conversation key's suffix: a thread begun on the computer's own login is never resumed on a subscription,
+    /// nor the other way round. A subscription whose threads live in the turn's own home (an environment one, or a full
+    /// Claude login, whose config home links the turn's `projects`) shares one suffix with every other such: a move
+    /// between plans resumes the same thread, as Claude Code resumes a session begun under another account, of another
+    /// organization too (lanes::PLAN_SWITCH_RESUME). A Codex home's threads live in that home, so its suffix names it.
     pub fn binding(&self) -> Option<String> {
-        Some(format!(":subscription:{}", self.id))
+        Some(if self.shares_threads() {
+            SHARED_BINDING.into()
+        } else {
+            self.own_binding()
+        })
+    }
+
+    /// The suffix a runner before the shared one saved this subscription's threads under: a conversation that has
+    /// nothing under the shared one takes its thread from there, once.
+    pub fn legacy_binding(&self) -> Option<String> {
+        self.shares_threads().then(|| self.own_binding())
+    }
+
+    fn own_binding(&self) -> String {
+        format!(":subscription:{}", self.id)
+    }
+
+    fn shares_threads(&self) -> bool {
+        self.env.is_some() || self.home_env.is_some()
+    }
+
+    /// A plan login kept in a home of its own (a ChatGPT login): it also signs its CLI in for the commands of a turn
+    /// running another runtime, so a bot on Claude can run `codex exec` on its computer's ChatGPT plan. Never an API
+    /// key (that spends per use), and never a runtime whose home is HOME (it would move the running CLI's own home).
+    fn for_shell(&self) -> bool {
+        self.home.is_some()
+            && self.billing == "subscription"
+            && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
     }
 }
 
@@ -134,6 +188,23 @@ pub fn secrets_in(text: &str) -> Vec<String> {
     out
 }
 
+/// What to mask for a full Claude login (its whole value or a turn's `.credentials.json`): the text whole and its
+/// tokens, not the account's email or plan names.
+pub fn claude_secrets(text: &str) -> Vec<String> {
+    let mut out = vec![text.to_string()];
+    if let Ok(v) = serde_json::from_str::<Value>(text) {
+        for key in ["accessToken", "refreshToken"] {
+            if let Some(t) = v["claudeAiOauth"][key]
+                .as_str()
+                .filter(|t| t.len() >= MIN_SECRET)
+            {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Read each subscription the server handed this turn; none is put in place until its runtime starts (`start`).
 /// An environment one's runtime's other sign-in variables leave `env` and `keys` (the turn's vault variables) now.
 /// Every value joins `values`, the turn's redaction list, for the whole turn: a turn's two processes write to the
@@ -170,6 +241,7 @@ pub fn apply(
             billing: billing(&item["billing"]),
             env: None,
             home: None,
+            home_env: None,
             file: None,
             value: value.clone(),
             written: value.clone(),
@@ -190,17 +262,40 @@ pub fn apply(
             delivered.env = Some(env_name);
         } else {
             let name = text_of(&item["file"]);
-            if !FILES.contains(&name.as_str()) {
+            let home_env = text_of(&item["home_env"]);
+            let overrides = crate::harness_tools::caps(&runtime, "").profile_home_overrides;
+            if !FILES.contains(&name.as_str())
+                || (name == CREDENTIALS) == home_env.is_empty()
+                || (!home_env.is_empty() && !overrides.contains(&home_env))
+            {
                 crate::util::diagnostic(&format!(
                     "Tico runner: left a subscription out of this turn: {id} names no known file"
                 ));
                 continue;
             }
-            let home = crate::isolation::bot_state(state_dir)
+            if !home_env.is_empty() {
+                // The CLI ranks a token in its environment above the file.
+                for other in crate::harness_tools::api_key_env(&runtime) {
+                    env.remove(&other);
+                    keys.remove(&other);
+                }
+                delivered.home_env = Some(home_env);
+            }
+            let plan = crate::isolation::bot_state(state_dir)
                 .join("subscriptions")
-                .join(&id)
-                .join(&runtime);
-            values.extend(secrets_in(&value));
+                .join(&id);
+            let home = if name == CREDENTIALS {
+                plan.join(TURNS)
+                    .join(uuid::Uuid::new_v4().simple().to_string())
+                    .join(&runtime)
+            } else {
+                plan.join(&runtime)
+            };
+            values.extend(if name == CREDENTIALS {
+                claude_secrets(&value)
+            } else {
+                secrets_in(&value)
+            });
             if let Some((_, kept)) = homes().kept.get(&home) {
                 values.extend(secrets_in(kept));
             }
@@ -278,23 +373,51 @@ pub async fn activate(
     Ok((got, secrets))
 }
 
-/// Sign `runtime` in, and only it, in `env`, the environment of its process about to start: the other runtimes'
-/// subscriptions leave it (a hop's environment is copied from the turn's first), and their homes are let go, since
-/// the host before it has stopped. A home subscription's file is put in place now. Returns what joins the turn's
-/// redaction list: the file as found in place, and what Codex refreshed in a home let go. A home that cannot be made
-/// leaves its subscription out of the turn, said in the runner's log.
+/// Sign `runtime` in, in `env`, the environment of its process about to start: the other runtimes' subscriptions
+/// leave it (a hop's environment is copied from the turn's first), and their homes are let go, since the host before
+/// it has stopped, except a plan login kept in a home (`Delivered::for_shell`), which stays in place with its CLI's
+/// home variable set so the turn's own commands can run that CLI signed in. A home subscription's file is put in
+/// place now. Returns what joins the turn's redaction list: the file as found in place, and what Codex refreshed in a
+/// home let go. A home that cannot be made leaves its subscription out of the turn, said in the runner's log.
 pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Vec<String> {
     let mut secrets = vec![];
-    for d in delivered.iter_mut().filter(|d| d.runtime != runtime) {
+    for d in delivered
+        .iter_mut()
+        .filter(|d| d.runtime != runtime && !d.for_shell())
+    {
         secrets.extend(release(d));
         if let Some(name) = &d.env {
             if env.get(name) == Some(&d.value) {
                 env.remove(name);
             }
         }
-        if let (Some(home), Some(var)) = (&d.home, crate::profiles::home_var(&d.runtime)) {
+        let var = d
+            .home_env
+            .clone()
+            .or_else(|| crate::profiles::home_var(&d.runtime));
+        if let (Some(home), Some(var)) = (&d.home, var) {
             if env.get(&var).is_some_and(|v| Path::new(v) == home) {
                 env.remove(&var);
+            }
+        }
+    }
+    let mut at = 0;
+    while at < delivered.len() {
+        let d = &mut delivered[at];
+        if d.runtime == runtime || !d.for_shell() {
+            at += 1;
+            continue;
+        }
+        match hold(d, env) {
+            Ok(found) => {
+                secrets.extend(found);
+                at += 1;
+            }
+            Err(e) => {
+                crate::util::diagnostic(&format!(
+                    "Tico runner: left a subscription out of this turn: {e}"
+                ));
+                delivered.remove(at);
             }
         }
     }
@@ -309,38 +432,196 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
         env.insert(name, d.value.clone());
         return secrets;
     }
-    let (Some(home), Some(file)) = (d.home.clone(), d.file.clone()) else {
+    if d.home.is_none() || d.file.is_none() {
         return secrets;
+    }
+    match hold(d, env) {
+        Ok(found) => secrets.extend(found),
+        Err(e) => {
+            crate::util::diagnostic(&format!(
+                "Tico runner: left a subscription out of this turn: {e}"
+            ));
+            delivered.remove(at);
+        }
+    }
+    secrets
+}
+
+/// Put a home subscription's file in place for this turn (once: a held home keeps what is there) and point its CLI's
+/// home variable at it in `env`, without the variables that CLI reads ahead of that home. Returns the file's secrets
+/// when it held something other than what was handed (Codex refreshed it in another turn here).
+fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
+    let mut secrets = vec![];
+    let (Some(home), Some(file)) = (d.home.clone(), d.file.clone()) else {
+        return Ok(secrets);
     };
     if !d.held {
         let name = file
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        match place(&home, &name, &d.value, d.revision) {
-            Ok(written) => {
-                if written != d.value {
-                    secrets.extend(secrets_in(&written));
-                }
-                d.written = written;
-                d.held = true;
-            }
-            Err(e) => {
-                crate::util::diagnostic(&format!(
-                    "Tico runner: left a subscription out of this turn: {e}"
-                ));
-                delivered.remove(at);
-                return secrets;
-            }
+        let written = place(&home, &name, &d.value, d.revision)?;
+        if written != d.value {
+            secrets.extend(if d.home_env.is_some() {
+                claude_secrets(&written)
+            } else {
+                secrets_in(&written)
+            });
         }
+        d.written = written;
+        d.held = true;
     }
-    if let Some(var) = crate::profiles::home_var(runtime) {
-        for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+    if let Some(var) = d.home_env.clone() {
+        for other in crate::harness_tools::api_key_env(&d.runtime) {
+            env.remove(&other);
+        }
+        if let Some(own) = env.get("HOME").filter(|h| !h.is_empty()) {
+            link_config(&home, &Path::new(own).join(".claude"));
+        }
+        env.insert(var, home.display().to_string());
+        return Ok(secrets);
+    }
+    if let Some(var) = crate::profiles::home_var(&d.runtime) {
+        for key in crate::harness_tools::caps(&d.runtime, "").profile_home_overrides {
             env.remove(&key);
         }
         env.insert(var, home.display().to_string());
     }
-    secrets
+    Ok(secrets)
+}
+
+/// A full Claude login's config directory sees the turn's own `~/.claude` (`own`): each entry there but the sign-in
+/// files is linked in, `projects` first made so the transcripts stay under HOME (hosts/claude.rs transcript). A link
+/// to another folder (the bot's HOME moved) is replaced; what Claude Code made in the home itself is left alone. A
+/// fresh home is marked as onboarded, as the computer's own is. Best effort: a turn whose links fail still runs.
+fn link_config(home: &Path, own: &Path) {
+    let _ = crate::isolation::mkdir(&own.join("projects"), 0o700);
+    for entry in std::fs::read_dir(own).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let text = name.to_string_lossy();
+        if OWN.contains(&text.as_ref()) || text.contains(".tico-") {
+            continue;
+        }
+        let link = home.join(&name);
+        match std::fs::symlink_metadata(&link) {
+            Ok(m) if m.file_type().is_symlink() => {
+                if std::fs::read_link(&link).is_ok_and(|t| t == entry.path()) {
+                    continue;
+                }
+                let _ = std::fs::remove_file(&link);
+            }
+            Ok(_) => continue,
+            Err(_) => {}
+        }
+        let _ = std::os::unix::fs::symlink(entry.path(), &link);
+    }
+    let settings = home.join(".claude.json");
+    if !settings.exists() {
+        let _ = write_private(&settings, "{\"hasCompletedOnboarding\":true}");
+    }
+}
+
+/// The plan a home is of: `subscriptions/<id>/<runtime>`, or a full Claude login's `subscriptions/<id>/turns/<turn>/claude`.
+fn plan_of(home: &Path) -> Option<String> {
+    let mut up = home.parent()?;
+    if up
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == TURNS)
+    {
+        up = up.parent()?.parent()?;
+    }
+    Some(up.file_name()?.to_string_lossy().to_string())
+}
+
+/// A full Claude login's config directory with a turn running on it: the one CLAUDE_CONFIG_DIR a turn keeps
+/// (hosts/claude.rs turn_env).
+pub fn is_config_home(path: &str) -> bool {
+    let path = Path::new(path);
+    path.file_name().is_some_and(|n| n == "claude")
+        && homes()
+            .live
+            .get(path)
+            .is_some_and(|_| path.join(CREDENTIALS).is_file())
+}
+
+/// Each full Claude login a turn here runs on, with the revision its file has (claude_login.rs asks for newer ones).
+/// Each plan once, at the oldest revision any of its turns has.
+pub fn live_logins() -> Vec<(String, i64)> {
+    let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    for (home, live) in homes().live.iter() {
+        if !home.join(CREDENTIALS).is_file() {
+            continue;
+        }
+        if let Some(id) = plan_of(home) {
+            let at = out.entry(id).or_insert(live.revision);
+            *at = (*at).min(live.revision);
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// A full Claude login's new access token (`value`, its `.credentials.json` at `revision`): written into every home
+/// of that plan a turn here still runs on at an older revision, and masked in every turn's output. Returns how many
+/// homes it rewrote.
+pub fn rewrite(id: &str, revision: i64, value: &str) -> usize {
+    if !safe_id(id) || value.is_empty() || value.len() > MAX_VALUE {
+        return 0;
+    }
+    for secret in claude_secrets(value) {
+        crate::redact::hide_everywhere(&secret, false);
+    }
+    write_logins(id, value, Some(revision))
+}
+
+/// A login this computer refreshed and the server has not yet acknowledged: the old access token is revoked already,
+/// so every home of the plan gets the new one now, while each keeps the revision it had until the server says which
+/// revision this is (`rewrite`), or that it kept another (`stale`).
+pub fn renew(id: &str, value: &str) -> usize {
+    if !safe_id(id) || value.is_empty() || value.len() > MAX_VALUE {
+        return 0;
+    }
+    for secret in claude_secrets(value) {
+        crate::redact::hide_everywhere(&secret, false);
+    }
+    write_logins(id, value, None)
+}
+
+/// The server did not keep this computer's refresh of a plan (a Reconnect came first): every home of it asks for the
+/// server's login on the next poll, whatever revision it had.
+pub fn stale(id: &str) {
+    for (home, live) in homes().live.iter_mut() {
+        if plan_of(home).is_some_and(|p| p == id) && home.join(CREDENTIALS).is_file() {
+            live.revision = 0;
+        }
+    }
+}
+
+/// Write `value` into each live home of plan `id`: those behind `revision` (and record it), or all of them (None).
+fn write_logins(id: &str, value: &str, revision: Option<i64>) -> usize {
+    let mut homes = homes();
+    let mut done = 0;
+    for (home, live) in homes.live.iter_mut() {
+        let file = home.join(CREDENTIALS);
+        if plan_of(home).is_none_or(|p| p != id)
+            || revision.is_some_and(|r| live.revision >= r)
+            || !file.is_file()
+        {
+            continue;
+        }
+        match write_private(&file, value) {
+            Ok(()) => {
+                if let Some(r) = revision {
+                    live.revision = r;
+                }
+                done += 1;
+            }
+            Err(e) => crate::util::diagnostic(&format!(
+                "Tico runner: could not renew a Claude plan's sign-in: {e}"
+            )),
+        }
+    }
+    done
 }
 
 /// Hold `home/name` for one turn. The first turn on a home writes the file: the login Codex refreshed here at this
@@ -378,7 +659,7 @@ fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, 
     Ok(text)
 }
 
-fn write_private(path: &Path, value: &str) -> Result<(), String> {
+pub(crate) fn write_private(path: &Path, value: &str) -> Result<(), String> {
     let staged = path.with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
     let mut f = std::fs::OpenOptions::new()
         .write(true)
@@ -424,7 +705,9 @@ pub fn sweep(state_dir: &Path) {
             .flatten()
             .flatten()
         {
-            if home.file_type().is_ok_and(|t| t.is_dir()) {
+            if home.file_name() == TURNS {
+                let _ = std::fs::remove_dir_all(home.path());
+            } else if home.file_type().is_ok_and(|t| t.is_dir()) {
                 clear(&home.path());
             }
         }
@@ -463,9 +746,22 @@ fn release(d: &mut Delivered) -> Vec<String> {
         _ => {
             homes.live.remove(&home);
             clear(&home);
+            if let Some(turn) = turn_dir(&home) {
+                // A turn's own config directory: its links go with it (never what they point at).
+                let _ = std::fs::remove_dir_all(turn);
+            }
         }
     }
     secrets
+}
+
+/// `subscriptions/<id>/turns/<turn>` of a full Claude login's home; None for any other home.
+fn turn_dir(home: &Path) -> Option<&Path> {
+    let turn = home.parent()?;
+    turn.parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == TURNS)
+        .then_some(turn)
 }
 
 pub fn for_runtime<'a>(delivered: &'a [Delivered], runtime: &str) -> Option<&'a Delivered> {
@@ -577,12 +873,79 @@ mod tests {
         );
         assert_eq!(env["ACME_KEY"], "acme");
         assert_eq!(got[0].billing, "subscription");
-        assert_eq!(got[0].binding().as_deref(), Some(":subscription:s1"));
+        // Claude keeps its threads in the turn's own home, so every plan shares one key; the plan's own is the old one.
+        assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
+        assert_eq!(got[0].legacy_binding().as_deref(), Some(":subscription:s1"));
         // A variable that does not sign the runtime in is never set.
         let mut env2 = Env::new();
         let bad = json!([{"id": "s2", "runtime": "claude", "env": "PATH", "value": "/evil", "revision": 1}]);
         assert!(apply(&state, &bad, &mut env2, &mut vec![], &mut BTreeSet::new()).is_empty());
         assert!(!env2.contains_key("PATH"));
+        std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[test]
+    fn two_turns_on_one_full_claude_login_keep_their_own_config_and_each_gets_the_new_token() {
+        let state = dir();
+        let id = format!("cl{}", uuid::Uuid::new_v4().simple());
+        let file = |token: &str| json!({"claudeAiOauth": {"accessToken": token}}).to_string();
+        let item = json!([{"id": id, "runtime": "claude", "kind": "claude_login", "file": CREDENTIALS,
+                           "home_env": "CLAUDE_CONFIG_DIR", "value": file("sk-ant-oat01-first-synthetic"),
+                           "revision": 3, "billing": "subscription"}]);
+        // Two bots, each with its own HOME, on one plan at once.
+        let mut turns = vec![];
+        for bot in ["ana", "bo"] {
+            let own = state.join(bot).join(".claude");
+            std::fs::create_dir_all(own.join(bot)).unwrap();
+            let mut env: Env = [("HOME".into(), state.join(bot).display().to_string())].into();
+            let mut got = apply(&state, &item, &mut env, &mut vec![], &mut BTreeSet::new());
+            start(&mut got, "claude", &mut env);
+            let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
+            assert!(is_config_home(&env["CLAUDE_CONFIG_DIR"]));
+            // Its transcripts are the turn's own, so a move to or from another Claude plan resumes the thread.
+            assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
+            assert_eq!(
+                std::fs::read_link(home.join("projects")).unwrap(),
+                own.join("projects")
+            );
+            assert_eq!(std::fs::read_link(home.join(bot)).unwrap(), own.join(bot));
+            turns.push((got, home));
+        }
+        let (ana, bo) = (turns[0].1.clone(), turns[1].1.clone());
+        assert_ne!(ana, bo);
+        // Neither repointed the other's links.
+        assert!(std::fs::read_link(ana.join("projects"))
+            .unwrap()
+            .starts_with(state.join("ana")));
+        assert!(!bo.join("ana").exists() && !ana.join("bo").exists());
+        assert_eq!(
+            live_logins()
+                .into_iter()
+                .filter(|(p, _)| *p == id)
+                .collect::<Vec<_>>(),
+            vec![(id.clone(), 3)]
+        );
+        let read = |home: &Path| std::fs::read_to_string(home.join(CREDENTIALS)).unwrap();
+        // Refreshed here: both files at once, each still at its revision until the server says which this is.
+        assert_eq!(renew(&id, &file("sk-ant-oat01-second-synthetic")), 2);
+        assert!(read(&ana).contains("second") && read(&bo).contains("second"));
+        assert!(live_logins().contains(&(id.clone(), 3)));
+        assert_eq!(rewrite(&id, 4, &file("sk-ant-oat01-second-synthetic")), 2);
+        assert!(live_logins().contains(&(id.clone(), 4)));
+        // A refresh the server did not keep: every home asks for the server's login again.
+        stale(&id);
+        assert!(live_logins().contains(&(id.clone(), 0)));
+        assert_eq!(rewrite(&id, 5, &file("sk-ant-oat01-third-synthetic")), 2);
+        assert!(read(&ana).contains("third") && read(&bo).contains("third"));
+        // A finished turn's config directory goes, never what its links point at.
+        for (mut got, home) in turns {
+            finish(&mut got);
+            assert!(!home.exists());
+        }
+        assert!(
+            state.join("ana/.claude/projects").is_dir() && state.join("bo/.claude/bo").is_dir()
+        );
+        assert!(!live_logins().iter().any(|(p, _)| *p == id));
         std::fs::remove_dir_all(&state).unwrap();
     }
 
@@ -614,6 +977,7 @@ mod tests {
         );
         assert_eq!(env["CODEX_HOME"], home.display().to_string());
         assert_eq!(got[0].binding().as_deref(), Some(":subscription:s3"));
+        assert_eq!(got[0].legacy_binding(), None);
         // Codex refreshed it and writes a session; a second turn on the same home joins with the refreshed file.
         std::fs::write(&file, "{\"tokens\":2}").unwrap();
         std::fs::create_dir_all(home.join("sessions")).unwrap();
@@ -665,7 +1029,8 @@ mod tests {
     }
 
     #[test]
-    fn each_process_of_a_turn_gets_only_its_own_runtimes_subscription() {
+    fn each_process_gets_its_runtimes_subscription_and_every_turn_the_chatgpt_login_for_its_commands(
+    ) {
         let state = dir();
         let token = "sk-ant-oat01-synthetic-primary";
         let login =
@@ -687,14 +1052,9 @@ mod tests {
         }
         start(&mut got, "claude", &mut env);
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
-        assert_eq!(
-            env["CODEX_HOME"], "/computer/.codex",
-            "Claude's process was pointed at the fallback's home"
-        );
-        assert!(
-            !file.exists(),
-            "the fallback's login was in place while only Claude ran"
-        );
+        // The ChatGPT login signs `codex` in for Claude's own commands (`codex exec` in its shell), in its own home.
+        assert_eq!(env["CODEX_HOME"], home.display().to_string());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), login);
         // No local login and no named fallback: the handed subscription wins before Gateway.
         let config =
             json!({"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5-5"});
@@ -716,7 +1076,8 @@ mod tests {
         finish(&mut got);
         assert!(!file.exists());
 
-        // The other way round: Codex first, Claude its fallback. The Codex home is let go once Claude starts.
+        // The other way round: Codex first, Claude its fallback. The Codex home stays for Claude's commands; what Codex
+        // refreshed goes back when the turn ends.
         let mut env = Env::new();
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
         start(&mut got, "codex", &mut env);
@@ -727,22 +1088,36 @@ mod tests {
         )
         .unwrap();
         let mut hop = env.clone();
-        let fresh = start(&mut got, "claude", &mut hop);
+        start(&mut got, "claude", &mut hop);
+        assert!(got[1].held && file.exists());
+        assert_eq!(hop["CODEX_HOME"], home.display().to_string());
+        assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
+        let fresh = finish(&mut got);
         assert!(
             fresh.iter().any(|s| s == "rt_synthetic_refreshed_dddddddd"),
             "the refresh was not masked: {fresh:?}"
         );
         assert!(got[1].refreshed.is_some() && !got[1].held);
-        assert!(
-            !file.exists(),
-            "the Codex login stayed after its host stopped"
-        );
-        assert!(!hop.contains_key("CODEX_HOME"), "{hop:?}");
-        assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
+        assert!(!file.exists(), "the Codex login stayed after the turn");
         assert!(
             finish(&mut got).is_empty(),
             "a home let go is not let go twice"
         );
+        std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[test]
+    fn an_openai_key_never_signs_in_another_runtimes_commands() {
+        let state = dir();
+        let items = json!([
+            {"id": "s11", "runtime": "codex", "kind": "openai_key", "file": "auth.json", "billing": "api",
+             "value": r#"{"OPENAI_API_KEY":"sk-synthetic-openai-key-eeeeeeee"}"#, "revision": 1},
+        ]);
+        let mut env = Env::new();
+        let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
+        let file = got[0].file.clone().unwrap();
+        start(&mut got, "claude", &mut env);
+        assert!(!file.exists() && !env.contains_key("CODEX_HOME"), "{env:?}");
         std::fs::remove_dir_all(&state).unwrap();
     }
 

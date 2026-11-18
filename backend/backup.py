@@ -520,7 +520,11 @@ def restore_snapshot(source, destination):
             (now,),
         )
         H.event(
-            c, H.KEEPER, "recovery.fenced", "database", {"source_sha256": report["sha256"], "active_attempts": active}
+            c,
+            H.TICO_ACTOR,
+            "recovery.fenced",
+            "database",
+            {"source_sha256": report["sha256"], "active_attempts": active},
         )
     return {
         "source": report,

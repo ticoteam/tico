@@ -230,7 +230,7 @@ def _manager_classifies_labels_but_keeps_mover_and_publish_gates(api, manager):
     token, _ = manager
     task = make(api)
     with api.app.state.store.transaction() as c:
-        H.tag_create(c, H.KEEPER, 'manager-check', label='Manager check')
+        H.tag_create(c, H.TICO_ACTOR, 'manager-check', label='Manager check')
     labelled = change(api, task, token, labels=['manager-check'])
     assert labelled['labels'] == ['manager-check']
     for fields in ({'number': 999}, {'lane': 'company'}, {'private': False}):

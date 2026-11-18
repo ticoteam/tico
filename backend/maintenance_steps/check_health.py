@@ -580,7 +580,7 @@ def _task_create(c, title, body):
     try:
         c.execute("SAVEPOINT check_health_task")
         with SRC.writing_as("check-health"):  # the task shows it came from the Health check (sources.filers)
-            made = H.task_create(c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
+            made = H.task_create(c, H.TICO_ACTOR, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
         c.execute("RELEASE check_health_task")
         return made
     except Exception:  # noqa: BLE001 - a refusal to file one task must not undo the check's record
@@ -591,13 +591,13 @@ def _task_create(c, title, body):
 
 
 def _comment(c, task_id, text, wake):
-    """A comment as the keeper. True when written (and, for a wake, queued for BotOps); otherwise the caller keeps its
+    """A comment as Tico. True when written (and, for a wake, queued for BotOps); otherwise the caller keeps its
     marker as it was and the next run tries again."""
     try:
         c.execute("SAVEPOINT check_health_comment")
         # A problem Health found is a blocker the bot is there to clear: it wakes (rules.WAKE_EVENTS), never a note.
         refs = RT.stamp({"wake": "blocker", "no_mentions": True}, "other", "check_health") if wake else None
-        message = H.task_comment(c, H.KEEPER, task_id, text, wake=wake, extra_refs=refs)
+        message = H.task_comment(c, H.TICO_ACTOR, task_id, text, wake=wake, extra_refs=refs)
         queued = (
             not wake
             or c.execute("SELECT 1 FROM jobs WHERE message_id=? AND bot_id=?", (message["id"], BOTOPS)).fetchone()

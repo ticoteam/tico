@@ -14,7 +14,7 @@
 - Enforcement: `decide` is the one decision, pure (the context's roster, configs, settings and lines, plus the write's
   facts and a counter, in; allow or refuse with the reason out). `check` and `check_post` gather a bot's write's facts
   and raise the 409 on the write; `scripts/reach_dry_run.py` replays history through the same `decide`. Only a bot's
-  own write is checked: a person's, the keeper's and the hub's own hand-offs (step flows, routines, rule wakes) never
+  own write is checked: a person's, Tico's and the hub's own hand-offs (step flows, routines, rule wakes) never
   come through here. Task caps (backend/task_caps.py) are still their own table.
 
 Tables: backend/migrations/baseline.sql.
@@ -1080,7 +1080,7 @@ REPLAY_AGENT = "org-rule-hold"  # org_rule_check.replay_identity: a held write a
 
 
 def _sender(who):
-    """The bot a write is checked for, or None: a person, the keeper and a person's BotOps or Assistant are never. Nor
+    """The bot a write is checked for, or None: a person, Tico and a person's BotOps or Assistant are never. Nor
     is a held write a person sent anyway: it passed reach before it was held, and a person approved it since."""
     if getattr(who, "role", "") != "bot" or not H.is_bot(getattr(who, "actor", "")):
         return None

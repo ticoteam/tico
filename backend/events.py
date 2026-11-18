@@ -518,6 +518,20 @@ TRIGGERS = [
     ("changes_task_assets_insert", "INSERT", "task_assets", None, _row("tasks", "files", "NEW.task_id")),
     ("changes_task_assets_delete", "DELETE", "task_assets", None, _row("tasks", "files", "OLD.task_id")),
     (
+        "changes_page_links_insert",
+        "INSERT",
+        "page_links",
+        "NEW.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(NEW.target,6)", "NEW.page_id"),
+    ),
+    (
+        "changes_page_links_delete",
+        "DELETE",
+        "page_links",
+        "OLD.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(OLD.target,6)", "OLD.page_id"),
+    ),
+    (
         "changes_pins_insert",
         "INSERT",
         "pins",
@@ -1214,7 +1228,7 @@ _ATTENTION_CHANGE_WHERE = (
 )
 # `bot_status` (backend/thread_bot_status.py): the status rows of a root may have moved. Written for the root of an open
 # wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
-# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
+# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last second.
 _OPEN_WAKE = (
     "recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
     "AND cause='human'"
@@ -1228,7 +1242,7 @@ _RUN_ROOT = (
 )
 _STATUS_QUIET = (
     "NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r "
-    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds'))"
+    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds'))"
 )
 
 
@@ -2235,10 +2249,17 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
-    from . import meeting_task_links, task_reads
+    from . import files, meeting_task_links, task_reads
 
     c, who = view.c, view.who
     rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
+    refs = {row["ref"] for row in rows if row["kind"] == "files" and row["ref"]}
+    if refs:
+        pages = files.page_rows(c, refs)
+        files.prime_visible(c, list(pages.values()))
+        cache = {}
+        visible_files = {ref for ref, page in pages.items() if files.file_visible(c, view.auth, who, page, cache)}
+        rows = [row for row in rows if row["kind"] != "files" or not row["ref"] or row["ref"] in visible_files]
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
@@ -3378,7 +3399,7 @@ EVENTS_DESCRIPTION = (
     "(how many of the messages it stands for are unread for the viewer: add that many) and `thread` (`id`, `title`, "
     "`name`, `audience`, `root_id`, `parent_id`, `kind`, `last_message_at`, and `dm_with`/`dm_with_count` for a DM), "
     "so a list bumps its row, or adds one it does not hold, without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
-    "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
+    "root's readers, at most one a run step every 1 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
     "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "

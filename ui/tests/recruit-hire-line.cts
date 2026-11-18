@@ -76,6 +76,7 @@ const hires: Record<string, unknown>[] = [];
     await box.locator('[data-choice-open]').click();
     const panel = page.locator('#sb-choice-pop');
     await panel.locator('[data-choice-harness] label:has(input[value="claude"])').click();
+    await panel.locator('[data-choice-more] summary').click();   // Compact is under More
     await panel.locator('[data-choice-compact]').selectOption('600000');
     await panel.locator('[data-choice-apply]').click();
     assert.equal((await box.locator('.sb-pick-text').innerText()).trim(), 'Opus 5.5 600K', 'the default effort is not named');

@@ -133,7 +133,7 @@ def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object, *, closing
     """Refuse a bot's done, forward move or close of a task while its own ❓ there is open: the task ending would
     clear the question before the person saw it. A person's moves, and Tico's own, are never held by a ❓, nor a bot's
     close of a task it filed itself: that withdraws the task, and the question is moot with it."""
-    if not task_id or not H.is_bot(by) or by == H.KEEPER or _SETTLED.get():
+    if not task_id or not H.is_bot(by) or by == H.TICO_ACTOR or _SETTLED.get():
         return
     if closing:
         filed = conn.execute("SELECT requester_id FROM tasks WHERE id=?", (str(task_id),)).fetchone()
@@ -227,14 +227,14 @@ def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
     conn.execute(
         "UPDATE question_marks SET cleared_at=?, cleared_reason='addressee_gone', cleared_by_id=? "
         "WHERE id IN (SELECT value FROM json_each(?)) AND cleared_at IS NULL",
-        (at, H.KEEPER, H._dump([m["id"] for m in gone])),
+        (at, H.TICO_ACTOR, H._dump([m["id"] for m in gone])),
     )
     for bot in sorted({str(m["bot_id"]) for m in gone}):
         H._recount(conn, bot)
     for m in gone:
-        H.event(conn, H.KEEPER, "question.cleared", m["id"], {"reason": "addressee_gone", "to": m["person_id"]})
+        H.event(conn, H.TICO_ACTOR, "question.cleared", m["id"], {"reason": "addressee_gone", "to": m["person_id"]})
         if m["task_id"]:
-            after_reply(conn, m["task_id"], H.KEEPER, "Its question can't be answered")
+            after_reply(conn, m["task_id"], H.TICO_ACTOR, "Its question can't be answered")
             _tell_gone(conn, m)
     return [str(m["id"]) for m in gone]
 
@@ -319,7 +319,7 @@ def unasked_reply(
     shape = ask_shape.line_refusal(str(text).lstrip(_LEAD)[len(GLYPH) :])
     if shape:
         lead += f" Your words would be refused as they are: {shape}"
-    H.event(conn, H.KEEPER, "question.unasked", aid, {"bot": bot, "task": row["id"], "posted": posted})
+    H.event(conn, H.TICO_ACTOR, "question.unasked", aid, {"bot": bot, "task": row["id"], "posted": posted})
     return task_wakes.add(
         conn,
         row,
@@ -445,7 +445,7 @@ def _check(
     conn: sqlite3.Connection, bot: str, task_id: str, person: str, body: str, message: Row | None, *, checked: bool
 ) -> str:
     """Everything a ❓ must pass, before or after its message is posted (`message` None: before). Returns the person."""
-    if not H.is_bot(bot) or bot == H.KEEPER:
+    if not H.is_bot(bot) or bot == H.TICO_ACTOR:
         H.refuse(conn, bot, "identity", "Only a bot marks a message ❓")
     row = None
     if task_id:
@@ -483,7 +483,7 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
     `replaced` the open ❓ it cleared ({id, line, created_at}) or None.
     `checked` False: a question Tico's own feature words and addresses for the bot (`ask`), so neither the bot's reach
     nor the words' shape is the bot's to answer for; the person must still be able to read the chat."""
-    if not H.is_bot(bot) or bot == H.KEEPER:
+    if not H.is_bot(bot) or bot == H.TICO_ACTOR:
         H.refuse(conn, bot, "identity", "Only a bot marks a message ❓")
     message = H.message(conn, message_id)
     if not message or message.get("sender_id") != bot:

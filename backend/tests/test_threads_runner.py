@@ -1,6 +1,6 @@
 """A bot's turn in a native thread, from the claim to the reply (docs/dev/threads-contract.md sections 4.4, 8, 11).
 
-A mention in a thread starts the bot's run through a carrier, a keeper notice that names the message it carries; the
+A mention in a thread starts the bot's run through a carrier, a Tico notice that names the message it carries; the
 turn answers that message, in its thread (a sub-thread included), as the bot under its turn's grant. The claim names
 the thread's root and audience class, which key the runner's session; the runner sends back the sub-thread's parent
 from the claim, and the reply stays in that sub-thread. A runner claims and completes turns over the attempt endpoints, as runner-rs does.
@@ -112,7 +112,7 @@ def test_a_carrier_turns_reply_is_rule_checked_as_going_to_the_carried_sender(ap
     assert checked == [["human:ana"]], "a carrier reply is never posted unchecked"
 
 
-def test_only_the_keepers_notice_is_a_carrier():
+def test_only_the_tico_notice_is_a_carrier():
     msg = {"id": "m1", "conversation_id": "t1", "from_actor": "human:ana", "refs": {"carries": "m0"}}
     assert execution.reply_source(None, msg) is msg, "a carries ref on a person's message is ignored"
 

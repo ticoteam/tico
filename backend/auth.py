@@ -1144,7 +1144,7 @@ class Auth:
         unreachable. Four things still get through, because each one is the protected bot's own
         doing or its own chain of command:
 
-        - itself, and the keeper (notices about its own tasks are written directly, not here)
+        - itself, and Tico (notices about its own tasks are written directly, not here)
         - its direct bot manager named in `reports_to`; task comments and questions also
           admit managers through the full org chain when they inherit a task party's rights
         - a bot holding an open task this bot requested — how a ticket gets a question back
@@ -1161,7 +1161,7 @@ class Auth:
         if who.role != "bot":
             return True
         sender = who.actor
-        if sender == "bot:" + slug or sender == H.KEEPER:
+        if sender == "bot:" + slug or sender == H.TICO_ACTOR:
             return True
         if not row:
             return True
@@ -1237,7 +1237,7 @@ class Auth:
         actor = H.resolve_actor(c, target)
         if not actor and (why := H.recruiting(c, target)):
             raise Problem("recruiting", why, 409)
-        if not actor or actor == H.KEEPER:
+        if not actor or actor == H.TICO_ACTOR:
             raise Problem("not_found", "Unknown recipient", 404)
         if actor.startswith("bot:"):
             self.require(c, who, H.actor_id(actor), need, missing="Unknown recipient")

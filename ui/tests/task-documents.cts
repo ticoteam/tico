@@ -2,17 +2,18 @@ import type * as Tasks from './tasks-page.cts';
 import type {Page} from 'playwright';
 // A task's documents in the task window (ui/app/task-docs.ts, task-modal.ts; backend/task_documents.py), on the v3
 // fixture (ui/tests/tasks-page.cts); every request is intercepted:
-// - a task with no documents shows no tabs at all, not even Chat: just its chat, Details behind its icon;
-// - a task with a Spec and a QA report: the tabs sit on the title row, right of the title, Chat first, then the
-//   documents, most recently changed first; ←/→ move along them;
+// - a task with no documents has two tabs, Chat and Files, and no more: its chat, Details behind its icon;
+// - a task with a Plan and a QA report: the tabs sit on the title row, right of the title: Chat, Files, then the
+//   documents, most recently changed first; ←/→ move along them; a Spec is a card under the title, not a tab
+//   (ui/tests/task-spec-files-tab.cts);
 // - the window opens with the focus on itself: no control wears a ring before the keyboard moves;
 // - a document opens under one small line, "v2 · Writer · 2h", which opens its versions (each once, with its note, the
 //   one shown in bold) and Compare; a version picked shows; Compare shows the two versions' text, line by line;
 // - a document takes the app's colours, light or dark;
 // - Details opens over a document and closes back to it, and while it shows no tab looks selected; a long Details
 //   scrolls inside the window, with or without documents, on a computer and a phone;
-// - Details after the description: "Pages" left with its + at the row's right end, then the pages; "To leave <stage>"
-//   left with its requirements under it; a stage with nothing to leave by has no To leave at all (⋯ › Ask someone…
+// - Details after the description: "To leave <stage>" left with its requirements under it (the pages are on the Files
+//   tab); a stage with nothing to leave by has no To leave at all (⋯ › Ask someone…
 //   opens its form);
 // - one document host, many documents: its controls answer once per tap; a read on its way still lands when the same
 //   document is shown again before it does;
@@ -27,15 +28,15 @@ const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 
 const shots = process.env.TICO_SHOTS || '';
 const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
-const SPEC = 'file-doc-spec', QA = 'file-doc-qa';
+const PLAN = 'file-doc-plan', QA = 'file-doc-qa';
 const docs = () => [
   {name: 'QA report', file_id: QA, version: 1, by: 'bot:writer', at: ago(20), versions: [{n: 1, by: 'bot:writer', at: ago(20), note: 'All six checks pass'}]},
-  {name: 'Spec', file_id: SPEC, version: 2, by: 'bot:writer', at: ago(125), versions: [
+  {name: 'Plan', file_id: PLAN, version: 2, by: 'bot:writer', at: ago(125), versions: [
     {n: 2, by: 'bot:writer', at: ago(125), note: 'Adds the empty state'}, {n: 1, by: 'human:ana', at: ago(60 * 26), note: 'First draft'}]},
 ];
 const PAGES: Record<string, string> = {
-  [`${SPEC}@1`]: '<h1>Saved carts</h1><p>A cart survives closing the tab.</p><p>It expires after 7 days.</p>',
-  [`${SPEC}@2`]: '<h1>Saved carts</h1><p>A cart survives closing the tab.</p><p>It expires after 30 days.</p><p>Empty state: "Nothing saved yet."</p>',
+  [`${PLAN}@1`]: '<h1>Saved carts</h1><p>A cart survives closing the tab.</p><p>It expires after 7 days.</p>',
+  [`${PLAN}@2`]: '<h1>Saved carts</h1><p>A cart survives closing the tab.</p><p>It expires after 30 days.</p><p>Empty state: "Nothing saved yet."</p>',
   [`${QA}@1`]: '<h1>QA report</h1><ul><li>Cart survives closing the tab ✓</li><li>Expires after 30 days ✓</li></ul>',
 };
 const LONG = Array.from({length: 40}, (_, i) => `Step ${i + 1}: open a cart, close the tab, come back.`).join('\n\n');
@@ -73,28 +74,23 @@ const longDetails = async (page: Page, id: string, phone: boolean, name: string)
   await toggle();
   await win.locator('[data-task-props]').waitFor();
   assert.deepEqual(await win.locator('[role="tab"][aria-selected="true"]').count(), 0, `while Details shows, no tab looks selected (${id}, ${phone ? 'phone' : 'computer'})`);
-  // After the description: Pages, its label left and + at the row's right end, its page under them; then To leave
-  // <stage>, a label at the left with its requirements under it, or nothing at all when the stage has none.
-  await win.locator('.task-pages .tp-row').waitFor();
+  // After the description: To leave <stage>, a label at the left with its requirements under it, or nothing at all when
+  // the stage has none. The task's pages are on its Files tab (task-pages.ts), not here.
   const parts = await win.locator('.task-side').evaluate(side => {
-    const box = (e: Element | null) => e ? e.getBoundingClientRect() : null, s = box(side.querySelector('.task-pages'))!;
-    const head = box(side.querySelector('.tp-head')), label = box(side.querySelector('.tp-head .lbl')), add = box(side.querySelector('[data-tp-add]')), row = box(side.querySelector('.tp-row'));
+    const box = (e: Element | null) => e ? e.getBoundingClientRect() : null;
     const reqs = side.querySelector<HTMLElement>('.task-requirements'), rh = reqs?.querySelector('h3'), shown = !!reqs && reqs.offsetHeight > 0;
     const rows = shown ? [...reqs.querySelectorAll('.task-req')].map(r => box(r)!) : [];
     const words = [...side.querySelectorAll<HTMLElement>('h3, h4, .lbl')].filter(e => e.offsetHeight > 0 && /^To leave/.test(e.innerText || '')).length;
     return {
-      pagesFirst: !!head && !!label && !!add && !!row && label.left - s.left < 2 && s.right - add.right < 2 && Math.abs(label.top + label.height / 2 - (add.top + add.height / 2)) < 4 && row.top >= head.bottom - 1,
       toLeave: shown ? (rh as HTMLElement).innerText.split('\n')[0]!.replace(/\s+\d+ of \d+$/, '').trim() : null,
       leaveLeft: shown ? box(rh!.querySelector('span'))!.left - box(reqs)!.left < 2 : null,
       reqsUnder: shown ? rows.length > 0 && rows.every(r => r.top >= box(rh!)!.bottom - 1) : null,
-      afterPages: shown ? box(reqs)!.top >= s.bottom - 1 : null, words,
-      // the two +s line up, one above the other
-      plusesAlign: shown ? Math.abs(box(reqs.querySelector('[data-req-ask]'))!.right - add!.right) < 1 && Math.abs(box(reqs.querySelector('[data-req-ask]'))!.width - add!.width) < 1 : null,
+      words,
     };
   });
-  const want = id === 't-2' ? {pagesFirst: true, toLeave: 'To leave Spec', leaveLeft: true, reqsUnder: true, afterPages: true, words: 1, plusesAlign: true}
-    : {pagesFirst: true, toLeave: null, leaveLeft: null, reqsUnder: null, afterPages: null, words: 0, plusesAlign: null};
-  assert.deepEqual(parts, want, `Details: Pages, then To leave (${id}, ${phone ? 'phone' : 'computer'})`);
+  const want = id === 't-2' ? {toLeave: 'To leave Spec', leaveLeft: true, reqsUnder: true, words: 1}
+    : {toLeave: null, leaveLeft: null, reqsUnder: null, words: 0};
+  assert.deepEqual(parts, want, `Details: To leave (${id}, ${phone ? 'phone' : 'computer'})`);
   const got = await win.locator('.task-layout').evaluate(layout => {
     const side = layout.querySelector<HTMLElement>('.task-side')!, props = side.querySelector('[data-task-props]')!;
     side.scrollTop = 1e6;
@@ -102,8 +98,8 @@ const longDetails = async (page: Page, id: string, phone: boolean, name: string)
     return {inside: s.bottom <= l.bottom + 1, scrolled: side.scrollTop > 0, factsShow: f.top < l.bottom && f.bottom > l.top, overflow: getComputedStyle(side).overflowY};
   });
   assert.deepEqual(got, {inside: true, scrolled: true, factsShow: true, overflow: 'auto'}, `a long Details scrolls inside the window (${id}, ${phone ? 'phone' : 'computer'})`);
-  // The shot: the end of the description, Pages, To leave and the facts.
-  await win.locator('.task-side').evaluate(side => { side.scrollTop = side.querySelector<HTMLElement>('.task-pages')!.offsetTop - 120; });
+  // The shot: the end of the description, To leave and the facts.
+  await win.locator('.task-side').evaluate(side => { side.scrollTop = side.querySelector<HTMLElement>('[data-task-props]')!.offsetTop - 120; });
   await shot(page, name);
   await win.locator('.task-side').evaluate(e => { e.scrollTop = 0; });
   await toggle();
@@ -120,8 +116,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const win = page.locator('#task-modal[open]');
       await win.locator('.task-chat .task-comments').waitFor();
       await win.locator('.task-chat textarea').waitFor();
-      assert.equal(await win.locator('.doc-tabs').count(), 0, 'a task with no documents has no tab row');
-      assert.equal(await win.getByRole('tab').count(), 0, 'not even a Chat tab');
+      assert.deepEqual(await texts(page), ['Chat', 'Files'], 'a task with no documents: Chat and Files, no document tab');
       assert.equal(await win.locator('.task-chat').isVisible(), true, 'just its chat');
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'task-modal', 'the focus is on the window');
       assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll(':focus-visible')].map(e => [e.id || e.tagName, getComputedStyle(e).outlineStyle])),
@@ -139,11 +134,11 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.equal(await leave.isVisible(), false, 'and goes again with its form');
       await win.locator('[data-task-tab="details"]').click();
 
-      // ---- a Spec and a QA report: the tabs on the title row, Chat first, then newest change first
+      // ---- a Plan and a QA report: the tabs on the title row, Chat and Files first, then newest change first
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       const docWin = page.locator('#task-modal[open][data-task="t-2"]');
       await docWin.locator('.tw-tabs').waitFor();
-      assert.deepEqual(await texts(page), ['Chat', 'QA report', 'Spec']);
+      assert.deepEqual(await texts(page), ['Chat', 'Files', 'QA report', 'Plan']);
       assert.equal(await docWin.getByRole('tab', {name: 'Chat'}).getAttribute('aria-selected'), 'true', 'it opens on the chat');
       const [title, row, close] = [await docWin.locator('.tmodal-title').boundingBox(), await docWin.locator('.tw-tabs').boundingBox(), await docWin.locator('[data-modal-close]').boundingBox()];
       assert.ok(title && row && close && row.x > title.x + title.width - 1 && row.x + row.width <= close.x, `the tabs sit right of the title, before the actions (${JSON.stringify([title, row, close])})`);
@@ -151,7 +146,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       await shot(page, `tabs-chat-desktop-${theme}`);
 
       // A document opens under its one version line.
-      await docWin.getByRole('tab', {name: 'Spec'}).click();
+      await docWin.getByRole('tab', {name: 'Plan'}).click();
       const view = docWin.locator('.task-doc'), line = view.locator('[data-doc-ver]');
       await view.locator('iframe.html-view').waitFor();
       assert.equal(await docWin.locator('.task-chat').isVisible(), false, 'the chat waits in its tab');
@@ -159,7 +154,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const one = (await line.boundingBox())!;
       assert.ok(one.height <= 24, `the version line is one small line (${one.height}px)`);
       assert.equal(await view.locator('.doc-v').count(), 0, 'its versions wait behind it');
-      assert.equal(await view.locator('iframe.html-view').getAttribute('title'), 'Spec v2');
+      assert.equal(await view.locator('iframe.html-view').getAttribute('title'), 'Plan v2');
       await shot(page, `spec-desktop-${theme}`);
       // The document is in the app's colours.
       const [paper, app] = [await view.frameLocator('iframe.html-view').locator('html').evaluate(e => getComputedStyle(e).backgroundColor),
@@ -203,7 +198,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       // A version picked shows.
       await line.click();
       await view.locator('[data-doc-v="1"]').click();
-      await page.waitForFunction(() => document.querySelector('#task-modal .task-doc iframe')?.getAttribute('title') === 'Spec v1');
+      await page.waitForFunction(() => document.querySelector('#task-modal .task-doc iframe')?.getAttribute('title') === 'Plan v1');
       assert.match((await line.innerText()).trim(), /^v1 · You · /);
       assert.equal(await view.locator('.doc-v').count(), 0, 'picked: the list shuts');
 
@@ -215,11 +210,13 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.equal(await view.isVisible(), false);
       await details.click();
       assert.equal(await view.isVisible(), true, 'and closes back to the document');
-      assert.equal(await docWin.getByRole('tab', {name: 'Spec'}).getAttribute('aria-selected'), 'true');
+      assert.equal(await docWin.getByRole('tab', {name: 'Plan'}).getAttribute('aria-selected'), 'true');
       await longDetails(page, 't-2', false, `details-long-documents-desktop-${theme}`);
 
       // ←/→ move along the tabs.
       await docWin.getByRole('tab', {name: 'Chat'}).focus();
+      await page.keyboard.press('ArrowRight');
+      assert.equal(await docWin.getByRole('tab', {name: 'Files'}).getAttribute('aria-selected'), 'true', 'Files comes after Chat');
       await page.keyboard.press('ArrowRight');
       assert.equal(await docWin.getByRole('tab', {name: 'QA report'}).getAttribute('aria-selected'), 'true');
       await view.locator('iframe[title="QA report v1"]').waitFor();
@@ -240,7 +237,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const {page, errors, tasks: fixture} = await open(browser, {viewport: {width: 390, height: 844}, theme, hash: '#/task/t-1', tasks: tasks(), needs: [], beforeGoto: files});
       const win = page.locator('#task-modal[open]');
       await win.locator('.task-chat textarea').waitFor();
-      assert.equal(await win.getByRole('tab').count(), 0, 'no documents, no tabs');
+      assert.deepEqual(await texts(page), ['Chat', 'Files'], 'no documents, no document tab');
       await shot(page, `no-documents-phone-${theme}`);
       await longDetails(page, 't-1', true, `details-long-phone-${theme}`);
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
@@ -272,15 +269,15 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       let asked = 0;
       const fileReads = (url: URL) => url.pathname.startsWith('/api/v2/files/');
       await page.route(fileReads, async route => { asked++; await held; await route.fallback(); });
-      await docWin.getByRole('tab', {name: 'Spec'}).click();
+      await docWin.getByRole('tab', {name: 'Plan'}).click();
       await page.waitForFunction(() => document.querySelector('#task-modal .task-doc .doc-ver-line'));
-      await docWin.getByRole('tab', {name: 'Spec'}).click();
+      await docWin.getByRole('tab', {name: 'Plan'}).click();
       await page.waitForTimeout(50);
       release();
-      await docWin.locator('.task-doc').locator('iframe[title="Spec v2"]').waitFor({timeout: 5000});
+      await docWin.locator('.task-doc').locator('iframe[title="Plan v2"]').waitFor({timeout: 5000});
       assert.equal(asked, 1, 'one read, not two');
       await page.unroute(fileReads);
-      assert.equal(await inStrip('Spec'), true, 'the tab selected shows');
+      assert.equal(await inStrip('Plan'), true, 'the tab selected shows');
       await shot(page, `spec-phone-${theme}`);
       await docWin.locator('.task-doc [data-doc-ver]').click();
       await shot(page, `spec-versions-phone-${theme}`);
@@ -292,11 +289,12 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const t1 = page.locator('#task-modal[open][data-task="t-1"]');
       await page.evaluate(() => { location.hash = '#/task/t-1'; });
       await t1.locator('.task-chat textarea').waitFor();
-      assert.equal(await t1.getByRole('tab').count(), 0);
+      assert.deepEqual(await texts(page), ['Chat', 'Files'], 'no document yet: Chat and Files');
       fixture.find(t => t.id === 't-1')!['documents'] = [docs()[0]];
       await page.evaluate(() => liveEmit('tasks', {id: 't-1', kind: 'update', kinds: ['files']}));
-      await t1.locator('.tw-tabs').waitFor();
-      assert.deepEqual(await texts(page), ['Chat', 'QA report']);
+      // The tab row is already there, so wait for the new tab itself: the live read lands after a short debounce.
+      await page.locator('#task-modal[open] [role="tab"]', {hasText: 'QA report'}).waitFor();
+      assert.deepEqual(await texts(page), ['Chat', 'Files', 'QA report']);
       assert.equal(await t1.getByRole('tab', {name: 'Chat'}).getAttribute('aria-selected'), 'true', 'the chat stays shown');
       assert.deepEqual(errors, []);
       await page.close();

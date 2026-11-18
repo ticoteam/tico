@@ -33,7 +33,7 @@ Write five lines, under 120 words, in a file:
 - the message version it uses, from `knowledge/message.md`.
 
 An idea carries no prediction, no hypothesis, no score and no bet. Write what changes and what is measured. The growth
-meeting decides.
+meeting decides. The prediction comes later, as a number, on the Go-live page the channel Owner writes in Building.
 
 ## 4. File each idea
 

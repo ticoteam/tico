@@ -39,6 +39,7 @@ def _page(c, eng, file_id, item_versions, by, verdict="met"):
     rid = c.execute(
         "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
     ).fetchone()[0]
+    X.stub_document(c, eng, rid, file_id, by, 1)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "rubric_hash, created_at) VALUES (?,?,?,?,1,?,?,'',?)",
@@ -129,7 +130,7 @@ def _merge_failed(c, numbers=(12,), dropped=WHY):
 
 
 def _back_to_qa(c, eng, note="The queue run failed in e2e: fix it."):
-    """The Release Owner moves it back, then whatever nudges the task runs (as the keeper did 0.4 s later)."""
+    """The Release Owner moves it back, then whatever nudges the task runs (as Tico did 0.4 s later)."""
     row = E.task(c, eng)
     E.move(c, eng, "engineering-qa", row["owner_id"] or X.ANA, note, seen_version=row["version"])
     E.advance(c, eng)

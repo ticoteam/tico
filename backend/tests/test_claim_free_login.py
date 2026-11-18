@@ -1,5 +1,5 @@
 """Where queued_reasons (Health) says a queued job is handed out, the claim must hand it out: a bot whose own login and
-codex are held while claude is free on this computer, and a queued keeper notice that is obsolete ahead of a
+codex are held while claude is free on this computer, and a queued Tico notice that is obsolete ahead of a
 real one."""
 
 import pytest
@@ -51,7 +51,7 @@ def finished_with_notices(api, real_on_open_task):
         refs = {"task": task["id"], "trigger": "other", "wake": "update"}
         obsolete = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "PR #7 checks passed",
             kind="notice",
@@ -61,7 +61,7 @@ def finished_with_notices(api, real_on_open_task):
         on = other if real_on_open_task else task
         real = H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:ops",
             "A comment from human:ana",
             kind="notice",
@@ -87,7 +87,7 @@ def claimed_after_health(api, machine):
 
 
 def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says_is_handed_out(api):
-    """Health counts an obsolete keeper notice as handed out, and the claim's write path cancels it before it chooses:
+    """Health counts an obsolete Tico notice as handed out, and the claim's write path cancels it before it chooses:
     the claim must then go on to the next queued job instead of answering nothing."""
     machine, obsolete_job, real_job = finished_with_notices(api, real_on_open_task=True)
     assert claimed_after_health(api, machine)["job_id"] == real_job
@@ -127,7 +127,7 @@ def test_a_person_caused_notice_on_a_done_task_does_not_keep_the_claim_from_the_
         for name, on in (("done", task), ("open", other)):
             sent[name] = H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:ops",
                 "A comment from human:ana",
                 kind="notice",
@@ -161,7 +161,7 @@ def test_a_head_job_the_engine_holds_at_start_does_not_keep_the_claim_from_the_w
         for name, on in (("held", task), ("open", other)):
             sent[name] = H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:ops",
                 "A comment from human:ana",
                 kind="notice",

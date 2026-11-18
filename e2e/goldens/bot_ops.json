@@ -42,6 +42,7 @@
     "notes": 0,
     "onboarding_state": "",
     "online": true,
+    "output_style": null,
     "owner_id": "ana",
     "owner_name": "Ana",
     "owners": [
@@ -59,13 +60,13 @@
     "private_tasks_default": false,
     "profile": {
       "chosen": true,
-      "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
+      "description": "Works the tasks it is given. News about them wakes it at once on its turn; people and hand-offs wake it at once.",
       "digest_hour": null,
       "label": "Doer",
       "name": "doer",
       "options": {},
       "pulls": "all",
-      "summary": "News about its tasks waits 5 min; a routine runs at least 15 min after its last run.",
+      "summary": "News about its tasks wakes it at once, on its turn; the rest is a note for its next run; a routine runs at least 15 min after its last run.",
       "sweeps": true,
       "takes": "all"
     },
@@ -107,6 +108,7 @@
     "thread_mode": "personal",
     "turns_at_once": null,
     "update_subscriptions": [],
+    "verbosity": null,
     "wake": {
       "digest_hour": null,
       "immediate": [
@@ -120,7 +122,7 @@
       "notice_seconds": "<volatile>",
       "profile": "doer",
       "repeat_seconds": "<volatile>",
-      "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+      "summary": "News about a task it owns (checks, reviews, a finished request) wakes it at once, on its turn; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
       "warm_window": [
         2700,
         3300

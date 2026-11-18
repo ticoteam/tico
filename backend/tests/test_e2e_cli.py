@@ -210,6 +210,8 @@ def argument_value(action, command):
         return "smoke@acme.example"
     if dest == "name":
         return "acme-smoke"  # a slug in most commands (`tico market page <slug>`)
+    if dest == "title" and list(command) == ["task", "child"]:
+        return SMOKE + " subtask"  # `task file` later files SMOKE under the same parent and owner: not its duplicate
     if dest in ("text", "title", "body", "note", "subject", "reason", "description", "question"):
         return SMOKE
     if dest in ("url",):

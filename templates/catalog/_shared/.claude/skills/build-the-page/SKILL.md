@@ -9,7 +9,7 @@ A person reads a page to decide: OK a spec, ship a change, start a release. They
 desktop, without opening the app or the code, and finish it with no doubt about what they are agreeing to. So every
 page is built the same way, from one of seven templates, and is never sent until it was seen rendered.
 
-## The six rules
+## The seven rules
 
 1. **The opening says what it is and what to decide.** Two or three short lines in `<div id="lead">`: what the page is
    about and its result, then a line that starts **Decide:**. A bug spec opens with **Report:**, any other spec with
@@ -28,6 +28,10 @@ page is built the same way, from one of seven templates, and is never sent until
 6. **Every sentence names something specific**: a number, a screen, a file, a person, a command. Cut any sentence
    that would fit another page, and any section that only restates the top. No "overview", "summary", "benefits",
    "considerations" or "next steps". A section with nothing in it says "Nothing." or "None."
+7. **Colour comes from the tokens.** Keep the template's `<style>` block. Colour only through its tokens (`var(--ink)`,
+   `var(--muted)`, `var(--surface)`, `var(--line)`...), which the app supplies in light and dark. No hex or rgb colour of
+   your own. A page that really needs one also gives dark values, under `@media (prefers-color-scheme: dark)`.
+   `page.py check` refuses a page that breaks this.
 
 The page brings the proof. It never asks its reader to test, look at the app, or send a screenshot.
 
@@ -38,7 +42,7 @@ The page brings the proof. It never asks its reader to test, look at the app, or
 | A spec for a bug | `templates/bug-spec.html` | `bug-spec` | Feature Owner, Spec |
 | A spec for a new feature or change on a screen | `templates/screen-spec.html` | `screen-spec` | Feature Owner, Spec |
 | A spec for a change with no screen (API, command, job) | `templates/change-spec.html` | `change-spec` | Feature Owner, Spec |
-| A Review page | `templates/review.html` | `review` | Reviewers, Review 1 and 2 |
+| A Review page | `templates/review.html` | `review` | Reviewer, Review |
 | The QA page | `templates/qa.html` | `qa` | Feature Owner, QA |
 | The release report, one for a batch | `templates/release.html` | `release` | Release Owner |
 | Checked in production | `templates/validation.html` | `validation` | Feature Owner, Validate |
@@ -54,7 +58,7 @@ What goes at the top, before `#details`:
   risks (three at most).
 
 Below the line, only what the builder, QA or release needs. Each template has the sections its stage's checker reads
-(a spec: goal, scope, acceptance criteria; a review: the head commit, what was read and run, the findings; QA: the
+(a spec: goal, scope, acceptance criteria; a review: the head commits, each model's checks and findings; QA: the
 proof, the checks at the head, what each reviewer found; Checked in production: the version and what was run there).
 Keep every section; write "Nothing." in one that has nothing, and delete the pictures only where no screen changed
 (show the call and its output in two `<pre>` blocks instead, and say so in the opening).
@@ -110,7 +114,7 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
 
 1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/YYYY-MM-DD.N.html` or
    `reports/YYYY-MM-DD-checked-<slug>.html`.
-   Replace every `{{...}}`. Keep its styles: they use only Tico's colour tokens, so the page follows light and dark.
+   Replace every `{{...}}`. Keep its styles (rule 7): they use only Tico's colour tokens, so the page follows light and dark.
 2. Take the screenshots and set the arrows.
 3. Build and check it (`page.py` is in this skill's folder):
 
@@ -120,9 +124,10 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
    `check` names each rule the page breaks: the opening, the sections, a picture that is not a screenshot, a picture
    in the details, a placeholder left, a request to test, filler, length, more than three risks, a pull request
    number in a changelog. Fix each and build again.
-4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--spec` for a spec. It
-   prints the file id and anything it removed. Anything of yours removed is a fault to fix; with `--spec`, Tico's own
-   fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are not a fault.
+4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--as Spec` for a spec (or
+   the document's name). It prints the file id and anything it removed. Anything of yours removed is a fault to fix;
+   with `--as Spec`, Tico's own fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are
+   not a fault.
 5. Render the published page and look at it:
 
        python3 .claude/skills/build-the-page/page.py render <file id> --kind <kind>

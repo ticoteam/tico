@@ -19,6 +19,7 @@ use crate::signin::{self, SignIn};
 use crate::util::text_of;
 
 pub const CLAUDE_MODELS: &[&str] = &[
+    "claude-fable-5-2",
     "claude-fable-5-1",
     "claude-opus-5",
     "claude-opus-4-8",

@@ -465,7 +465,7 @@ def record_moved_input(c, from_attempt, to_attempt, message):
     """Before an input row moves to another run, keep its tasks against the run that read it."""
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         INPUT_MOVED,
         from_attempt,
         {
@@ -540,7 +540,7 @@ def message_readable(c, actor, message, current=False):
         or not run_pages_readable(c, actor, carried)
     ):
         return False
-    if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
+    if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.TICO_ACTOR:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
         source = H.message(c, carried["carries"], include_deleted=True)
         source_refs = (source or {}).get("refs") or {}

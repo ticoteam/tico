@@ -62,5 +62,9 @@
 .tc-form textarea{min-height:120px}
 .tc-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tc-pick{display:inline-flex;align-items:center;gap:4px}
+/* Who else reads a private task as it moves (Product #449): one quiet line above Create, never a warning colour. */
+.tc-readers{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface2);font-size:13px;line-height:1.45}
 /* A task others depend on: "Blocks #307" beside Late (task_depends). */
 .tk-blocks{flex:none;padding:0 6px;border-radius:999px;background:var(--fail-bg);color:var(--fail);font-size:var(--t-2xs);line-height:16px;white-space:nowrap}
+/* Visible to, on a task in a pipeline: who still reads it if made private (Product #449). */
+.prop-vis{display:flex;flex-direction:column;gap:2px;min-width:0}.prop-vis-note{color:var(--muted);font-size:12px;line-height:1.4;white-space:normal;max-width:300px}

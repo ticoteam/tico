@@ -348,7 +348,7 @@ def _screen(store, source, text, bot, key, primary, free, actor, role, mode_, ca
         return verdict(mode_, None, "", patterns, detector, "short", thresholds=thresholds)
     if qset is None:
         return verdict(mode_, None, "", patterns, detector, "question_set")
-    payer = actor or (H.bot_actor(bot) if bot else H.KEEPER)
+    payer = actor or (H.bot_actor(bot) if bot else H.TICO_ACTOR)
     with store.read() as c:
         engine = server_engine(store, c, primary if primary is not None else _primary())
         why = (
@@ -411,7 +411,7 @@ def note(c, v, source, target, *, once=False, **detail):
         return
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "screening." + ("held" if v["action"] == "hold" else "warned"),
         target or "",
         {
@@ -520,7 +520,7 @@ def rule_task(c, rule_id, by, bot, title, body, ctx):
                 body,
                 text,
                 cache_key=f"{trigger}:{ctx.get('delivery') or ''}",
-                actor=by or H.KEEPER,
+                actor=by or H.TICO_ACTOR,
                 person=people[0] if people else "",
             )
             return "waits for screening", None
@@ -643,7 +643,7 @@ def _open_task(c, auth, row, v, owner, title, body):
 
     return person_asks.task_for(
         c,
-        row["actor"] or H.KEEPER,
+        row["actor"] or H.TICO_ACTOR,
         title[:300],
         body,
         owner or H.bot_actor(row["bot"]),
@@ -692,7 +692,7 @@ def deliver(store, auth, row, v, waited=False):
             from .watchers import defang
 
             for text in json.loads(now["later"] or "[]"):
-                H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
+                H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
             c.execute(
                 "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                 (row["bot"], row["key"], task["id"], H.now()),
@@ -888,7 +888,7 @@ def recent(c, limit=RECENT):
     rows = c.execute(
         "SELECT created_at,action,target,detail FROM events WHERE actor=? "
         "AND action IN ('screening.held','screening.warned') ORDER BY created_at DESC LIMIT ?",
-        (H.KEEPER, limit),
+        (H.TICO_ACTOR, limit),
     ).fetchall()
     out = []
     for r in rows:

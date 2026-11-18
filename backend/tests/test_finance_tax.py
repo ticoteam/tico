@@ -32,7 +32,7 @@ BOOKKEEPER = {"finance-owner": {"name": "finance-owner", "runtime": "fake", "sta
 
 
 @pytest.fixture
-def keeper(books):
+def tico(books):
     """Finance is set up and the Bookkeeper is on the roster, as bookkeeper.ensure leaves an install."""
     with books.transaction() as c:
         H.sync_registry(c, BOOKKEEPER, {"people": PEOPLE})
@@ -214,8 +214,8 @@ def _remit(c, period):
     return bill
 
 
-def test_the_1099_totals_count_cash_and_leave_card_payments_out(keeper):
-    with keeper.transaction() as c:
+def test_the_1099_totals_count_cash_and_leave_card_payments_out(tico):
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         _card_gl(c)
         bank, program = _bank(c), _program(c)
@@ -225,7 +225,7 @@ def test_the_1099_totals_count_cash_and_leave_card_payments_out(keeper):
         _pay(c, acme, 10_000, {"account_id": account(c, "1000")})
         _expense(c, acme, 20_000, "bank", "b1", "1000")
         _expense(c, acme, 15_000, "card", "c1", "2200")
-    with keeper.read() as c:
+    with tico.read() as c:
         report = FR.form_1099_report(c, OWNER, 2026, AT)
         csv_text = FR.form_1099_csv(c, OWNER, 2026, AT)
     row = _vendor_row(report, "Acme Consulting")
@@ -233,18 +233,18 @@ def test_the_1099_totals_count_cash_and_leave_card_payments_out(keeper):
     assert csv_text.splitlines() == [",".join(T.FORM_COLUMNS), "2026,Acme Consulting,yes,800.00,700.00,2000.00,no"]
 
 
-def test_the_1099_threshold_is_2000_from_2026_and_600_before(keeper):
-    with keeper.transaction() as c:
+def test_the_1099_threshold_is_2000_from_2026_and_600_before(tico):
+    with tico.transaction() as c:
         small = _contact(c, "Small Co", is_1099=True)
         old = _contact(c, "Old Co", is_1099=True)
         bank = _bank(c)
         _pay(c, small, 199_999, {"money_account_id": bank})
-    with keeper.read() as c:
+    with tico.read() as c:
         assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Small Co")["reportable"] is False
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         _pay(c, small, 1, {"money_account_id": bank})
         _pay(c, old, 60_000, {"money_account_id": bank}, bill_day="2025-05-01", paid_on="2025-06-01")
-    with keeper.read() as c:
+    with tico.read() as c:
         report = FR.form_1099_report(c, OWNER, 2026, AT)
         old_report = FR.form_1099_report(c, OWNER, 2025, AT)
     small_row = _vendor_row(report, "Small Co")
@@ -254,8 +254,8 @@ def test_the_1099_threshold_is_2000_from_2026_and_600_before(keeper):
     assert (T.threshold(2026), T.threshold(2025)) == (200_000, 60_000)
 
 
-def test_a_tin_is_never_written_to_the_finance_tables(keeper):
-    with keeper.transaction() as c:
+def test_a_tin_is_never_written_to_the_finance_tables(tico):
+    with tico.transaction() as c:
         _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin%'")]
         assert len(tables) > 30
@@ -264,8 +264,8 @@ def test_a_tin_is_never_written_to_the_finance_tables(keeper):
                 assert "0000001" not in " ".join(str(v) for v in row), table
 
 
-def test_sales_tax_is_collected_and_remitted_by_jurisdiction_and_quarter(keeper):
-    with keeper.transaction() as c:
+def test_sales_tax_is_collected_and_remitted_by_jurisdiction_and_quarter(tico):
+    with tico.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(
             c,
@@ -284,7 +284,7 @@ def test_sales_tax_is_collected_and_remitted_by_jurisdiction_and_quarter(keeper)
         q1 = _remit(c, "2026-Q1")
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": q1, "account_id": account(c, "1000")}).status == "committed"
         q3 = _remit(c, "2026-Q3")
-    with keeper.read() as c:
+    with tico.read() as c:
         rows = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
     assert len(rows) == 4
     assert _quarter(rows, "2026-Q1") == {
@@ -299,9 +299,9 @@ def test_sales_tax_is_collected_and_remitted_by_jurisdiction_and_quarter(keeper)
         "tax_remitted": 0,
         "due": 8_000,
     }
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": q3, "account_id": account(c, "1000")}).status == "committed"
-    with keeper.read() as c:
+    with tico.read() as c:
         rows = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
         csv_text = FR.sales_tax_csv(c, OWNER, 2026, AT)
     assert _quarter(rows, "2026-Q3") == {
@@ -320,8 +320,8 @@ def test_sales_tax_is_collected_and_remitted_by_jurisdiction_and_quarter(keeper)
     ]
 
 
-def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(keeper):
-    with keeper.transaction() as c:
+def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(tico):
+    with tico.transaction() as c:
         customer = _contact(c, "Globex", kind="customer")
         assert (
             act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": customer}).code
@@ -383,8 +383,8 @@ def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
             assert (repeats, first_due) == first[key], key
 
 
-def test_a_teammate_who_does_not_see_everything_is_refused_the_workpapers(keeper):
-    with keeper.transaction() as c:
+def test_a_teammate_who_does_not_see_everything_is_refused_the_workpapers(tico):
+    with tico.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority})
         assert made.status == "committed", made
@@ -392,19 +392,19 @@ def test_a_teammate_who_does_not_see_everything_is_refused_the_workpapers(keeper
         _grant(c, PAYABLES, "receivables")
         _grant(c, PAYABLES, "expenses", whose="own")
     reads = [FR.sales_tax_report, FR.sales_tax_csv, FR.form_1099_report, FR.form_1099_csv]
-    with keeper.read() as c:
+    with tico.read() as c:
         for who in (PLAIN, PAYABLES):
             for read in reads:
                 with pytest.raises(FinanceError) as refused:
                     read(c, who, 2026, AT)
                 assert refused.value.code == "denied", (who, read.__name__)
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         # Without the amount owed there is no bill to make: the owed figure is read off the workpaper.
         assert act(c, PAYABLES, "tax_remit", {"jurisdiction": "TL", "period": "2026-Q1"}).code == "denied"
 
 
-def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(keeper):
-    with keeper.transaction() as c:
+def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(tico):
+    with tico.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(
             c,
@@ -445,11 +445,11 @@ def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(k
             == "committed"
         )
         _grant(c, PAYABLES, "everything", whose="company")
-    with keeper.read() as c:
+    with tico.read() as c:
         with pytest.raises(FinanceError) as refused:
             FR.sales_tax_report(c, PAYABLES, 2026, AT)
     assert refused.value.code == "denied"
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         assert (
             act(
                 c,
@@ -459,7 +459,7 @@ def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(k
             ).status
             == "committed"
         )
-    with keeper.read() as c:
+    with tico.read() as c:
         mine = FR.sales_tax_report(c, PAYABLES, 2026, AT)["rows"]
         everyone = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
     assert mine == everyone
@@ -471,8 +471,8 @@ def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(k
     }
 
 
-def test_an_everything_grant_reads_both_workpapers_when_no_line_behind_them_is_private(keeper):
-    with keeper.transaction() as c:
+def test_an_everything_grant_reads_both_workpapers_when_no_line_behind_them_is_private(tico):
+    with tico.transaction() as c:
         _private_salaries(c)
         # Payroll with no vendor and no tax on it: nothing the two workpapers read sits on the private account.
         FA.post_entry(
@@ -505,7 +505,7 @@ def test_an_everything_grant_reads_both_workpapers_when_no_line_behind_them_is_p
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         _pay(c, acme, 40_000, {"money_account_id": _bank(c)})
         _grant(c, PAYABLES, "everything", whose="company")
-    with keeper.read() as c:
+    with tico.read() as c:
         assert FR.sales_tax_report(c, PAYABLES, 2026, AT) == FR.sales_tax_report(c, OWNER, 2026, AT)
         assert FR.sales_tax_csv(c, PAYABLES, 2026, AT) == FR.sales_tax_csv(c, OWNER, 2026, AT)
         assert FR.form_1099_report(c, PAYABLES, 2026, AT) == FR.form_1099_report(c, OWNER, 2026, AT)
@@ -519,14 +519,14 @@ def test_an_everything_grant_reads_both_workpapers_when_no_line_behind_them_is_p
         assert _vendor_row(FR.form_1099_report(c, PAYABLES, 2026, AT), "Acme Consulting")["cash_paid"] == 40_000
 
 
-def test_an_everything_grant_is_refused_a_1099_with_a_private_line_behind_it(keeper):
-    with keeper.transaction() as c:
+def test_an_everything_grant_is_refused_a_1099_with_a_private_line_behind_it(tico):
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         _private_salaries(c)
         # The vendor's bill has a line on the private account, so its settlement is part of the 1099 total.
         _pay(c, acme, 40_000, {"money_account_id": _bank(c)}, code="6500")
         _grant(c, PAYABLES, "everything", whose="company")
-    with keeper.read() as c:
+    with tico.read() as c:
         for read in (FR.form_1099_report, FR.form_1099_csv):
             with pytest.raises(FinanceError) as refused:
                 read(c, PAYABLES, 2026, AT)
@@ -534,7 +534,7 @@ def test_an_everything_grant_is_refused_a_1099_with_a_private_line_behind_it(kee
         # No sales tax line sits on that account, so the sales tax workpaper still reads.
         assert FR.sales_tax_report(c, PAYABLES, 2026, AT)["year"] == 2026
         assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")["cash_paid"] == 40_000
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         assert (
             act(
                 c,
@@ -544,26 +544,26 @@ def test_an_everything_grant_is_refused_a_1099_with_a_private_line_behind_it(kee
             ).status
             == "committed"
         )
-    with keeper.read() as c:
+    with tico.read() as c:
         assert FR.form_1099_report(c, PAYABLES, 2026, AT) == FR.form_1099_report(c, OWNER, 2026, AT)
         assert FR.form_1099_csv(c, PAYABLES, 2026, AT) == FR.form_1099_csv(c, OWNER, 2026, AT)
 
 
-def test_1099_payments_count_in_the_year_they_were_paid(keeper):
-    with keeper.transaction() as c:
+def test_1099_payments_count_in_the_year_they_were_paid(tico):
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         bank = _bank(c)
         _pay(c, acme, 20_000, {"money_account_id": bank}, bill_day="2025-12-01", paid_on="2026-01-05")
         _pay(c, acme, 30_000, {"money_account_id": bank}, bill_day="2025-11-01", paid_on="2025-12-28")
-    with keeper.read() as c:
+    with tico.read() as c:
         y2025 = _vendor_row(FR.form_1099_report(c, OWNER, 2025, AT), "Acme Consulting")
         y2026 = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
     assert (y2025["cash_paid"], y2026["cash_paid"]) == (30_000, 20_000)
 
 
 @pytest.mark.parametrize("kind", ["debitCardTransaction", "creditCardTransaction"])
-def test_a_card_row_on_a_bank_account_is_a_card_payment(keeper, kind):
-    with keeper.transaction() as c:
+def test_a_card_row_on_a_bank_account_is_a_card_payment(tico, kind):
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         bank = _bank(c)
         card = SK.insert(
@@ -585,16 +585,16 @@ def test_a_card_row_on_a_bank_account_is_a_card_payment(keeper, kind):
         )
         _pay(c, acme, 40_000, {"feed_id": card})
         _pay(c, acme, 10_000, {"money_account_id": bank})
-    with keeper.read() as c:
+    with tico.read() as c:
         row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
     assert (row["cash_paid"], row["card_paid_excluded"]) == (10_000, 40_000)
 
 
-def test_a_payment_posted_after_its_month_closed_counts_in_the_year_it_was_paid(keeper):
+def test_a_payment_posted_after_its_month_closed_counts_in_the_year_it_was_paid(tico):
     """A December row posts on the first open day after the close, and so does its re-categorization. Both count in 2025
     with the payment, so a Dec 30 payment is not moved into 2026."""
     jan = "2026-01-05T12:00:00.000000Z"
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         bank = _bank(c)
         assert close_month(c, "2025-12", at=jan).status == "committed"  # no December row is in the books yet
@@ -608,16 +608,16 @@ def test_a_payment_posted_after_its_month_closed_counts_in_the_year_it_was_paid(
             act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")}, at=jan).status
             == "committed"
         )
-    with keeper.read() as c:
+    with tico.read() as c:
         assert _vendor_row(FR.form_1099_report(c, OWNER, 2025, AT), "Acme Consulting")["cash_paid"] == 60_000
         assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")["cash_paid"] == 0
 
 
-def test_a_payment_matched_to_a_bill_after_its_month_closed_counts_once_in_the_year_paid(keeper):
+def test_a_payment_matched_to_a_bill_after_its_month_closed_counts_once_in_the_year_paid(tico):
     """A November row is posted to the vendor's expense, its month closes, and then the row is matched to the vendor's bill.
     The match's reclassification posts on a later open day, but it counts in 2025 with the payment: once in 2025, nothing
     in 2026."""
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         fid = _feed(c, _bank(c), -60_000, day="2025-11-20")
         assert (
@@ -650,7 +650,7 @@ def test_a_payment_matched_to_a_bill_after_its_month_closed_counts_once_in_the_y
         )
         dates = [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE source='bank' ORDER BY entry_date")]
         assert dates == ["2025-11-20", "2026-01-05"]
-    with keeper.read() as c:
+    with tico.read() as c:
         assert _vendor_row(FR.form_1099_report(c, OWNER, 2025, AT), "Acme Consulting")["cash_paid"] == 60_000
         assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")["cash_paid"] == 0
 
@@ -665,8 +665,8 @@ def test_a_payment_matched_to_a_bill_after_its_month_closed_counts_once_in_the_y
         ("cardInternationalTransactionFee", -15_000, 15_000),
     ],
 )
-def test_every_card_row_on_a_bank_account_is_card_money_and_a_refund_never_lowers_cash(keeper, kind, amount, card):
-    with keeper.transaction() as c:
+def test_every_card_row_on_a_bank_account_is_card_money_and_a_refund_never_lowers_cash(tico, kind, amount, card):
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         bank = _bank(c)
         _pay(c, acme, 50_000, {"money_account_id": bank})
@@ -674,14 +674,14 @@ def test_every_card_row_on_a_bank_account_is_card_money_and_a_refund_never_lower
         assert (
             act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")}, at=AT).status == "committed"
         )
-    with keeper.read() as c:
+    with tico.read() as c:
         row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
     assert (row["cash_paid"], row["card_paid_excluded"]) == (50_000, card)
 
 
-def test_only_invoices_that_carry_sales_tax_feed_the_sales_tax_workpaper(keeper):
+def test_only_invoices_that_carry_sales_tax_feed_the_sales_tax_workpaper(tico):
     """An invoice with no sales tax line feeds no row, so its income account is not behind the workpaper."""
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(
             c,
@@ -712,8 +712,8 @@ def test_only_invoices_that_carry_sales_tax_feed_the_sales_tax_workpaper(keeper)
     assert feeding == {account(c, "4000"), tax_account}
 
 
-def test_a_card_expense_matched_to_a_bill_nets_on_the_card(keeper):
-    with keeper.transaction() as c:
+def test_a_card_expense_matched_to_a_bill_nets_on_the_card(tico):
+    with tico.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         _card_gl(c)
         bank, program = _bank(c), _program(c)
@@ -721,13 +721,13 @@ def test_a_card_expense_matched_to_a_bill_nets_on_the_card(keeper):
         assert act(c, OWNER, "categorize", {"feed_id": charge, "account_id": account(c, "6100")}).status == "committed"
         _pay(c, acme, 50_000, {"feed_id": charge})
         _pay(c, acme, 240_000, {"money_account_id": bank})
-    with keeper.read() as c:
+    with tico.read() as c:
         row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
     assert (row["card_paid_excluded"], row["cash_paid"]) == (50_000, 240_000)
 
 
-def test_a_vendor_paid_under_a_name_before_its_contact_existed_counts(keeper):
-    with keeper.transaction() as c:
+def test_a_vendor_paid_under_a_name_before_its_contact_existed_counts(tico):
+    with tico.transaction() as c:
         FA.post_entry(
             c,
             {
@@ -742,13 +742,13 @@ def test_a_vendor_paid_under_a_name_before_its_contact_existed_counts(keeper):
             at=AT,
         )
         _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
-    with keeper.read() as c:
+    with tico.read() as c:
         row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
     assert row["cash_paid"] == 20_000
 
 
-def test_a_partial_remittance_counts_what_was_paid(keeper):
-    with keeper.transaction() as c:
+def test_a_partial_remittance_counts_what_was_paid(tico):
+    with tico.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(
             c,
@@ -762,7 +762,7 @@ def test_a_partial_remittance_counts_what_was_paid(keeper):
         bill = _remit(c, "2026-Q1")
         paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "amount": 1_000, "account_id": account(c, "1000")})
         assert paid.status == "committed", paid
-    with keeper.read() as c:
+    with tico.read() as c:
         rows = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
     assert _quarter(rows, "2026-Q1") == {
         "taxable_sales": 20_000,
@@ -770,7 +770,7 @@ def test_a_partial_remittance_counts_what_was_paid(keeper):
         "tax_remitted": 1_000,
         "due": 600,
     }
-    with keeper.transaction() as c:
+    with tico.transaction() as c:
         again = act(c, OWNER, "tax_remit", {"jurisdiction": "TL", "period": "2026-Q1"})
         assert again.status == "committed", again
         assert (
@@ -779,8 +779,8 @@ def test_a_partial_remittance_counts_what_was_paid(keeper):
         )
 
 
-def test_an_exempt_income_line_is_listed_as_exempt_sales(keeper):
-    with keeper.transaction() as c:
+def test_an_exempt_income_line_is_listed_as_exempt_sales(tico):
+    with tico.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(
             c,
@@ -802,21 +802,21 @@ def test_an_exempt_income_line_is_listed_as_exempt_sales(keeper):
         assert act(c, OWNER, "invoice_send", {"invoice_id": invoice.result["invoice_id"]}).status == "committed"
         # Income on an invoice with no sales tax line is not taxed, so it is not an exempt sale either.
         _invoice(c, customer, "2026-03-05", 9_000)
-    with keeper.read() as c:
+    with tico.read() as c:
         rows = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
         csv_text = FR.sales_tax_csv(c, OWNER, 2026, AT)
     first = next(r for r in rows if r["period"] == "2026-Q1")
     assert (first["taxable_sales"], first["exempt_sales"], first["tax_collected"]) == (20_000, 5_000, 1_600)
     assert csv_text.splitlines()[1] == "2026-Q1,Testland,200.00,50.00,16.00,0.00,16.00"
     # The invoice read says which line is taxable (the income line given none defaults to taxable).
-    with keeper.read() as c:
+    with tico.read() as c:
         read = FR.invoice(c, OWNER, str(invoice.result["invoice_id"]), AT)
     assert [x["taxable"] for x in read["lines"]][:2] == [True, False]
 
 
-def test_a_book_with_cards_and_a_new_jurisdiction_gets_distinct_codes(keeper):
-    connect(keeper, FakeMercury())  # Mercury IO takes the card line at 2101
-    with keeper.transaction() as c:
+def test_a_book_with_cards_and_a_new_jurisdiction_gets_distinct_codes(tico):
+    connect(tico, FakeMercury())  # Mercury IO takes the card line at 2101
+    with tico.transaction() as c:
         made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland"})
         assert made.status == "committed", made
         codes = {str(r[0]): str(r[1]) for r in c.execute("SELECT subtype, code FROM fin_accounts")}

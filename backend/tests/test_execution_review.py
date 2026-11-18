@@ -653,10 +653,10 @@ def hub_update(api, shift=0):
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, 'system.update.started', '0.4.17', {'from': '0.4.16', 'to': '0.4.17'})
+        H.event(c, H.TICO_ACTOR, 'system.update.started', '0.4.17', {'from': '0.4.16', 'to': '0.4.17'})
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'system.update.finished',
             '0.4.17',
             {'outcome': 'succeeded', 'from': '0.4.16', 'to': '0.4.17', 'message': ''},
@@ -882,7 +882,7 @@ def test_a_run_held_before_this_release_for_an_update_settles_on_the_next_sweep(
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             'job.held',
             attempt['id'],
             {
@@ -1496,7 +1496,7 @@ def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
     machine, message, attempt = setup_attempt(api)
     limited_turn(api, machine, attempt)
     assert claim(api, machine) is None
-    # A person's new message gets one try now; a bot's or the keeper's would not.
+    # A person's new message gets one try now; a bot's or Tico's would not.
     post(api, "chat/ops", {"text": "Renewed the plan, try again."})
     retry = claim(api, machine)
     assert retry, "a person's message after the limit lets the bot try once"
@@ -1506,7 +1506,7 @@ def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
     post(api, "bots/ops/limit/retry", {}, token="cara-test", expected=403)
     assign(api, machine, "assistant")
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "assistant", state="limited", focus="fake usage limit")
+        H.status_set(c, H.TICO_ACTOR, "assistant", state="limited", focus="fake usage limit")
     assert post(api, "bots/ops/limit/retry", {})["cleared"] == 2
     with api.app.state.store.read() as c:
         assert H.status(c, "ops")["state"] == H.status(c, "assistant")["state"] == "idle"
@@ -2157,7 +2157,7 @@ def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
 
 
 def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
-    """Ben reads one of ops' stopped runs, so his issue is drawn; what the keeper left on Ana's private run, and what
+    """Ben reads one of ops' stopped runs, so his issue is drawn; what Tico left on Ana's private run, and what
     waits behind it, counts toward neither its numbers, its names nor its urgency."""
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
@@ -2166,7 +2166,7 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     stop_partway(api, machine, claim(api, machine), 'company')
     private = post(api, 'tasks', {'owner': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
     private_id = private.get('task', private).get('id') or private['refs']['task']
-    # The keeper settles the request Ana's private run was for and leaves the comment carried on that run.
+    # Tico settles the request Ana's private run was for and leaves the comment carried on that run.
     ready(api, machine, ['ops'])
     first = claim(api, machine)
     stop_partway(api, machine, first, 'twice')
@@ -2229,15 +2229,15 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
             with store.read_transaction() as c:
                 seen[token] = (
                     execution.held_back(c, who, api.app.state.auth, 'ops')[0],
-                    execution.left_by_keeper(c, who, 'ops'),
+                    execution.left_by_tico(c, who, 'ops'),
                     execution.unreviewed(c, who, 'ops')[0],
                 )
             assert len(calls) == 3 and calls[:2] == [1, 1], calls
     assert seen['ana-test'][:2] == (1, 1) and seen['ben-test'][:2] == (0, 0), seen
 
 
-def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_botops(api):
-    """The keeper dismissed only the request a stopped run was for ('stopped partway twice'); the message folded into
+def test_a_run_carried_on_a_stopped_run_the_tico_settled_is_left_for_botops(api):
+    """Tico dismissed only the request a stopped run was for ('stopped partway twice'); the message folded into
     the same run stayed held with nobody asked. BotOps reviews it, whether or not anything waits behind it."""
     from backend.store import H
 

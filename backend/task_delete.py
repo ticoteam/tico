@@ -328,7 +328,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             ),
             [*kept, *kept],
         )
-    actor = actor or H.KEEPER
+    actor = actor or H.TICO_ACTOR
     now = H.now()
     from . import task_engine
 
@@ -505,7 +505,7 @@ def restore_tasks(c, ids, actor=None):
     (task_engine.restore): an open task on a new visit in the stage it was in while that stage may take it, else the
     first one; a done or closed one as it ended. A private task no stage may take is not restored (`not_shared`, with
     its cause and fix) and stays in the trash. What it was asked, and the wakes written for it, are not replayed."""
-    actor = actor or H.KEEPER
+    actor = actor or H.TICO_ACTOR
     entries = []
     for tid in dict.fromkeys(ids):
         row = c.execute("SELECT * FROM task_trash WHERE task_id=? AND purged_at IS NULL", (tid,)).fetchone()
@@ -690,7 +690,7 @@ def purge_trash(c, older_than_days, apply=False, actor=None):
         c.execute("UPDATE task_trash SET rows='{}', purged_at=? WHERE task_id=?", (now, r["task_id"]))
         H.event(
             c,
-            actor or H.KEEPER,
+            actor or H.TICO_ACTOR,
             "task.purged",
             r["task_id"],
             {

@@ -308,7 +308,7 @@ def s_fail_open(org, items, judge):
     def cap_on():
         settings.decisions_monthly_usd = 1.0
         with org.store.transaction() as c:  # the month's spend already at the cap
-            H.event(c, H.KEEPER, "judge.spend", "other@1", {"cost_usd": 2.0})
+            H.event(c, H.TICO_ACTOR, "judge.spend", "other@1", {"cost_usd": 2.0})
 
     def cap_off():
         settings.decisions_monthly_usd = 1_000_000.0

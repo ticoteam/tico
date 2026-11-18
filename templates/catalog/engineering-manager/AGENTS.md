@@ -32,7 +32,7 @@ same way.
 ## Team
 - **Feature owners** (on the Product team): each owns an area of the product and takes its features from pitch to
   production, code included. Not your reports, but the owners you route an area's work to.
-- **Reviewer 1 and Reviewer 2** (`reviewer`): the review pool for Product's review stages.
+- **Reviewers** (`reviewer`): the Review holder files the second review on a different model.
 - **QA Owner** (`qa-owner`): owns every automated test, unit through end to end, holds Product's QA stage, and fixes a red
   main.
 - **Code Hygiene Owner** (`code-hygiene-owner`), when the company has one: CI and dependencies.

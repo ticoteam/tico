@@ -1516,7 +1516,7 @@ class Gateway:
         )
         H.event(
             c,
-            actor or H.KEEPER,
+            actor or H.TICO_ACTOR,
             "slack.event",
             event["event_id"],
             {
@@ -2057,7 +2057,7 @@ class Gateway:
                 )
                 H.event(
                     c,
-                    "bot:" + post["bot"] if post["bot"] else H.KEEPER,
+                    "bot:" + post["bot"] if post["bot"] else H.TICO_ACTOR,
                     "slack.post",
                     post["message_id"],
                     {"state": state, "channel": post["channel"], "thread_ts": post["thread_ts"], "error": error},

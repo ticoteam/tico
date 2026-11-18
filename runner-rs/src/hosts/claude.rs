@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::{
-    event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions,
+    event, failed, hub_mcp_server_by_name, is_auth_retryable, is_limit, shell_outside_actions,
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::util::{iso, log, py_dumps, text_of};
@@ -533,6 +533,8 @@ struct Shared {
     effort: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
+    /// The run this host's turn belongs to, for its timing marks (flight.rs); empty until the runner names it.
+    attempt: Mutex<String>,
 }
 
 #[derive(Clone)]
@@ -593,7 +595,29 @@ impl ClaudeHost {
             effort: false.into(),
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
+            attempt: Mutex::new(String::new()),
         }))
+    }
+
+    /// Names the run this host's turns belong to, so its own marks land on that run's timings.
+    pub fn set_attempt(&self, aid: &str) {
+        *self.0.attempt.lock().unwrap_or_else(|p| p.into_inner()) = aid.to_string();
+    }
+
+    fn attempt(&self) -> String {
+        self.0
+            .attempt
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// A timing mark on the named run (crate::util::mark); nothing before `set_attempt`.
+    fn mark(&self, name: &str) {
+        let aid = self.attempt();
+        if !aid.is_empty() {
+            crate::util::mark(name, &aid);
+        }
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -784,7 +808,9 @@ impl ClaudeHost {
         argv.push("-p".into());
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
-        if let Some(hub) = hub_mcp_server(&t.settings.env) {
+        // `--mcp-config` is on the command line, which any user on the computer can read: the hub's token and other
+        // values go as `${VAR}`, which Claude expands from the turn's environment (`turn_env`).
+        if let Some(hub) = hub_mcp_server_by_name(&t.settings.env) {
             servers.insert("tico".into(), hub);
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
@@ -820,12 +846,17 @@ impl ClaudeHost {
             argv.extend(["--effort".into(), e]);
         }
         // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
-        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
+        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move,
+        // and the bot's output style goes in the same one `--settings` (a second would replace the first).
+        let mut flag = serde_json::Map::new();
         if let Some(dir) = t.settings.memory_dir.as_deref() {
-            argv.extend([
-                "--settings".into(),
-                py_dumps(&json!({"autoMemoryDirectory": dir})),
-            ]);
+            flag.insert("autoMemoryDirectory".into(), json!(dir));
+        }
+        if let Some(style) = t.settings.output_style.as_deref() {
+            flag.insert("outputStyle".into(), json!(style));
+        }
+        if !flag.is_empty() {
+            argv.extend(["--settings".into(), py_dumps(&Value::Object(flag))]);
         }
         if let Some(from) = &t.fork_from {
             argv.extend([
@@ -930,7 +961,7 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        let (child, stderr) = {
+        let (child, stderr, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
                 return Err(failed("claude host is not running"));
@@ -943,10 +974,10 @@ impl ClaudeHost {
                 .get(thread_id)
                 .cloned()
                 .ok_or_else(|| failed(format!("unknown claude thread {thread_id}")))?;
-            if let Some(size) = transcript(&t.settings, &session_of(thread_id, &t))
+            let size = transcript(&t.settings, &session_of(thread_id, &t))
                 .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.len())
-            {
+                .map(|m| m.len());
+            if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
             let (child, stderr, reaping) = self
@@ -957,8 +988,12 @@ impl ClaudeHost {
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
             inner.context.remove(thread_id);
-            (child, stderr)
+            (child, stderr, size.unwrap_or(0))
         };
+        // Spawned now: whatever the runner holds the turn for after this (a cold sign-in) is not Claude's boot.
+        self.mark("claude_spawned");
+        // The session Claude resumes, by size: whether resuming takes longer as a thread grows.
+        crate::flight::fact(&self.attempt(), "transcript_bytes", transcript_bytes);
         log(&format!(
             "claude[{}]: turn started pid {}",
             self.0.bot,
@@ -1156,6 +1191,7 @@ impl ClaudeHost {
                         if self.before_prompt(&msg) {
                             continue;
                         }
+                        self.mark("claude_result");
                         self.settle(&turn, &msg);
                         self.track_wait(&msg);
                         result = Some(msg);
@@ -1603,6 +1639,7 @@ impl ClaudeHost {
                 }
             }
             "system" if msg["subtype"] == "init" => {
+                self.mark("claude_init");
                 let session = msg["session_id"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -2221,7 +2258,8 @@ fn session_of(thread_id: &str, t: &Thread) -> String {
 
 /// This exact session's transcript: other bots' and people's transcripts stay private.
 fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> {
-    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env never lets CLAUDE_CONFIG_DIR through.
+    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env lets no other CLAUDE_CONFIG_DIR through (a full
+    // login's links `projects` back there).
     let home = turn_env(settings).remove("HOME").unwrap_or_default();
     let dir = std::path::Path::new(&home).join(".claude");
     let name = format!("{session}.jsonl");
@@ -2297,8 +2335,15 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
         }
     }
     // Claude reads CLAUDE_CONFIG_DIR ahead of HOME: one inherited from this process (or brought by a grant) would run
-    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME.
-    env.remove("CLAUDE_CONFIG_DIR");
+    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME. The one
+    // exception is the home of a full Claude login handed to this turn (model_subscriptions.rs), which links the rest
+    // of HOME's .claude in, `projects` among it.
+    if !env
+        .get("CLAUDE_CONFIG_DIR")
+        .is_some_and(|d| crate::model_subscriptions::is_config_home(d))
+    {
+        env.remove("CLAUDE_CONFIG_DIR");
+    }
     env
 }
 
@@ -2563,6 +2608,61 @@ mod tests {
     }
 
     #[test]
+    fn no_secret_value_is_on_the_claude_command_line() {
+        // Synthetic values only: any process on the computer can read a command line.
+        let token = "synthetic-run-token-0f3a9c";
+        let header = "synthetic-header-secret-7b21";
+        let dir =
+            std::env::temp_dir().join(format!("claude-argv-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            mcp_servers: vec![json!({"name": "linear", "transport": "http",
+                "url": "https://mcp.invalid/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})],
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("HUB_API_URL", "http://hub.invalid"),
+            ("HUB_TOKEN", token),
+            ("HUB_BOT", "acme"),
+            ("HUB_EMPLOYEE", "acme"),
+            ("HUB_DIR", "/hub.invalid"),
+            ("LINEAR_KEY", header),
+        ] {
+            settings.env.insert(k.into(), v.into());
+        }
+        // Every kind of Claude turn builds its command line here: a fresh, a resumed and a forked one.
+        let fresh = host.start_thread(&settings);
+        let forked = host.start_thread_forked(&settings, "old-session");
+        for thread in [&fresh, &forked] {
+            let argv = host.argv(thread, &host.inner().threads[thread].clone(), Some("high"));
+            for arg in &argv {
+                assert!(!arg.contains(token), "run token in {arg}");
+                assert!(!arg.contains(header), "header secret in {arg}");
+            }
+            let config: Value = serde_json::from_str(
+                &argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1],
+            )
+            .unwrap();
+            let tico = &config["mcpServers"]["tico"];
+            for k in crate::hosts::HUB_MCP_ENV {
+                assert_eq!(tico["env"][*k], format!("${{{k}}}"));
+            }
+            assert_eq!(
+                config["mcpServers"]["linear"]["headers"]["Authorization"],
+                "Bearer ${LINEAR_KEY}"
+            );
+        }
+        // Claude expands the placeholders from the turn's own environment, which keeps the values.
+        let env = turn_env(&settings);
+        assert_eq!(env["HUB_TOKEN"], token);
+        assert_eq!(env["LINEAR_KEY"], header);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn auto_memory_is_on_in_the_repository_and_claude_compacts_at_the_turns_compact_at() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
@@ -2591,6 +2691,43 @@ mod tests {
         let env = turn_env(&settings);
         assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
         assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "120000");
+    }
+
+    #[test]
+    fn the_output_style_goes_in_the_one_settings_flag_beside_auto_memory_and_default_adds_none() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let given = |settings: &Settings| -> Vec<Value> {
+            let thread = host.start_thread(settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+            argv.iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--settings")
+                .map(|(i, _)| serde_json::from_str(&argv[i + 1]).unwrap())
+                .collect()
+        };
+        let mut settings = Settings {
+            cwd: "/w/bot-acme".into(),
+            memory_dir: Some("/w/bot-acme/memory/claude".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            given(&settings),
+            vec![
+                json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude", "outputStyle": "Concise"})
+            ]
+        );
+        settings.memory_dir = None;
+        assert_eq!(given(&settings), vec![json!({"outputStyle": "Concise"})]);
+        // Default (none saved, or an older server) passes no outputStyle, and with no memory folder no --settings.
+        settings.output_style = None;
+        assert!(given(&settings).is_empty());
+        settings.memory_dir = Some("/w/bot-acme/memory/claude".into());
+        assert_eq!(
+            given(&settings),
+            vec![json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})]
+        );
     }
 
     #[test]
@@ -2807,6 +2944,65 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    #[tokio::test]
+    async fn a_turn_marks_its_spawn_init_and_result_and_its_transcript_size() {
+        let dir =
+            std::env::temp_dir().join(format!("claude-marks-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("out.jsonl"),
+            concat!(
+                r#"{"type": "system", "subtype": "init", "session_id": "s-marks"}"#,
+                "\n",
+                r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 1, "output_tokens": 1}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\ncat out.jsonl\ncat >/dev/null\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        let thread = host.start_thread(&settings);
+        // The session it resumes: its size goes with the turn's marks.
+        let folder = dir.join(".claude/projects/acme");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{thread}.jsonl")), "x".repeat(1234)).unwrap();
+        let aid = format!("marks-{}", uuid::Uuid::new_v4().simple());
+        crate::flight::track();
+        crate::flight::phase("claimed", &aid);
+        host.set_attempt(&aid);
+        host.start_turn(&thread, "hello", None).unwrap();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if ev["kind"] == "status" && ev["state"] == "idle" {
+                break;
+            }
+        }
+        let t = crate::flight::timings(&aid).unwrap();
+        let at = |name: &str| {
+            t["phases"][name]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{name}: {t}"))
+        };
+        assert!(at("claude_spawned") <= at("claude_init"), "{t}");
+        assert!(at("claude_init") <= at("claude_result"), "{t}");
+        assert_eq!(t["transcript_bytes"], 1234, "{t}");
+        crate::flight::turn_end(&aid, "acme", "claude", "completed", true);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     const BG_STARTED: &str = r#"{"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "a1", "task_type": "local_agent", "description": "Build concept A"}]}"#;

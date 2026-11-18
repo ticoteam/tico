@@ -47,7 +47,8 @@ Object.assign(ctx, {
   taskFormRestore: noop, taskFormCapture: () => ({fields: [], folds: []}), taskModalBind: noop, taskPropFocus: noop,
   taskMenuSettled: () => Promise.resolve(),
   taskTabFirst: noop, taskLiveStart: noop, taskRailLoad: () => Promise.resolve(), taskChatLoad: () => Promise.resolve(),
-  tfLoad: () => Promise.resolve(), taskRunsLoad: () => Promise.resolve(), githubNudgeTask: () => Promise.resolve(),
+  tfLoad: () => Promise.resolve(), taskFilesTabLoad: () => Promise.resolve(),
+  taskRunsLoad: () => Promise.resolve(), githubNudgeTask: () => Promise.resolve(),
   decideTaskOpen: () => Promise.resolve(false),     // decide.ts: these tasks do not wait on the person, so the page opens
 });
 const VmError = vm.runInContext('Error', ctx) as ErrorConstructor;

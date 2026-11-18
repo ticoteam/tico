@@ -639,7 +639,7 @@ def read_by_run(c, aid, task):
     ).fetchone()[0]
     note = H._write_message(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "bot:ops",
         "Plan notes",
         H.conversation(c, room),
@@ -676,11 +676,11 @@ def test_a_held_write_nobody_decides_for_a_day_is_kept_unsent_and_its_bot_is_tol
     age_holds(api, 25)
     assert sweep_holds(api) == [held["id"]]
     row = hold_row(api, held["id"])
-    assert (row["state"], row["decided_by"]) == ("kept", H.KEEPER)
+    assert (row["state"], row["decided_by"]) == ("kept", H.TICO_ACTOR)
     assert ben_needs_you(api) == []
     assert bodies(api, "gold") == []  # the held text is written nowhere
     # The bot that wrote it is told, not the person it was for.
-    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.KEEPER,))
+    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.TICO_ACTOR,))
     assert len(told) == 1 and "was not sent" in told[0]["body"] and "24 hours" in told[0]["body"]
     assert sweep_holds(api) == []  # decided once
 
@@ -834,7 +834,7 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
     elif how == "budget":
         api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
+            H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = say(api, "Our favorite color is gold")
@@ -879,7 +879,7 @@ def test_a_spent_decisions_cap_stops_rule_checks(ruled):
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
     with store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     got = say(api, "Our favorite color is gold")
     assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
     assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
@@ -892,7 +892,7 @@ def test_a_decisions_cap_spent_while_a_check_waits_its_turn_is_the_budget_too(ru
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
     with store.transaction() as c:  # under the cap, but with no room for one more call's most
-        H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
     got = say(api, "Our favorite color is gold")
     assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
     assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
@@ -1005,7 +1005,7 @@ def test_a_task_change_warning_rides_on_the_change_itself(ruled):
     assert got["rule_warning"]
     row = sql(api, "SELECT note FROM tasks WHERE id=?", (task["id"],))[0]
     assert row["note"].startswith("Warning:") and row["note"].endswith("Our favorite color is red.")
-    assert sql(api, "SELECT id FROM messages WHERE sender_id=? AND body LIKE 'Warning:%'", (H.KEEPER,)) == []
+    assert sql(api, "SELECT id FROM messages WHERE sender_id=? AND body LIKE 'Warning:%'", (H.TICO_ACTOR,)) == []
 
 
 def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_people(ruled):
@@ -1429,11 +1429,11 @@ def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
 
     with api.app.state.store.transaction() as c:
         for _ in range(3):
-            H.event(c, H.KEEPER, "judge.call", "rule-check@1", {})
-        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@1", {})
+            H.event(c, H.TICO_ACTOR, "judge.call", "rule-check@1", {})
+        H.event(c, H.TICO_ACTOR, "judge.call", "person-ask-ingest@1", {})
     with api.app.state.store.read() as c:
         assert K.calls_today(c) == 3
-        assert B.used_today(c, H.KEEPER) == 1
+        assert B.used_today(c, H.TICO_ACTOR) == 1
 
 
 # ---- Send anyway: privacy, snapshot, full inputs, a new Warn ------------------------------------------------------

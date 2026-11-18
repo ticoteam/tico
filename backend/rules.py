@@ -280,7 +280,7 @@ def notice_only(message):
     """Whether a message is a notice from Tico marked to run without its task."""
     return bool(
         message
-        and message.get("sender_id") == H.KEEPER
+        and message.get("sender_id") == H.TICO_ACTOR
         and message.get("kind") == "notice"
         and (message.get("refs") or {}).get(PARKED_NOTICE) is True
     )
@@ -436,7 +436,7 @@ def event_of(actor, kind, refs, body, floor=None):
     if refs.get("sweep"):
         return "routine"
     trigger = run_triggers.of_message({"refs": refs, "sender_id": actor})[0]
-    if trigger in ("comment", "status_or_relation") or actor == H.KEEPER:
+    if trigger in ("comment", "status_or_relation") or actor == H.TICO_ACTOR:
         label = wake_presets.classify({"refs": refs, "sender_id": actor, "body": body, "kind": kind})[0]
         if label == "assignment":
             return "assignment"
@@ -507,7 +507,7 @@ class _Context:
         for key, want in when.items():
             wanted = want if isinstance(want, list) else [want]
             if key == "actor":
-                mine = "keeper" if self.actor == H.KEEPER else "human" if H.is_human(self.actor) else "bot"
+                mine = "keeper" if self.actor == H.TICO_ACTOR else "human" if H.is_human(self.actor) else "bot"
                 if mine not in wanted:
                     return False
                 continue
@@ -560,7 +560,7 @@ def _row_decision(row, actor):
     if outcome == BATCH:
         # Only Tico's own notices can be held at enqueue (the wake_preset_hold trigger); a message from anyone
         # else wakes, with the rule still named, rather than risk a wake nobody sees.
-        return Decision(BATCH if actor == H.KEEPER else WAKE, row["id"], None, params)
+        return Decision(BATCH if actor == H.TICO_ACTOR else WAKE, row["id"], None, params)
     if outcome in (ASK, ACTION):
         by = row["created_by"]
         if outcome == ACTION and params.get("action") in TASK_ACTIONS:
@@ -690,7 +690,7 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(WAKE, "awaited_" + key)
     if refs.get("wake_digest"):
         return Decision(WAKE, "batch_digest")
-    if refs.get("wake_batch") in BATCH_EVENTS and actor == H.KEEPER:
+    if refs.get("wake_batch") in BATCH_EVENTS and actor == H.TICO_ACTOR:
         return Decision(BATCH, "batch_" + refs["wake_batch"])
     if held == "own_write":
         return Decision(IGNORE, held, HOLD_IGNORED)  # the bot's own run already knows what it wrote
@@ -731,7 +731,7 @@ def thread_wake(conn, message, bot, thread, mode="queue"):
         refs.pop("carries", None)
         found = judge(
             conn,
-            message.get("sender_id") or H.KEEPER,
+            message.get("sender_id") or H.TICO_ACTOR,
             bot,
             message.get("kind") or "say",
             refs,
@@ -872,14 +872,14 @@ def _ask_without_task(conn, decision, actor, body, target, conv):
     who = _operator(conn, target) or (decision.by if H.is_human(decision.by) else None)
     if not who:
         raise ValueError("no person to ask")
-    sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
+    sender = "Tico" if actor == H.TICO_ACTOR else H.actor_id(actor)
     text = str(body or "").strip()[:1500]
     heading = " ".join(text.split())[:80] or f"a message to {H.actor_id(target)}"
     from . import person_asks
 
     made = person_asks.task_for(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         f"A rule needs you: {heading}"[:300],
         f"The rule {decision.rule} asked for a person on a message to {H.actor_id(target)}.\n\nFrom {sender}: {text}",
         who,
@@ -889,7 +889,7 @@ def _ask_without_task(conn, decision, actor, body, target, conv):
         deduplicate=False,
         private=True,  # the message was for the bot: only the person it falls to reads it
     )
-    H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": decision.rule, "about": about})
+    H.event(conn, H.TICO_ACTOR, ASKED, made["id"], {"rule": decision.rule, "about": about})
 
 
 # Only bots write questions (backend/question_marks.py): a rule's ❓ is the Rules Owner's, or BotOps' when it is not
@@ -931,11 +931,11 @@ def _ask(conn, decision, row, actor, body, target=None, conv=None):
     who = (row["requester_id"] if H.is_human(row["requester_id"]) else None) or _operator(conn, row["owner_id"])
     if not who:
         raise ValueError("no person to ask")
-    sender = "Tico" if actor == H.KEEPER else H.actor_name(conn, actor)
+    sender = "Tico" if actor == H.TICO_ACTOR else H.actor_name(conn, actor)
     text = " ".join(str(body or "").split())[:400]
     said = f"A rule holds a message from {sender} until you reply. Should it go on?\n\nRule {decision.rule}"
     wait = _rule_ask(conn, row["id"], who, f"{said}:\n> {text}" if text else said)
-    H.event(conn, H.KEEPER, ASKED, row["id"], {"rule": decision.rule, "requirement": wait})
+    H.event(conn, H.TICO_ACTOR, ASKED, row["id"], {"rule": decision.rule, "requirement": wait})
 
 
 def _act(conn, decision, row, message=None):
@@ -962,7 +962,7 @@ def _act(conn, decision, row, message=None):
             raise ValueError(found["detail"])  # the bot was not told: open the message instead (fail open)
         H.event(
             conn,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "rule.action",
             row["id"] if row else decision.rule,
             {"rule": decision.rule, "action": action, "ok": found["ok"], "detail": found["detail"]},
@@ -977,21 +977,21 @@ def _act(conn, decision, row, message=None):
     # its writer could not change by hand. Failing opens the message, so the owner still hears of it.
     if (
         H.task_private(conn, row)
-        and decision.by != H.KEEPER
+        and decision.by != H.TICO_ACTOR
         and (not decision.by or not H.task_private_readable(conn, decision.by, row))
     ):
         raise ValueError("the rule's writer cannot read this private task")
     note = str(params.get("note") or params.get("text") or "")[:1000]
     said = f"Rule {decision.rule}: {note}" if note else f"Rule {decision.rule}"
     done = runner(conn, row["id"], params, said) or {}
-    H.event(conn, H.KEEPER, "rule.action", row["id"], {"rule": decision.rule, "action": action, **done})
+    H.event(conn, H.TICO_ACTOR, "rule.action", row["id"], {"rule": decision.rule, "action": action, **done})
 
 
 # The task actions. Each is one task call as Tico, with the rule's words as its why; a refusal raises, and the caller
 # undoes the action and says it failed. A rule never pushes past what a stage needs: a forward move it asks for is
 # refused while anything is missing.
 def _close(conn, tid, params, said):
-    H.task_close(conn, H.KEEPER, tid, said)
+    H.task_close(conn, H.TICO_ACTOR, tid, said)
 
 
 def _needs_why(conn, tid, to):
@@ -1022,7 +1022,7 @@ def _needs_why(conn, tid, to):
 def _move(conn, tid, params, said):
     """`params.stage`: a stage of the task's pipeline (by id or name), or next, done, closed or reopen."""
     to = str(params["stage"])
-    H.task_move(conn, H.KEEPER, tid, to, said if _needs_why(conn, tid, to) else None)
+    H.task_move(conn, H.TICO_ACTOR, tid, to, said if _needs_why(conn, tid, to) else None)
     return {"stage": to}
 
 
@@ -1039,12 +1039,12 @@ def _relate(conn, tid, params, said):
     from . import task_relations as TR
 
     TR.relate(
-        conn, H.KEEPER, tid, str(params["task"]), kind=str(params.get("kind") or "related"), mover=True, note=said
+        conn, H.TICO_ACTOR, tid, str(params["task"]), kind=str(params.get("kind") or "related"), mover=True, note=said
     )
 
 
 def _note(conn, tid, params, said):
-    H.task_update(conn, H.KEEPER, tid, note=said)
+    H.task_update(conn, H.TICO_ACTOR, tid, note=said)
 
 
 def _assign(conn, tid, params, said):
@@ -1054,7 +1054,7 @@ def _assign(conn, tid, params, said):
     owner, task = str(params["owner"]), H.task(conn, tid)
     if H.task_private(conn, task) and not H.task_private_readable(conn, owner, task):
         raise ValueError("the new owner cannot read this private task")
-    H.task_reassign(conn, H.KEEPER, tid, owner, said)
+    H.task_reassign(conn, H.TICO_ACTOR, tid, owner, said)
     return {"owner": owner}
 
 
@@ -1063,7 +1063,7 @@ def _retag(add):
         have, named = H.task_labels(H.task(conn, tid)), list(params["tag"])
         keys = have + [k for k in named if k not in have] if add else [k for k in have if k not in named]
         if keys != have:  # a tag already on (or already off) writes nothing and mirrors no note
-            H.task_update(conn, H.KEEPER, tid, labels=keys, note=said)
+            H.task_update(conn, H.TICO_ACTOR, tid, labels=keys, note=said)
         return {"tag": named, "changed": keys != have}
 
     return run
@@ -1182,11 +1182,11 @@ def _bot_room(conn, slug):
         bot = H.bot(conn, slug) or {}
         name = bot.get("display_name") or bot.get("slug") or slug
         return rooms.personal_room(conn, H.human_actor(stored["owner_id"]), slug, "Chat with " + name)
-    return H._pair_conversation(conn, H.KEEPER, H.bot_actor(slug), "notice", allow_held=True)
+    return H._pair_conversation(conn, H.TICO_ACTOR, H.bot_actor(slug), "notice", allow_held=True)
 
 
 def _tell_bot(conn, rule_id, slug, text, refs, *, wake, task=None, room=None):
-    """The keeper's notice to a bot, decided here: it wakes the bot (`wake`) or waits quietly as a note. With a task it
+    """Tico's notice to a bot, decided here: it wakes the bot (`wake`) or waits quietly as a note. With a task it
     goes in the task's room, and only to a bot that may read the task; else in `room` when given (an automation's
     note to its owner's Assistant), else the bot's own room. Returns (ok, detail)."""
     found = H.bot(conn, slug) if slug else None
@@ -1203,7 +1203,7 @@ def _tell_bot(conn, rule_id, slug, text, refs, *, wake, task=None, room=None):
     else:
         conv = room or _bot_room(conn, slug)
     decided = Decision(WAKE, rule_id) if wake else Decision(NOTE, rule_id, HOLD_ROW)
-    H._write_message(conn, H.KEEPER, target, text, conv, "notice", refs, None, None, decided=decided)
+    H._write_message(conn, H.TICO_ACTOR, target, text, conv, "notice", refs, None, None, decided=decided)
     return True, "woke it" if wake else "left it a note"
 
 
@@ -1271,7 +1271,7 @@ def _send_out(conn, outcome, by, hook, kind, subject, data, revision):
             kind,
             str(subject),
             data if isinstance(data, dict) else {"data": data},
-            by or H.KEEPER,
+            by or H.TICO_ACTOR,
             only=hook,
             revision=revision,
         )
@@ -1329,14 +1329,21 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     try:
         private = True if event in TTR.TRIGGERS and task and H.task_private(conn, task) else None
         row = H.task_create(
-            conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False, private=private
+            conn,
+            by or H.TICO_ACTOR,
+            title[:300],
+            body,
+            H.bot_actor(slug),
+            lint=False,
+            deduplicate=False,
+            private=private,
         )
         if event in TTR.TRIGGERS and task:
             from . import task_relations as TR
 
             TR.relate(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 row["id"],
                 task["id"],
                 mover=True,
@@ -1362,7 +1369,7 @@ def _finance(action):
         data = values.get("data") if isinstance(values.get("data"), dict) else {}
         params = {**params, "payload": templating.render_json(params.get("payload") or {}, values)}
         done = finance.watch(
-            conn, rule_id, by or H.KEEPER, action, params, data, f"rule-{rule_id}-{action}-{event}-{subject}"[:200]
+            conn, rule_id, by or H.TICO_ACTOR, action, params, data, f"rule-{rule_id}-{action}-{event}-{subject}"[:200]
         )
         ok = done.status in ("committed", "needs_approval")
         detail = done.status if ok else f"{done.status}: {done.reason}"[:300]
@@ -1429,7 +1436,7 @@ def _event_ask(conn, row, name, params, values, ctx):
 
     made = person_asks.task_for(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         f"A rule needs you: {heading}"[:300],
         f"The rule {row['id']} asked for a person.\n\n{text}",
         who,
@@ -1438,7 +1445,7 @@ def _event_ask(conn, row, name, params, values, ctx):
         asker=_rules_asker(),
         deduplicate=False,
     )
-    H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": row["id"], "event": name})
+    H.event(conn, H.TICO_ACTOR, ASKED, made["id"], {"rule": row["id"], "event": name})
     return True, "asked"
 
 
@@ -1491,7 +1498,7 @@ def judge_event(conn, event, ctx, *, actor="keeper"):
         try:
             H.event(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "rule.event_error",
                 str(event)[:80],
                 {

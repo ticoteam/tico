@@ -587,7 +587,7 @@ def queue_on(api, sub, sender, to="bot:ops", hours=0):
 def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_gets_past_it(api, monkeypatch):
     machine, sub, check = limited_check(api)
     # An older notice the claim has not handed out yet waits beside the job that keeps stopping.
-    queue_on(api, sub, H.KEEPER, hours=20)
+    queue_on(api, sub, H.TICO_ACTOR, hours=20)
     assert check_held(api, check, hours=11) == []
     [found] = check_held(api, check, hours=13)
     with api.app.state.store.read() as c:

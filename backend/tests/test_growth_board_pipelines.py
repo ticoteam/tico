@@ -12,6 +12,10 @@ from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post, put
+import pytest
+from backend.tests.helpers.growth_cards import classic_cards  # noqa: F401 (the fixture)
+
+pytestmark = pytest.mark.usefixtures("classic_cards")  # these test the Number and Channels cards
 
 ANA = "human:ana"
 OWNER = "bot:ops"

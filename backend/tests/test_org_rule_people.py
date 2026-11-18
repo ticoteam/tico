@@ -220,7 +220,7 @@ def test_a_persons_message_goes_through_unchecked_when_the_check_fails(ruled, mo
     elif how == "budget":
         api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
+            H.event(c, H.TICO_ACTOR, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = write(api, "cara-test", "Our favorite color is gold.")
@@ -307,9 +307,9 @@ def test_people_have_their_own_daily_call_cap(ruled):
 def test_people_calls_and_spend_are_counted_apart_from_the_bots(ruled):
     api, _ = ruled
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.call", "rule-check@1", {"people": True, "cost_usd": 2.5})
-        H.event(c, H.KEEPER, "judge.call", "rule-check@1", {"cost_usd": 1.0})
-        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@1", {"people": True, "cost_usd": 4.0})
+        H.event(c, H.TICO_ACTOR, "judge.call", "rule-check@1", {"people": True, "cost_usd": 2.5})
+        H.event(c, H.TICO_ACTOR, "judge.call", "rule-check@1", {"cost_usd": 1.0})
+        H.event(c, H.TICO_ACTOR, "judge.call", "person-ask-ingest@1", {"people": True, "cost_usd": 4.0})
     with api.app.state.store.read() as c:
         assert K.calls_today(c, people=True) == 1 and K.calls_today(c) == 1
     assert get(api, "rules/stats")["people_usd"] == 2.5

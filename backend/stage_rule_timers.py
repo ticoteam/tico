@@ -252,11 +252,17 @@ def _move_back(conn: Any, rule: Row, task: Row, said: str) -> None:
         R.TASK_RUNNERS["move"](conn, task["id"], {"stage": stage}, said)
         now: Row = H.task(conn, task["id"]) or {}
         if now.get("owner_id"):
-            E.reassign(conn, task["id"], None, H.KEEPER, said)
+            E.reassign(conn, task["id"], None, H.TICO_ACTOR, said)
     moved: Row = H.task(conn, task["id"]) or {}
     task.update(stage_id=moved.get("stage_id"), late_told_at=None)
     SR.record(
-        conn, task["id"], rule, said, H.KEEPER, "moved_back", {"from": task["stage_name"], "to": moved.get("stage_id")}
+        conn,
+        task["id"],
+        rule,
+        said,
+        H.TICO_ACTOR,
+        "moved_back",
+        {"from": task["stage_name"], "to": moved.get("stage_id")},
     )
 
 
@@ -271,8 +277,8 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str) -> None:
         task_wakes.add(conn, row, owner, row["visit"], task_wakes.body(conn, row, said, to=owner), wake_key=key)
     elif H.task_private_readable(conn, owner, row):
         conv = H.conversation(conn, task["conversation_id"])
-        H._write_message(conn, H.KEEPER, owner, said, conv, "notice", {"task": task["id"]}, None, None)
-    SR.record(conn, task["id"], rule, said, H.KEEPER, "told", {"to": owner})
+        H._write_message(conn, H.TICO_ACTOR, owner, said, conv, "notice", {"task": task["id"]}, None, None)
+    SR.record(conn, task["id"], rule, said, H.TICO_ACTOR, "told", {"to": owner})
 
 
 def _manager(conn: Any, task: Row) -> str | None:
@@ -355,8 +361,8 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
     if H.is_bot(manager):
         ok = R._tell_bot(conn, "stage-rules", H.actor_id(manager), text, refs, wake=True)[0]
     else:
-        conv = H._pair_conversation(conn, H.KEEPER, manager, "notice", allow_held=True)
-        ok = bool(H._write_message(conn, H.KEEPER, manager, text, conv, "notice", refs, None, None))
+        conv = H._pair_conversation(conn, H.TICO_ACTOR, manager, "notice", allow_held=True)
+        ok = bool(H._write_message(conn, H.TICO_ACTOR, manager, text, conv, "notice", refs, None, None))
     if not ok:
         # The manager cannot be told (archived, gone): nothing says it was, and its next match tries again.
         _settle(conn, named, "failed", None)
@@ -364,7 +370,7 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
     _settle(conn, named, "told", at)
     name = str(H.actor_name(conn, manager))
     for row, rule in listed:
-        SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.KEEPER, "told", {"to": manager})
+        SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.TICO_ACTOR, "told", {"to": manager})
     return True
 
 

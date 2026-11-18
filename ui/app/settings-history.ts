@@ -33,6 +33,7 @@ function settingsValue(field: string, value: SettingsValue) {
   if (field === 'manages_reports') return value ? 'On' : 'Off';
   if (field === 'lifecycle') return obj.state ? `${obj.state.charAt(0).toUpperCase()}${obj.state.slice(1)}` : 'Not made';
   if (field === 'compact_at') return SETTINGS_COMPACT_AT.find(([size]) => size === value)?.[1] || String(value);
+  if (field === 'output_style' || field === 'verbosity') return value == null ? 'Default' : String(value);
   if (field === 'placement') return obj.label ? `${obj.label} · ${settingsPersonName(obj.operator)}` : 'not assigned';
   if (field === 'definition') return [obj.display_name, obj.status,
     obj.reports_to ? `reports to ${settingsBotName(obj.reports_to)}` : 'top level'].filter(Boolean).join(' · ');
@@ -277,7 +278,7 @@ interface SettingsHistoryPage {
 }
 // The label of each field in a change's line (the Changes list reads it as "Bot · field").
 const SETTINGS_FIELD_LABEL: Record<string, string> = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',
-  compact_at:'compact at',profile:'profile',
+  compact_at:'compact at',output_style:'output style',verbosity:'verbosity',profile:'profile',
   turns_at_once:'Turns at once',definition:'setup',task_model:'task model',identity:'name and description',
   manages_reports:'manages its reports', lifecycle:'archive or restore'};
 // A page of changes older than `before` (a page's next_before): the owner's list, or one bot's card with `bot`.

@@ -106,7 +106,9 @@ def test_a_security_notice_wakes_botops_and_asks_the_owner(api, hq, judged):
     send(hq, "s1", kind="security", body="Rotate your Acme keys today.")
     service(api).tick()
     wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]
-    assert len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["sender_id"] == H.KEEPER
+    assert (
+        len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["sender_id"] == H.TICO_ACTOR
+    )
     assert json.loads(wakes[0]["refs"])["rule_id"] == "tico-notice-security-wake"
     with api.app.state.store.read() as c:
         asked = c.execute(

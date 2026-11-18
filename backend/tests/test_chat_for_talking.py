@@ -36,7 +36,7 @@ def _task(api):
     """Ana's task for ops, filed from her chat: its runs' replies reach her in the task's own room."""
     task = post(api, "tasks", {"owner": "ops", "title": "Add the export button", "body": "On the reports page."})
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "task.room", task["id"], {})
+        H.event(c, H.TICO_ACTOR, "task.room", task["id"], {})
         room = E.task(c, task["id"])["conversation_id"]
     return task, room
 
@@ -303,7 +303,7 @@ def test_the_report_of_a_run_that_finished_its_task_stays_after_the_task_is_reop
 
 
 def test_an_answer_to_a_persons_message_carried_into_the_run_stays(company):
-    """A person's message folded into a notice's run through a carrier (the keeper's copy: refs.carries, refs.from) is
+    """A person's message folded into a notice's run through a carrier (Tico's copy: refs.carries, refs.from) is
     a person's words in the run, as the completion reads it (H.in_person_name_sql)."""
     with company.transaction() as c:
         task, room = _old_room(c)
@@ -315,7 +315,7 @@ def test_an_answer_to_a_persons_message_carried_into_the_run_stays(company):
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,revision,restricted) "
             "VALUES(?,?,?,?,'notice','What is the answer?',?,?,0,1)",
-            (carrier, room, H.KEEPER, "bot:cpo", json.dumps({"carries": asked, "from": ANA}), H.now()),
+            (carrier, room, H.TICO_ACTOR, "bot:cpo", json.dumps({"carries": asked, "from": ANA}), H.now()),
         )
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (run, carrier))
         importlib.import_module(MIGRATION).up(c)
@@ -332,7 +332,7 @@ def test_the_unread_mark_keeps_a_bot_post_people_were_delivered(company):
         ana = threads.actor_viewer(c, ANA)
         room = threads.dm(c, ana, ["human:ben", "bot:cpo"], title="Launch")["id"]
         post = threads.post(c, threads.actor_viewer(c, "bot:cpo"), room, "The report is ready.")
-        H.say(c, H.KEEPER, "bot:cpo", "Late in To do.", conversation_id=room, kind="notice")
+        H.say(c, H.TICO_ACTOR, "bot:cpo", "Late in To do.", conversation_id=room, kind="notice")
         importlib.import_module(MIGRATION).up(c)
         assert _counters_of(c, room)[1] == _seq(c, post["id"])
         ben = threads.actor_viewer(c, "human:ben")

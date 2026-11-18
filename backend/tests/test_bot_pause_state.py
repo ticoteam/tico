@@ -31,7 +31,7 @@ def _pause_record_and_legacy_fallback(api, monkeypatch):
         hold = holds.get(c, holds.PAUSED, 'bot', 'ops')
         assert hold['created_by_id'] == 'human:ana' and paused['paused_by']['at'] == hold['created_at']
     with api.app.state.store.transaction() as c:  # a pause Tico opened names no person
-        c.execute("UPDATE holds SET created_by_id=? WHERE id=?", (H.KEEPER, hold['id']))
+        c.execute("UPDATE holds SET created_by_id=? WHERE id=?", (H.TICO_ACTOR, hold['id']))
     assert read(api).json()['paused_by'] is None
     with api.app.state.store.transaction() as c:
         company_pause.resume_bot(c, 'human:ana', 'ops')

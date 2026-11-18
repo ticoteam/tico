@@ -113,7 +113,7 @@ def run(c, ctx):
         if items:
             H.event(
                 tx,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "judge.call",
                 f"{learnings.QUESTION_SET}@run",
                 {

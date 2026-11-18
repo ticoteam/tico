@@ -1,6 +1,6 @@
 //! The small server relays the run loop follows each tick (service.py `poll_logins`, the subscription refresh
-//! poll, `poll_credential_imports`, `step_harnesses`): browser sign-ins, weekly-allowance reads, credential
-//! imports, and harness installs and owner actions. Each runs on its own task so the claim loop never waits,
+//! poll, `poll_credential_imports`, `step_harnesses`): browser sign-ins, weekly-allowance reads, full Claude logins,
+//! credential imports, and harness installs and owner actions. Each runs on its own task so the claim loop never waits,
 //! never two of the same at once, asked when the event stream says so and on its own backup timer.
 
 use std::collections::{HashMap, HashSet};
@@ -26,6 +26,7 @@ struct HarnessRelay {
 struct Relays {
     logins: Slot<crate::login::Logins>,
     refresh: Slot<crate::subscription_refresh::Refreshes>,
+    claude: Slot<crate::claude_login::Logins>,
     imports: Slot<()>,
     harness: Slot<HarnessRelay>,
     polled: Mutex<HashMap<&'static str, Instant>>,
@@ -37,6 +38,7 @@ fn relays() -> &'static Relays {
     R.get_or_init(|| Relays {
         logins: Default::default(),
         refresh: Default::default(),
+        claude: Default::default(),
         imports: Default::default(),
         harness: Default::default(),
         polled: Mutex::new(HashMap::new()),
@@ -130,6 +132,18 @@ pub fn poll(runner: &Arc<Runner>) {
             if ask != Some(false) {
                 let _ = refresh.poll(&me, ask).await;
             }
+        });
+    }
+    if let Ok(mut logins) = r.claude.clone().try_lock_owned() {
+        let me = runner.clone();
+        tokio::spawn(async move {
+            // Full Claude logins: new tokens for turns here, leased refreshes and usage reads (claude_login.rs).
+            let ask = wants(&me, "claude_logins", crate::claude_login::POLL_S);
+            note(
+                "claude_logins",
+                logins.poll(&me, ask).await,
+                "Claude plan poll",
+            );
         });
     }
     if let Ok(held) = r.imports.clone().try_lock_owned() {

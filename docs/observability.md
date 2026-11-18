@@ -370,11 +370,18 @@ seconds, milliseconds as decimals) and `kind`, here always `runner.*`: `runner.s
 pid), `runner.turn` (attempt, bot, runtime, outcome, `total_ms`, and `phases`: milliseconds since the turn was claimed
 for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
 `model_done`, `scrubbed` (the secret scrub of the changed files), `finished_at`, `saved` (the result in runner.sqlite),
-`flushed` (the last events sent), `complete_posted` and `done`), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
+`flushed` (the last events sent), `complete_posted` and `done`; a Claude turn adds `claude_spawned` (its process
+started, before any cold sign-in hold), `claude_init` (its `system/init`) and `claude_result` (its last `result`), and
+`transcript_bytes`, the size of the session it resumed), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
 seconds or more and every timeout, the scrub's included: verb, checkout folder name, milliseconds, exit code; never arguments) and
 `runner.process` once a minute (resident memory, CPU time, finished children's CPU, open turns, and `dropped`: records
 lost because the writer fell behind). Turns never wait on the disk. `TICO_FLIGHT_RECORDER=0` turns it off.
 `tico-runner flight summary --since 1h` (or `--dir <folder>` for a copied state folder) prints recent turns with their
 phase timings, the slowest phases, slow heartbeats and slow git commands.
+
+The same timings, up to `finished`, also go to the server with the turn's result (`timings`, feature `run_timings`),
+and the server adds `send_to_claim_ms` (the message to the claim), `rule_check_ms` (the completion's org rule check)
+and `received_ms` (the claim to the result's arrival, the runner's clock against the server's). Each run in
+`GET /api/v2/bots/{bot}/turns` (`tico run list`) carries them, so a turn's split is readable without the computer.
 
 In-process writers wait FIFO for at most 30 seconds before reporting the existing database-locked error; SQLite's own 30-second busy timeout still covers a writer in another process. A request that exhausts both waits can therefore fail after about 60 seconds, rather than 30. Fresh lease polls can answer without a write. Diagnostic heartbeats are coalesced with lease writes, at most one minute apart while polling continues; a stalled diagnostic forces the next renewal through the write path to clear it.

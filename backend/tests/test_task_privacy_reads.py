@@ -296,7 +296,7 @@ def test_live_events_stop_when_private_owner_loses_access(api):
     before, cursor = seen(start)
     assert "First packet note" in before and row["id"] in before
     with store.transaction() as c:
-        H.task_reassign(c, H.KEEPER, row["id"], "human:cara", "Moved for the test")
+        H.task_reassign(c, H.TICO_ACTOR, row["id"], "human:cara", "Moved for the test")
     post(api, "tasks/" + row["id"] + "/comments", {"text": "Second packet note"})
     after, _ = seen(cursor)
     assert "Second packet note" not in after and "Sensitive" not in after
@@ -326,9 +326,9 @@ def test_a_task_event_says_what_moved_only_to_who_could_read_it_and_nothing_to_w
     with store.read() as c:
         start = events.latest(c)
     with store.transaction() as c:
-        H.task_reassign(c, H.KEEPER, shared["id"], "human:ana", "Moved for the test")
-        E.move(c, shared["id"], E.DONE, H.KEEPER, "Finished")
-        H.task_reassign(c, H.KEEPER, secret["id"], "human:cara", "Moved for the test")
+        H.task_reassign(c, H.TICO_ACTOR, shared["id"], "human:ana", "Moved for the test")
+        E.move(c, shared["id"], E.DONE, H.TICO_ACTOR, "Finished")
+        H.task_reassign(c, H.TICO_ACTOR, secret["id"], "human:cara", "Moved for the test")
     (mine,) = [data for data in sent(ben, start) if data.get("id") == shared["id"]]
     assert mine["was"] == {"owner": "human:cara", "status": "open"}
     assert mine["task"]["status"] == E.DONE
@@ -359,7 +359,7 @@ def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):
         who = Identity("human:ben", "human", email="ben@acme.example")
         before = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] in {t["id"] for t in before["tasks"]}
-        H.task_reassign(c, H.KEEPER, row["id"], "human:ana", "Moved for the test")
+        H.task_reassign(c, H.TICO_ACTOR, row["id"], "human:ana", "Moved for the test")
         after = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] not in {t["id"] for t in after["tasks"]}
     result = get(api, "context/search?q=Sensitive&source=docs", "ben-test")
@@ -435,7 +435,7 @@ def test_deleted_comment_receipt_is_canonical_empty_and_currently_authorized(api
         for forged in ({**receipt, "body": "Withdrawn private comment"}, {**receipt, "extra": "Private words"}):
             with pytest.raises(Problem):
                 task_privacy.require_payload(c, who, forged)
-        H.task_reassign(c, H.KEEPER, row["id"], "human:ana", "Moved for the test")
+        H.task_reassign(c, H.TICO_ACTOR, row["id"], "human:ana", "Moved for the test")
         with pytest.raises(Problem):
             task_privacy.require_payload(c, who, receipt)
 
@@ -548,7 +548,7 @@ def test_sql_audit_keeps_no_literals_and_provenance_uses_the_result_snapshot(api
         )
         try:
             with api.app.state.store.transaction() as write:
-                H.task_reassign(write, H.KEEPER, row["id"], "human:ana", "Moved for the test")
+                H.task_reassign(write, H.TICO_ACTOR, row["id"], "human:ana", "Moved for the test")
             # An in-flight read has one coherent snapshot; the next request sees revocation.
             assert SQL.run(conn, f"SELECT id FROM tasks WHERE id='{row['id']}'", [], 500, 5)["rows"] == [[row["id"]]]
             with pytest.raises(Problem):
@@ -1004,7 +1004,7 @@ def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(ap
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (rows[3]["id"],))
         for done in (rows[1], rows[5]):
-            H.task_close(c, H.KEEPER, done["id"], "Finished for the test")
+            H.task_close(c, H.TICO_ACTOR, done["id"], "Finished for the test")
         c.execute(
             "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent','now')",
             (rows[1]["id"], rows[4]["id"]),

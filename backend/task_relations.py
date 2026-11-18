@@ -303,7 +303,7 @@ def _mine(conn, actor, row, mover):
         )
     )
     mine = mine or H.task_ancestor_party(conn, actor, row) or H.general_manager_acts(conn, actor, row)
-    if not mine and not mover and actor != H.KEEPER:
+    if not mine and not mover and actor != H.TICO_ACTOR:
         H.refuse(
             conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers"
         )
@@ -312,7 +312,7 @@ def _mine(conn, actor, row, mover):
 def _mover(conn, actor, mover):
     H = _H()
     if mover is None:
-        mover = actor == H.KEEPER or H.is_human(actor) and H.can_move(conn, actor)
+        mover = actor == H.TICO_ACTOR or H.is_human(actor) and H.can_move(conn, actor)
     return bool(mover)
 
 

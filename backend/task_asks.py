@@ -50,7 +50,7 @@ Row = dict[str, Any]
 _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
-SYSTEM: str = _core.KEEPER
+SYSTEM: str = _core.TICO_ACTOR
 
 WAITING, OK, SENT_BACK, WITHDRAWN, USED = "waiting", "ok", "sent_back", "withdrawn", "used"
 STANDINGS = (WAITING, OK, SENT_BACK, WITHDRAWN, USED)

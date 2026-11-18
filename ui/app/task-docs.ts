@@ -5,21 +5,55 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first. `kind`
-// markdown is one of the task's .md files, read as Markdown; any other is HTML, opened sandboxed as a page is.
+// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first. A
+// document is a linked page or a Markdown file. A linked page shows its links and whether the task OK'd an older version.
 interface TaskDocVersion { n: number; by: string; at: string; note?: string | null; }
-interface TaskDoc { name: string; file_id: string; kind?: 'html' | 'markdown'; version: number; by: string; at: string; versions: TaskDocVersion[]; }
+interface TaskDocLink { target: string; role: string; name?: string | null; by?: string | null; }
+interface TaskDoc {
+  name: string; file_id: string; page_id?: string | null; title?: string | null; version: number; by: string; at: string;
+  versions: TaskDocVersion[]; links?: TaskDocLink[] | null; changed_since_ok?: boolean | null; kind?: 'html' | 'markdown';
+}
 // One tab: Chat, a document, or (Flow) what an approval shows when it is no document of the task.
 interface DocTab { key: string; label: string; dot?: boolean; }
 
-const docKey = (name: string) => 'doc:' + name;
+const docKey = (doc: TaskDoc, docs: TaskDoc[]) =>
+  docs.filter(other => other.name === doc.name).length > 1
+    ? 'doc:' + JSON.stringify([doc.name, doc.file_id])
+    : 'doc:' + doc.name;
 const docOf = (docs: TaskDoc[] | null | undefined, key: string | null | undefined): TaskDoc | null =>
-  key?.startsWith('doc:') ? (docs || []).find(d => docKey(d.name) === key) || null : null;
+  key?.startsWith('doc:') && docs ? docs.find(d => docKey(d, docs) === key) || null : null;
+const docTab = (doc: TaskDoc, docs: TaskDoc[]): DocTab => ({
+  key: docKey(doc, docs),
+  label: docs.filter(other => other.name === doc.name).length > 1 ? doc.title || doc.name : doc.name,
+});
 /** The tabs: Chat first, then each document, most recently changed first (as the server lists them), then `extra`.
     None at all, not even Chat, when there is nothing beside the chat. */
 function docTabs(docs: TaskDoc[] | null | undefined, extra: DocTab[] = [], chatDot = false): DocTab[] {
-  const rest = [...(docs || []).map(d => ({key: docKey(d.name), label: d.name})), ...extra];
+  const rest = [...(docs || []).map((d, _, shown) => docTab(d, shown)), ...extra];
   return rest.length ? [{key: 'chat', label: 'Chat', dot: chatDot}, ...rest] : [];
+}
+/** The Spec cards under a task's title: one card per page the task has as its Spec, each opening the page. A card shows
+    the page's title (`titles`: the Files list's, once read; else the document's own), v<version>, its writers, "also
+    the Spec of D-…" when another task has it as its Spec too, and a small dot when the task was OK'd on an older
+    version. No Spec, no section. */
+function taskSpecsHTML(docs: TaskDoc[] | null | undefined, taskId: string, titles: Map<string, string> = new Map()): string {
+  const specs = (docs || []).filter(d => d.name === 'Spec' && d.kind !== 'markdown');
+  if (!specs.length) return '';
+  const cards = specs.map(d => {
+    const id = d.page_id || d.file_id, links = d.links || [];
+    const title = titles.get(id) || d.title || 'Spec';
+    const writers = [...new Set([...links.filter(l => l.role === 'writer').map(l => l.name || actorLabel(l.target)),
+      ...d.versions.map(v => actorLabel(v.by))].filter(Boolean))];
+    const others = [...new Set(links.filter(l => l.role === 'Spec' && l.target.startsWith('task:') && l.target !== 'task:' + taskId)
+      .map(l => /^D-\d+/.exec(l.name || '')?.[0] || l.name || l.target))];
+    const meta = [`v${d.version}`, writers.join(', '), others.length ? `also the Spec of ${others.join(', ')}` : ''].filter(Boolean).join(' · ');
+    return `<a class="task-spec" href="${esc(pageHref(id))}" data-task-spec="${esc(id)}" title="${esc(title)}">`
+      + '<span class="nav-icon task-spec-ic" aria-hidden="true">description</span>'
+      + `<span class="task-spec-main"><span class="task-spec-t">${esc(title)}</span><span class="task-spec-m muted">${esc(meta)}</span></span>`
+      + (d.changed_since_ok ? '<span class="task-spec-dot" role="img" aria-label="Changed since OK" title="Changed since OK"></span>' : '')
+      + '</a>';
+  });
+  return `<section class="task-specs" data-task-specs aria-label="Spec">${cards.join('')}</section>`;
 }
 /** The tab row, a segmented control that scrolls sideways when the tabs do not fit; '' with no tabs. `attrs` gives each
     tab's own attributes (the task window's data-task-tab, Flow's data-dc-tab). */
@@ -63,16 +97,51 @@ interface DocViewState { doc: TaskDoc; shown: number; open: boolean; compare: [n
 interface DocApproval { version: number; unchecked: boolean; }
 const DOC_VIEWS = new WeakMap<HTMLElement, DocViewState>();
 const DOC_BOUND = new WeakSet<HTMLElement>();  // hosts whose delegated listeners are on, once each
-/** A document's default look, the app's own theme: its background, text, lines and links, light or dark as the app is.
-    Zero-specificity base styles, so a document that sets its own colours keeps them. */
-function docLook(): string {
-  const css = getComputedStyle(document.documentElement), v = (name: string) => css.getPropertyValue(name).trim();
+// The CSS a page carries itself, read from its raw HTML: the text of its <style> blocks and of its style= attributes.
+const DOC_STYLE_BLOCK = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+const DOC_STYLE_ATTR = /\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+// A colour or background declaration: its property, then its value up to the end of the declaration.
+const DOC_COLOUR_DECL = /(?:^|[^\w-])(?:color|background(?:-color|-image)?|border(?:-(?:top|right|bottom|left))?(?:-color)?|outline-color)\s*:([^;{}]*)/gi;
+// A literal colour in a value: #hex, rgb(), hsl(), or a plain colour name.
+const DOC_LITERAL_COLOUR = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\(|(?:^|[^\w-])(?:white|black|gray|grey|silver|red|green|blue|yellow|orange|purple|pink|brown|navy|teal|maroon|olive|lime|aqua|fuchsia|cyan|magenta)\b/i;
+/** A page that sets colours of its own and does not say it handles dark. Its CSS (style blocks and style= attributes)
+    writes a literal colour in a colour or background declaration, and nothing there mentions prefers-color-scheme or
+    color-scheme. Such a page is drawn light in either app theme: its text colours would sit on the app's dark background.
+    A colour written through a token (var(--ink), fallback included) is the app's, so a page of tokens does not count,
+    nor a page with no colours of its own. Pure: the raw HTML in, a boolean out. */
+function pageIsLightOnly(raw: string): boolean {
+  const blocks = [...raw.matchAll(DOC_STYLE_BLOCK)].map(m => m[1] ?? '');
+  const attrs = [...raw.matchAll(DOC_STYLE_ATTR)].map(m => m[1] ?? m[2] ?? '');
+  const css = [...blocks, ...attrs].join('\n');
+  if (/prefers-color-scheme|color-scheme/i.test(css)) return false;
+  // A picture's url() is data, not a colour of the page, and a var() is the app's token: both come out before the check.
+  const own = css.replace(/url\((?:"[^"]*"|'[^']*'|[^)"'])*\)/gi, '').replace(/var\([^()]*\)/gi, '');
+  return [...own.matchAll(DOC_COLOUR_DECL)].some(m => DOC_LITERAL_COLOUR.test(m[1] ?? ''));
+}
+/** The light palette (styles/tokens.css, :root[data-theme="light"]). The app's values can be read only for the theme it is
+    in, so a light page drawn in the dark theme takes this set; keep it in step with tokens.css. */
+const DOC_LIGHT: Record<string, string> = {'--bg': '#ffffff', '--ink': '#111111', '--link': '#111111', '--muted': '#5e5e5e',
+  '--surface': '#f5f5f5', '--surface2': '#ededed', '--line': '#e0e0e0', '--fail': '#c53030', '--ok': '#2f7a4f', '--wait': '#b7791f'};
+/** The tokens the spec templates (skills/build-the-page/templates) style through: the colours, which follow the look, and
+    the type, the same in both themes. Every document defines them on :root (docLook), so a page that uses them follows the app. */
+const DOC_COLOUR_TOKENS = ['--bg', '--ink', '--muted', '--surface', '--surface2', '--line', '--link', '--fail', '--ok', '--wait'];
+const DOC_TYPE_TOKENS = ['--sans', '--mono', '--t-sm', '--t-base', '--t-md', '--t-lg'];
+/** A document's look: base styles htmlPreviewDoc puts before the page's own (zero specificity, so the page's rules win).
+    The app's own theme (its background, text, lines and links, light or dark as the app is), or the light palette for a
+    page pageIsLightOnly names. And the template tokens, on :root, in the same colours, so a page styled through them
+    (var(--ink), var(--surface)...) follows the app in both themes. */
+function docLook(raw: string): string {
+  const css = getComputedStyle(document.documentElement), read = (name: string) => css.getPropertyValue(name).trim();
   const theme = document.documentElement.dataset.theme;
-  const dark = theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
-  return `:where(html){color-scheme:${dark ? 'dark' : 'light'};background:${v('--bg')};color:${v('--ink')}}`
-    + `:where(a){color:${v('--link')}}:where(hr){border:0;border-top:1px solid ${v('--line')}}`
-    + `:where(th,td){border:1px solid ${v('--line')};padding:4px 8px}:where(table){border-collapse:collapse}`
-    + `:where(code,pre){background:${v('--surface2')};border-radius:4px}:where(code){padding:0 3px}:where(pre){padding:8px}`;
+  const appDark = theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const light = pageIsLightOnly(raw), dark = appDark && !light;
+  const colour = (name: string) => light ? (DOC_LIGHT[name] ?? '') : read(name);
+  const tokens = [...DOC_COLOUR_TOKENS.map(name => `${name}:${colour(name)}`), ...DOC_TYPE_TOKENS.map(name => `${name}:${read(name)}`)];
+  return `:where(:root){${tokens.join(';')}}`
+    + `:where(html){color-scheme:${dark ? 'dark' : 'light'};background:${colour('--bg')};color:${colour('--ink')}}`
+    + `:where(a){color:${colour('--link')}}:where(hr){border:0;border-top:1px solid ${colour('--line')}}`
+    + `:where(th,td){border:1px solid ${colour('--line')};padding:4px 8px}:where(table){border-collapse:collapse}`
+    + `:where(code,pre){background:${colour('--surface2')};border-radius:4px}:where(code){padding:0 3px}:where(pre){padding:8px}`;
 }
 /** Each document open draws again in the app's colours when its theme changes (its bytes are read once, then held). */
 function docViewsRetheme() {
@@ -179,6 +248,6 @@ async function docViewBody(host: HTMLElement, st: DocViewState) {
     const text = await read(st.shown);
     if (stale()) return;
     if (md) box.innerHTML = `<div class="doc-md md">${safeMd(text)}</div>`;
-    else box.replaceChildren(htmlPreviewFrame(text, `${st.doc.name} v${st.shown}`, docLook()));
+    else box.replaceChildren(htmlPreviewFrame(text, `${st.doc.name} v${st.shown}`, docLook(text)));
   } catch (e) { if (!stale()) box.innerHTML = `<p class="muted doc-err">${esc(errorMessage(e, ''))}</p>`; }
 }

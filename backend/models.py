@@ -176,6 +176,12 @@ CompactAt = Literal[
     100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
 ]
 
+# Claude Code's built-in output styles (`outputStyle` in its settings); Default is its own, and saves nothing
+# (backend/harnesses.py OUTPUT_STYLES). Only a Claude Code turn uses it.
+OutputStyle = Literal["Default", "Concise", "Explanatory", "Learning", "Proactive"]
+# Codex's `model_verbosity` (backend/harnesses.py VERBOSITIES); none is the model's own. Only a Codex turn uses it.
+Verbosity = Literal["low", "medium", "high"]
+
 
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
@@ -469,7 +475,10 @@ class TaskAskAnswer(Contract):
     value: Annotated[str, Field(min_length=1, max_length=20_000)]
     note: str | None = Field(default=None, max_length=20_000)
     version: Version | None = None
-    page_version: Annotated[str, Field(pattern=r"^[^@\s]+@[1-9][0-9]{0,8}$", max_length=200)] | None = None
+    page_version: (
+        Annotated[str, Field(pattern=r"^[^@,\s]+@[1-9][0-9]{0,8}(?:,[^@,\s]+@[1-9][0-9]{0,8})*$", max_length=8192)]
+        | None
+    ) = None
     visit_id: ID | None = None
     on_behalf_of: ID | None = None
 
@@ -1656,12 +1665,14 @@ class Heartbeat(Contract):
             "browser_exit_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",
+            "claude_login_v1",  # full Claude logins: their turns, refreshes and usage reads (backend/claude_login.py)
             "threads_v1",
             "memory_tidy_packets_v1",
             "harness_allocation_v1",
             "make_page",
             "memory_tidy_keep_v1",
             "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
+            "plan_switch_resume_v1",  # a Claude thread resumes on the plan a set moves to (backend/model_subscriptions.py)
         ]
     ] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
@@ -2243,6 +2254,23 @@ class BotCompactAt(Contract):
     # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
     compact_at: CompactAt | None = Field(
         description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotOutputStyle(Contract):
+    # Required: null or "Default" clears it, back to Claude Code's own. Kept on any harness; only a Claude Code turn
+    # uses it (backend/harnesses.py output_style).
+    output_style: OutputStyle | None = Field(
+        description="Claude Code's output style for the bot's turns; null or Default is Claude Code's own"
+    )
+    expected_revision: int = Field(ge=1)
+
+
+class BotVerbosity(Contract):
+    # Required: null clears it, back to the model's own. Kept on any harness; only a Codex turn uses it.
+    verbosity: Verbosity | None = Field(
+        description="Codex's model_verbosity for the bot's turns; null is the model's own"
     )
     expected_revision: int = Field(ge=1)
 
@@ -2882,6 +2910,16 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class RunTimings(Contract):
+    """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
+    `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
+    the size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings)."""
+
+    claimed_at: float = Field(ge=0)
+    phases: dict[Annotated[str, Field(max_length=40)], Annotated[int, Field(ge=0, le=10**9)]] = Field(max_length=40)
+    transcript_bytes: int | None = Field(default=None, ge=0)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2923,6 +2961,7 @@ class Completion(Contract):
     rotated: RunRotation | None = None
     # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
     session: RunSession | None = None
+    timings: RunTimings | None = None  # feature `run_timings`
 
 
 class Retry(Contract):
@@ -3527,6 +3566,7 @@ class GrowthChannelCreate(Contract):
     why: str = Field(default="", max_length=1000)
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
+    input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int = 0
 
 
@@ -3540,7 +3580,12 @@ class GrowthChannelUpdate(Contract):
     why: str | None = Field(default=None, max_length=1000)
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
+    input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int | None = None
+
+
+class GrowthLineUse(Contract):
+    use: Literal["trace", "source"]
 
 
 # A synced source's kind (backend/growth_sync.py): file import, database query, Finance ad spend

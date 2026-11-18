@@ -49,7 +49,7 @@ def notes(api, task_id):
         return [
             r[0]
             for r in c.execute(
-                "SELECT body FROM messages WHERE json_extract(refs,'$.task')=? AND sender_id=?", (task_id, H.KEEPER)
+                "SELECT body FROM messages WHERE json_extract(refs,'$.task')=? AND sender_id=?", (task_id, H.TICO_ACTOR)
             )
         ]
 

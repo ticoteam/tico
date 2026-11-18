@@ -53,7 +53,7 @@ def ensure(c, owner=None):
     c.execute(
         "INSERT OR IGNORE INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,type_from,unheard) "
         "VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (ID, NAME, "webhook", secrets.token_hex(32), H.KEEPER, now, now, "none", "/kind", "log"),
+        (ID, NAME, "webhook", secrets.token_hex(32), H.TICO_ACTOR, now, now, "none", "/kind", "log"),
     )
     c.execute("UPDATE triggers SET deleted_at=NULL WHERE id=? AND deleted_at IS NOT NULL", (ID,))
     if not owner:
@@ -85,7 +85,7 @@ def ensure(c, owner=None):
 def complete(c, owner):
     """Whether `ensure` has nothing left to do: a cheap read for the pull loop."""
     if not c.execute(
-        "SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL AND created_by=?", (ID, H.KEEPER)
+        "SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL AND created_by=?", (ID, H.TICO_ACTOR)
     ).fetchone():
         return False
     if not owner:
@@ -161,7 +161,7 @@ def record_relay(c, relay_id):
     c.execute(
         "INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
         "VALUES(?,?,?,?,?,NULL,0)",
-        (relay_id, ID, "", H.KEEPER, H.now()),
+        (relay_id, ID, "", H.TICO_ACTOR, H.now()),
     )
     return True
 

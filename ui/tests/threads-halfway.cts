@@ -2,7 +2,7 @@
 // within five minutes under one header, a reply's one-line quote (and a hidden one), the hover bar's React · Reply ·
 // Copy and the reaction picker, replying from a message (the quote above the composer, `in_reply_to` on the post, the
 // quote on the new message, a click on it scrolling back), the routing line under a person's message, the bots' status
-// rows at the end in their three states (Stop, Fix, a ticking clock) and live from the `bot_status` event, the composer's
+// rows at the end in their three states (Stop, Fix, a ticking clock) and live from the `bot_status` event (a send to a bot draws its Starting row before the server answers), the composer's
 // placeholder, the Ask's question as its own row above the composer, the bot page's thread actions in its top line,
 // and a phone at 390px (no sideways scroll, finger-sized targets, the quote cut short, the long press's sheet).
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots: threads-halfway-<name>-<desktop|phone>-<dark|light>.png.
@@ -67,11 +67,12 @@ const dmMessages = () => [{id: 'd1', seq: 1, thread_id: 't-dm-ops', sender_id: '
   routed: {to: [{actor: 'bot:ops', name: 'Ops'}]}}];
 
 // `twin`: a second bot named Ops, so the names that tell bots apart add the slug.
-async function open(browser: import('playwright').Browser, {phone = false, twin = false}: {phone?: boolean; twin?: boolean} = {}) {
+// `idle`: the bot's DM has no status rows, and its sends wait on `state.sendGate` or fail when `state.sendFail` is set.
+async function open(browser: import('playwright').Browser, {phone = false, twin = false, idle = false}: {phone?: boolean; twin?: boolean; idle?: boolean} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen: {errors: string[]; posts: Record<string, unknown>[]; stops: unknown[]; timelines: (string | null)[]; reacts: string[]} = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
-  const sse: {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean} = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: [] as unknown[]};
+  const sse: {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean} = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: [] as unknown[], sendGate: null as Promise<void> | null, sendFail: false};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A closed page's waiting stream ends, so node can exit.
   page.on('close', () => { sse.done = true; });
@@ -116,13 +117,15 @@ async function open(browser: import('playwright').Browser, {phone = false, twin 
       if (tl[1] === 't-ship') return json({thread: team, breadcrumb: [{id: 't-ship', title: 'Ship day'}], next_cursor: null, messages: messages(), bot_status: statuses()});
       if (tl[1] === 't-note') return json({thread: noteThread, breadcrumb: [], next_cursor: null, messages: noteMessages(), bot_status: [], read_marks: {'t-note': 0}});
       if (tl[1] === 't-marks') return json({thread: marksThread, breadcrumb: [], next_cursor: null, messages: marksMessages(), bot_status: [], read_marks: {'t-marks': 5, 't-side': 2}});
-      if (tl[1] === 't-dm-ops') return json({thread: dmThread, breadcrumb: [], next_cursor: null, messages: dmMessages(), bot_status: [working(0.4)]});
+      if (tl[1] === 't-dm-ops') return json({thread: dmThread, breadcrumb: [], next_cursor: null, messages: dmMessages(), bot_status: idle ? [] : [working(0.4)]});
     }
     if (/^\/api\/v2\/threads\/[^/]+\/(read|members|calls)$/.test(p)) return json(p.endsWith('calls') ? {calls: [], next_before: null, available: false} : p.endsWith('members') ? {members: [], next_cursor: null} : {ok: true});
-    if (/^\/api\/v2\/threads\/[^/]+\/bot-status$/.test(p)) return json({bots: statuses()});
+    if (/^\/api\/v2\/threads\/[^/]+\/bot-status$/.test(p)) return json({bots: idle ? [] : statuses()});
     const send = p.match(/^\/api\/v2\/threads\/([^/]+)\/messages$/);
     if (send && method === 'POST') {
       const body = JSON.parse(req.postData() || '{}'); seen.posts.push(body);
+      if (state.sendGate) await state.sendGate;
+      if (state.sendFail) return json({error: 'Test failure'}, 500);
       const target = messages().find(m => m.id === body.in_reply_to);
       return json({message: msg('n' + seen.posts.length, 20 + seen.posts.length, 'human:ana', body.text, 0, {thread_id: send[1], in_reply_to: body.in_reply_to || null,
         reply_to: target ? quote(target.id, target.sender_id, 'Bea', target.body) : null})});
@@ -389,6 +392,32 @@ let browser: import('playwright').Browser | null = null;
       assert.ok(top.top >= nudge.bottom, `${width}px: the banner (to ${nudge.bottom}) sits above the header (from ${top.top})`);
     }
     await page.setViewportSize({width: 390, height: 844});
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+  // ---- a bot's DM with nothing running: a send draws the bot's row at once, before the server has said anything; a send
+  // that fails takes it away
+  {
+    const {page, seen, state} = await open(browser, {idle: true});
+    let release!: () => void;
+    state.sendGate = new Promise<void>(done => release = done);
+    await page.goto('https://tico-ui.test/#/bot/ops/dm');
+    const composer = page.locator('#bot-thread .thv-composer .p-text');
+    await composer.waitFor();
+    await composer.fill('Check the Acme invoices.');
+    await page.locator('#bot-thread .thv-composer .p-send').click();
+    // The send is held, so the server has sent nothing: the row is already there, its clock running from the send.
+    const starting = page.locator('#bot-thread .th-status-working');
+    await starting.waitFor();
+    assert.equal(seen.posts.length, 1);
+    assert.equal(await starting.locator('.th-status-detail').textContent(), 'Starting');
+    assert.match(await starting.locator('[data-th-since]').textContent() ?? '', /^\d+:\d\d$/);
+    assert.equal(await starting.locator('[data-th-stop]').count(), 0, 'no Stop before a run exists');
+    // The send fails: the row goes.
+    state.sendFail = true;
+    release();
+    await starting.waitFor({state: 'detached'});
+    assert.equal(await page.locator('#bot-thread .th-status').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
   }

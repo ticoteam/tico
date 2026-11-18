@@ -1245,7 +1245,7 @@ class Store:
 
             conn = cast(sqlite3.Connection, c)  # pyright reads transaction()'s connection as its initial None
             for (bot,) in conn.execute("SELECT id FROM bots WHERE state='paused'").fetchall():
-                company_pause.pause_bot(conn, H.KEEPER, bot)  # a registry's paused bot: its own pause is a hold
+                company_pause.pause_bot(conn, H.TICO_ACTOR, bot)  # a registry's paused bot: its own pause is a hold
             for slug, entry in entries.items():
                 team = P.team_of(slug, entries, people)
                 operator = seed_operator(slug, team, people, owner)
@@ -1265,7 +1265,7 @@ class Store:
                         str(entry.get("repo") or ("emp-" + slug)),
                         mode,
                         H.now(),
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                     ),
                 )
                 if entry.get("repo"):

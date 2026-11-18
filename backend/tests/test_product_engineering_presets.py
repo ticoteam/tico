@@ -289,9 +289,38 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
 
 
 # ----------------------------------------------------------------------------- the handoff
+def _linked_document(c, task, requirement_id, file_id, version):
+    """The synthetic approval uses a real page identity and task-role link, as document submission does."""
+    from backend import page_links as L
+    from backend import task_documents as TD
+
+    actor = task["owner_id"]
+    now = H.now()
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,current_version,"
+        "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',?,?,?,?)",
+        (file_id, H.actor_id(actor), "task:" + task["id"], file_id, "Spec", task["id"], version, now, now),
+    )
+    blob = H.new_id()
+    c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,16,'spec.html','text/html',?)",
+        (blob, actor, "0" * 64, now),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES(?,?,?,?,16,'spec.html','text/html',?,?)",
+        (file_id, version, blob, "0" * 64, actor, now),
+    )
+    document = R.document_of(R.get(c, requirement_id))
+    if document:
+        TD.record(c, task["id"], document, file_id, actor)
+        L.link(c, file_id, actor, "writer", actor)
+
+
 def _spec_page(c, task, version=3):
     """The Spec page that counted on the task's visit to Spec, as task_pages.attach leaves it (track B)."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
+    _linked_document(c, task, rid, "f-spec", version)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -547,7 +576,7 @@ def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
     filed = _filed(c, row["id"])
     assert len(filed) == 1
-    assert E.task(c, filed[0][0])["requester_id"] == H.KEEPER
+    assert E.task(c, filed[0][0])["requester_id"] == H.TICO_ACTOR
 
 
 def test_a_handoff_nobody_can_file_files_nothing_and_the_move_goes_through(c):
@@ -703,6 +732,7 @@ def _sign_off(c, stage_id):
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
     row = E.move(c, row["id"], stage_id, ANA, "Straight to the sign-off for this test")
     rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (stage_id,)).fetchone()[0]
+    _linked_document(c, row, rid, "f-page", 1)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",

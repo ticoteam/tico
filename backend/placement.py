@@ -68,7 +68,7 @@ def auto_place(c, execution, bot, by=""):
         return None  # an external agent has a credential, not a computer
     from . import cloud_machines
 
-    if cloud_machines.offered(c, execution.store.settings) and cloud_machines.adopt(c, bot, by or H.KEEPER):
+    if cloud_machines.offered(c, execution.store.settings) and cloud_machines.adopt(c, bot, by or H.TICO_ACTOR):
         return None  # its cloud machine is made when it has work (backend/cloud_machines.py)
     try:
         who = execution.auth.owner_identity(c)

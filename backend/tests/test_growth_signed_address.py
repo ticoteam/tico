@@ -174,7 +174,7 @@ def test_a_bot_cost_run_clears_the_amounts_it_wrote_that_no_longer_apply(api):
     # Every cost falls to zero (run cost is append-only, so the run is given no rows): nothing it wrote is left.
     with api.app.state.store.transaction() as c:
         source = c.execute("SELECT * FROM gtm_sources WHERE id=?", (src["id"],)).fetchone()
-        result = GS.run(c, H.KEEPER, dict(source), rows=[])
+        result = GS.run(c, H.TICO_ACTOR, dict(source), rows=[])
     assert result["ok"] and result["written"] == 2
     rows = {r["channel"]: r["bot_cost"] for r in get(api, f"growth/cohorts?month={LAST}")["cohorts"]}
     assert sum(v or 0 for v in rows.values()) == 0

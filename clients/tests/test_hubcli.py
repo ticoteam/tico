@@ -655,7 +655,7 @@ class AgainstAStub(unittest.TestCase):
             "review",
             "--title",
             "Review PR 700",
-            "--message",
+            "--body",
             "https://github.com/ticoteam/tico/pull/700",
             env=self.env,
         )
@@ -665,6 +665,7 @@ class AgainstAStub(unittest.TestCase):
             (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
             ("bot:assistant", "grok", "review", "T1"),
         )
+        self.assertEqual(posted["message"], "https://github.com/ticoteam/tico/pull/700")
         # With no value, the server picks the company's check model.
         code, out = run_hub(
             "task", "child", "T1", "--check-model", "--role", "review", "--title", "Review PR 701", env=self.env
@@ -1749,6 +1750,11 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
         "growth/channels/door",
         {"stage": "paused", "owner_ref": None},
     )  # "" clears
+    assert run("growth", "channel", "update", "door", "--input-kpi", "kpi_new") == (
+        "PATCH",
+        "growth/channels/door",
+        {"input_kpi_id": "kpi_new"},
+    )
     assert run("growth", "channel", "retire", "door") == ("POST", "growth/channels/door/retire", {})
     assert run(
         "growth",
@@ -1831,6 +1837,7 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     )
     assert run("growth", "economics", "--month", "2026-10") == ("GET", "growth/economics", {"month": "2026-10"})
     assert run("growth", "numbers", "--months", "6") == ("GET", "growth/numbers", {"months": 6})
+    assert run("growth", "numbers", "--month", "2026-10") == ("GET", "growth/numbers", {"month": "2026-10"})
     assert run("growth", "kpis") == ("GET", "growth/kpis", {})
     assert run("growth", "settings") == ("GET", "growth/settings", {})
     assert run("growth", "settings", "--set", "margin_pct=40", "--set", "unit=orders") == (

@@ -54,6 +54,7 @@ DB_WAIT = 2.0  # seconds the recorder's own database writes wait for the write l
 PENDING_MAX = 120  # table writes kept for the next try while the lock is busy (about two hours of minutes)
 LONG_HOLD_MS = 5000  # a write transaction holding the lock this long is logged with its route and code site
 LONG_HOLD_PER_MINUTE = 20
+EVENTS_PER_MINUTE = 20  # events a request raises (`note`) kept a minute; the rest are counted as `dropped` in theirs
 LOG_HOLD_MS = 250  # a write transaction holding the lock this long goes to the server log with its code site
 LOG_HOLD_PER_MINUTE = 30
 MINUTE_DAYS = 2  # request minutes older than this become hours
@@ -308,6 +309,8 @@ class Recorder:
         self.hold = {}
         self.locked = 0
         self.long_holds = []
+        self.events = []  # (ts, kind, detail) raised by requests (`note`), written to flight_events
+        self.events_dropped = 0
         self.web = {}  # (metric, route) -> hist
         self.web_dropped = 0
 
@@ -357,6 +360,10 @@ class Recorder:
     def long_hold(self, route, site, hold_ms, wait_ms):
         """A write transaction that held the lock for LONG_HOLD_MS or more, from the thread that held it."""
         self.samples.append(("h", int(time.time()), route, site, hold_ms, wait_ms))
+
+    def event(self, kind, detail):
+        """Something a request saw that a reading of the recorder needs later (`note`): one append."""
+        self.samples.append(("e", int(time.time()), kind, detail))
 
     def tick(self, lag_ms):
         """The event loop woke `lag_ms` late (backend/timing.py watch_loop)."""
@@ -466,6 +473,11 @@ class Recorder:
                                 "wait_s": round(wait / 1000, 1),
                             }
                         )
+                elif kind == "e":
+                    if len(self.events) < EVENTS_PER_MINUTE:
+                        self.events.append(s[1:])
+                    else:
+                        self.events_dropped += 1
                 elif kind == "l":
                     _add(self.lag, s[1])
                     self.lag_max = max(self.lag_max, s[1])
@@ -532,6 +544,9 @@ class Recorder:
             requests, slow, lag, lag_max = self.requests, self.slow, self.lag, self.lag_max
             web, web_dropped = self.web, self.web_dropped
             long_holds = self.long_holds + self.open_holds()
+            events = self.events + (
+                [(minute, "events_dropped", {"n": self.events_dropped})] if self.events_dropped else []
+            )
             totals = (self.queries, self.sql_ms, self.txns, self.wait_max, self.hold_max, self.hold, self.locked)
             wait_sum = self.wait_sum
             self._reset()
@@ -664,6 +679,7 @@ class Recorder:
             "process": proc,
             "sql": sql_rows,
             "long_holds": long_holds,
+            "events": events,
             "file": ([minute_record, routes_record] if requests else [minute_record]) + holds,
         }
 
@@ -680,6 +696,8 @@ def write(c, taken):
     c.executemany("INSERT OR REPLACE INTO flight_web VALUES(?,?,?,?,?,?)", taken.get("web") or [])
     for hold in taken.get("long_holds") or []:
         _event(c, "long_hold", {k: v for k, v in hold.items() if k != "ts"}, hold["ts"])
+    for ts, kind, detail in taken.get("events") or []:
+        _event(c, kind, detail, ts)
 
 
 def process_stats():
@@ -937,6 +955,14 @@ def _event(c, kind, detail, now=None):
         "INSERT INTO flight_events(created_at,kind,detail) VALUES(?,?,?)",
         (int(now or time.time()), kind, json.dumps(detail, separators=(",", ":"))),
     )
+
+
+def note(conn, kind, detail):
+    """Record an event from inside a request, read or write, without writing there: the recorder keeps it and the
+    minute's write puts it in flight_events. Nothing happens with the recorder off."""
+    rec = getattr(conn, "recorder", None) or ACTIVE
+    if rec is not None:
+        rec.event(kind, detail)
 
 
 def record_event(store, kind, detail, now=None):

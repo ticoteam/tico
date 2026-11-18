@@ -2,7 +2,7 @@
 // Checks the page parts (ui/parts.json, scripts/build-ui.cjs): code outside a part may use the part's names only
 // through its entries, since the part is not loaded until a person goes to one of its pages.
 //
-//   npx --yes -p typescript@5.9.3 -c 'node scripts/check_ui_parts.cjs'     (scripts/check_ui_types.sh runs it)
+//   node scripts/check_ui_parts.cjs     (scripts/check_ui_types.sh runs it)
 //
 // The files are the scripts index.html bundles, which share their top-level names. For every name a page part declares
 // at its top level, each use from a file outside that part (the shell, or a part that does not list it in its deps)
@@ -23,17 +23,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-function typescript() {
-  try { return require('typescript'); } catch { /* not installed here: the one npx put on PATH */ }
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    const bin = path.join(dir, 'tsc');
-    if (fs.existsSync(bin)) return require(path.join(path.dirname(fs.realpathSync(bin)), '..', 'lib', 'typescript.js'));
-  }
-  throw new Error('typescript is not installed: run this under npx -p typescript (see the top of this file)');
-}
+const ts = require('@typescript/typescript6');
 
 function main() {
-  const ts = typescript();
   const root = path.join(__dirname, '..');
   const ui = process.argv.slice(2).find(a => !a.startsWith('--')) || path.join(root, 'ui');
   const html = fs.readFileSync(path.join(ui, 'index.html'), 'utf8');

@@ -131,7 +131,7 @@ def test_finished_checks_end_the_owner_bots_own_snooze_and_wake_it(api):
         task = snoozed(c, plain_task(c), "bot:cpo")
         assert woke(c, sent(c, task, result="fail")) == (True, False)
         by, ended, ended_by = snooze_of(c, task)
-        assert by == "bot:cpo" and ended and ended_by == H.KEEPER
+        assert by == "bot:cpo" and ended and ended_by == H.TICO_ACTOR
         assert H.task(c, task["id"]).get("snooze") is None
 
 

@@ -381,7 +381,7 @@ const A = (id: string, kind: 'image' | 'svg' | 'page', over: Record<string, unkn
     // the redraw keeps a playing clip where it was: the same element, still playing, not back at 0:00 (frame defect
     // from 3/4: a kept node moved through another document reloads). Both ways: moving the card in place
     // (moveBefore) and, where a browser has no moveBefore, taking it out and putting it back.
-    const noMove = (on: boolean) => page.evaluate((on: boolean) => { if (on) { (window as unknown as VisualWin).__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; } else Element.prototype.moveBefore = (window as unknown as VisualWin).__mb as (node: Node, child: Node | null) => void; }, on);
+    const noMove = (on: boolean) => page.evaluate((on: boolean) => { if (on) { (window as unknown as VisualWin).__mb = Element.prototype.moveBefore; Reflect.deleteProperty(Element.prototype, "moveBefore"); } else Element.prototype.moveBefore = (window as unknown as VisualWin).__mb as (node: Node, child: Node | null) => void; }, on);
     for (const way of ['moveBefore', 'no moveBefore']) {
       await page.evaluate((src: string) => {
         const card = `<figure class="vcard" data-visual-key="m:clip@1" data-state="ready"><audio src="${src}" muted preload="auto"></audio></figure>`;

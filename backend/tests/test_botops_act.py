@@ -18,5 +18,5 @@ def test_a_task_someone_else_reopened_never_lends_the_persons_rights_again(compa
         assert [r["actor"] for r in BA.reopened_by(c, own)] == [ANA]
         assert BA.lend_lapsed(c, H.task(c, own)) == ""  # the person reopened it herself
         H.task_close(c, ANA, own, "Done.")
-        H.task_move(c, H.KEEPER, own, H.TASK_REOPEN, "One more.")
+        H.task_move(c, H.TICO_ACTOR, own, H.TASK_REOPEN, "One more.")
         assert "someone other than the person reopened it" in BA.lend_lapsed(c, H.task(c, own))

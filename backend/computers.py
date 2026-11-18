@@ -79,7 +79,7 @@ def sweep(store, at):
         for computer in replaced:
             revoke(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 computer["id"],
                 at=at,
                 reason="No bots assigned and offline for over 24 hours; "

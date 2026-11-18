@@ -136,3 +136,22 @@ def normalize_fallback(value):
         # Where it compacts while on the fallback; absent is "Same as bot".
         out["compact_at"] = compact
     return out
+
+
+# Claude Code's built-in output styles, its `outputStyle` setting (backend/models.py OutputStyle); none saved is its own
+# Default. Codex's `model_verbosity` levels; none saved is the model's own. A bot keeps either on any harness, and the
+# runner passes each only to its own harness (runner-rs/src/hosts/claude.rs and codex.rs).
+OUTPUT_STYLES = ("Concise", "Explanatory", "Learning", "Proactive")
+VERBOSITIES = ("low", "medium", "high")
+
+
+def output_style(config):
+    """The bot's saved Claude Code output style, or None for Default (nothing saved, or a value not offered)."""
+    value = (config or {}).get("output_style")
+    return value if value in OUTPUT_STYLES else None
+
+
+def verbosity(config):
+    """The bot's saved Codex verbosity, or None for the model's own."""
+    value = (config or {}).get("verbosity")
+    return value if value in VERBOSITIES else None

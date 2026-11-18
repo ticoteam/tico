@@ -142,7 +142,7 @@ class World:
         elif kind == "moved":
             aid = self.run(c, self.say(c))
             mid = self.say(c, report(aid))
-            H.event(c, H.KEEPER, task_privacy.INPUT_MOVED, aid, {"message_id": "gone", "tasks": [tid]})
+            H.event(c, H.TICO_ACTOR, task_privacy.INPUT_MOVED, aid, {"message_id": "gone", "tasks": [tid]})
         elif kind == "job":
             free = [m for m in earlier if not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (m,)).fetchone()]
             aid = self.run(c, self.rng.choice(free) if free else self.say(c, self.reference(tid)))
@@ -206,7 +206,7 @@ class World:
         elif what == "late-move" and self.attempts:
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 task_privacy.INPUT_MOVED,
                 self.rng.choice(self.attempts),
                 {"tasks": [self.rng.choice(self.tasks)]},

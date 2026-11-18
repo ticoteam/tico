@@ -145,7 +145,7 @@ declare function card(key: string, file: VisualFile): Element | null;
       await short.evaluate((m: HTMLMediaElement, at: number) => new Promise(r => { m.addEventListener('seeked', r, {once: true}); m.currentTime = at; }), at);
       const kept = await page.evaluate(([way, n]: [string, number]): [string | undefined, number, boolean] => {
         const mb = Element.prototype.moveBefore!;
-        if (way === 'no moveBefore') delete Element.prototype.moveBefore;
+        if (way === 'no moveBefore') Reflect.deleteProperty(Element.prototype, "moveBefore");
         try { messages.push({id: 'm9' + n, files: [{file_id: 'x' + n, version: 1, name: 'notes.txt', kind: 'file'}]}); draw(); }
         finally { Element.prototype.moveBefore = mb; }
         const m = document.querySelector<HTMLAudioElement>('[data-visual-key="m1b:short@1"] audio')!;

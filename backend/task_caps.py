@@ -312,7 +312,7 @@ def forget(c, teammate):
     for row in c.execute(
         "SELECT sender, receiver FROM task_caps WHERE sender=? OR receiver=?", (teammate, teammate)
     ).fetchall():
-        apply(c, H.KEEPER, row["sender"], row["receiver"], None, via="group move")
+        apply(c, H.TICO_ACTOR, row["sender"], row["receiver"], None, via="group move")
     named = ref(teammate)
     for found, change in proposals.waiting(c, "task_cap"):
         if named in (change.get("sender"), change.get("receiver")):

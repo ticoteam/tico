@@ -7,6 +7,17 @@ from ._base import SCHEMAS, items, obj
 SCHEMAS.update(
     {
         # Pages and Library › Files (backend/pages.py, backend/file_library.py).
+        "PageLinkView": obj(
+            {
+                "target": "s",
+                "role": "s",
+                "name": "s",
+                "by": "s",
+                "at": "s",
+                "approval": obj({"version": "i"}, required=["version"]),
+            }
+        ),
+        "PageWriter": obj({"actor": "s", "name": "s", "versions": "i", "last_at": "s"}),
         "Page": obj(
             {
                 "audience": {
@@ -17,6 +28,9 @@ SCHEMAS.update(
                     "type": "boolean",
                     "description": "Only returned to managers, including on lists and cards",
                 },
+                "links": items(ref("PageLinkView")),
+                "writers": items(ref("PageWriter")),
+                "may_write": "b",
                 "file_id": "s",
                 "title": "s",
                 "bot_id": "s",
@@ -76,7 +90,12 @@ SCHEMAS.update(
             required=["page"],
         ),
         "PagePublished": obj(
-            {"page": ref("Page"), "unembedded": items({"type": "string"}), "created": "b"},
+            {
+                "page": ref("Page"),
+                "links": items(ref("PageLinkView")),
+                "unembedded": items({"type": "string"}),
+                "created": "b",
+            },
             required=["page", "unembedded"],
         ),
         "PageList": obj({"pages": items(ref("Page")), "has_more": "b", "next_cursor": "n"}, required=["pages"]),

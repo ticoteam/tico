@@ -93,7 +93,7 @@ DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SENDER = re.compile(r"[a-z0-9._%+-]*@[a-z0-9-]+(\.[a-z0-9-]+)+")  # a whole address, or `@domain` for any address there
-KEEPER = SimpleNamespace(actor=H.KEEPER)
+TICO = SimpleNamespace(actor=H.TICO_ACTOR)
 
 
 class Unavailable(Exception):
@@ -174,7 +174,7 @@ def bot_problem(c, bot, *, routing=False):
     """Use the task model's restrictions for bots whose host only syncs chat, and for routing task recipients."""
     if not bot or bot["state"] != "active":
         return "Choose an active bot for physical mail"
-    refusal = H.task_taking_refusal(c, H.KEEPER, H.bot_actor(bot["id"]))
+    refusal = H.task_taking_refusal(c, H.TICO_ACTOR, H.bot_actor(bot["id"]))
     if refusal and (routing or refusal[0] == "external-bot"):
         return "Physical mail is unavailable: " + refusal[1]
     return None
@@ -656,7 +656,7 @@ class PostalMail:
                 "WHERE id=? AND status IN ('new','failed')",
                 (attempts, H.shift(H.now(), seconds=wait), str(code)[:80], H.now(), row["id"]),
             )
-            H.event(c, H.KEEPER, "mail.failed", row["id"], {"error": str(code)[:80], "attempts": attempts})
+            H.event(c, H.TICO_ACTOR, "mail.failed", row["id"], {"error": str(code)[:80], "attempts": attempts})
 
     def read(self, data, mime, name):
         if READABLE.get(mime) is None or len(data) > READ_BYTES:
@@ -748,7 +748,7 @@ class PostalMail:
             if engine is None:
                 with self.store.read() as c:
                     engine = server_engine(self.store, c, getattr(self.app.state, "judge", None))
-                    if engine is not None and used_today(c, H.KEEPER) >= daily_cap(self.settings, "bot"):
+                    if engine is not None and used_today(c, H.TICO_ACTOR) >= daily_cap(self.settings, "bot"):
                         engine = None
             if engine is None:
                 return out
@@ -756,7 +756,7 @@ class PostalMail:
             replies = DG.ask_run(engine, [pairs[k] for k in run], label, calls, run)
             with self.store.transaction() as c:
                 for call in calls:
-                    H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, types=["choice"]))
+                    H.event(c, H.TICO_ACTOR, "judge.call", label, DG.audit_row(call, label, types=["choice"]))
             for k, reply in zip(run, replies, strict=True):
                 if isinstance(reply, BaseException):
                     continue  # Decide never stops a letter: the reader's word stands
@@ -781,7 +781,7 @@ class PostalMail:
         if rule["to"] and not to:
             raise Unavailable("no_recipient")  # nobody on the roster yet: kept failed, never archived unseen
         # A filed scan is read through its task; an archived one has no task, so it is the owner's own file.
-        holder = KEEPER if to else SimpleNamespace(actor=owner_actor(c, self.auth) or H.KEEPER)
+        holder = TICO if to else SimpleNamespace(actor=owner_actor(c, self.auth) or H.TICO_ACTOR)
         item = blobs.register(c, holder, digest, size, name, mime)
         task_id, file_id = None, None
         if to:
@@ -809,7 +809,7 @@ class PostalMail:
                 if owner:
                     H.notice(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         owner,
                         f"Legal mail: {summary}\nAssigned to {H.actor_name(c, to)}.\n"
                         + (
@@ -820,9 +820,9 @@ class PostalMail:
                         refs={"task": task_id},
                     )
             bot = H.actor_id(to) if H.is_bot(to) else self.file_bot(c)
-            file_id, number = self.app.state.files.attach_task(c, KEEPER, task_id, item, digest, bot)
+            file_id, number = self.app.state.files.attach_task(c, TICO, task_id, item, digest, bot)
             c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (task_id, item["id"]))
-            file_added(c, KEEPER, task_id, item, number)
+            file_added(c, TICO, task_id, item, number)
         status = "filed" if task_id else "archived"
         c.execute(
             "UPDATE mail_items SET status=?,kind=?,summary=?,sender=?,deadline=?,task_id=?,file_id=?,blob_id=?,"
@@ -840,7 +840,7 @@ class PostalMail:
                 ident,
             ),
         )
-        H.event(c, H.KEEPER, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
+        H.event(c, H.TICO_ACTOR, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
         if kind == "legal" and task_id:
             from . import personal_alerts
 
@@ -859,7 +859,7 @@ class PostalMail:
             when = f", due {due[:10]}" if due else ""
             return person_asks.ask(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 to,
                 title,
                 body,
@@ -873,7 +873,7 @@ class PostalMail:
         made = H.attempt(
             c,
             H.task_create,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             to,
@@ -889,7 +889,7 @@ class PostalMail:
         # Nobody else to hand it to: file it for `to` again, so the refusal says why.
         return H.task_create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             title,
             body,
             to if not owner or owner == to else owner,

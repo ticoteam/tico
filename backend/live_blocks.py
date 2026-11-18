@@ -130,11 +130,25 @@ def _task(c, auth, who, attrs, base):
 
 
 def _files(c, files, who, attrs, base):
-    from . import file_library
+    from . import file_library, page_links
+    from .store import Problem
 
-    if not attrs.get("task"):
+    task_id = attrs.get("task")
+    if not task_id:
         return ""
-    where, args = ["f.task_id=?", "f.state<>'deleted'", "f.archived=0", "COALESCE(p.archived,0)=0"], [attrs["task"]]
+    try:
+        files.auth.task(c, who, task_id)
+    except Problem as exc:
+        if exc.status not in (403, 404):
+            raise
+        return ""
+    where = [
+        "f.id IN (" + page_links.TASK_FILE_IDS + ")",
+        "f.state<>'deleted'",
+        "f.archived=0",
+        "COALESCE(p.archived,0)=0",
+    ]
+    args = [task_id, "task:" + task_id, "task:" + task_id]
     kind = FILE_KINDS.get(attrs.get("kind", ""), attrs.get("kind", ""))
     if kind == "page":
         where.append("p.file_id IS NOT NULL")

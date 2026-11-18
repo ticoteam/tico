@@ -108,7 +108,7 @@ def test_a_doc_update_on_a_team_with_no_doc_bot_is_left_for_a_person_to_choose(a
     # A named owner the roster does not have is refused again, and nothing is created for it.
     change(api, rid, iid, {"detail": {**detail, "owner": "human:nobody"}})
     push(api, rid, iid, expected=422)
-    change(api, rid, iid, {"detail": {**detail, "owner": H.KEEPER}})
+    change(api, rid, iid, {"detail": {**detail, "owner": H.TICO_ACTOR}})
     push(api, rid, iid, expected=422)
     change(api, rid, iid, {"detail": {**detail, "owner": "human:ben"}})
     pushed = push(api, rid, iid)

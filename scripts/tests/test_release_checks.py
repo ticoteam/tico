@@ -430,9 +430,10 @@ def test_pr_guard_reuses_the_existing_default_collection(tmp_path, monkeypatch):
 
     def collect(command, **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout='test_listed.py::test_one\ncustom.py::test_lost\n', stderr='')
+        listed = 'test_listed.py::test_one\ncustom.py::test_lost\n'
+        return SimpleNamespace(returncode=0, communicate=lambda: (listed, ''))
 
-    monkeypatch.setattr(pr_checks, 'subprocess', SimpleNamespace(run=collect))
+    monkeypatch.setattr(pr_checks, 'subprocess', SimpleNamespace(Popen=collect, PIPE=-1))
     with pytest.raises(RuntimeError, match='absent.*custom.py'):
         pr_checks.collect(root=tmp_path)
     assert len(commands) == 1  # the plan already pays for this collection; the guard never launches another

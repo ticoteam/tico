@@ -94,7 +94,7 @@ def test_botops_moving_a_persons_task_to_itself_with_lent_rights_lends_nothing_l
 
 
 def test_a_later_wake_run_citing_a_task_a_bot_moved_to_botops_lends_nothing(api, botops):
-    """A keeper wake (the daily update) starts a run with no requester; citing the task Ops moved must not lend Ana's
+    """A Tico wake (the daily update) starts a run with no requester; citing the task Ops moved must not lend Ana's
     rights as a follow-through on her request would."""
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
@@ -104,7 +104,7 @@ def test_a_later_wake_run_citing_a_task_a_bot_moved_to_botops_lends_nothing(api,
     _complete(api, botops, ops)
     finish(api, botops, claim(api, botops, "botops"))  # the moved task's own notice
     with api.app.state.store.transaction() as c:
-        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
+        H.say(c, H.TICO_ACTOR, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
     later = claim(api, botops, "botops")
     before = get(api, "bots/ops/repositories", "ana-test")
     cited = api.put(

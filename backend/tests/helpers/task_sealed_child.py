@@ -12,7 +12,7 @@ def carry(api, attempt, row):
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
-        said = H.task_comment(c, H.KEEPER, row["id"], "Look at this task too.", wake=False)
+        said = H.task_comment(c, H.TICO_ACTOR, row["id"], "Look at this task too.", wake=False)
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], said["id"]))
 
 
