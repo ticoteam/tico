@@ -48,7 +48,8 @@ the row keeps its place. A new file's time is when its content was written, not 
 each file's last commit time (its modification time when uncommitted) as `modified`, and the server takes it for a new
 or changed file, never later than now. Before it uploads anything, the runner dates every file Tico may already hold
 (published before times were sent, by another computer of the bot, or new) in one request per 500 files, without the
-bytes: `POST /api/v2/files/dates` with `{bot, attempt, files: [{path, digest, modified}]}`. Only a file of that bot at
+bytes: `POST /api/v2/files/dates` with `{bot, attempt, files: [{path, digest, modified}]}` (the runner's own call, not
+part of the stable API). Only a file of that bot at
 that path whose current version has that digest moves, only back, and only while its time is still the copy's (nothing
 has happened to it since); the answer's `known` paths are not uploaded. A whole checkout copied before times were sent
 settles in one turn; only the rest is uploaded, 40 a turn. An unchanged upload with an earlier time moves a copy's time
@@ -181,9 +182,10 @@ the bot publishes a changed version.
 
 Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=&q=&kind=` (ordered by last
 activity, with the visible `total`; `q` keeps files that have every word in their name, path or text, as
-[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`, `/dates` (a bot's computer, above),
+[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`,
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
 lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
+`POST /api/v2/files/dates` is the runner's own call, not part of the stable API.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
 It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
@@ -206,7 +208,8 @@ rule is the web app's, so such a caller sends the joined path itself.
 ## Library › Files
 
 **Library › Files** lists every file the viewer may see, across all bots and whoever added it: bots' files and
-[pages](pages.md), task and thread attachments, people's uploads, links and imports. Each row passes the same check as
+[pages](pages.md) (bot-wide, on a task or in a chat), task attachments whoever added them, links and imports. A file a
+person attaches to a thread message stays on that message and is not listed here. Each row passes the same check as
 the bot's page, so a file you may not read adds no row, name or count.
 
 - **Filters:** kind (Pages, Documents, Images, Data, Video and audio, Other), bot, team (its bots' files and the
@@ -563,8 +566,9 @@ never approved by an older one's review, and a deleted task's verdicts stop coun
 
 `tico file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `tico_file_review`,
 `POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
-bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). A person
-may use it too; Decide is the usual way.
+bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). Bots only: a
+person, or a bot acting for one (the Assistant, BotOps), gets 403. A person approves a file with their own OK of the
+version, asked on the task.
 
 Upload retries verify their idempotency receipt before writing bytes to durable storage.
 Multipart retries still parse and hash the incoming bytes to reject changed content, using
