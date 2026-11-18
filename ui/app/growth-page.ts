@@ -1,5 +1,5 @@
 /* ui/app/growth-page.ts — The Growth page (#/growth, docs/growth.md): the shared page header (the month picker and the
-   Growth board as tools; Settings in ⋯) and, until Growth is set up, the Get started panel (growth-start.ts), over the Dashboard's
+   Growth board as tools; Settings in ⋯) and, until Growth is set up, the Growth Manager row (growth-start.ts: Chat and Call), over the Dashboard's
    grid of cards for the place `growth` (ui/app/dashboard.ts, backend/cards.py), which the owner, admins and bots
    arrange. Its cards read the month picked here (GET /api/v2/places/growth?month=); this file draws them: a Number, the
    Funnel, Channels, Retention and the Growth board. Settings (growth-channels.js) keeps the numbers the maths uses, the
@@ -217,11 +217,11 @@ function pageGrowth() {
   $('#gr-head .ph-back')?.setAttribute('data-gr-back', '');
   pageGrowthSources(GR);
 }
-// After Settings or a channel saves: the cards and the Get started panel read again.
+// After Settings or a channel saves: the cards and the Growth Manager row read again.
 function grReload(state: unknown) {
   dashChoicesStale();   // the Number form's channels
   if (GR === state && DASH?.place === 'growth') void dashRefresh(DASH);
-  if (GR === state && GR) void grStartRead(GR);   // the Get started panel's steps
+  if (GR === state && GR) void grStartRead(GR);   // set up yet?
 }
 
 // ----------------------------------------------------------------- the head over the grid
@@ -253,7 +253,7 @@ DASH_PLACES.growth = {
     if (!root) return;   // G: the grid is there before a place is wired
     // Settings is a ⋯ item, which the header draws again with its tools: one listener on the page catches it.
     root.addEventListener('click', ev => { if (eventElement(ev)?.closest('[data-gr-settings]') && GR) void gcSettings(GR); });
-    if (GR) grStartMount(GR, root);   // the Get started panel under the head while setup is not done
+    if (GR) grStartMount(GR, root);   // the Growth Manager row under the head: Chat and Call
     // A stale or failing source is said once, right under the head and over every other panel (grHealthRead).
     root.querySelector('header.ph')?.insertAdjacentHTML('afterend', '<div class="gr-banner gr-amber gr-health" data-gr-health role="status" hidden></div>');
     grResolveWire(root);

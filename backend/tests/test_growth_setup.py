@@ -337,3 +337,23 @@ def test_set_up_is_not_marked_shown_before_it_is_done_nor_by_a_bot(api):
     set_up_to(api, "month")
     post(api, "growth/setup/shown", {}, token=bot(api, "ops"), expected=403)
     assert get(api, "growth/setup")["celebrate"] is True
+
+
+def test_the_growth_manager_writes_what_people_tell_it_but_does_not_retire(api):
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('growth-manager','growth-manager','Growth Manager','active')"
+        )
+    gm = bot(api, "growth-manager")
+    assert get(api, "growth/channels", token=gm)["you_may"] == {
+        "settings": True,
+        "channels": True,
+        "sources": True,
+        "months": True,
+    }
+    put(api, "growth/settings", {"revenue_month": 80, "margin_pct": 70}, token=gm)
+    post(api, "growth/channels", {"slug": "referrals", "name": "Referrals"}, token=gm)
+    src = post(api, "growth/sources", {"truth_for": "new customers", "system": "Ana", "reach_kind": "person"}, token=gm)
+    post(api, "growth/channels/referrals/retire", {}, token=gm, expected=403)
+    post(api, f"growth/sources/{src['id']}/retire", {}, token=gm, expected=403)
+    put(api, "growth/settings", {"margin_pct": 60}, token=bot(api, "ops"), expected=403)

@@ -1,9 +1,9 @@
 # Setup
 
-Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is six recorded answers, your pipelines written down, a first growth page on the task, and the routines checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is Growth's first numbers from a short chat, your pipelines written down, a first growth page on the task, and the routines checked.
 
-Inputs: the setup task, `tico team show`, `tico task list --all`, and the six questions in step 3.
-Done when: the six dated answers are recorded; `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md`, `knowledge/routing.md` and `knowledge/pipeline.md` are written; the first draft page is on the task, labelled as a draft; the routines are checked and logged in `memory/decisions.md`; `tico bot setup-done` has run.
+Inputs: the setup task, `tico team show`, `tico task list --all`, and `skills/growth-interview/SKILL.md`.
+Done when: Growth has its channels, a month per channel and revenue per customer (`tico growth setup` says done), or the person stopped and you said what is missing; `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md`, `knowledge/routing.md` and `knowledge/pipeline.md` are written; the first draft page is on the task, labelled as a draft; the routines are checked and logged in `memory/decisions.md`; `tico bot setup-done` has run.
 
 ---
 
@@ -22,16 +22,9 @@ See which marketing and sales bots and humans exist and what they reported latel
 
 What you do (a weekly growth page across marketing and the pipeline, a six week calendar, routing proposals, and a decision on each task that stops in your pipelines), that you never do a stage's work or change a stage's settings, that routing and changes happen only when the task asks and a granted Tool allows it, and that public messages stay drafts until a person turns mail sending on in Tico.
 
-## 3. Ask, in one message
+## 3. Ask, by chat
 
-Numbered, each with its one-line why. Offer a default so a human can answer "fine". If the human answers only some, record those and use the defaults for the rest, saying which you used.
-
-1. Who reads the weekly growth page, and which day and hour should it land? (Default: you, Fridays at 14:00.) Why: sets the recipient and the routine's schedule.
-2. Which workstreams should it report on, across marketing and sales, and who owns each? Why: each workstream becomes one line with a named owner.
-3. What are the pipeline stages, in order, and after how many days without activity is a deal stalled? (Default: 14 days.) Why: sets what 'moved' and 'stalled' mean.
-4. What are the two or three growth numbers you look at every week, and where do they live? Why: becomes the dashboard lines.
-5. When a new lead or marketing request arrives, who decides where it goes? Which lead sources should I route, and who takes each today? Why: sets the routing rules.
-6. Is there a stage whose owner is not hired yet, or one you expect to be slow on purpose? Why: a stage with nobody is a hiring question, not a stuck task.
+Do not send a questionnaire. Follow `skills/growth-interview/SKILL.md`: one question at a time, to whoever knows, saving each answer as it arrives. Use defaults instead of asking: the weekly page goes to the person who set you up, Fridays at 14:00; a deal is stalled after 14 days without activity; workstreams and routing come from `tico team show` and the owners' own pages. Say which defaults you used in one line; anyone can change them by telling you.
 
 ## 4. Record
 

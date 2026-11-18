@@ -377,18 +377,21 @@ steps are done). The Growth activation rate is read from these dates. A team who
 steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
 support session reading Growth records nothing.
 
-On the web, the Growth page shows a **Get started** panel over its cards while any step is not done: the four steps in
-order, each done step with what was set, and the next one with a button that opens its form (Settings, a new channel,
-the channel's source picker or Sources when there is no source yet, and the Months form on the channel and the last full
-month). Someone who may not do the next step sees who may, by name, instead of the button. A team that finishes the
-steps after first opening Growth is told once that it is set up, with a link to the channel's numbers
-(`POST /api/v2/growth/setup/shown`); after that the panel does not come back. Each empty card names the step that fills
-it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
+On the web, Growth gets its numbers by chat, not forms. Under the header is one row with the Growth Manager: **Chat**
+opens your chat with it and, while setup is not done, asks it to set Growth up ("Help me set up Growth."). Its
+`growth-interview` skill asks whoever knows (founder, sales, finance, marketing, support), one question at a time, takes
+answers in any shape (a guess is saved as an estimate), routes "ask Ana" to Ana, and writes each answer as it arrives
+(`numbers-from-chat`); things that already work become Growth Monitoring tasks (`what-already-works`), and person sources
+are asked again when a month closes (`keep-numbers-fresh`). **Call** calls the Growth Manager by voice once voice calls
+with bots ship; until then it says they are coming. Once set up, the row is a quiet line. With no Growth Manager on the
+team there is no row. Each empty card says what fills it; the Funnel, which reads the growth KPIs, links to Goals.
+Settings and Sources stay in ⋯ for anyone who would rather type.
 
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage, budget and KPI. Anyone else
-proposes the change. The owner and admins may change any channel, source or setting.
+proposes the change. The owner, admins and the Growth Manager (`bot:growth-manager`, which writes what people tell it)
+may change any channel, source or setting; only the owner and admins retire one.
 
 Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
 any channel (`channels`), add or change sources (`sources`), record months (`months`). `channels` false does not stop a

@@ -1199,6 +1199,12 @@ def install(app, store, auth, mutate):
             logging.getLogger(__name__).warning("growth view read was not counted", exc_info=True)
 
     def editor(who, what):
+        """The owner, an admin or the Growth Manager (backend/growth_setup.py editor): it writes what people tell it."""
+        auth.domain(who)
+        if not SETUP.editor(auth, who):
+            raise Problem("forbidden", f"Only the owner, an admin or the Growth Manager {what}", 403)
+
+    def retirer(who, what):
         auth.domain(who)
         if not admin(auth, who):
             raise Problem("forbidden", f"Only the owner or an admin {what}", 403)
@@ -1210,7 +1216,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
+            out = {"channels": channels(c, include_retired), "may_edit": SETUP.editor(auth, who)}
         return answer(who, out)
 
     @app.get("/api/v2/growth/channels/{slug}")
@@ -1269,7 +1275,7 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             fields = {k: getattr(body, k) for k in body.model_fields_set}
-            if not admin(auth, who):
+            if not SETUP.editor(auth, who):
                 row = channel(c, slug)
                 if not row:
                     raise Problem("not_found", f"No channel {slug}", 404)
@@ -1294,7 +1300,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "retires a channel")
+            retirer(who, "retires a channel")
             return channel_retire(c, who.actor, slug)
 
         return mutate(request, body, work)
@@ -1319,7 +1325,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {**sources(c, include_retired), "may_edit": admin(auth, who)}
+            out = {**sources(c, include_retired), "may_edit": SETUP.editor(auth, who)}
         return answer(who, out)
 
     @app.post("/api/v2/growth/sources")
@@ -1363,7 +1369,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "retires a source")
+            retirer(who, "retires a source")
             return source_update(c, who.actor, sid, {}, retire=True)
 
         return mutate(request, body, work)
@@ -1535,7 +1541,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {**settings(c), "may_edit": admin(auth, who)}
+            out = {**settings(c), "may_edit": SETUP.editor(auth, who)}
         return answer(who, out)
 
     @app.put("/api/v2/growth/settings")

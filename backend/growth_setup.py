@@ -61,11 +61,21 @@ DATES = ("first_opened_at", "settings_at", "channel_at", "source_at", "month_at"
 # its own table, growth_setup_shown.
 
 
+# The bot that gathers Growth's numbers by chat and calls (templates/catalog/growth-manager, skill growth-interview): it
+# writes what people tell it, so it changes settings, channels and sources as an admin does (retiring stays a person's).
+GROWTH_MANAGER = "bot:growth-manager"
+
+
+def editor(auth: Any, who: Any) -> bool:
+    """The owner or an admin as a person, or the Growth Manager: who changes settings, channels and sources."""
+    return bool(Brand.admin(auth, who)) or (who.role == "bot" and who.actor == GROWTH_MANAGER)
+
+
 def you_may(auth: Any, who: Any) -> dict[str, bool]:
-    """Per action, what this caller may do: the owner and admins (as people) change settings, channels and sources; they
-    and any bot record months (backend/growth.py)."""
-    person = bool(Brand.admin(auth, who))
-    return {"settings": person, "channels": person, "sources": person, "months": person or who.role == "bot"}
+    """Per action, what this caller may do: the owner, admins and the Growth Manager change settings, channels and
+    sources; they and any bot record months (backend/growth.py)."""
+    may = editor(auth, who)
+    return {"settings": may, "channels": may, "sources": may, "months": may or who.role == "bot"}
 
 
 def who_may(c: Any) -> list[dict[str, str]]:

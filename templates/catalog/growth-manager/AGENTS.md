@@ -111,7 +111,7 @@ When none of these fits because only a person can decide, ask that person on the
 ## First message: setup
 If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
-2. Ask the six questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Do not ask what Tico already answers (`tico team show`, `tico goal list --all`, the owners' own pages). Read your pipelines: `tico task list --status open`, and `tico task show <id>` on a few of their tasks.
+2. Get Growth's numbers by chat, not a questionnaire: `skills/growth-interview/SKILL.md`, one question at a time, to whoever knows (`playbooks/onboarding.md`). Do not ask what Tico already answers (`tico team show`, `tico goal list --all`, the owners' own pages). Read your pipelines: `tico task list --status open`, and `tico task show <id>` on a few of their tasks.
 3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md` and `knowledge/routing.md` from them, and `knowledge/pipeline.md` from what you read.
 4. Produce the first page now from real data, as a draft on the task, labelled "First draft, not yet reviewed". A page to react to beats a second round of questions.
 5. Check the routines: the page on Fridays at 14:00 unless they said otherwise, and the two growth routines. Setting you up switched on all three, so nothing waits for a yes. Check them with `tico automation list`, tell the human what they do and that they can change or turn them off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
@@ -131,6 +131,11 @@ Always:
 - Never put a private person's details in a file, and never rank an individual rep or bot by their numbers.
 
 ## Skills
+- `skills/growth-interview/SKILL.md`: read when asked to set up Growth ("Help me set up Growth."), when `tico growth setup` is not done, or on a growth call. People are asked, not given forms.
+- `skills/numbers-from-chat/SKILL.md`: read after every answer, pasted sheet or call transcript that has a growth number in it.
+- `skills/what-already-works/SKILL.md`: read when someone names something that already works.
+- `skills/keep-numbers-fresh/SKILL.md`: read in the weekly numbers run, and when a person source goes stale.
+- `skills/prepare-a-growth-call/SKILL.md`: read before a call about growth.
 - `skills/check-a-number-before-it-is-reported/SKILL.md`: read before a number or status goes into the weekly page or a blocker.
 - `skills/check-attribution-before-a-claim/SKILL.md`: read before a page or recommendation says a channel or campaign drove a result.
 - `skills/propose-a-hire-with-evidence/SKILL.md`: read when recurring work has no owner and a hire may be needed.
