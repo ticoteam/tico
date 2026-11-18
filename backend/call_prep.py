@@ -27,6 +27,8 @@ did not reach wait for the next minute, so the heartbeat is never held up.
 import logging
 import threading
 import time
+import weakref
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -60,6 +62,19 @@ def instructions(row: Row) -> str:
     )
 
 
+def _weak_follow(prep: "Prep") -> Callable[[str], None]:
+    """`prep.follow` for the module-level CALL_FOLLOWERS without keeping prep, and so its app, alive: an app built and
+    let go (a demo build, every test) is freed, and its entry then does nothing until the next build on that file."""
+    method = weakref.WeakMethod(prep.follow)
+
+    def follow(call_id: str) -> None:
+        bound = method()
+        if bound is not None:
+            bound(call_id)
+
+    return follow
+
+
 class Prep:
     def __init__(self, app: Any, store: Any, calls: Any) -> None:
         self.app, self.store, self.calls = app, store, calls
@@ -67,7 +82,7 @@ class Prep:
         self.unread: dict[str, int] = {}  # call_id -> passes in a row its event could not be read
         self.following: list[threading.Thread] = []
         with store.read() as c:
-            calendar_events.CALL_FOLLOWERS[str(H._main_path(c))] = self.follow
+            calendar_events.CALL_FOLLOWERS[str(H._main_path(c))] = _weak_follow(self)
 
     def sweep(self) -> dict[str, int]:
         """One pass (the scheduler's, every minute): the scheduled calls due their prep, or past their end. Calls still
