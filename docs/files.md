@@ -193,6 +193,23 @@ activity, with the visible `total`; `q` keeps files that have every word in thei
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
 lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `POST /api/v2/files/dates` is the runner's own call, not part of the stable API.
+
+Each file in these answers (the list, `/files/mentions` and `/info`) has two kinds. `kind` is the stored kind, which
+says how the file opens (`document`, `slides`, `design`, `spreadsheet`, `data`, `image`, `video`, `audio`…).
+`library_kind` is the word the `kind` filter takes, as in the Library and Search:
+
+| `library_kind` | Stored `kind` |
+|---|---|
+| `page` | any, when the file is a page |
+| `document` | `document`, `slides`, `design` |
+| `image` | `image` |
+| `data` | `spreadsheet`, `data` |
+| `media` | `video`, `audio` |
+| `other` | anything else |
+
+Filter with a file's `library_kind`: a page whose stored kind is `document` is listed under `kind=page`, not
+`kind=document`. A stored kind that is not a filter word (`kind=spreadsheet`) is refused with 422 and the word to use.
+`tico_file_list` takes the same `kind`.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
 It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
