@@ -177,10 +177,21 @@ function meetCallNow(): void {
     if (who) who.innerHTML = chosen.map(a => `<span class="nm-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(name(a))}</span><button type="button" data-remove aria-label="Remove ${esc(name(a))}">×</button></span>`).join('');
     if (start) start.disabled = !chosen.length;
   };
+  // A team (the org chart's, as the meeting window's Add has them): its bots the viewer may call, in one pick.
+  const team = (g: OrgGroup): string[] => {
+    const can = new Set(teammates().map(t => t.actor));
+    return (g.bots || []).map(b => 'bot:' + b).filter(a => can.has(a) && !chosen.includes(a));
+  };
+  const teams = (): WhoCandidate[] => (S.orgGroups || []).map(g => ({g, members: team(g)})).filter(t => t.members.length).map(({g, members}) => ({
+    subject: 'group:' + g.id, kind: 'group', name: g.name || g.id, face: '<span class="meet-team-ic" aria-hidden="true"><span class="nav-icon">groups</span></span>',
+    trail: `<span class="meet-team-n" aria-label="${members.length}"><span class="meet-stack" aria-hidden="true">${members.slice(0, 3).map(a => actorAvatar(a, 18)).join('')}</span><span class="tnum">${members.length}</span></span>`}));
   const picker = whoPickerWire(dialog, {
-    candidates: () => teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
-      email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)})),
-    onPick: c => { chosen.push(c.subject); paint(); }});
+    candidates: () => [...teams(), ...teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
+      email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)}))],
+    onPick: c => {
+      const g = c.subject.startsWith('group:') ? (S.orgGroups || []).find(x => 'group:' + x.id === c.subject) : null;
+      chosen.push(...(g ? team(g) : [c.subject])); paint();
+    }});
   if (who) who.onclick = ev => {
     const actor = eventElement(ev)?.closest<HTMLElement>('[data-actor]')?.dataset['actor'];
     if (!actor) return;

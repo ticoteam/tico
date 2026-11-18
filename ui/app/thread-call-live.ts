@@ -3,7 +3,8 @@
    A page part (ui/parts.json): it loads on the first join, so a cold open of Home does not download it (P05b). The call
    state (CALL, CALL_GEN, CALL_JOINS), the header's phone button, Start and leaving the page stay in ui/app/thread-call.ts
    with Home. The meeting window (ui/app/call-window.ts) draws the same call: its screen box takes a shared screen, and
-   each change here redraws it (callWindowDraw). */
+   each change here redraws it (callWindowDraw). What shows on the stage (a shared screen or a Tico file) is each
+   person's own room attributes (CALL_SHOW): one thing at a time, the newest (callShown). */
 'use strict';
 
 function callLib(): Promise<LivekitNamespace> {
@@ -46,13 +47,22 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
   if (stale()) return;
   const room = new LK.Room({adaptiveStream: false, dynacast: false});
   CALL = {id: call.id, threadId, title: title || call.title || 'Call', connector: (j.call || call).connector, room,
-          token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0, gen};
+          token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0, gen,
+          showing: '', showingAt: 0};
   const here = CALL;
   room.on(LK.RoomEvent.TrackSubscribed, (track: CallTrack, _pub: unknown, who: CallParticipant | undefined) => { if (CALL === here) callTrackOn(track, who); });
   room.on(LK.RoomEvent.TrackUnsubscribed, (track: CallTrack) => { for (const el of track.detach()) el.remove(); callScreenSync(); });
   room.on(LK.RoomEvent.ParticipantConnected, callBarDraw);
   room.on(LK.RoomEvent.ParticipantDisconnected, callBarDraw);
-  room.on(LK.RoomEvent.LocalTrackUnpublished, (pub: CallPublication) => { if (pub.source === LK.Track.Source.ScreenShare && CALL === here) { here.sharing = false; callBarDraw(); } });
+  // The browser's own Stop sharing ends the share: the stage is cleared for everyone.
+  room.on(LK.RoomEvent.LocalTrackUnpublished, (pub: CallPublication) => {
+    if (pub.source !== LK.Track.Source.ScreenShare || CALL !== here) return;
+    here.sharing = false;
+    if (here.showing === 'screen') void callShow(here, '');
+    callBarDraw();
+  });
+  // Someone showed something newer: this tab's own screen or file stops.
+  if (LK.RoomEvent.ParticipantAttributesChanged) room.on(LK.RoomEvent.ParticipantAttributesChanged, () => { if (CALL === here) callShowSync(here); });
   // Who speaks, who is muted and whether the browser lets the call be heard: only the meeting window shows them.
   for (const event of [LK.RoomEvent.ActiveSpeakersChanged, LK.RoomEvent.TrackMuted, LK.RoomEvent.TrackUnmuted,
     LK.RoomEvent.AudioPlaybackStatusChanged, LK.RoomEvent.LocalTrackPublished]) if (event) room.on(event, () => { if (CALL === here) callWindowDraw(); });
@@ -101,7 +111,10 @@ function callTrackOn(track: CallTrack, who: CallParticipant | undefined): void {
   const el = track.attach();
   el.setAttribute('aria-label', `${actorName(who?.identity || '') || 'Someone'}'s screen`);
   el.dataset.who = who?.identity || '';
+  // When it arrived here: what orders a screen whose sharer does not say what they show (callShown).
+  el.dataset.at = String(Date.now());
   box.append(el);
+  if (CALL) callShowSync(CALL);
   callScreenSync();
 }
 // Where a shared screen shows: the meeting window's stage when this page is the window, else the bar's.
@@ -188,7 +201,12 @@ async function callBarAct(k: string, button: HTMLElement): Promise<void> {
   const lp = here.room?.localParticipant;
   try {
     if (k === 'mute') { here.muted = !here.muted; await lp?.setMicrophoneEnabled(!here.muted); }
-    else if (k === 'share') { here.sharing = !here.sharing; await lp?.setScreenShareEnabled(here.sharing, {audio: false}); }
+    else if (k === 'share') {
+      here.sharing = !here.sharing;
+      await lp?.setScreenShareEnabled(here.sharing, {audio: false});
+      if (here.sharing) await callShow(here, 'screen');
+      else if (here.showing === 'screen') await callShow(here, '');
+    }
     else if (k === 'leave') { await callLeave(); return; }
     else if (k === 'end') { if (await askConfirm('End the call for everyone?')) await callLeave({end: true}); return; }
     else if (k === 'bot') { callBotPick(button); return; }
@@ -199,6 +217,62 @@ async function callBarAct(k: string, button: HTMLElement): Promise<void> {
     if ((isErrorRecord(e) ? e.name : undefined) !== 'NotAllowedError') toast(errorMessage(e, 'Could not change that'));
   }
   callBarDraw();
+}
+// ----------------------------------------------------------------- the stage
+// What one person shows: `mine` for this tab. `at` orders them: the newest is on the stage for everyone.
+interface CallShowing { who: string; what: string; at: number; mine: boolean; }
+// Everything shown in the call now, newest first: each person's attributes, this tab's own, and any shared screen whose
+// sharer's client does not say (at the time it arrived here).
+function callShowings(here: CallState | null): CallShowing[] {
+  if (!here) return [];
+  const all: CallShowing[] = [];
+  if (here.showing) all.push({who: here.room?.localParticipant?.identity || myActor(), what: here.showing, at: here.showingAt, mine: true});
+  for (const p of here.room?.remoteParticipants?.values() ?? []) {
+    const what = p.attributes?.[CALL_SHOW] || '';
+    if (what) all.push({who: p.identity, what, at: Number(p.attributes?.[CALL_SHOW_AT]) || 0, mine: false});
+  }
+  for (const v of document.querySelectorAll<HTMLElement>('#cw-screen video, #call-bar .call-screen video')) {
+    const who = v.dataset.who || '';
+    if (who && !all.some(s => s.who === who)) all.push({who, what: 'screen', at: Number(v.dataset.at) || 0, mine: false});
+  }
+  return all.sort((a, b) => b.at - a.at);
+}
+const callShown = (here: CallState | null): CallShowing | null => callShowings(here)[0] || null;
+// This tab shows `what` ('' stops): its attributes say so to the room. Its time is after anything already shown, so a
+// clock that runs behind still puts the newest pick on top.
+async function callShow(here: CallState, what: string): Promise<void> {
+  const newest = callShowings(here).filter(s => !s.mine)[0]?.at || 0;
+  here.showing = what;
+  here.showingAt = what ? Math.max(Date.now(), newest + 1) : 0;
+  callWindowDraw();
+  try { await here.room?.localParticipant?.setAttributes?.({[CALL_SHOW]: what, [CALL_SHOW_AT]: what ? String(here.showingAt) : ''}); }
+  catch { /* an older server's token cannot say it: only this tab shows it */ }
+}
+// Show a Tico file on the stage, in place of this tab's own screen: one thing at a time.
+// The stage is told first, so the share's end (LocalTrackUnpublished) finds it already replaced.
+async function callShowFile(id: string): Promise<void> {
+  const here = CALL; if (!here || !id) return;
+  await callShow(here, 'file:' + id);
+  await callShareOff(here);
+  callBarDraw();
+}
+async function callShareOff(here: CallState): Promise<void> {
+  if (!here.sharing) return;
+  here.sharing = false;
+  try { await here.room?.localParticipant?.setScreenShareEnabled(false, {audio: false}); } catch {}
+}
+// Stop: this tab's screen or file leaves the stage.
+async function callShowStop(): Promise<void> {
+  const here = CALL; if (!here) return;
+  await callShow(here, '');
+  await callShareOff(here);
+  callBarDraw();
+}
+// Someone else showed something after this tab: this tab's own screen or file stops.
+function callShowSync(here: CallState): void {
+  const top = callShown(here);
+  if (here.showing && top && !top.mine) void callShowStop();
+  callWindowDraw();
 }
 // Bots the viewer can write to; the server checks again.
 function callBotPick(button: HTMLElement): void {

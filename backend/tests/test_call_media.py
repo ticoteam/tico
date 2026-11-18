@@ -42,7 +42,8 @@ def test_a_person_token_grants_audio_and_screen_share_only_and_never_camera():
     assert grant["canPublish"] is True and grant["canSubscribe"] is True
     assert sorted(grant["canPublishSources"]) == ["microphone", "screen_share", "screen_share_audio"]
     assert "camera" not in json.dumps(claims)
-    assert grant["canPublishData"] is False and grant["canUpdateOwnMetadata"] is False
+    # Their own attributes say what they show on the stage (docs/meet.md, Sharing); still no data messages.
+    assert grant["canPublishData"] is False and grant["canUpdateOwnMetadata"] is True
     assert "roomAdmin" not in grant and "roomList" not in grant
 
 

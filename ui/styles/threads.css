@@ -199,8 +199,10 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .thv-lib-q{flex:1;min-width:0}
 .thv-lib-x{flex:none;width:var(--ctl);height:var(--ctl);padding:0}
 .thv-lib-list{flex:1;min-height:0;overflow-y:auto}
-.thv-lib-row{display:block;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;cursor:pointer}
+.thv-lib-row{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;cursor:pointer}
 .thv-lib-row:hover{background:var(--surface2)}
+.thv-lib-row .nav-icon{flex:none;font-size:16px;color:var(--muted)}
+.thv-lib-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* the menu on a message, and a call's Add a bot */
 .thv-pop{position:fixed;z-index:60;min-width:160px;padding:4px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.14)}

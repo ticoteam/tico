@@ -12,7 +12,7 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {html, uiFile, isUiPath, serveUi} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 declare const window: Window & typeof globalThis & {__chirps: number; __order: string[]};
 
@@ -86,6 +86,8 @@ async function open(browser: import('playwright').Browser, {phone = false}: {pho
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.hostname !== 'tico-ui.test') return route.fallback();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+    // The fonts when screenshots are saved: they show the icons.
+    if (shots && p.startsWith('/vendor/fonts/') && isUiPath(p)) return serveUi(route, p);
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]!)))
       return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
@@ -481,7 +483,8 @@ let browser: import('playwright').Browser | null = null;
 
   // ---- the Meetings page's Call now: there with Tico Meet; its picker's list in the dialog, open for the next pick and
   // without who is chosen; Start with the Ops bot opens a new Tico Meet call's window from their DM, and with Bea and Cy
-  // from a new thread named for them; gone where the server has no Tico Meet
+  // from a new thread named for them; a team (first, its faces and count) adds its bots in one pick; gone where the
+  // server has no Tico Meet
   for (const phone of [false, true]) {
     const {context, page, seen, mode} = await open(browser, {phone});
     const config = {features: {tico_meet: true}};
@@ -489,11 +492,15 @@ let browser: import('playwright').Browser | null = null;
       last_message_at: at(60), me: me(), members: [], live_call: null};
     const dms: string[] = [];
     const made: unknown[] = [];
-    const mine = new Set(['/api/me', '/api/employees', '/api/v2/meetings', '/api/meetings/sources', '/api/v2/threads/dm', '/api/v2/threads']);
+    const mine = new Set(['/api/me', '/api/employees', '/api/humans', '/api/v2/meetings', '/api/meetings/sources', '/api/v2/threads/dm', '/api/v2/threads']);
     await page.route(u => u.hostname === 'tico-ui.test' && mine.has(u.pathname), route => {
       const req = route.request(), url = new URL(req.url()), json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.pathname === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true, config});
-      if (url.pathname === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_chat: true, schedules: []}]);
+      const bot = (name: string, display_name: string) => ({name, display_name, status: 'active', can_chat: true, schedules: []});
+      if (url.pathname === '/api/employees') return json([bot('ops', 'Ops'), bot('ledger', 'Ledger'), bot('scout', 'Scout')]);
+      // The Ops team: its three bots, and one the viewer does not have (never added).
+      if (url.pathname === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
+        {id: 'cy', name: 'Cy', email: 'cy@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', bots: ['ops', 'ledger', 'scout', 'gone'], my_access: {see: true, read: true, write: true}}]});
       if (url.pathname === '/api/v2/meetings') return json({meetings: [], pending_count: 0});
       if (url.pathname === '/api/meetings/sources') return json({sources: []});
       if (url.pathname === '/api/v2/threads') {
@@ -518,6 +525,12 @@ let browser: import('playwright').Browser | null = null;
     await dialog.locator('.who-pick-q').click();
     const ops = page.locator('.who-pick-list [role="option"][data-who="bot:ops"]');
     await ops.waitFor();
+    // The team first: its mark, its name, a few of its faces and how many.
+    const team = page.locator('.who-pick-list [role="option"][data-who="group:ops"]');
+    assert.equal(await page.locator('.who-pick-list [role="option"]').first().getAttribute('data-who'), 'group:ops');
+    assert.equal(await team.locator('.settings-combo-n').innerText(), 'Ops team');
+    assert.equal(await team.locator('.meet-stack .av, .meet-stack img, .meet-stack > *').count(), 3);
+    assert.equal(await team.locator('.meet-team-n .tnum').innerText(), '3');
     await themed(page, 'call-now-pick', phone);
     if (phone) {
       // The dialog stands at the top of a phone's screen, above where the keyboard comes up.
@@ -539,6 +552,15 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(field && chip && under && chip.y >= field.y + field.height && under.y >= chip.y + chip.height, 'chips under the field, the list under them');
     if (phone) assert.ok(((await list.locator('[role="option"]').first().boundingBox())?.height || 0) >= 44, 'rows 44px on a phone');
     await themed(page, 'call-now-dialog', phone);
+    // The team counts who is left of it; a pick adds them all, and the team leaves the list.
+    assert.equal(await team.locator('.meet-team-n .tnum').innerText(), '2');
+    await team.click();
+    await dialog.locator('.nm-chip[data-actor="bot:scout"]').waitFor();
+    assert.deepEqual(await dialog.locator('.nm-chip').evaluateAll(els => els.map(e => e.getAttribute('data-actor'))), ['bot:ops', 'bot:ledger', 'bot:scout']);
+    assert.equal(await team.count(), 0, 'a team with nobody left leaves the list');
+    // Back to Ops alone for the start below.
+    for (const a of ['bot:ledger', 'bot:scout']) await dialog.locator(`.nm-chip[data-actor="${a}"]`).click();
+    assert.equal(await dialog.locator('.nm-chip').count(), 1);
     mode.start = 'tico';
     await page.evaluate(() => { window.__order = []; });
     if (phone) {

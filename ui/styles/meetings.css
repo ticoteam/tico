@@ -87,6 +87,13 @@ dialog.meet-call-dialog{background:var(--g1)}
 .meet-call-who:empty{display:none}
 .meet-call-who .nm-chip{cursor:pointer}
 .meet-call-start{display:inline-flex;align-items:center;gap:8px}
+/* a team in Call now's list: its mark, its name, then a few of its faces and how many */
+.meet-team-ic{display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:6px;background:var(--surface2);color:var(--muted)}
+.meet-team-ic .nav-icon{font-size:16px}
+.meet-team-n{display:inline-flex;align-items:center;gap:6px;margin-left:auto;color:var(--muted);font-size:var(--t-sm)}
+.meet-stack{display:flex}
+.meet-stack .av{box-shadow:0 0 0 2px var(--surface);border-radius:50%}
+.meet-stack .av+.av{margin-left:-6px}
 /* A phone: the dialog stands at the top, so the field, the list and Start stay above the keyboard. */
 @media (max-width:760px){
   dialog.tmodal.meet-call-dialog{top:max(12px,env(safe-area-inset-top));right:16px;bottom:auto;left:16px;margin:0;width:auto;max-width:none;max-height:calc(100dvh - 24px)}

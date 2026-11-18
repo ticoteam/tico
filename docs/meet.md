@@ -97,15 +97,25 @@ visit to its address, such as a copied link, shows Join.
   caption in the call view's `voice.bots`; else the latest words of someone the room hears now; else the transcript's
   last words), and for a few seconds the voice's `note`.
 - **Tabs.** Chat (the thread itself, with the composer, without the call's own posts; its `+` menu has Upload file,
-  Link a file, Link a task and New task, which makes a task linked to the call's meeting at once), Transcript (the live
+  Link a file, which posts the file's card at once, Link a task and New task, which makes a task linked to the call's
+  meeting at once; a task posted either way shows as a card with its state, title and owner), Transcript (the live
   transcript, each new or corrected piece applied from the meeting's event stream as it comes) and People (who is in
   the call, or while searching, people, bots, or a whole team's bots to add). Adding a person rings them into the call
   (`POST /api/v2/calls/{call_id}/ring`): someone who already reads the thread keeps their place in it, anyone else is
   added to the thread first. The count on People is who is in the call, bots tapped out not counted, the same as the
   thread's call bar.
-- **Controls.** Mic, share (the screen) and Leave. The connector also has End in the Leave menu.
-- **Sharing.** While someone else shares their screen, the window switches to the wide layout: the screen on the left,
-  the tabs on the right, or the screen above the tabs in a window too narrow for that. It goes back to small when
+- **Controls.** Mic, share and Leave. Share is a small menu: **Screen** (where the browser can share one) and **Show a
+  Tico file**, a search of the company's files and pages that shows the pick to everyone in the call. While the viewer
+  shows something, share is Stop. The connector also has End in the Leave menu.
+- **Sharing.** One thing shows at a time: someone's screen or a Tico file. Each person says what they show in their
+  own LiveKit participant attributes: `showing` is `screen` or `file:<id>` (empty for nothing) and `showing_at` when
+  it started (ms). Every client shows the newest; a person whose own share is overtaken stops it, so a new screen or
+  file replaces the one before. A late joiner reads the attributes as it joins. Stop (or the browser's own Stop
+  sharing) clears them. A file shows as the file view draws it, read with the viewer's own rights: someone who may not
+  read it sees "No access" and nothing of it is fetched. `showing_at` is the sharer's clock, kept after anything
+  already shown, so a later pick still wins over a clock that runs behind.
+  While someone else's screen or any file shows, the window switches to the wide layout: the stage on the left,
+  the tabs on the right, or the stage above the tabs in a window too narrow for that. It goes back to small when
   sharing stops. The desktop app's window (it asks the app, `callWindowSize`, which only the call's own window may) and
   a pop-up the page opened grow to about 1100 by 720 and go back to their size after; a tab keeps its size. On a phone
   the screen has a full-screen button.
@@ -125,7 +135,8 @@ A Google Meet call still opens Meet in a tab of its own.
    it. If the recorder cannot join, the call ends at once with `meet_unavailable`. The start may name bots (`bots`) to
    attach at once.
 2. **Join.** People who can read the thread join and get a token good for 5 minutes. It grants microphone and screen
-   share, never a camera and no data messages. A join sent again with the same idempotency key gets its token back only
+   share, never a camera and no data messages; a person may change their own participant attributes (what they show,
+   above). A join sent again with the same idempotency key gets its token back only
    while the person can still read the thread. A joined client refreshes its token with
    `POST /api/v2/calls/{call_id}/token` before it expires. Once End is pressed (`ending`) joins and token refreshes are
    refused (`409 call_ended`), and the thread rail no longer shows the call as live.
@@ -196,7 +207,8 @@ Tico Meet.
 call in the viewer's DM with that bot, with the bot in it, and join it.
 
 **Call now.** The Meetings page's **Call now** (only where the server runs Tico Meet, `features.tico_meet` in the config)
-picks people and bots and starts a Tico Meet call with the bots in it: in the viewer's DM when one teammate is picked,
+picks people and bots (a team, listed first with a few of its faces and how many, adds its bots in one pick) and
+starts a Tico Meet call with the bots in it: in the viewer's DM when one teammate is picked,
 else in a new thread with them all, named for the call's title or, without one, for who is in it. Its meeting window
 opens and joins it.
 

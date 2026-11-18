@@ -143,6 +143,24 @@ button.cw-face{cursor:pointer}
 .cw-task-form input{flex:1}
 .cw-task-form select{max-width:120px}
 
+/* the share menu, over the controls: Screen and Show a Tico file, then the file picker */
+.cw-pop{position:absolute;left:12px;bottom:70px;z-index:6;width:min(300px,calc(100% - 24px));box-sizing:border-box;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.cw-pop[hidden]{display:none}
+.cw-pop.cw-pop-file{width:min(340px,calc(100% - 24px))}
+.cw-pop-row{display:flex;align-items:center;gap:10px;width:100%;min-height:38px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--ink);text-align:left;cursor:pointer}
+.cw-pop-row:hover,.cw-pop-row:focus-visible{background:var(--hover)}
+.cw-pop-row .nav-icon{font-size:18px;color:var(--muted)}
+.cw-pop-lib{display:flex;flex-direction:column;max-height:min(320px,50vh)}
+
+/* a task in the chat: its state, its title, its owner */
+.cw-tcard{display:inline-flex;align-items:center;gap:8px;max-width:100%;box-sizing:border-box;height:40px;padding:0 12px 0 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
+.cw-tcard:hover{border-color:var(--g4)}
+.cw-tcard-mark{display:grid;place-items:center;color:var(--muted)}
+.cw-tcard-mark .nav-icon{font-size:18px}
+.cw-tcard-mark.done{color:var(--ok)}
+.cw-tcard-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.cw-tcard-who{flex:none;display:inline-flex}
+
 /* the controls */
 .cw-bar{flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 .cw-bar:empty{display:none}
@@ -167,6 +185,21 @@ button.cw-face{cursor:pointer}
 .cw-screen[hidden]{display:none}
 .cw.cw-wide .cw-screen{display:grid}
 .cw-screen video{display:block;width:100%;height:100%;object-fit:contain}
+.cw-screen video[hidden]{display:none}
+/* a Tico file on the stage: its title and who shows it, then the file as the file view draws it */
+.cw-file{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
+.cw-file[hidden]{display:none}
+.cw-file-head{flex:none;display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border-bottom:1px solid var(--line)}
+.cw-file-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.cw-file-by{flex:none;display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-sm)}
+.cw-file-body{flex:1;min-height:0;display:flex}
+.cw-file-body>div{flex:1;min-width:0}
+.cw-file-body .frv-skel{min-height:120px;margin:16px}
+.cw-file-body .frv-doc .md{padding:20px 24px 40px}
+.cw-file-body .frv-other{display:grid;place-items:center;padding:16px}
+.cw-noaccess{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+.cw-noaccess .nav-icon{font-size:28px}
+.cw:not(.cw-wide) .cw-file{display:none}
 .cw-stage{position:relative}
 .cw-full{display:none}
 
@@ -210,6 +243,7 @@ button.cw-face{cursor:pointer}
   .cw.cw-wide .cw-body{display:flex;flex-direction:column}
   .cw.cw-wide .cw-stage{flex:none;padding:6px 12px 8px}
   .cw.cw-wide .cw-screen{height:min(36vh,280px);flex:none}
+  .cw.cw-wide .cw-file{height:min(40vh,320px);flex:none}
   .cw.cw-wide .cw-side{border-left:0}
 }
 
@@ -235,9 +269,12 @@ button.cw-face{cursor:pointer}
   .cw .thv-ask .p-pill{min-height:44px}
   .cw.cw-wide .cw-full{position:absolute;top:6px;right:12px;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;background:transparent;color:#fff;cursor:pointer}
   .cw-full span{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:rgba(23,23,23,.78)}
+  /* the full screen button sits over a file's title row */
+  .cw.cw-wide .cw-file-head{padding-right:56px}
   .cw-side::before{content:"";align-self:center;width:36px;height:4px;margin-top:8px;border-radius:2px;background:var(--g4)}
   .cw-bar{background:var(--surface);padding-bottom:max(34px,env(safe-area-inset-bottom))}
   .cw-ctl{width:56px;height:48px}
+  .cw-pop-row,.cw-pop .thv-lib-row{min-height:44px}
   .cw-leave{height:48px;padding:0 28px;font-size:15px;font-weight:600}
   .cw-tab{font-size:15px}
   /* a 44px tap, the same 26px look */

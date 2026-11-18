@@ -230,21 +230,7 @@ function frvPaint(st: FrvState): void {
   box.className = 'frv-preview';
   box.setAttribute('aria-busy', 'true');
   box.innerHTML = '<div class="frv-skel"></div>';
-  if (link) {
-    const g = googlePreviewUrl(link);
-    box.removeAttribute('aria-busy');
-    if (!g) { box.innerHTML = frvCard(frvLabel(st), null, '', link); return; }
-    // Google draws its own file, signed in as the viewer; Tico passes nothing to it but the address.
-    const frame = document.createElement('iframe');
-    frame.className = 'frv-google';
-    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms');
-    frame.referrerPolicy = 'no-referrer';
-    frame.title = frvLabel(st);
-    frame.src = g;
-    box.replaceChildren(frame);
-    box.classList.add('frv-is-frame');
-    return;
-  }
+  if (link) { frvLinkBody(box, link, frvLabel(st)); return; }
   void (async () => {
     let file: ViewedFile;
     try { file = await viewFile(st.id, st.name || 'file', n); } catch (e) {
@@ -255,11 +241,45 @@ function frvPaint(st: FrvState): void {
     if (!st.name || st.name === 'file') { st.name = file.name; frvTitle(st); }
     const kind = frvKindOf(file.name, file.blob.type);
     if (st.cmp && kind && FRV_DIFF_KINDS.includes(kind)) { await frvCompare(st, box, file, kind, current); return; }
-    await frvBody(st, box, file, kind, current);
+    await frvBody(frvDownload(st), box, file, kind, current);
   })();
 }
-async function frvBody(st: FrvState, box: HTMLElement, file: ViewedFile, kind: string | null, current: () => boolean): Promise<void> {
-  const size = file.blob.size, href = st.d.querySelector<HTMLAnchorElement>('[data-frv-dl]')?.href || '';
+const frvDownload = (st: FrvState): string => st.d.querySelector<HTMLAnchorElement>('[data-frv-dl]')?.href || '';
+// A linked file: Google's own preview of a Google file, else a card that opens it.
+function frvLinkBody(box: HTMLElement, link: string, label: string): void {
+  const g = googlePreviewUrl(link);
+  box.removeAttribute('aria-busy');
+  if (!g) { box.innerHTML = frvCard(label, null, '', link); return; }
+  // Google draws its own file, signed in as the viewer; Tico passes nothing to it but the address.
+  const frame = document.createElement('iframe');
+  frame.className = 'frv-google';
+  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms');
+  frame.referrerPolicy = 'no-referrer';
+  frame.title = label;
+  frame.src = g;
+  box.replaceChildren(frame);
+  box.classList.add('frv-is-frame');
+}
+// One file, its latest version, drawn into `box` as this view draws it: the meeting window's stage (a Tico file shown in
+// a call, ui/app/call-window.ts). The file's info, or null when the viewer may not read it (nothing of it is fetched).
+async function fileShowInto(box: HTMLElement, id: string, current: () => boolean): Promise<FrvInfo | null> {
+  const info = (await v2Get<{file?: FrvInfo}>(`/v2/files/${encodeURIComponent(id)}/info`, {fresh: true}))?.file || null;
+  if (!info || !current()) return info;
+  box.className = 'frv-preview';
+  box.setAttribute('aria-busy', 'true');
+  box.innerHTML = '<div class="frv-skel"></div>';
+  const link = info.locator === 'remote_link' && info.open?.type === 'external' ? info.open.url : '';
+  if (link) { frvLinkBody(box, link, info.title || info.name || 'File'); return info; }
+  let file: ViewedFile;
+  try { file = await viewFile(id, info.name || 'file', null); } catch (e) {
+    if (current()) { box.removeAttribute('aria-busy'); box.innerHTML = `<p class="err frv-err">${esc(errorMessage(e, 'Could not open the file.'))}</p>`; }
+    return info;
+  }
+  if (current()) await frvBody(`${API}/v2/files/${encodeURIComponent(id)}`, box, file, frvKindOf(file.name, file.blob.type), current);
+  return info;
+}
+async function frvBody(href: string, box: HTMLElement, file: ViewedFile, kind: string | null, current: () => boolean): Promise<void> {
+  const size = file.blob.size;
   const done = (cls: string) => { box.removeAttribute('aria-busy'); box.classList.add('frv-' + cls); };
   const tooBig = (kind === 'markdown' || kind === 'text') && size > DOC_VIEW_LIMIT || kind === 'csv' && size > CSV_LIMIT
     || kind === 'html' && size > HTML_VIEW_LIMIT || kind === 'docx' && size > FRV_DOCX_LIMIT;
@@ -287,7 +307,7 @@ async function frvBody(st: FrvState, box: HTMLElement, file: ViewedFile, kind: s
 // A version against the one before it, as a line diff (task-files.ts tfDiffHTML); a Word file by its text.
 async function frvCompare(st: FrvState, box: HTMLElement, file: ViewedFile, kind: string, current: () => boolean): Promise<void> {
   const n = frvShownVersion(st) ?? 0, prev = st.versions.find(x => x.version < n);
-  if (!prev) { st.cmp = false; await frvBody(st, box, file, kind, current); return; }
+  if (!prev) { st.cmp = false; await frvBody(frvDownload(st), box, file, kind, current); return; }
   try {
     const old = await viewFile(st.id, st.name || 'file', prev.version);
     const text = (f: ViewedFile) => kind === 'docx' ? docxText(f.blob) : f.blob.text();

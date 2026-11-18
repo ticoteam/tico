@@ -2,8 +2,10 @@
    view of the meeting alone. The desktop app shows it in a small window of its own, a browser in a tab, a phone on the
    whole screen. Small by default: the title, Live and the time, one face per person and bot in the call (a ring on
    whoever speaks, a crossed-out mic on whoever is muted, a breathing ring on a bot that is thinking), one caption line,
-   then Chat, Transcript and People, and the mic, share and Leave. While someone else shares their screen it grows to
-   the wide layout, the screen beside the tabs, and goes back when the sharing stops. Once the call has ended the same
+   then Chat, Transcript and People, and the mic, share and Leave. Share is a small menu: Screen, or Show a Tico file
+   (one of the company's files, drawn as the file view draws it). While something shows (someone else's screen, or a
+   file) it grows to the wide layout, the stage beside the tabs, and goes back when it stops; one thing at a time, the
+   newest (callShown, ui/app/thread-call-live.ts). The chat's + links a file (its card) or a task (a task card). Once the call has ended the same
    view is its notes: who was in it, how long, the summary, the action items (Create makes each a task linked to the
    call) and the transcript.
    The window joins only when it was opened to (`?join=1`, set by Start, Join and the call's card): a plain visit to its
@@ -34,13 +36,20 @@ interface CwState {
   // The notes, once the call has ended (null until read), and what was done with each item here.
   ended: boolean; notes: CwNotes | null; made: Map<string, string>; tq: string; tsearch: boolean; notesTries: number;
   task: '' | 'new' | 'link'; note: string; noteAt: number;
+  // The share menu: closed, its two choices, or the file picker.
+  pop: '' | 'menu' | 'file';
+  // The tasks the chat's cards name, as read (null: not readable), once each.
+  tasks: Map<string, CwTask | null>;
 }
+// A task a chat card names: what the card shows of it (GET /v2/tasks/{id}).
+interface CwTask { id?: string; title?: string; status?: string; owner_id?: string | null }
 
 let CW: CwState | null = null;
 const CW_LIVE = '/v2/live-meetings/';
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CW_ICONS = {add: 'add', search: 'search', close: 'close', copy: 'content_copy', team: 'groups', check: 'check', link: 'link',
-  down: 'expand_more', open: 'open_in_new', mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', task: 'task_alt'};
+  down: 'expand_more', open: 'open_in_new', mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', task: 'task_alt',
+  file: 'description', lock: 'lock', done: 'check_circle', todo: 'radio_button_unchecked'};
 // The sound the browser held back until a tap (autoplay): a speaker, crossed out.
 const CW_SOUND_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/></svg>';
 // The shared screen on the whole phone: four corners.
@@ -86,7 +95,7 @@ function pageCallWindow(id: string): void {
       <div class="cw-caption cw-caption-head" aria-live="polite"></div>
     </header>
     <div class="cw-body">
-      <div class="cw-stage"><div id="cw-screen" class="cw-screen" hidden></div>
+      <div class="cw-stage"><div id="cw-screen" class="cw-screen" hidden></div><div id="cw-file" class="cw-file" hidden></div>
         <button type="button" class="cw-full" data-cw="full" aria-label="Full screen" title="Full screen"><span>${CW_FULL_SVG}</span></button>
         <div class="cw-caption cw-caption-stage" aria-hidden="true"></div></div>
       <div class="cw-side">
@@ -99,11 +108,13 @@ function pageCallWindow(id: string): void {
       </div>
     </div>
     <div class="cw-after" hidden></div>
+    <div class="cw-pop" role="dialog" aria-label="Share" hidden></div>
     <footer class="cw-bar"></footer>`;
   document.body.append(el);
   const st: CwState = {id, el, tab: 'chat', threadId: '', title: '', join, chat: null, source: null, meeting: '', after: 0, eventId: 0,
     chunks: new Map(), bots: [], gone: new Set(), busy: new Set(), joinTried: false, missing: false, drawn: 0, wide: false, size: null,
-    ended: false, notes: null, made: new Map(), tq: '', tsearch: false, notesTries: 0, task: '', note: '', noteAt: 0};
+    ended: false, notes: null, made: new Map(), tq: '', tsearch: false, notesTries: 0, task: '', note: '', noteAt: 0,
+    pop: '', tasks: new Map()};
   CW = st;
   el.addEventListener('click', ev => { void cwClick(st, ev); });
   el.addEventListener('input', ev => {
@@ -127,7 +138,7 @@ function callWindowStop(): void {
   threadUnmount(st.chat);
   // A shared screen goes back to the bar.
   const bar = $('#call-bar .call-screen');
-  for (const v of st.el.querySelectorAll('#cw-screen video')) bar?.append(v);
+  for (const v of st.el.querySelectorAll<HTMLVideoElement>('#cw-screen video')) { v.hidden = false; bar?.append(v); }
   st.el.remove();
   document.body.classList.remove('call-page', 'cw-wide-page', 'cw-composer');
   if (CALL) callScreenSync();
@@ -226,7 +237,10 @@ function cwChatMount(st: CwState): void {
   st.chat = threadMount(host, {id: st.threadId, header: false, reach: false, placeholder: () => 'Message',
     // The call's own posts (its card, transcript and notes) are not part of its chat: they are the tabs and the notes.
     hide: m => !!m.refs?.call && !(m.refs as {live_meeting?: {chat_id?: string}}).live_meeting?.chat_id,
-    attachMore: {plus: true, items: [['link', 'Link a task', CW_ICONS.link], ['new', 'New task', CW_ICONS.task]], pick: k => { st.task = k === 'new' ? 'new' : 'link'; cwTaskDraw(st); }}});
+    attachMore: {plus: true, items: [['link', 'Link a task', CW_ICONS.link], ['new', 'New task', CW_ICONS.task]], pick: k => { st.task = k === 'new' ? 'new' : 'link'; cwTaskDraw(st); }},
+    // Link a file posts it at once: its link, which the chat draws as the file's card.
+    libPick: f => { if (st.chat) void thvSend(st.chat, {text: `[${f.title.replace(/[[\]]/g, '')}](${API}/v2/files/${encodeURIComponent(f.id)})`}); },
+    body: m => cwTaskBody(st, m)});
 }
 
 // ----------------------------------------------------------------- reading the call
@@ -288,8 +302,39 @@ const cwCount = (faces: CwFace[]): number => faces.filter(f => f.on).length;
 // Bots the viewer may put in a call (the server checks again): active, chattable, writable, not the Assistant's helpers.
 const cwAddable = () => shownEmps().filter(e => e.status === 'active' && e.can_chat !== false && (!e.my_access || e.my_access.write) && !isAssistantHelper(e.name));
 const cwMayAdd = (slug: string): boolean => cwAddable().some(e => e.id === slug || e.slug === slug);
-// Who is sharing their screen into the stage, '' for nobody.
-const cwSharer = (st: CwState): string => st.el.querySelector<HTMLElement>('#cw-screen video')?.dataset.who || '';
+// What the stage shows (callShown): someone else's screen, once it arrives here, or a Tico file, anyone's; one at a time.
+// Who shows it, '' for nothing.
+function cwStageDraw(st: CwState, live: boolean): string {
+  const top = live ? callShown(cwHere(st)) : null;
+  const screen = st.el.querySelector<HTMLElement>('#cw-screen'), file = st.el.querySelector<HTMLElement>('#cw-file');
+  const fileId = top?.what.startsWith('file:') ? top.what.slice(5) : '';
+  const who = top?.what === 'screen' && !top.mine ? top.who : '';
+  let video = false;
+  for (const v of screen?.querySelectorAll<HTMLVideoElement>('video') ?? []) { v.hidden = !who || v.dataset.who !== who; video ||= !v.hidden; }
+  if (screen) screen.hidden = !video;
+  if (file) {
+    file.hidden = !fileId;
+    if (fileId && top) cwFileDraw(st, file, fileId, top.who);
+    else if (file.dataset.file) { file.dataset.file = ''; file.replaceChildren(); }
+  }
+  return video ? who : fileId && top ? top.who : '';
+}
+// A Tico file on the stage: its title over it, then the file as the file view draws it (fileShowInto); "No access" for
+// someone who may not read it, and nothing of it is fetched.
+function cwFileDraw(st: CwState, box: HTMLElement, id: string, who: string): void {
+  const by = `${cwAv(who, 18)}<span>${esc(cwName(who))}</span>`;
+  if (box.dataset.file === id) { const b = box.querySelector<HTMLElement>('.cw-file-by'); if (b) patchHTML(b, by); return; }
+  box.dataset.file = id;
+  box.innerHTML = `<div class="cw-file-head"><span class="cw-file-t"></span><span class="cw-file-by">${by}</span></div><div class="cw-file-body"><div class="frv-preview" aria-busy="true"><div class="frv-skel"></div></div></div>`;
+  const body = box.querySelector<HTMLElement>('.cw-file-body > div'), title = box.querySelector<HTMLElement>('.cw-file-t');
+  if (!body || !title) return;
+  const current = (): boolean => CW === st && box.dataset.file === id;
+  void Promise.resolve(fileShowInto(body, id, current)).then(info => {
+    if (!current()) return;
+    if (!info) { body.className = 'cw-noaccess muted'; body.removeAttribute('aria-busy'); body.innerHTML = `${cwIcon(CW_ICONS.lock)}<span>No access</span>`; return; }
+    title.textContent = info.title || info.name || 'File';
+  }, () => { if (current()) { body.className = 'cw-noaccess muted'; body.innerHTML = '<span>Could not open the file</span>'; } });
+}
 
 // ----------------------------------------------------------------- drawing
 // Many changes come at once (speakers, mutes, the call's view): one draw for them all.
@@ -303,7 +348,7 @@ function cwDraw(st: CwState): void {
   if (ended && !st.ended) { st.ended = true; void cwAfterLoad(st); }
   el.classList.toggle('cw-ended', ended);
   el.classList.toggle('cw-missing', st.missing);
-  const sharer = live ? cwSharer(st) : '';
+  const sharer = cwStageDraw(st, live);
   cwWide(st, !!sharer);
   const title = el.querySelector<HTMLElement>('.cw-title');
   const name = st.title || v?.title || (st.missing ? 'Call not found' : 'Call');
@@ -312,7 +357,8 @@ function cwDraw(st: CwState): void {
   if (meta) {
     const since = v?.started_at || '';
     if (live && since) callTick();
-    const sharing = sharer ? (sharer === myActor() ? 'You' : actorName(sharer)) + ' sharing' : cwHere(st)?.sharing ? 'You are sharing' : '';
+    const mine = sharer === myActor() || sharer === cwHere(st)?.room?.localParticipant?.identity;
+    const sharing = sharer && !mine ? `${actorName(sharer)} sharing` : sharer || cwHere(st)?.sharing ? 'You are sharing' : '';
     patchHTML(meta, live ? `<span class="cw-live-dot" aria-hidden="true"></span>Live${since ? ` · <span data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${sharing ? ` · ${esc(sharing)}` : ''}`
       : ended ? esc(cwWhen(v)) : '');
   }
@@ -447,10 +493,12 @@ function cwBarDraw(st: CwState, v: CallRecord | null): void {
     patchHTML(bar, `<span class="spacer"></span><button type="button" class="primary cw-join" data-cw="join">Join</button>`);
     return;
   }
-  const btn = (k: string, icon: string, label: string, on = false): string =>
-    `<button type="button" class="cw-ctl${on ? ' on' : ''}" data-cw-ctl="${k}" aria-label="${esc(label)}" title="${esc(label)}" aria-pressed="${on}">${cwIcon(icon)}</button>`;
+  const btn = (k: string, icon: string, label: string, on = false, more = ''): string =>
+    `<button type="button" class="cw-ctl${on ? ' on' : ''}" data-cw-ctl="${k}" aria-label="${esc(label)}" title="${esc(label)}" aria-pressed="${on}"${more}>${cwIcon(icon)}</button>`;
+  // Share: Stop while this tab shows something, else the menu (Screen, Show a Tico file).
+  const showing = here.sharing || !!here.showing;
   patchHTML(bar, `${btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted)}${
-    callShareable() ? btn('share', here.sharing ? CW_ICONS.stop : CW_ICONS.share, here.sharing ? 'Stop sharing' : 'Share screen', here.sharing) : ''}
+    showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true) : btn('share', CW_ICONS.share, 'Share', false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`)}
     <span class="spacer"></span><button type="button" class="cw-leave" data-cw-ctl="leave"${here.leaving ? ' disabled' : ''}>Leave</button>`);
 }
 // The wide layout while someone else's screen shows. The desktop app's window grows to fit it and goes back after
@@ -485,6 +533,12 @@ function cwWhen(v: CallRecord | null): string {
 // ----------------------------------------------------------------- acting
 async function cwClick(st: CwState, ev: MouseEvent): Promise<void> {
   const t = eventElement(ev); if (!t) return;
+  // A click anywhere else puts the share menu away.
+  if (st.pop && !t.closest('.cw-pop, [data-cw-ctl="share"]')) cwPop(st, '');
+  const pop = t.closest<HTMLElement>('[data-cw-pop]');
+  if (pop) { await cwPopPick(st, pop.dataset.cwPop || ''); return; }
+  const card = t.closest<HTMLAnchorElement>('a[data-cw-tcard]');
+  if (card) { ev.preventDefault(); cwOpenElsewhere(st, card.getAttribute('href') || ''); return; }
   const tab = t.closest<HTMLElement>('[data-cw-tab]');
   if (tab) { st.tab = tab.dataset.cwTab || 'chat'; cwDraw(st); if (st.tab === 'transcript') cwScrollEnd(st); return; }
   const bot = t.closest<HTMLElement>('[data-cw-bot]');
@@ -514,9 +568,9 @@ async function cwClick(st: CwState, ev: MouseEvent): Promise<void> {
 function cwScrollEnd(st: CwState): void { const pane = st.el.querySelector<HTMLElement>('.cw-transcript'); if (pane) pane.scrollTop = pane.scrollHeight; }
 // The shared screen on the whole screen (a phone's), and back.
 function cwFull(st: CwState): void {
-  const video = st.el.querySelector<HTMLVideoElement & {webkitEnterFullscreen?: () => void}>('#cw-screen video');
+  const video = st.el.querySelector<HTMLVideoElement & {webkitEnterFullscreen?: () => void}>('#cw-screen video:not([hidden])');
   if (document.fullscreenElement) { void document.exitFullscreen().catch(() => {}); return; }
-  const box = st.el.querySelector<HTMLElement>('#cw-screen');
+  const box = st.el.querySelector<HTMLElement>('#cw-file:not([hidden])') || st.el.querySelector<HTMLElement>('#cw-screen');
   if (box?.requestFullscreen) void box.requestFullscreen().catch(() => { video?.webkitEnterFullscreen?.(); });
   else video?.webkitEnterFullscreen?.();
 }
@@ -534,7 +588,37 @@ async function cwControl(st: CwState, k: string, button: HTMLElement): Promise<v
     if (!CALL) cwClose(st);
     return;
   }
+  if (k === 'share') { cwPop(st, st.pop ? '' : 'menu'); return; }
+  if (k === 'stop') { cwPop(st, ''); await callShowStop(); return; }
   await callBarAct(k, button);
+}
+// The share menu over the controls: Screen (where the browser can share one) and Show a Tico file, which turns into the
+// file picker (ui/app/thread-library.ts); a pick shows it to everyone.
+function cwPop(st: CwState, pop: CwState['pop']): void {
+  st.pop = pop;
+  const box = st.el.querySelector<HTMLElement>('.cw-pop'), bar = st.el.querySelector<HTMLElement>('.cw-bar');
+  st.el.querySelector('[data-cw-ctl="share"]')?.setAttribute('aria-expanded', String(!!pop));
+  if (!box) return;
+  box.hidden = !pop;
+  box.classList.toggle('cw-pop-file', pop === 'file');
+  if (!pop) { box.replaceChildren(); return; }
+  if (bar) box.style.bottom = `${Math.max(0, st.el.getBoundingClientRect().bottom - bar.getBoundingClientRect().top) + 6}px`;
+  box.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); cwPop(st, ''); st.el.querySelector<HTMLElement>('[data-cw-ctl="share"]')?.focus(); } };
+  if (pop === 'menu') {
+    box.innerHTML = `${callShareable() ? `<button type="button" class="cw-pop-row" data-cw-pop="screen">${cwIcon(CW_ICONS.share)}<span>Screen</span></button>` : ''}<button type="button" class="cw-pop-row" data-cw-pop="file">${cwIcon(CW_ICONS.file)}<span>Show a Tico file</span></button>`;
+    box.querySelector<HTMLElement>('button')?.focus();
+    return;
+  }
+  box.innerHTML = '<div class="cw-pop-lib"></div>';
+  const pane = box.querySelector<HTMLElement>('.cw-pop-lib');
+  if (pane) void libPickerMount(pane, {links: true, placeholder: 'Find a file or page', close: () => cwPop(st, ''),
+    pick: f => { cwPop(st, ''); void callShowFile(f.id); }});
+}
+async function cwPopPick(st: CwState, k: string): Promise<void> {
+  if (k === 'file') { cwPop(st, 'file'); return; }
+  cwPop(st, '');
+  const button = st.el.querySelector<HTMLElement>('[data-cw-ctl="share"]');
+  if (k === 'screen' && button) await callBarAct('share', button);
 }
 // A bot's face (or its People row): one tap puts it in the call; on one in the call it leaves at once, with Undo.
 async function cwBotToggle(st: CwState, slug: string, on: boolean): Promise<void> {
@@ -586,10 +670,14 @@ function cwClose(st: CwState): void {
   window.setTimeout(() => { if (!window.closed && CW === st) location.hash = threadHref(st.threadId); }, 150);
 }
 function cwOpenThread(st: CwState): void {
-  if (!st.threadId) return;
-  const url = location.pathname + location.search + threadHref(st.threadId);
+  if (st.threadId) cwOpenElsewhere(st, threadHref(st.threadId));
+}
+// A place in the app opened beside the call (a new window or tab) so the call stays; a phone goes there.
+function cwOpenElsewhere(_st: CwState, hash: string): void {
+  if (!hash.startsWith('#/')) return;
+  const url = location.pathname + location.search + hash;
   if (window.opener || !cwPhone()) { try { if (window.open(url, '_blank')) return; } catch {} }
-  location.hash = threadHref(st.threadId);
+  location.hash = hash;
 }
 
 // ----------------------------------------------------------------- tasks from the chat
@@ -631,6 +719,31 @@ async function cwTaskSubmit(st: CwState, form: HTMLFormElement): Promise<void> {
     buttons.forEach(b => { b.disabled = false; });
     cwToast(errorMessage(e, 'Could not do that'), true);
   }
+}
+// A message that is only a task's link (Link a task, New task) is the task's card: its state, its title and its owner.
+const CW_TASK_LINK = /^\[([^\]\n]*)\]\(#\/task\/([^)\s/?#]+)\)$/;
+function cwTaskBody(st: CwState, m: ThvMessage): string | null {
+  const hit = CW_TASK_LINK.exec((m.body || '').trim()); if (!hit) return null;
+  let id: string;
+  try { id = decodeURIComponent(hit[2] || ''); } catch { return null; }
+  if (!id) return null;
+  if (!st.tasks.has(id)) void cwTaskRead(st, id);
+  return cwTaskCardHTML(id, hit[1] || 'Task', st.tasks.get(id));
+}
+function cwTaskCardHTML(id: string, said: string, t: CwTask | null | undefined): string {
+  const title = t?.title || said, done = !!t?.status && t.status !== 'open';
+  const mark = `<span class="cw-tcard-mark${done ? ' done' : ''}" role="img" aria-label="${done ? 'Done' : 'To do'}">${cwIcon(done ? CW_ICONS.done : CW_ICONS.todo)}</span>`;
+  return `<div class="th-body"><a class="cw-tcard" href="#/task/${esc(encodeURIComponent(id))}" data-cw-tcard>${mark}<span class="cw-tcard-t">${esc(title)}</span>${
+    t?.owner_id ? `<span class="cw-tcard-who" title="${esc(cwName(t.owner_id))}">${cwAv(t.owner_id, 18)}</span>` : ''}</a></div>`;
+}
+// Read once per task: the chat draws again with what it says.
+async function cwTaskRead(st: CwState, id: string): Promise<void> {
+  st.tasks.set(id, null);
+  const r = await v2Get<{task?: CwTask} & CwTask>(`/v2/tasks/${encodeURIComponent(id)}`);
+  if (CW !== st) return;
+  const t = r?.task || r;
+  st.tasks.set(id, t?.id || t?.title ? t : null);
+  if (st.chat && !st.chat.gone) thvDraw(st.chat, {parts: ['list']});
 }
 // A task linked to the call's meeting (its rules decide who reads it).
 async function cwTaskMake(st: CwState, title: string, owner: string): Promise<{id?: string; title?: string}> {

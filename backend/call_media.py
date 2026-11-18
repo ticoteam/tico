@@ -119,7 +119,11 @@ def _claims(config, identity, name, video, ttl, now):
 
 
 def person_token(config, room, identity, name, *, now=None, ttl=TOKEN_TTL_SECONDS):
-    """A person's join token for one call room: audio and screen share, never camera or data."""
+    """A person's join token for one call room: audio and screen share, never camera or data.
+
+    Their own attributes may change (canUpdateOwnMetadata): what they show on the stage, `showing` (docs/meet.md,
+    Sharing). Nothing on the server reads a participant's name, metadata or attributes.
+    """
     video = {
         "roomJoin": True,
         "room": room,
@@ -127,7 +131,7 @@ def person_token(config, room, identity, name, *, now=None, ttl=TOKEN_TTL_SECOND
         "canPublish": True,
         "canPublishData": False,
         "canPublishSources": list(AUDIO_SOURCES),
-        "canUpdateOwnMetadata": False,
+        "canUpdateOwnMetadata": True,
     }
     return sign(_claims(config, identity, name, video, ttl, now), config.api_secret)
 
