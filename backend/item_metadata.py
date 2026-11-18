@@ -173,8 +173,10 @@ def prime_of_task(conn: "sqlite3.Connection", task_ids: "Iterable[str]", source:
     keys = sorted({str(link["item_key"]) for links in found.values() for link in links})
     keys = [k for k in keys if (GET_SQL, source, item_type, k) not in values]
     if keys:
+        # `item_key` is COLLATE NOCASE: a link's key finds its row whatever the case of either, so both sides are
+        # matched as NOCASE compares them (ASCII letters only), as `get` finds it.
         items = {
-            str(row["item_key"]): row
+            nocase(str(row["item_key"])): row
             for row in _rows(
                 conn,
                 "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key IN (SELECT value FROM json_each(?))",
@@ -182,7 +184,15 @@ def prime_of_task(conn: "sqlite3.Connection", task_ids: "Iterable[str]", source:
             )
         }
         for k in keys:
-            values.setdefault((GET_SQL, source, item_type, k), items.get(k.lower()))
+            values.setdefault((GET_SQL, source, item_type, k), items.get(nocase(k)))
+
+
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def nocase(text: str) -> str:
+    """`text` as SQLite's NOCASE collation compares it: ASCII A-Z folded to a-z, every other character as it is."""
+    return text.translate(_ASCII_LOWER)
 
 
 def tasks_of(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> list[str]:

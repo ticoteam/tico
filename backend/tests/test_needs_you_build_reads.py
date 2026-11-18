@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from backend import item_metadata as IM
 from backend import needs_cache
 from backend import question_marks as Q
 from backend import task_engine as E
@@ -33,6 +34,24 @@ SPEC = (
         "requirements": [{"kind": "page", "line": "Spec page", "person": ANA, "who_oks": "none"}],
     },
 )
+# A review page for the PR's newest commit, for Ana to OK. Its PR's repository is named in mixed case, as GitHub gives
+# it: `item_key` is NOCASE, so its link finds its metadata whatever the case of either.
+REVIEW = (
+    {
+        "name": "Review",
+        "owner": "assignee",
+        "requirements": [
+            {
+                "kind": "page",
+                "line": "Review page",
+                "person": ANA,
+                "who_oks": "none",
+                "settings": {"at_head": True, "rubric": "Reviewed"},
+            }
+        ],
+    },
+)
+REVIEW_PRS = (("Acme/Widgets#7", "Acme/Widgets#7"), ("ACME/widgets#8", "acme/Widgets#8"))  # (link's key, saved key)
 WHO = {ANA: Identity(ANA, "owner", "ana@acme.example"), BEN: Identity(BEN, "human", "ben@acme.example")}
 
 
@@ -62,6 +81,19 @@ def company(api, pages, questions, idle):
                 )
         X.new_task(c, ANA, "Waits for its machine", "eng", assignee="bot:idle")
         X.new_task(c, ANA, "Held up by a bot on no computer", "eng", assignee="bot:stuck")
+        X.pipeline(c, "review", "Review", REVIEW, manager="bot:manager")
+        for linked, saved in REVIEW_PRS:
+            row = X.new_task(c, ANA, f"Review {linked}", "review", assignee="bot:writer")
+            repo, number = linked.split("#")
+            c.execute(
+                "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+                "VALUES (?,?,'pr',?,?,?,'github','pr',?,?)",
+                (H.new_id(), row["id"], f"https://github.com/{repo}/pull/{number}", repo, int(number), linked, H.now()),
+            )
+            IM.save(c, "github", "pr", saved, {"state": "open", "head_sha": "aaa", "merged_sha": None}, 1)
+            fid, _ = _page(c, store, f"<p>Reviewed {linked} at aaa</p>")
+            made = P.attach(c, row["id"], "Review page", "page:" + fid, "bot:writer", seen_version=row["version"])
+            _say(c, made, "met")
     more(store, pages, questions, idle)
     return store
 
@@ -116,7 +148,10 @@ def test_the_batched_build_is_the_row_by_row_build_byte_for_byte(api, count_only
         mine, _ = build(api, ANA, "snapshot")
         kinds = {item["kind"] for item in mine}
         assert {"ask", "question", "paused"} <= kinds, kinds
-        assert len([item for item in mine if item["kind"] == "ask" and (item.get("ask") or {}).get("page")]) == 6
+        assert len([item for item in mine if item["kind"] == "ask" and (item.get("ask") or {}).get("page")]) == 6 + 2
+        # The review pages are for their PRs' newest commits: each is Ana's to OK, not stale.
+        reviews = [item for item in mine if str((item.get("task") or {}).get("title")).startswith("Review ")]
+        assert len(reviews) == len(REVIEW_PRS), [item["line"] for item in mine]
 
 
 def test_more_pages_questions_and_idle_bots_read_no_more_statements(api):
@@ -176,8 +211,8 @@ def test_the_next_pages_come_from_the_build_that_gave_the_first(api, monkeypatch
     builds.clear()
     later = api.get(f"/api/v2/needs-you?limit=5&cursor={first['next']}", headers=headers("ana-test")).json()
     assert later["restart"] is True and later["version"] == mend["version"] and builds == [False]
-    # A held list serves for TTL seconds, no longer.
-    now = [1000.0]
+    # A held list serves for TTL seconds from when its snapshot began, no longer.
+    now = [needs_cache.clock() + 1.0]
     monkeypatch.setattr(needs_cache, "clock", lambda: now[0])
     fresh = api.get("/api/v2/needs-you?limit=5", headers=headers("ana-test")).json()
     now[0] += needs_cache.TTL + 1
@@ -190,8 +225,84 @@ def test_the_next_pages_come_from_the_build_that_gave_the_first(api, monkeypatch
 def test_the_cache_holds_a_bounded_number_of_lists_and_one_version_a_viewer():
     held = needs_cache.NeedsCache()
     for n in range(needs_cache.MAX_ENTRIES + 10):
-        held.keep(f"viewer{n}", "v1", [{"id": n}], None)
+        held.keep(f"viewer{n}", "v1", [{"id": n}], None, needs_cache.begin())
     assert len(held) == needs_cache.MAX_ENTRIES and held.get("viewer0", "v1") is None
-    held.keep("viewer99", "v1", [], None)
-    held.keep("viewer99", "v2", [], None)
+    held.keep("viewer99", "v1", [], None, needs_cache.begin())
+    held.keep("viewer99", "v2", [], None, needs_cache.begin())
     assert held.get("viewer99", "v1") is None and held.get("viewer99", "v2") is not None
+
+
+def test_a_build_that_began_before_another_never_takes_its_place(monkeypatch):
+    """Two builds of a viewer's list run at once. The one whose snapshot began first (before a change) ends last: it
+    is not kept over the newer one, whose cursors stay served, and nothing it held ages from when it ended."""
+    now = [5000.0]
+    monkeypatch.setattr(needs_cache, "clock", lambda: now[0])
+    held = needs_cache.NeedsCache()
+    older = needs_cache.begin()
+    now[0] += 1
+    newer = needs_cache.begin()
+    now[0] += 4
+    held.keep("ana", "after", [{"id": "b"}], None, newer)
+    now[0] += 10
+    held.keep("ana", "before", [{"id": "a"}], None, older)  # the slow build that began first ends last
+    assert held.get("ana", "before") is None
+    kept = held.get("ana", "after")
+    assert kept is not None and kept.items == [{"id": "b"}]
+    # Its newer one evicted for room, the older build is still not kept.
+    for n in range(needs_cache.MAX_ENTRIES):
+        held.keep(f"viewer{n}", "v1", [], None, needs_cache.begin())
+    assert held.get("ana", "after") is None
+    held.keep("ana", "before", [{"id": "a"}], None, older)
+    assert held.get("ana", "before") is None
+    # A list serves until TTL after its snapshot began, not after the build ended; one that old already is not kept.
+    now[0] = newer + needs_cache.TTL + 0.5
+    held.keep("ana", "after", [{"id": "b"}], None, newer)
+    assert held.get("ana", "after") is None
+    fresh = needs_cache.begin()
+    now[0] += needs_cache.TTL - 1
+    held.keep("ana", "later", [{"id": "c"}], None, fresh)
+    assert held.get("ana", "later") is not None
+    now[0] += 2
+    assert held.get("ana", "later") is None
+
+
+def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_reads(api, monkeypatch):
+    """Ben loses a task on his next page (it is made private) after he read the first: his next cursor does not show
+    it from the held build. The page is built again without it, starting from the top (`restart`), as before the
+    cache. A cursor hit while he still reads every task on it checks them in one statement besides the rules."""
+    company(api, pages=0, questions=0, idle=0)
+    store = api.app.state.store
+    first = api.get("/api/v2/needs-you?limit=2", headers=headers("ben-test")).json()
+    assert first["next"] and first["count"] >= 4, first
+    whole = api.get("/api/v2/needs-you", headers=headers("ben-test")).json()
+    second = api.get(f"/api/v2/needs-you?limit=2&cursor={first['next']}", headers=headers("ben-test")).json()
+    assert "restart" not in second and second["items"] == whole["items"][2:4]
+    # A cursor hit reads the caller's task rules and one statement for the page's tasks, never a build.
+    seen = []
+    take, give = store._take, store._give
+
+    def counting_take():
+        c = take()
+        c.set_trace_callback(seen.append)
+        return c
+
+    def quiet_give(c):
+        c.set_trace_callback(None)
+        give(c)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, "_take", counting_take)
+        patched.setattr(store, "_give", quiet_give)
+        again = api.get(f"/api/v2/needs-you?limit=2&cursor={first['next']}", headers=headers("ben-test")).json()
+    assert again == second
+    page_reads = [sql for sql in seen if "FROM tasks WHERE id IN" in sql]
+    print(f"\n  a cursor hit's statements: {len(seen)}", *seen, sep="\n    ")
+    assert len(page_reads) == 1 and len(seen) <= 12, seen
+    gone = second["items"][0]["task_id"]
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (gone,))
+    later = api.get(f"/api/v2/needs-you?limit=2&cursor={first['next']}", headers=headers("ben-test")).json()
+    assert later["restart"] is True and later["version"] != first["version"]
+    rebuilt = api.get("/api/v2/needs-you", headers=headers("ben-test")).json()
+    assert gone not in {item.get("task_id") for item in rebuilt["items"]}
+    assert later["items"] == rebuilt["items"][:2] and later["count"] == first["count"] - 1

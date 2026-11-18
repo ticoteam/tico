@@ -2103,6 +2103,17 @@ def needs_page(items, version, limit, cursor):
     return items[offset:end], (needs_cursor(version, end) if end < len(items) else None), restarted
 
 
+def needs_still_readable(c, auth, who, items):
+    """Whether the caller still reads every task these Needs-you items name (`auth.task_sql`, as needs_items read them):
+    one statement for them all, before a page cut from a held build (backend/needs_cache.py) is given."""
+    wanted = set()
+    for it in items:
+        wanted.update(it.get("task_ids") or ())
+        if it.get("task_id"):
+            wanted.add(it["task_id"])
+    return not wanted or _readable_task_ids(c, auth.task_sql(c, who), wanted) == wanted
+
+
 def needs_bots(items, me):
     """How many Needs-you items each bot is behind ({"bot:slug": n}, needs_actor). A page carries this for the whole
     list, so the sidebar's numbers do not wait for every page."""
@@ -3453,10 +3464,17 @@ def install_views(app, store, auth, mutate, task_view):
         held = needs_cache.of(app)
         viewer = needs_cache.viewer(who)
         if cursor and not count and ids is None:
-            # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py).
+            # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py), once
+            # the caller is seen still to read every task on it; when one is gone, the list is built again.
             built = held.get(viewer, cursor.partition(".")[0])
             if built is not None:
-                return needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until)
+                out = needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts)
+                with store.read_transaction() as c:
+                    readable = needs_still_readable(c, auth, who, out["items"])
+                if readable:
+                    return out
+                held.drop(viewer)
+        began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
@@ -3467,7 +3485,8 @@ def install_views(app, store, auth, mutate, task_view):
             from . import ask_snoozes
 
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
-        held.keep(viewer, current, items, woken["snoozed_until"])
+        counts = {}  # the page counts, worked out by the first page, kept for the next ones
+        held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:
             return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
         if ids is not None:
@@ -3483,7 +3502,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "items": [x for x in items if str(x["id"]) in positions],
             }
         if limit is not None or cursor:
-            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"])
+            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"], counts)
         return {
             "actor": who.actor,
             "count": len(items),
@@ -3494,18 +3513,20 @@ def install_views(app, store, auth, mutate, task_view):
             **woken,
         }
 
-    def needs_paged(who, items, current, limit, cursor, snoozed_until):
+    def needs_paged(who, items, current, limit, cursor, snoozed_until, counts):
         page, after, restarted = needs_page(items, current, limit, cursor)
+        if not counts:  # over the whole list: once a build, however many of its pages are read
+            counts.update(by_kind=needs_kinds(items), bots=needs_bots(items, who.actor), stages=needs_stages(items))
         out = {
             "actor": who.actor,
             "count": len(items),
-            "by_kind": needs_kinds(items),
+            "by_kind": counts["by_kind"],
             "items": page,
             "version": current,
             "next": after,
             "snoozed_until": snoozed_until,
-            "bots": needs_bots(items, who.actor),
-            "stages": needs_stages(items),
+            "bots": counts["bots"],
+            "stages": counts["stages"],
         }
         if restarted:
             out["restart"] = True
