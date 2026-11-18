@@ -23,7 +23,8 @@ Renew tasks: from api_tools.EXPIRING_DAYS before a key's end date (typed, or rea
 tool reads "Expires in N days" and the same task opens as "Renew <vendor> key", with the same key card, naming the date
 and the bots that hold the key. It is decided after each check and proxied call, and every hour for every tool with an
 end date that close (`sweep`), so a key no check reaches is renewed too. It closes itself when the key's value is
-replaced or the date moves past the window; a key that lapses first keeps the same task.
+replaced, its date moves past the window (typed, read, or noticed by the sweep) or the key is removed; a key that lapses
+first keeps the same task.
 
 One open task a tool: a repeat finds it (event `tool.reconnect_task`, its target the tool) and adds nothing, notifies
 nobody. When the tool reads Working (or Works (limited)) again or its key's value is replaced, its card says fixed
@@ -90,15 +91,38 @@ def _tool(c: Any, tool_id: str) -> Row:
     return c.execute("SELECT * FROM tools WHERE id=? AND kind='api'", (tool_id,)).fetchone()
 
 
-def open_task(c: Any, tool_id: str) -> Row:
-    """The tool's open Reconnect task, or None."""
+def _opened(c: Any, tool_id: str) -> tuple[Row, dict[str, Any]]:
+    """The tool's open task and the detail it was opened with, or (None, {})."""
     found = c.execute(
         "SELECT detail FROM events WHERE action=? AND target=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (EVENT, tool_id),
     ).fetchone()
     detail: dict[str, Any] = json.loads(found[0] or "{}") if found else {}
     task: Row = H.task(c, detail.get("task")) if detail.get("task") else None
-    return task if task and task["status"] in H.ACTIVE_STATUSES else None
+    return (task, detail) if task and task["status"] in H.ACTIVE_STATUSES else (None, {})
+
+
+def open_task(c: Any, tool_id: str) -> Row:
+    """The tool's open Reconnect task, or None."""
+    return _opened(c, tool_id)[0]
+
+
+def renewing(c: Any, tool_id: str) -> bool:
+    """Whether the tool's open task is a Renew task (opened before an end date, not on a rejected key)."""
+    return bool(_opened(c, tool_id)[1].get("renew"))
+
+
+def _ends_soon(c: Any, tool_id: str) -> bool:
+    """Whether a stored key of the tool ends within api_tools.EXPIRING_DAYS (or has ended)."""
+    api_tools = _api_tools()
+    soon = (api_tools._today() + api_tools.timedelta(days=api_tools.EXPIRING_DAYS)).isoformat()
+    return bool(
+        c.execute(
+            "SELECT 1 FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL AND expires_on IS NOT NULL "
+            "AND expires_on<=? LIMIT 1",
+            (tool_id, soon),
+        ).fetchone()
+    )
 
 
 def _vendor(tool: Row) -> str:
@@ -367,6 +391,9 @@ def sync(c: Any, tool_id: str) -> Row:
         return start(c, tool_id, "its check or its calls got 401")
     if ending(text):
         return start(c, tool_id, "its key's end date is near", renew=True)
+    if renewing(c, tool_id) and not _ends_soon(c, tool_id):
+        # Its date moved away or its key went, whatever the tool reads now (Not checked has no check to say Working).
+        return close(c, tool_id, f"No key of {tool['name']} ends within {_api_tools().EXPIRING_DAYS} days now.")
     if text in FIXED:
         return close(c, tool_id, f"{tool['name']} reads {text} again.")
     return None
@@ -392,11 +419,28 @@ def sweep(store: Any) -> int:
                 (soon,),
             )
         ]
+        # Tools with a Renew task open whose date has moved away since: it ends here too.
+        renewals = [
+            str(r[0])
+            for r in c.execute(
+                "SELECT DISTINCT target FROM events WHERE action=? AND json_extract(detail,'$.renew') ORDER BY target",
+                (EVENT,),
+            )
+        ]
         for tool_id in ids:
             if not open_task(c, tool_id):
                 _safely(sync, c, tool_id)
                 done += 1
+        for tool_id in renewals:
+            if tool_id not in ids and renewing(c, tool_id):
+                _safely(sync, c, tool_id)
+                done += 1
     return done
+
+
+def redated(c: Any, tool_id: str) -> Row:
+    """A key's end date was typed, cleared or the key removed: an open Renew task ends when no end date is near."""
+    return _safely(sync, c, tool_id) if renewing(c, tool_id) else None
 
 
 def replaced(c: Any, tool_id: str) -> Row:

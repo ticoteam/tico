@@ -219,3 +219,57 @@ def test_nothing_of_the_reply_but_the_day_is_kept(api, monkeypatch):
         events = json.dumps([dict(r) for r in c.execute("SELECT * FROM events")])
     for text in (checks_rows, events):
         assert "09:00:00" not in text and "acme-octocat-synthetic" not in text
+
+
+def test_a_typed_date_moved_away_or_a_removed_key_ends_the_renew_task_of_a_tool_no_check_reaches(api):
+    setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    tid = tool(api, "Acme internal")["id"]  # Not checked: nothing ever reads Working for it
+    kid = key(api, tid, OLD)["id"]
+    typed(api, tid, kid, day(10))
+    reconnect_tasks.sweep(api.app.state.store)
+    [task] = tasks(api, tid)
+    typed(api, tid, kid, day(90))  # the person typed the renewed key's date
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "done"
+        assert c.execute("SELECT ended FROM task_reconnects WHERE task_id=?", (task["id"],)).fetchone()[0] == "fixed"
+
+    # The sweep notices a date moved by any other path, and a removed key ends it too.
+    typed(api, tid, kid, day(5))
+    reconnect_tasks.sweep(api.app.state.store)
+    [_, second] = tasks(api, tid)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE credentials SET expires_on=? WHERE id=?", (day(60), kid))
+    reconnect_tasks.sweep(api.app.state.store)
+    with api.app.state.store.read() as c:
+        assert H.task(c, second["id"])["status"] == "done"
+    typed(api, tid, kid, day(5))
+    reconnect_tasks.sweep(api.app.state.store)
+    third = tasks(api, tid)[-1]
+    r = api.delete(f"/api/v2/api-tools/{tid}/keys/{kid}", headers=headers())
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, third["id"])["status"] in ("done", "closed")
+
+
+def test_a_limited_github_key_still_gets_its_end_date(api, monkeypatch):
+    tid, kid = github(api)
+    answer = checks(monkeypatch)
+    answer.reply = api_tools.Reply(401, missing_scope=True, ends_header=f"{day(40)} 09:00:00 UTC")
+    assert post(api, f"api-tools/{tid}/check", {})["detail"] == api_tools.LIMITED
+    assert stored(api, kid) == (day(40), "vendor")
+
+
+def test_a_check_answered_after_the_value_was_replaced_keeps_no_date(api, monkeypatch):
+    tid, kid = github(api)
+
+    def answer(url, hdrs, params, read_body=False):
+        # The person saves a new value while the old one's check is out at the vendor.
+        r = api.patch(f"/api/v2/api-tools/{tid}/keys/{kid}", json={"value": NEW}, headers=headers())
+        assert r.status_code == 200, r.text
+        return api_tools.Reply(200, ends_header=f"{day(3)} 09:00:00 UTC")
+
+    monkeypatch.setattr(api_tools, "send_check", answer)
+    post(api, f"api-tools/{tid}/check", {})
+    assert stored(api, kid) == (None, None)
+    assert tasks(api, tid) == []  # no Renew task for the new value from the old one's date

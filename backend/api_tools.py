@@ -1023,11 +1023,17 @@ def vendor_end_date(service, reply):
     return _utc_day(raw) if raw else ""
 
 
-def _keep_end_date(c, key_id, ends):
+def _revision(c, key_id):
+    row = c.execute("SELECT revision FROM credentials WHERE id=?", (key_id,)).fetchone()
+    return row["revision"] if row else None
+
+
+def _keep_end_date(c, key_id, ends, revision=None):
     """A check's word on its key's end date (`vendor_end_date`): a day replaces any date and marks it the vendor's; ''
-    clears a date the vendor gave before and keeps one a person typed."""
-    row = c.execute("SELECT expires_on, expires_source FROM credentials WHERE id=?", (key_id,)).fetchone()
-    if row is None:
+    clears a date the vendor gave before and keeps one a person typed. Nothing changes when the key's value was
+    replaced since the check read it (`revision`): the answer was about the old value."""
+    row = c.execute("SELECT expires_on, expires_source, revision FROM credentials WHERE id=?", (key_id,)).fetchone()
+    if row is None or (revision is not None and row["revision"] != revision):
         return
     if ends and (row["expires_on"], row["expires_source"]) != (ends, "vendor"):
         c.execute("UPDATE credentials SET expires_on=?, expires_source='vendor' WHERE id=?", (ends, key_id))
@@ -1065,7 +1071,7 @@ def _check_one(tool, key, secret, auth=None):
         return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer"), None
     code = reply.status_code
     if code == 401 and reply.missing_scope:  # a restricted key: known to the vendor, this path needs another permission
-        return True, code, LIMITED, None
+        return True, code, LIMITED, vendor_end_date(tool["service"], reply) if auth is None else None
     rejected = TS.rejects(tool["service"], code)
     ok = 200 <= code < 300 or (code == 403 and not rejected)  # a 403: the key is known, the path needs another scope
     text = _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
@@ -1105,6 +1111,9 @@ def _check_tool(store, vault, tool_id):
             if mcp or together
             else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
         )
+        # The revision each value was checked at, read after decrypt (which may reseal it): an end date is kept only
+        # while the key still holds that value (`_keep_end_date`), never on a value saved while the check was out.
+        stored = [({**dict(k), "revision": _revision(c, k["id"])}, secret) for k, secret in stored]
     if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
         return mcp_connect.check(store, vault, tool_id)
     if together:  # a template's keys go on one call together, as the proxy sends them
@@ -1139,7 +1148,7 @@ def _record_checks(store, tool_id, results):
             )
             rows.append(row | {"ok": ok})
             if ends is not None:
-                _keep_end_date(c, key["id"], ends)
+                _keep_end_date(c, key["id"], ends, key.get("revision"))
     rows.sort(key=lambda r: r["ok"])
     return rows
 
@@ -1734,6 +1743,8 @@ def update_key(c, who, vault, tool_id, key_id, body):
     )
     if body.value is not None:
         reconnect_tasks.replaced(c, tool_id)  # its Reconnect task, if one is open, is done
+    elif body.expires_on is not None:
+        reconnect_tasks.redated(c, tool_id)  # a Renew task ends once no key's end date is near
     return _key_view(c, who, vault.row(c, key_id), True, vault.admins)
 
 
@@ -1743,6 +1754,7 @@ def delete_key(c, who, vault, tool_id, key_id):
     if not may_remove(who, key["created_by"], manages=TA.admin(c, who, vault.admins)):
         TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     _drop_key(c, who, key["id"])
+    reconnect_tasks.redated(c, tool_id)  # the key it renewed is gone
     return {"deleted": True, "id": key_id}
 
 
