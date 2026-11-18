@@ -2197,12 +2197,12 @@ def dropped_line(entry, depth):
     return f"- `{entry['file']}`: {where} ({took})"
 
 
-def cap_light(record, counts, timings=None, root=ROOT):
+def cap_light(record, counts, timings=None):
     """A light plan's time cap on the Python tests narrow() kept (`counts`: tests per file), as (kept counts, timings).
     Updates `record` (narrow's) with what the cap left. The pull request plan and `local` both cap through here, so a
     builder's local run picks what its pull request run will. The seconds are the run's measured timings over the
     committed table; the returned timings carry the cap's estimates, untimed files included, for packing."""
-    timings = {**committed_timings(root), **(timings or {})}
+    timings = {**committed_timings(), **(timings or {})}
     seconds = weights(counts, timings)
     levels = record.pop("level", {})
     kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
@@ -2891,7 +2891,7 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     if record is not None and python:
         counts = collected(python, root)
         if counts is not None:  # a collection that failed caps nothing: when unsure, run more
-            python = sorted(cap_light(record, counts, root=root)[0])
+            python = sorted(cap_light(record, counts)[0])
     browser = browser_scripts(picked["browser"], root) if picked["browser"] else []
     # On a RunsOn VM (scripts/heavy.sh with TICO_HEAVY_REMOTE=1) the venv is python3 on its PATH, not this path.
     remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
