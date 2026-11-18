@@ -718,6 +718,14 @@ def runtime_provider(runtime):
     return row["id"] if row else ""
 
 
+def maker(model):
+    """Who made `model` (`anthropic`, `openai`, ...): its catalog provider, or for a Tico AI Gateway id the maker of the
+    model it runs underneath (gateway_tiers.maker_of), so Tico Medium on Claude Sonnet is Anthropic's. '' when the
+    catalog does not list it."""
+    row = MODEL_BY_ID.get(str(model or "")) or {}
+    return str(row.get("maker") or row.get("provider") or "")
+
+
 def serves(provider, row):
     """Whether enabling `provider` lets bots run this catalog model: the model's own provider, or
     the catch-all provider of the model's runtime (OpenRouter serves every pi model)."""
@@ -1132,7 +1140,7 @@ def check_order(record):
     for row in rows:
         if row["model"] not in seen and not MODEL_BY_ID[row["model"]].get("deprecated"):
             seen.add(row["model"])
-            order.append(row)
+            order.append({**row, "maker": maker(row["model"]) or row["provider"]})
     return order
 
 
@@ -1161,9 +1169,8 @@ def author_provider(author):
     author = str(author or "").strip()
     if author in PROVIDER_BY_ID:
         return author
-    row = MODEL_BY_ID.get(author)
-    if row:
-        return row["provider"] or ""
+    if author in MODEL_BY_ID:
+        return maker(author)
     return runtime_provider(author)
 
 
@@ -1173,7 +1180,7 @@ def check_choice(record, author, available=None):
     second opinion from another provider is preferred; with none, the author's own provider still checks the work."""
     own = author_provider(author)
     rows = [row for row in check_order(record) if available is None or row["runtime"] in available]
-    for row in [r for r in rows if r["provider"] != own] + [r for r in rows if r["provider"] == own]:
+    for row in [r for r in rows if r["maker"] != own] + [r for r in rows if r["maker"] == own]:
         return row
     raise ProviderError(
         "check_model",
