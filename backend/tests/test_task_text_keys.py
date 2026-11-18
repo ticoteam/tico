@@ -176,6 +176,14 @@ def test_every_detector_key_is_still_refused_in_task_text():
         assert len(K.found(text)) >= len(certain), case.get("id")
 
 
+def test_a_body_that_is_not_json_is_checked_as_one_text():
+    # A client that sends plain text, or JSON cut short, still has its words checked: no route reads around the check.
+    assert [rule for _, rule in K.keys_in(("the token is " + KEY).encode())]
+    assert K.keys_in(b'{"text": "the token is ' + KEY.encode() + b'"')
+    assert K.keys_in(b"\xff\xfe" + KEY.encode())
+    assert not K.keys_in(b"not json, and no key in it")
+
+
 def test_a_named_key_is_refused_however_it_is_spelled(api):
     task = _task(api)
     for line in NAMED_KEYS:
