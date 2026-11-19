@@ -1,11 +1,12 @@
 """Measures the two polls every computer sends (Nov 19 TIDY flight recorder: POST /api/v2/runners/heartbeat 669 an hour,
 avg 558 ms, slow samples 48 queries; POST /api/v2/runners/performance 459 an hour, ~27 queries) on a fictional company
-at TIDY's size: RUNNERS computers sharing 165 bots, a few hundred open tasks with a worktree each, a few turns running.
+at TIDY's size: RUNNERS computers sharing 165 bots, a few hundred open tasks with a worktree each, no turn
+running (the provenance walk for live turns runs on the read snapshot, before the write lock, and is not measured here).
 
     nice -n 10 .venv/bin/python bench/perf-runner-polls.py
 
 Env: RUNS (default 40 beats per route), RUNNERS (10), WORKTREES (300), SHAPES=1 (the statement shapes one call runs
-inside its write transaction, with their count and time), PROFILE=heartbeat|performance (cProfile that route).
+inside its write transaction, with their count and time).
 
 Per route it prints the median and p90 wall time of a request, its SQL time and statement count, and the write
 transaction's lock hold (BEGIN IMMEDIATE to COMMIT) with the statements run inside it. Only fictional data, in a temporary
@@ -169,7 +170,8 @@ class Meter:
 
         def counted(sql, ms, locked=False):
             if self.on:
-                self.queries.append((flight.fingerprint(sql), ms, getattr(self.local, "held", False)))
+                # The text as given: fingerprinted after the request, outside the timed call and lock hold.
+                self.queries.append((sql, ms, getattr(self.local, "held", False)))
             return query(sql, ms, locked)
 
         def timed(conn, rec=None, **kwargs):
@@ -209,7 +211,8 @@ def measure(api, meter, name, send):
         counts.append(len(meter.queries))
         holds.append(sum(meter.holds))
         locked_counts.append(sum(1 for *_, inside in meter.queries if inside))
-        for shape, ms, inside in meter.queries:
+        for sql_text, ms, inside in meter.queries:
+            shape = flight.fingerprint(sql_text)
             shapes[(inside, shape)] += 1
             shape_ms[(inside, shape)] += ms
     q = lambda xs, p: sorted(xs)[min(len(xs) - 1, int(len(xs) * p))]
@@ -300,17 +303,6 @@ def main():
                 explain(app.state.store, computers)
                 measure(api, meter, "heartbeat", beat)
                 measure(api, meter, "performance", lambda n: perf(n + len(computers)))
-                if os.environ.get("PROFILE"):
-                    import cProfile
-                    import pstats
-
-                    send = {"heartbeat": beat, "performance": perf}[os.environ["PROFILE"]]
-                    prof = cProfile.Profile()
-                    prof.enable()
-                    for n in range(20):
-                        send(n)
-                    prof.disable()
-                    pstats.Stats(prof).sort_stats("cumulative").print_stats(40)
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 

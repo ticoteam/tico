@@ -215,16 +215,16 @@ def refusals(c, runner_id, bots):
     asked once per hosted bot, under the write lock (50 reads a beat on a computer with 50 bots)."""
     out = {}
     for part in H.chunks(bots):
+        keys = {f'subscription-unavailable:{bot}': bot for bot in part}
         for key, value in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key IN (%s)" % ','.join('?' * len(part)),
-            ['subscription-unavailable:' + bot for bot in part],
+            "SELECT key,value FROM registry_metadata WHERE key IN (%s)" % ','.join('?' * len(keys)), list(keys)
         ):
             try:
                 blocked = json.loads(value)
             except ValueError:
                 continue
             if isinstance(blocked, dict) and blocked.get('runner_id') == runner_id:
-                out[key.removeprefix('subscription-unavailable:')] = blocked
+                out[keys[key]] = blocked
     return out
 
 

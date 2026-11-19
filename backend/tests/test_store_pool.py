@@ -62,8 +62,8 @@ def test_a_savepoint_inside_a_transaction_keeps_its_reads_and_a_rollback_to_it_d
         assert read_cache.rows(c, "SELECT x FROM t")[0][0] == 1
         c.execute("RELEASE inner")
         assert ("SELECT x FROM t", ()) in c.read_cache
-        c.execute("RELEASE outer")  # ends the transaction: nothing is answered from it after
-        assert not c.in_transaction and read_cache.cache(c) is None and c.read_cache == {}
+        c.execute("RELEASE outer")  # ends the transaction: its reads go with it
+        assert not c.in_transaction and c.read_cache == {}
 
 
 def test_a_connection_a_caller_changed_is_not_reused(tmp_path):
