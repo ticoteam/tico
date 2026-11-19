@@ -33,7 +33,7 @@ from . import page_owners
 from . import rule_due as _rule_due
 from . import task_privacy as _privacy
 from . import teammate_access as _teammate_access
-from .api_contract import api_v2
+from .api_contract import api_v2, error
 from .entities import store as ES
 from .models import ID, Contract
 from .store import H as _H, Problem
@@ -106,7 +106,8 @@ class MatterWrite(Contract):
     side: Literal["theirs", "ours"] | None = None
     forum: str | None = Field(default=None, max_length=FORUM_MAX)
     place_id: ID | None = None
-    product_id: ID | None = None
+    # A product's id is product/<key>, and its key can be as long as a product's name (200).
+    product_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 def _via(who: Any) -> str:
@@ -619,10 +620,12 @@ def matters(
     risk_id: str | None = None,
     kind: str | None = None,
     open_only: bool | None = None,
+    product_ids: list[str] | None = None,
     limit: Any = LIMIT_DEFAULT,
     offset: Any = 0,
 ) -> Row:
-    """One page of matters `who` reads: {matters: [{task, matter, risks}], next_offset}."""
+    """One page of matters `who` reads: {matters: [{task, matter, risks}], next_offset}. `product_ids` (product_matter_ids)
+    keeps the matters about one product."""
     limit, offset = _page(limit, offset)
     if kind is not None and kind not in MATTER_KINDS:
         raise Problem("validation", "kind is one of " + ", ".join(MATTER_KINDS), 422)
@@ -633,10 +636,13 @@ def matters(
         args.append(kind)
     if open_only is not None:
         where.append("t.status='open'" if open_only else "t.status<>'open'")
+    if product_ids is not None:
+        where.append(f"m.product_id IN ({','.join('?' * len(product_ids)) or 'NULL'})")
+        args.extend(product_ids)
     sql = MATTERS_SQL.format(
         matter=", ".join(f"m.{k} AS m_{k}" for k in MATTER_FIELDS),
         visible=_visible_tasks(auth, c, who, ", ".join((*TASK_FIELDS, *MASK_FIELDS))),
-        join="JOIN" if kind else "LEFT JOIN",
+        join="JOIN" if kind or product_ids is not None else "LEFT JOIN",
         risk=" AND g.id=?" if risk_id else "",
         where="".join(" AND " + w for w in where),
     )
@@ -669,6 +675,16 @@ def matters(
             }
         )
     return {"matters": out, "next_offset": offset + limit if len(rows) > limit else None}
+
+
+def product_matter_ids(c: Any, who: Any, ident: str) -> list[str]:
+    """The ids a matter may store for one product the caller sees: the product's id (a bare key is read as
+    product/<key>) and each record since merged into it, as a matter keeps the id it was given."""
+    ident = ident.strip()
+    product = _entity(c, who.actor, ident if "/" in ident else "product/" + ident, "product")
+    stored = [r[0] for r in c.execute("SELECT DISTINCT product_id FROM matters WHERE product_id IS NOT NULL")]
+    now = _current(c, stored)
+    return [product, *(sid for sid in stored if sid != product and now[sid] == product)]
 
 
 def redact_audit(c: Any, auth: Any, who: Any, found: list[Row]) -> None:
@@ -876,20 +892,42 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def create_route(request: Request, body: RiskCreate) -> Any:  # pyright: ignore[reportUnusedFunction]
         return mutate(request, body, lambda c: create(auth, c, request.state.identity, body))  # pyright: ignore[reportUnknownLambdaType]
 
-    @app.get("/api/v2/matters", **api_v2("Risk", "listMatters", "Matters the caller reads, newest first", "MatterList"))
+    @app.get(
+        "/api/v2/matters",
+        **api_v2(
+            "Risk",
+            "listMatters",
+            "Matters the caller reads, newest first",
+            "MatterList",
+            responses={"404": error("not_found: no such risk or product, or one the caller may not see")},
+        ),
+    )
     def matters_route(  # pyright: ignore[reportUnusedFunction]
         request: Request,
         kind: str | None = None,
         open: bool | None = None,
         risk: str | None = None,
+        product: str | None = None,
         limit: int = LIMIT_DEFAULT,
         offset: int = 0,
     ) -> Any:
-        """Tasks carrying a risk that the caller reads, with their facts. `kind=dispute&open=true` is the Disputes tab."""
+        """Tasks carrying a risk that the caller reads, with their facts. `kind=dispute&open=true` is the Disputes tab;
+        `product` (its id, or its key) keeps the matters about that product."""
         who = reader(request)
         with store.read() as c:
             risk_id = require_risk(c, who, risk)["id"] if risk else None
-            return matters(auth, c, who, risk_id=risk_id, kind=kind, open_only=open, limit=limit, offset=offset)
+            product_ids = product_matter_ids(c, who, product) if product else None
+            return matters(
+                auth,
+                c,
+                who,
+                risk_id=risk_id,
+                kind=kind,
+                open_only=open,
+                product_ids=product_ids,
+                limit=limit,
+                offset=offset,
+            )
 
     @app.get(
         "/api/v2/risk/obligations",

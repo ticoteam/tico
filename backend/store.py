@@ -1395,6 +1395,10 @@ class Store:
                     from .meeting_items import redact
 
                     result = redact(c, replay_principal, replay_auth, result)
+                if operation.startswith('/api/v2/products'):
+                    from .products import replayed as products_replayed
+
+                    result = products_replayed(replay_auth, c, replay_principal, result)
                 result = replayed_refusal(c, replay_principal, result)
                 from .files import readable_page_refs
 

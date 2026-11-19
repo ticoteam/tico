@@ -1,7 +1,9 @@
 /* ui/app/products.ts — Company › Products: our products, the record that joins Finance, Legal, Growth and Customers.
    Each is a Contacts Product record our company owns, with eight fields: name, kind, status, tax kind, owner, the
-   agreement it is sold under, its code (repositories) and the vendors it depends on.
-   Backend: backend/products.py (GET/POST /api/v2/products, GET/POST /api/v2/products/<key>).
+   agreement it is sold under, its code (repositories) and the vendors it depends on. Each also carries its risks: the
+   risks on matters about it and on the agreements it is sold under, and how many of those matters are open.
+   Backend: backend/products.py (GET/POST /api/v2/products, GET/POST /api/v2/products/<key>); a product's matters are
+   GET /api/v2/matters?product=<key> (backend/risk.py).
    Addresses:
      #/products          the list
      #/products/<key>    one product (key: its id after product/)
@@ -10,11 +12,15 @@
 
 interface PrFile { id: string; title: string; page: boolean }
 interface PrLink { id: string; name: string; link_id: string; file?: PrFile | null }
+interface PrRisk { id: string; key: string; label: string; via: ('matter' | 'agreement')[] }
 interface Product {
   id: string; key: string; name: string;
   kind: string | null; status: string | null; tax_kind: string | null; owner_teammate: string | null;
   repositories: string[]; agreements: PrLink[]; depends_on: PrLink[];
+  open_matters: number; risks: PrRisk[];
 }
+// A row of GET /v2/matters: the task (the fields this page reads) and the risks it carries.
+interface PrMatter { task: { id: string; label?: string | null; title?: string | null; status: string } }
 type PrChoice = 'kind' | 'status' | 'tax_kind';
 type PrList = 'repositories' | 'agreements' | 'depends_on';
 
@@ -28,9 +34,12 @@ const PR_CHOICES: Record<PrChoice, [string, string][]> = {
 const PR_FIELD_NAMES: Record<PrChoice | 'owner_teammate', string> = {kind: 'Kind', status: 'Status', tax_kind: 'Tax kind', owner_teammate: 'Owner'};
 
 let PRP: { run: number } | null = null;   // the page on screen: a late answer for a page left behind draws nothing
+let PR_MATTERS: { key: string; rows: PrMatter[] } | null = null;   // the matters of the product on screen
 let PR_RUN = 0;   // never reset, so a page opened after leaving Products never takes an earlier page's answer
 
 const prHref = (key: string): string => PRODUCTS_ROUTE + '/' + encodeURIComponent(key);
+// A risk shows by name: Risk has no page of its own to open yet.
+const prRisks = (p: Product): string => p.risks.map(r => esc(r.label)).join(', ');
 const prLive = (run: number): boolean => PRP !== null && PRP.run === run;
 const prErr = (e: unknown): string => `<p class="err" data-pr-error>${esc(errorMessage(e, 'Something went wrong.'))}</p>`;
 const prWord = (field: PrChoice, key: string | null): string => key ? (PR_CHOICES[field].find(([k]) => k === key)?.[1] ?? key) : '';
@@ -76,6 +85,8 @@ function prTable(rows: readonly Product[]): string {
     {head: 'Tax kind', cls: 'muted', cell: p => esc(prWord('tax_kind', p.tax_kind))},
     {head: 'Agreement', cls: 'pr-agreement', cell: p => p.agreements.map(prAgreement).join(', ')},
     {head: 'Owner', cls: 'muted', cell: p => esc(prWho(p.owner_teammate))},
+    {head: 'Risks', cls: '', cell: prRisks},
+    {head: 'Matters', cls: 'muted', cell: p => p.open_matters ? `${p.open_matters} open` : ''},
   ];
   const shown = cols.filter(c => rows.some(r => c.cell(r) !== ''));
   return `<table class="tt-list pr-list"><thead><tr><th>Name</th>${shown.map(c => `<th>${c.head}</th>`).join('')}</tr></thead>
@@ -123,14 +134,20 @@ async function pageProduct(key: string): Promise<void> {
   if (!main) return;
   main.innerHTML = `<div class="tt pr pr-one" id="pr-root" data-pr-page="product">${skelRows(6, { card: true })}</div>`;
   let product: Product;
+  let rows: PrMatter[];
+  // A product's matters come from the matters list (its most, 200); a failed read leaves the card out, not the page.
+  const matters = get<{ matters: PrMatter[] }>(`/v2/matters?product=${encodeURIComponent(key)}&limit=200`, { fresh: true })
+    .then(r => r.matters, () => [] as PrMatter[]);
   try {
     product = (await get<{ product: Product }>(`/v2/products/${encodeURIComponent(key)}`, { fresh: true })).product;
+    rows = await matters;
   } catch (e) {
     if (prLive(run)) main.innerHTML = `<div class="tt pr">${pageHead({title: 'Product', hook: 'pr-ehead', back: {href: PRODUCTS_ROUTE, label: 'Products'}, more: PAGE_HEAD_COPY})}${prErr(e)}</div>`;
     return;
   }
   const root = document.getElementById('pr-root');
   if (!prLive(run) || !root) return;
+  PR_MATTERS = { key: product.key, rows };
   prDraw(root, product);
   prBind(root, run, product);
 }
@@ -146,7 +163,21 @@ function prDraw(root: HTMLElement, p: Product): void {
       ${prListCard('agreements', 'Agreement', p.agreements.map(a => ({value: a.id, html: prAgreement(a), label: a.name})))}
       ${prListCard('repositories', 'Code', p.repositories.map(r => ({value: r, html: `<a href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${esc(r)}</a>`, label: r})))}
       ${prListCard('depends_on', 'Depends on', p.depends_on.map(d => ({value: d.id, html: `<a href="${DIR_ROUTE}/${encodeURIComponent(d.id)}">${esc(d.name)}</a>`, label: d.name})))}
+      ${prRiskCards(p)}
     </div>`;
+}
+// Risks and Matters: read-only cards, shown only when the product has some. A matter is set on its task (Risk).
+function prRiskCards(p: Product): string {
+  const matters = PR_MATTERS?.key === p.key ? PR_MATTERS.rows : [];
+  const risks = p.risks.length ? `<section class="card dir-card" data-pr-risks><header><h2>Risks</h2></header>
+    <ul class="pr-items">${p.risks.map(r => `<li><span class="pr-item">${esc(r.label)}</span></li>`).join('')}</ul></section>` : '';
+  const rows = matters.map(m => {
+    const closed = m.task.status !== 'open';
+    return `<li data-pr-matter="${esc(m.task.id)}"${closed ? ' class="muted"' : ''}><span class="pr-item"><a href="#/task/${encodeURIComponent(m.task.id)}">${esc(m.task.title || m.task.label || m.task.id)}</a></span>
+      ${closed ? '<span class="muted">Closed</span>' : m.task.label ? `<span class="muted">${esc(m.task.label)}</span>` : ''}</li>`;
+  }).join('');
+  const open = p.open_matters ? `<span class="spacer"></span><span class="muted">${p.open_matters} open</span>` : '';
+  return risks + (rows ? `<section class="card dir-card" data-pr-matters><header><h2>Matters</h2>${open}</header><ul class="pr-items">${rows}</ul></section>` : '');
 }
 // A field's row: its name, then its value as a quiet select (an empty choice clears it).
 function prSelectRow(field: PrChoice | 'owner_teammate', options: readonly [string, string][], value: string | null): string {
@@ -252,5 +283,5 @@ function prBind(root: HTMLElement, run: number, p: Product): void {
 
 // Leaving the page drops its state, so a late answer draws nothing.
 function productsStop(r: string): void {
-  if (!rdUnder((r || '').split('?')[0] ?? '', PRODUCTS_ROUTE)) PRP = null;
+  if (!rdUnder((r || '').split('?')[0] ?? '', PRODUCTS_ROUTE)) { PRP = null; PR_MATTERS = null; }
 }

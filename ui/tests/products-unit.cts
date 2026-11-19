@@ -1,5 +1,5 @@
 // No browser: the Products list shows a column only when some product has a value in it, words not keys, and an
-// agreement opens its file when it has one.
+// agreement opens its file when it has one. Risks show by name, and open matters as a count.
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const vm: typeof import('node:vm') = require('node:vm');
@@ -18,7 +18,7 @@ const prTable = (context as unknown as {prTable(rows: unknown[]): string}).prTab
 
 const product = (over: Record<string, unknown>) => ({
   id: 'product/x', key: 'x', name: 'X', kind: null, status: null, tax_kind: null, owner_teammate: null,
-  repositories: [], agreements: [], depends_on: [], ...over,
+  repositories: [], agreements: [], depends_on: [], open_matters: 0, risks: [], ...over,
 });
 const heads = (html: string): string[] => [...html.matchAll(/<th>([^<]*)<\/th>/g)].map(m => m[1] ?? '');
 
@@ -37,4 +37,12 @@ assert.match(html, />Software</, 'a tax kind shows its word');
 assert.match(html, /<a href="#\/pages\/f1">Supply<\/a>/, 'an agreement with a page opens it');
 assert.match(html, /data-label="Agreement">Terms</, 'an agreement without a file is its name alone');
 assert.match(html, />Ana</);
+const risky = prTable([
+  product({key: 'kit', open_matters: 2, risks: [{id: 't1', key: 'risk:supplier-recall', label: 'Supplier <recall>', via: ['matter']}]}),
+  product({key: 'app'}),
+]);
+assert.deepEqual(heads(risky), ['Name', 'Risks', 'Matters']);
+assert.match(risky, /data-label="Risks">Supplier &#60;recall&#62;</, 'a risk is its name, escaped');
+assert.match(risky, />2 open</);
+assert.deepEqual(heads(prTable([product({open_matters: 0, risks: []})])), ['Name'], 'no risks and no open matters: no columns');
 console.log('products-unit: ok');
