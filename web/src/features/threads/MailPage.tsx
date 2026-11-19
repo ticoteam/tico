@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQueries, useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { defaultStringifySearch } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
 import { clock, Composer, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
@@ -15,14 +16,13 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
-import { ItemHead, ListAndItem, PageMore } from '@/pagekinds';
+import { ItemHead, ListAndItem, PageMore, type ItemHeadProps } from '@/pagekinds';
 import { letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
 import { ChatWith, press, useMe } from './people';
 import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, textsBySenderQuery, type Mailbox } from './queries';
 import { NewButton, useThreadTabs } from './ThreadsPage';
 import './threads.css';
 
-const q = (params: Record<string, string>) => `?${new URLSearchParams(params).toString()}`;
 const DRAFT = 'DRAFT';
 
 export interface MailPageProps {
@@ -51,6 +51,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
   const rows = letterRows(list.data?.pages.flatMap((p) => p.messages) ?? []);
   // An opened mail keeps the words it was found by.
   const keep: Record<string, string> = words ? { q: words } : {};
+  const back = { to: '/threads/mail', label: 'Mail', search: { box: current, q: words } };
   // With more than one mailbox an empty one stays a list: the filter in the head leads to the others.
   const pick = boxes.length > 1;
   const none = boxes.length === 0;
@@ -94,7 +95,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             <Row
               className="tl-row tl-catch"
               title="Instructions"
-              href={`/threads/mail${q({ box: current, view: 'instructions' })}`}
+              href={`/threads/mail${defaultStringifySearch({ box: current, ...keep, view: 'instructions' })}`}
               selected={!!reading}
               target="page:/threads/mail?view=instructions"
             >
@@ -132,13 +133,13 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
       onRetry={() => void list.refetch()}
       {...(reading
         ? {
-            itemHead: <ItemHead title="Instructions" target="page:/threads/mail?view=instructions" back={BACK} />,
+            itemHead: <ItemHead title="Instructions" target="page:/threads/mail?view=instructions" back={back} />,
             item: <Instructions box={current} />,
             itemLabel: 'Instructions',
           }
         : open && mailbox
           ? {
-              itemHead: <LetterHead box={mailbox} id={open} />,
+              itemHead: <LetterHead box={mailbox} id={open} back={back} />,
               item: <LetterBody box={current} id={open} />,
               foot: mailbox.may?.send !== false && <Reply box={current} id={open} />,
               itemLabel: 'Mail',
@@ -157,7 +158,7 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
     <Row
       className="ml-row"
       title={`${from}: ${subject}`}
-      href={`/threads/mail${q({ box, ...keep, open: l.thread_id })}`}
+      href={`/threads/mail${defaultStringifySearch({ box, ...keep, open: l.thread_id })}`}
       selected={selected}
       unread={letterUnread(l)}
       target={`letter:${l.thread_id}`}
@@ -175,10 +176,8 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
   );
 }
 
-const BACK = { to: '/threads/mail', label: 'Mail' };
-
 /** The open mail's head: who wrote first and their address, the mailbox's agent, Archive and ⋯. */
-function LetterHead({ box, id }: { box: Mailbox; id: string }) {
+function LetterHead({ box, id, back }: { box: Mailbox; id: string; back: ItemHeadProps['back'] }) {
   const { data } = useQuery(letterQuery(box.address, id));
   const first = data?.find((l) => !l.labels?.includes(DRAFT));
   const last = data?.at(-1);
@@ -188,7 +187,7 @@ function LetterHead({ box, id }: { box: Mailbox; id: string }) {
     <ItemHead
       title={from}
       target={`letter:${id}`}
-      back={BACK}
+      back={back}
       lead={first ? <Avatar kind="person" name={from} className="is-out" size={28} /> : undefined}
       actions={
         <>
@@ -372,7 +371,7 @@ function contactsOf(texts: Text[]): Text[] {
 function ContactRow({ t, selected }: { t: Text; selected: boolean }) {
   const from = t.from || 'Unknown';
   return (
-    <Row className="tl-row" title={from} href={`/threads/messaging${q({ open: from })}`} selected={selected} target={`contact:${from}`}>
+    <Row className="tl-row" title={from} href={`/threads/messaging${defaultStringifySearch({ open: from })}`} selected={selected} target={`contact:${from}`}>
       <Avatar kind="person" name={from} className="is-out" decorative />
       <span className="row-title">{from}</span>
       <Ago at={t.received_at} className="row-age" />

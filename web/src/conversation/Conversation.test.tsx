@@ -173,8 +173,10 @@ describe('Conversation', () => {
     expect(sends()).toHaveLength(2);
   });
 
-  it('stays at the bottom as messages come in, and leaves the person where they scrolled to', async () => {
+  it('follows and reads new messages at the bottom, and waits for the reader to scroll back otherwise', async () => {
     const settle = () => act(async () => {});
+    const reads = () => posts.filter((p) => p.url === `/api/v2/threads/${T}/read`).map((p) => p.body);
+    serve(() => ({ status: 200, body: {} }));
     seed(Array.from({ length: 20 }, (_, i) => msg(i + 1, 'bot:qa', `Line ${i + 1}`)));
     show();
     await settle();
@@ -185,6 +187,7 @@ describe('Conversation', () => {
     emit('messages', [{ id: 'm21', conversation_id: T, message: msg(21, 'bot:qa', 'One more thing') }]);
     await settle();
     expect(log.scrollTop).toBe(bottom());
+    expect(reads()).toContainEqual({ seq: 21 });
 
     log.scrollTo({ top: 200 });
     await settle();
@@ -192,6 +195,11 @@ describe('Conversation', () => {
     await settle();
     expect(log.scrollTop).toBe(200);
     expect(bottom()).toBeGreaterThan(200);
+    expect(reads()).not.toContainEqual({ seq: 22 });
+
+    log.scrollTo({ top: bottom() });
+    await settle();
+    expect(reads()).toContainEqual({ seq: 22 });
   });
 
   it('draws a "New" line before the first message from someone else past the read mark', () => {
