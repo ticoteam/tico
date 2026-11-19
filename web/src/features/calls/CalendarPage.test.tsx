@@ -97,6 +97,30 @@ const block = (title: string) =>
   screen.getAllByTitle(new RegExp(`^${title},`)).find((el) => el.classList.contains('ev') || el.classList.contains('mi')) as HTMLElement;
 
 describe('Calendar', () => {
+  it.each([true, false])('still picks people or Just Tico when the server reports Tico Meet available=%s', async (available) => {
+    queryClient.setQueryData(['config'], { features: { tico_meet: available } });
+    queryClient.setQueryData(['directory'], { actors: [{ id: 'human:ana', name: 'Ana', kind: 'person' }], byId: {} });
+    seed('week', [occ({})]);
+    show(`/calendar?view=week&date=${DAY}`);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start call' }));
+    const picker = within(await screen.findByRole('dialog', { name: 'Start call' }));
+    expect(picker.getByRole('checkbox', { name: 'Just Tico', checked: true })).toBeTruthy();
+    fireEvent.click(picker.getByRole('checkbox', { name: 'Ana' }));
+    expect(picker.getByRole('checkbox', { name: 'Ana', checked: true })).toBeTruthy();
+    expect((picker.getByRole('button', { name: 'Start call' }) as HTMLButtonElement).disabled).toBe(!available);
+    fireEvent.click(picker.getByRole('checkbox', { name: 'Just Tico', checked: false }));
+    expect(picker.getByRole('checkbox', { name: 'Ana', checked: false })).toBeTruthy();
+    expect(picker.getByRole('checkbox', { name: 'Just Tico', checked: true })).toBeTruthy();
+    const go = picker.getByRole('button', { name: 'Call Tico' }) as HTMLButtonElement;
+    expect(go.disabled).toBe(!available);
+    if (!available) {
+      expect(picker.getByText('Tico Meet is not set up on this server')).toBeTruthy();
+      fireEvent.click(go);
+      expect(fetches).not.toContain('/api/v2/assistant');
+      expect(picker.getByRole('checkbox', { name: 'Just Tico', checked: true })).toBeTruthy();
+    }
+  });
+
   it('draws a week with its range, and an event links to its panel @s971 @s978', async () => {
     seed('week', [occ({})]);
     show(`/calendar?view=week&date=${DAY}`);
@@ -237,6 +261,7 @@ describe('Calendar on a phone', () => {
   });
 
   it('keeps New event filled in the head, the views and the range under it; Start call is in the ⋯', async () => {
+    queryClient.setQueryData(['config'], { features: { tico_meet: false } });
     seed('week', [occ({})]);
     seed('month', [occ({})]);
     const router = show(`/calendar?view=week&date=${DAY}`);
@@ -248,7 +273,9 @@ describe('Calendar on a phone', () => {
     await waitFor(() => expect(router.state.location.search).toMatchObject({ view: 'month' }));
     fireEvent.click(within(head).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Start call' }));
-    expect(await screen.findByRole('dialog', { name: 'Start call' })).toBeTruthy();
+    const picker = within(await screen.findByRole('dialog', { name: 'Start call' }));
+    expect(picker.getByText('Tico Meet is not set up on this server')).toBeTruthy();
+    expect((picker.getByRole('button', { name: 'Call Tico' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('Week is a strip of days with the chosen day under it', async () => {
