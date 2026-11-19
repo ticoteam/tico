@@ -2112,6 +2112,31 @@ def person_wrote_since(c, bot, since):
     )
 
 
+PLACE_SQL = "SELECT runner_id FROM assignments WHERE bot=?"
+
+
+def cooling_off_loads(c):
+    """What cooling_off reads, for a page that asks it of many bots in one snapshot (holds._usage_limit): the claim's
+    loads (backend/claim_loads.py: the company's providers and plans, every open hold and every assigned computer's
+    row, read once, as Health passes them), with each bot's computer (PLACE_SQL) and configuration (BS.ONE_SQL) primed
+    in the snapshot's read cache. A row a page primed already stays. None outside a snapshot."""
+    from . import claim_loads
+    from .read_cache import cache, prime
+
+    if cache(c) is None:
+        return None
+    configs = {r["bot"]: r for r in c.execute(f"SELECT {BS.CONFIG} AS config,bc.bot FROM bot_config bc {BS.JOIN}")}
+    places = {r["bot"]: r for r in c.execute("SELECT runner_id,bot FROM assignments")}
+    bots = configs.keys() | places.keys()
+    prime(c, BS.ONE_SQL, {(b,): configs.get(b) for b in bots})
+    prime(c, PLACE_SQL, {(b,): places.get(b) for b in bots})
+    runners = {
+        r["id"]: r
+        for r in c.execute("SELECT * FROM runners_with_state WHERE id IN (SELECT runner_id FROM assignments)")
+    }
+    return claim_loads.read(c, None, runners, ())
+
+
 def cooling_off(c, settings, bot, loads=None):
     """Whether a usage limit keeps the bot's next turn waiting: the claim's own answer (claim_refusal), from the login
     holds alone (backend/login_holds.py). The login its turn would sign in with (its own, a company subscription's, or
@@ -2122,12 +2147,12 @@ def cooling_off(c, settings, bot, loads=None):
     from .read_cache import one
     from .shared_bots import follow
 
-    place = one(c, "SELECT runner_id FROM assignments WHERE bot=?", (bot,))
-    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()  # not the read cache: pages prime it with other columns first
+    place = one(c, PLACE_SQL, (bot,))
+    row = one(c, BS.ONE_SQL, (bot,))  # by name: pages prime this row with other columns too (prime_claimables)
     if not place or not place["runner_id"] or not row:
         return False
     runner = loads.runner_of(c, place["runner_id"]) if loads is not None else one(c, RUNNER_SQL, (place["runner_id"],))
-    config = follow(c, bot, json.loads(row[0] or "{}"))
+    config = follow(c, bot, json.loads(row["config"] or "{}"))
     if runner is not None and gateway_waits(c, settings, runner, config, loads):
         return bool(gateway_wait(c, runner["id"], bot, loads))
     return bool(login_refusal(c, settings, place["runner_id"], bot, config, loads=loads))
