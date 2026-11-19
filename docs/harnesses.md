@@ -264,30 +264,31 @@ its provider, grant credentials or guarantee model access on a computer.
 
 ### Run a bot's tasks on another model
 
-Use **Task model**, **Task effort** and **Task context length** for a bot's task sessions. Each starts as
-**Same as bot** and is set on its own: a task effort or context length works without a task model. Chat keeps the
-bot's own model, effort and **Compact at**.
+Use **Task model** for a bot's task sessions. Like every model picker it has **Harness**, **Model**, **Effort** and
+**Compact** in one panel, and starts as **Same as bot**. An effort or window works without a task model of its own:
+on **Same as bot**, tasks run on the bot's model at that effort, and the picker reads **Same as bot HIGH**. Chat
+keeps the bot's own model, effort and **Compact at**.
 
 1. Open **Settings > Bots** and click **Tasks** beside the bot's model.
-2. In the row that opens, choose the harness and model and click **Apply**, or change **Task effort** or
-   **Task context length** (each saves when changed).
+2. In the row that opens, open **Task model**, choose the harness, model, effort and window, and click **Apply**.
+   All of them save together.
 
-**Task effort** lists the efforts of the model that runs tasks: the task model, or the bot's own. **Task context
-length** offers the **Compact at** sizes. The **Tasks** mark gets an accent dot when any of them is set, and names
-a task context length (**Tasks · 600k**). For example, you can keep a bot on Sonnet 5.5 and choose Haiku 5.5 for its
-tasks. You can also set them in the bot editor, then click **Save bot**. Changing one keeps the others: picking
-**Same as bot** for the model keeps the task effort and context length, and tasks are back to the bot's own settings
-only when all three are **Same as bot**. Changing the bot's own model leaves its task settings set; a bulk **Change
-model** for task models keeps each bot's task context length.
+**Effort** lists the efforts of the model that runs tasks: the task model, or the bot's own. **Default** comes
+first: the model's own default effort or, on **Same as bot**, the bot's effort. **Compact** offers the **Compact at**
+sizes. The **Tasks** mark gets an accent dot when any of them is set, and names a task effort or window of their own
+(**Tasks · HIGH · 600k**). For example, you can keep a bot on Sonnet 5.5 and choose Haiku 5.5 for its tasks. You can
+also set it in the bot editor, then click **Save bot**. Choosing **Same as bot** for the harness keeps the window and
+sets the effort back to **Default**, and tasks are back to the bot's own settings only when model, effort and window
+are all **Same as bot**. Changing the bot's own model leaves its task settings set; a bulk **Change model** for task
+models keeps each bot's task window.
 
 If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
 to the bot's own model, with the task context length and any task effort that model takes; the task history records why.
 A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
-A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
-**Task context length** or save the same model again. Settings does not offer **Task effort** choices for such a
-model, so that field stays disabled there. A save that sends only an effort or a context length keeps the model too.
+A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change its
+window or save the same model again. Settings offers no other effort for such a model. A save that sends only an effort or a context length keeps the model too.
 Choosing such a model for a bot that does not have it saved is refused.
 
 #### A warning about a cheaper task model

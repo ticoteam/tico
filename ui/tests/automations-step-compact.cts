@@ -51,6 +51,8 @@ async function run(browser: Browser, viewport: AutomationsFakeSupport.Viewport, 
   const compact = panel.locator('[data-choice-compact]');
   assert.equal(await compact.inputValue(), '');
   assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', ...SIZES]);
+  // A step's run on Same as bot has no Effort of its own (only the bot's Task model picker has one): it could not save.
+  assert.equal(await panel.locator('[data-choice-effort]').isVisible(), false, 'no Effort row on Same as bot');
   await compact.selectOption('150000');
   await applyPicker(panel);
   assert.equal(await closedText(box), 'Same as bot 150K');

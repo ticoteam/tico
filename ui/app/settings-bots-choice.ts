@@ -12,8 +12,9 @@ type SettingsCompactMode = '' | 'bot' | 'task' | 'fallback' | 'bulk';
 // A bot's own turn settings for one harness each (backend/harnesses.py): Claude Code's output style and Codex's
 // verbosity; null is the harness's own. Kept on any harness, shown only on their own.
 interface SettingsTurnStyle { output_style: string | null; verbosity: string | null; }
-// A box's pick: its value ('harness::model::effort', '' for Same as bot / None), its window (null: the model's
-// default, the bot's own or each bot's own, as the mode says) and its turn style.
+// A box's pick: its value ('harness::model::effort', '' for Same as bot / None; a task pick on Same as bot with an
+// effort of its own is '::::effort'), its window (null: the model's default, the bot's own or each bot's own, as the
+// mode says) and its turn style.
 interface SettingsChoicePicker { value: () => string; compact: () => number | null; style: () => SettingsTurnStyle; valid: () => boolean; changed: () => boolean; }
 // A [data-bot-choice] box keeps its pick, so the bot editor's Save reads a pick that was Applied but not saved, and
 // what Apply does with it (`onPick`: save it, or hold it).
@@ -21,7 +22,7 @@ interface SettingsChoiceBox extends HTMLElement { picker?: SettingsChoicePicker;
 // How a box is drawn: what it chooses, for which bot, and what it has now.
 interface SettingsChoiceSpec {
   bot?: SettingsBot | null | undefined; kind: string; name: string; current: string; compact?: number | null; readonly?: boolean;
-  none?: string; noEffort?: boolean; mode: SettingsCompactMode; style?: SettingsTurnStyle | null;
+  none?: string; mode: SettingsCompactMode; style?: SettingsTurnStyle | null;
 }
 
 // Where a conversation compacts (backend/providers.py COMPACT_SIZES).
@@ -85,11 +86,13 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
   const c = settingsChoiceFromValue(value), bot = spec.bot;
   if (!c.model) {
     if (!spec.none) return bot ? {short: settingsDefaultLabel(bot), long: settingsDefaultLabel(bot)} : {short: 'Choose', long: 'Not chosen'};
-    // Same as bot with its tasks' own window, or bulk change's window alone; a fallback of None has none.
-    // (a task's or a step's own run on Same as bot runs on the bot's task model).
+    // Same as bot with its tasks' own effort and window ("Same as bot HIGH 150K"), or bulk change's window alone; a
+    // fallback of None has none. (A task's or a step's own run on Same as bot runs on the bot's task model.)
     const same = bot && spec.kind === 'run' && bot.task_model?.model ? bot.task_model : bot;
     const size = compact && (spec.mode === 'bulk' || (spec.mode === 'task' && settingsCompacts(same ? settingsBotHarness(same) : ''))) ? settingsSizeWords(compact) : '';
-    return {short: [spec.none, size].filter(Boolean).join(' '), long: [spec.none, size ? `compacts at ${size.toLowerCase()}` : ''].filter(Boolean).join(', ')};
+    const effort = spec.kind === 'task' && spec.mode === 'task' ? c.effort : '';
+    return {short: [spec.none, settingsEffortShort(effort), size].filter(Boolean).join(' '),
+      long: [spec.none, effort ? `${settingsEffortName(effort)} effort` : '', size ? `compacts at ${size.toLowerCase()}` : ''].filter(Boolean).join(', ')};
   }
   const compacts = !!spec.mode && settingsCompacts(c.harness);
   const size = compacts ? compact || (spec.mode === 'bot' ? settingsCompactDefault(c.model) : null) : null;
@@ -103,7 +106,7 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
 function settingsBoxSpec(box: HTMLElement): SettingsChoiceSpec {
   return {bot: box.dataset.botChoice ? S.emps.find(row => row.id === box.dataset.botChoice) : null, kind: box.dataset.kind || 'model',
     name: box.dataset.name || 'Model', current: box.dataset.current || '', compact: Number(box.dataset.compactCurrent) || null,
-    readonly: box.hasAttribute('data-readonly'), none: box.dataset.none || '', noEffort: box.hasAttribute('data-no-effort'),
+    readonly: box.hasAttribute('data-readonly'), none: box.dataset.none || '',
     mode: (box.dataset.compactMode || '') as SettingsCompactMode, style: settingsBoxStyle(box)};
 }
 // A picker: a box with its closed button. The panel is drawn when it opens (settingsChoicePopover).
@@ -112,7 +115,7 @@ function settingsChoiceBox(spec: SettingsChoiceSpec) {
   return `<div class="settings-choice" data-bot-choice="${esc(spec.bot?.id || '')}" data-kind="${esc(spec.kind)}" data-name="${esc(spec.name)}"
     data-current="${esc(spec.current)}" data-compact-current="${spec.compact || ''}" data-compact-mode="${spec.mode}"
     data-output-style-current="${esc(spec.style?.output_style || '')}" data-verbosity-current="${esc(spec.style?.verbosity || '')}"
-    ${spec.none ? `data-none="${esc(spec.none)}"` : ''} ${spec.noEffort ? 'data-no-effort' : ''} ${spec.readonly ? 'data-readonly' : ''}>
+    ${spec.none ? `data-none="${esc(spec.none)}"` : ''} ${spec.readonly ? 'data-readonly' : ''}>
     <button type="button" class="sb-pick${spec.readonly ? ' ro' : ''}" data-choice-open aria-haspopup="dialog" aria-expanded="false"
       aria-label="${esc(`${spec.name}${who}: ${words.long}`)}" title="${esc(words.long)}"><span class="sb-pick-text${settingsChoiceFromValue(spec.current).model ? '' : ' muted'}">${esc(words.short)}</span><span class="sb-pick-caret" aria-hidden="true"></span></button>
   </div>`;
@@ -120,11 +123,12 @@ function settingsChoiceBox(spec: SettingsChoiceSpec) {
 // What each bot picker kind is drawn with (SETTINGS_CHOICE_KINDS names it).
 function settingsChoiceSpecOf(e: SettingsBot, kind: SettingsChoiceKind): SettingsChoiceSpec {
   const spec = SETTINGS_CHOICE_KINDS[kind], selected = spec.of(e);
+  // Tasks on the bot's own model with an effort of their own hold that effort alone ('::::high').
   const current = selected?.model ? settingsChoiceValue(selected.harness || selected.runtime, selected.model,
-    selected.reasoning_effort || selected.effort) : '';
+    selected.reasoning_effort || selected.effort) : kind === 'task' && selected?.reasoning_effort ? settingsChoiceValue('', '', selected.reasoning_effort) : '';
   const compact = kind === 'model' ? Number(e.compact_at) || null : kind === 'task' ? e.task_model?.compact_at || null : e.fallback?.compact_at || null;
   return {bot: e, kind, name: spec.name, current, compact, readonly: !settingsCanManageBot(e),
-    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind,
+    none: spec.none === true ? 'None' : spec.none || '', mode: kind === 'model' ? 'bot' : kind,
     style: kind === 'model' ? {output_style: e.output_style || null, verbosity: e.verbosity || null} : null};
 }
 function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
@@ -252,12 +256,15 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
           ${option('auto', 'Auto (always latest)', !legacy && t.version === 'auto')}</select></label></div>
       <p class="settings-tier-line" data-tier-line>${esc(settingsTierLine(picked.model))}</p>`;
   };
-  const defaultEffort = () => inTier() ? tierEfforts(shown()).def : settingsModel(picked.model)?.default_effort || '';
-  const efforts = () => inTier() ? tierEfforts(shown()).list
+  // A task pick on Same as bot runs on the bot's model: its Effort row lists that model's efforts, Default first
+  // meaning the bot's own effort ('').
+  const asBot = () => spec.kind === 'task' && mode === 'task' && !picked.harness && !!runModel();
+  const defaultEffort = () => asBot() ? '' : inTier() ? tierEfforts(shown()).def : settingsModel(picked.model)?.default_effort || '';
+  const efforts = () => asBot() ? ['', ...settingsModelEfforts(runModel())] : inTier() ? tierEfforts(shown()).list
     : choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
   const paintEffort = () => {
     const list = efforts(), current = picked.effort, row = part('[data-choice-effort]');
-    row.hidden = !!spec.noEffort || !picked.model;
+    row.hidden = !picked.model && !asBot();
     const rows: SettingsPanelRow[] = current && !list.includes(current) ? [{value: current, label: `${settingsEffortName(current)} (current)`, on: true, off: true}] : [];
     // The model's own default comes first as Default; the closed button then names no effort.
     const def = defaultEffort(), order = list.includes(def) ? [def, ...list.filter(id => id !== def)] : list;
@@ -300,7 +307,8 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   };
   // More opens by itself when something in it is not at its default.
   const moreSet = () => (compactable() && !!compact) || (styleShown() && !!style.output_style) || (verbosityShown() && !!style.verbosity);
-  const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
+  const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort)
+    : asBot() && picked.effort ? settingsChoiceValue('', '', picked.effort) : '';
   const tierValid = () => { const t = settingsTierParse(picked.model);
     return !!t && (t.version === 'auto' || !!gw?.tiers[t.tier]?.versions.some(v => v.version === t.version)) && tierEfforts(t).list.includes(picked.effort) && !block('tico'); };
   const valid = () => (inTier() ? tierValid() : (choices.some(row => row.value === value()) && !block(picked.harness)))
@@ -484,10 +492,7 @@ async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact
   const savedStyle = settingsBoxStyle(box), restyled = !settingsSameStyle(style, savedStyle);
   if (!e || (value === current && compact === savedCompact && !restyled)) return;
   if (box.dataset.kind === 'task') {
-    const change: SettingsTaskChange = {};
-    if (value !== current) change.choice = value ? settingsChoiceFromValue(value) : null;
-    if (compact !== savedCompact) change.compact_at = compact;
-    try { await settingsSaveTaskModel(e, change, e.revision); }
+    try { await settingsSaveTaskModel(e, settingsTaskChangeOf(value, compact), e.revision); }
     catch (error) { toast(errorMessage(error, ''), true); }
     return;
   }
