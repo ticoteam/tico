@@ -24,7 +24,7 @@ export const goTo = defineAction({
   did: ({ to }) => copy.didGoTo(nameOf(to)),
   // motion.md 5, case 5: the flight goes to the new page's title.
   target: ({ to }) => ({ kind: 'page', id: to }),
-  offer: () => copy.pages.map(([to, title]) => ({ input: { to }, title })),
+  // No search rows of its own: search's Pages group offers the menu's pages.
 });
 
 const chat = s.string({

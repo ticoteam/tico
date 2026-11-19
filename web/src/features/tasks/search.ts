@@ -53,6 +53,7 @@ export const filtersOf = ({ owner, waiting, asked, tag, due, late, q }: TasksSea
 export const tasksSearch = defineSearch({
   group: 'Tasks',
   order: 10,
+  remote: true,
   find: async (q, signal) => {
     const words = q.trim().slice(0, 200);
     if (!words) return [];

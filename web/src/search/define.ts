@@ -23,12 +23,13 @@ export interface SearchProvider {
   group: string;
   /** Lower comes first. */
   order: number;
+  /** It asks the server: the dialog waits for a pause in the typing before calling it. */
+  remote?: boolean;
   /** From the cache where it can; a server search should go through the one cache too. */
   find(q: string, signal: AbortSignal): SearchHit[] | Promise<SearchHit[]>;
 }
 
-/* Its own module: the providers' glob below loads every search.ts before providers.ts runs, so the mark they use
-   must be ready first. */
+/* Its own module, with nothing heavy behind it: every search.ts imports it, and providers.ts loads those. */
 export const defined = new WeakSet<object>();
 
 export function defineSearch(p: SearchProvider): SearchProvider {

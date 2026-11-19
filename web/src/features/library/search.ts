@@ -71,6 +71,9 @@ export const contactsSearch = (raw: Record<string, unknown>): ContactsSearch => 
 
 /* ---------------------------------------------------------------- Cmd+K: one group per Library page */
 
+/** Contact types searched at most, so one pause in the typing is a few reads, not one per type. */
+const CONTACT_TYPES = 4;
+
 export const docsFind = defineSearch({
   group: 'Docs',
   order: 60,
@@ -90,11 +93,11 @@ export const docsFind = defineSearch({
   },
 });
 
-/** The server's file search (titles and text). `files.open` only works on the Files page, so a hit opens Files
-    narrowed to the file's name. */
+/** The server's file search (titles and text). */
 export const filesFind = defineSearch({
   group: 'Files',
   order: 61,
+  remote: true,
   find: async (q, signal) => {
     const words = q.trim().slice(0, 200);
     if (words.length < 2) return [];
@@ -103,7 +106,7 @@ export const filesFind = defineSearch({
       key: `file:${f.id}`,
       title: f.title,
       lead: { icon: 'file' as const },
-      run: { id: 'files.list', input: { q: f.title.slice(0, 200) } },
+      run: { id: 'files.open', input: { file: f.id } },
     }));
   },
 });
@@ -140,11 +143,11 @@ export const toolsFind = defineSearch({
   },
 });
 
-/** Each contact type that has any, searched by name on the server. `contacts.open` only works on the Contacts page,
-    so a hit opens Contacts on its type, narrowed to its name. */
+/** Contacts by name from the server: one read for each of the (at most) four types with the most contacts. */
 export const contactsFind = defineSearch({
   group: 'Contacts',
   order: 64,
+  remote: true,
   find: async (q, signal) => {
     const words = q.trim().slice(0, 200);
     if (!words) return [];
@@ -152,11 +155,12 @@ export const contactsFind = defineSearch({
     const found = await Promise.all(
       counts
         .filter((c) => c.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, CONTACT_TYPES)
         .map((c) =>
-          fetchFor(contactSearchQuery(c.type, words, HITS), signal).then(
-            ({ rows }) => rows.map((r) => ({ r, type: c.type })),
-            () => [],
-          ),
+          fetchFor(contactSearchQuery(c.type, words, HITS), signal)
+            .then(({ rows }) => rows.map((r) => ({ r, type: c.type })))
+            .catch(() => []),
         ),
     );
     return found
@@ -167,7 +171,7 @@ export const contactsFind = defineSearch({
         title: r.name,
         meta: types.find((t) => t.key === type)?.name,
         lead: { icon: 'people' as const },
-        run: { id: 'contacts.list', input: type === 'person' ? { q: r.name.slice(0, 200) } : { type, q: r.name.slice(0, 200) } },
+        run: { id: 'contacts.open', input: { contact: r.id, type } },
       }));
   },
 });

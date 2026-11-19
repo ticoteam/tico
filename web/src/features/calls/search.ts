@@ -9,6 +9,7 @@ import { meetingsQuery } from './queries';
 export const meetingsSearch = defineSearch({
   group: 'Meetings',
   order: 30,
+  remote: true,
   find: async (q, signal) => {
     const words = q.trim().slice(0, 200);
     if (!words) return [];

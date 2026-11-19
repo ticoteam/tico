@@ -6,7 +6,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Dot } from '@/tico/dot';
 import * as copy from './copy';
-import { providers, type Lead, type SearchHit } from './providers';
+import { loadProviders, providers, type Lead, type SearchHit } from './providers';
 import { gather, highlight, remember, RECENT, type Group } from './results';
 import './search.css';
 import { closeSearch, useSearchState } from './state';
@@ -44,15 +44,26 @@ function Palette({ opened }: { opened: string }) {
     return () => app?.classList.remove('is-search');
   }, []);
 
+  // People and pages answer at once; the features' providers load on the first open and are kept after.
+  const [from, setFrom] = useState(() => providers);
+  useEffect(() => {
+    let live = true;
+    void loadProviders().then((all) => live && setFrom(all));
+    return () => {
+      live = false;
+    };
+  }, []);
+
   useEffect(() => {
     const stop = new AbortController();
-    void gather(q, providers, registry.values(), ctxFor('search'), stop.signal).then((g) => {
+    const show = (g: Group[]) => {
       if (stop.signal.aborted) return;
       setGroups(g);
       setOn(0);
-    });
+    };
+    void gather(q, from, registry.values(), ctxFor('search'), stop.signal, show).then(show);
     return () => stop.abort();
-  }, [q]);
+  }, [q, from]);
 
   const ask = q.trim() && registry.has('tico.ask') ? q.trim() : '';
   const hits = groups.flatMap((g) => g.hits);

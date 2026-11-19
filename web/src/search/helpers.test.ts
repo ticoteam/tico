@@ -4,6 +4,7 @@ import { api } from '@/api/client';
 import { queryClient } from '@/data';
 import { fetchFor } from './helpers';
 import { pages } from './pages';
+import { loadProviders, providers } from './providers';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,5 +30,14 @@ describe('search helpers', () => {
     const hits = await pages.find('finance', new AbortController().signal);
     expect(hits.map((h) => [h.title, h.run])).toEqual([['Company, Finance', { id: 'shell.goTo', input: { to: '/company/finance' } }]]);
     expect(await pages.find('  ', new AbortController().signal)).toEqual([]);
+  });
+
+  it('has people and pages from the start, and loads the features’ providers once and keeps them', async () => {
+    expect(providers.map((p) => p.group)).toEqual(['People', 'Pages']);
+    const first = loadProviders();
+    expect(loadProviders()).toBe(first);
+    const all = await first;
+    expect(providers).toBe(all);
+    expect(all.map((p) => p.group)).toEqual(expect.arrayContaining(['People', 'Pages', 'Tasks', 'Threads', 'Files', 'Contacts', 'Meetings']));
   });
 });

@@ -1,9 +1,11 @@
+import { createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { registry } from '@/actions';
+import { registry, type Ctx } from '@/actions';
 import { queryClient } from '@/data';
 import type { SearchHit } from '@/search/define';
 import { countsQuery, docsListQuery, skillsQuery, toolsQuery, typesQuery } from './queries';
 import { contactsFind, docsFind, filesFind, skillsFind, toolsFind } from './search';
+import { contactsOpen, filesOpen } from './actions';
 
 // Made-up rows only.
 const sig = () => new AbortController().signal;
@@ -33,11 +35,14 @@ describe('library search', () => {
     expect([...docs, ...skills, ...tools].every(valid)).toBe(true);
   });
 
-  it('asks the server for files and for each contact type that has any', async () => {
+  it('asks the server for files and for the four contact types with the most, and opens each hit', async () => {
     queryClient.setQueryData(countsQuery.queryKey, [
       { type: 'person', count: 3 },
-      { type: 'organization', count: 1 },
+      { type: 'organization', count: 2 },
       { type: 'place', count: 0 },
+      { type: 'farm', count: 1 },
+      { type: 'shop', count: 5 },
+      { type: 'event', count: 4 },
     ]);
     queryClient.setQueryData(typesQuery.queryKey, [
       { key: 'person', name: 'Person', plural_name: 'People' },
@@ -53,13 +58,37 @@ describe('library search', () => {
     });
     const files = await filesFind.find('frost', sig());
     const contacts = await contactsFind.find('frost', sig());
-    expect(runs(files)).toEqual([['frost-dates.csv', { id: 'files.list', input: { q: 'frost-dates.csv' } }]]);
+    expect(runs(files)).toEqual([['frost-dates.csv', { id: 'files.open', input: { file: 'f1' } }]]);
     expect(contacts.map((h) => [h.title, h.meta, h.run])).toEqual([
-      ['Robin Frost', 'Person', { id: 'contacts.list', input: { q: 'Robin Frost' } }],
-      ['Frost Farms', 'Organization', { id: 'contacts.list', input: { type: 'organization', q: 'Frost Farms' } }],
+      ['Robin Frost', 'Person', { id: 'contacts.open', input: { contact: 'c1', type: 'person' } }],
+      ['Frost Farms', 'Organization', { id: 'contacts.open', input: { contact: 'c2', type: 'organization' } }],
     ]);
-    expect(asked).not.toContain('/api/v2/entities/find/place');
+    const types = asked.filter((u) => u.startsWith('/api/v2/entities/find/')).map((u) => u.split('/').pop());
+    expect(types.sort()).toEqual(['event', 'organization', 'person', 'shop']);
     expect([...files, ...contacts].every(valid)).toBe(true);
+  });
+
+  it('opens a file or a contact from any page, and keeps the page’s own words when already on it', async () => {
+    const at = (where: string) => {
+      const root = createRootRoute();
+      const pages = ['library/files', 'library/contacts', 'threads/$thread'].map((path) => createRoute({ getParentRoute: () => root, path }));
+      const router = createRouter({ routeTree: root.addChildren(pages), history: createMemoryHistory({ initialEntries: [where] }) });
+      return { ctx: { router, queryClient, via: 'search' } as Ctx, here: () => [router.state.location.pathname, router.state.location.search] };
+    };
+    const away = at('/threads/t1?chat=agent:helper');
+    await filesOpen.run(away.ctx, { file: 'f1' });
+    expect(away.here()).toEqual(['/library/files', { file: 'f1' }]);
+    await contactsOpen.run(away.ctx, { contact: 'c2', type: 'organization' });
+    expect(away.here()).toEqual(['/library/contacts', { type: 'organization', panel: 'c2' }]);
+
+    const files = at('/library/files?kind=pdf');
+    await filesOpen.run(files.ctx, { file: 'f1' });
+    expect(files.here()).toEqual(['/library/files', { kind: 'pdf', file: 'f1' }]);
+    const contacts = at('/library/contacts?type=organization&q=frost');
+    await contactsOpen.run(contacts.ctx, { contact: 'c1', type: 'person' });
+    expect(contacts.here()).toEqual(['/library/contacts', { panel: 'c1' }]);
+    await contactsOpen.run(contacts.ctx, { contact: null });
+    expect(contacts.here()).toEqual(['/library/contacts', {}]);
   });
 
   it('finds nothing for no words', async () => {

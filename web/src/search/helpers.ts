@@ -3,8 +3,8 @@ import { queryClient, type Actor } from '@/data';
 import type { Lead } from './define';
 
 /* What the providers share. Features import it as `@/search/helpers` (with `@/search/define` and `@/search/results`),
-   not `@/search`: the index loads providers.ts, whose glob loads every feature's search.ts, so a search.ts that
-   imported the index would load itself half-made whenever a route reached it first. */
+   not `@/search`: the index is the dialog and its provider loader, which a search.ts must not pull in (and the
+   loader imports every search.ts). */
 
 /** Hits a group shows at most. */
 export const HITS = 8;

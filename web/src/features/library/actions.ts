@@ -58,6 +58,9 @@ const set = (router: AnyRouter, change: Record<string, string | number | undefin
     },
   });
 
+/** Whether the person is on this Library page now (the app may sit under /next). */
+const on = (router: AnyRouter, to: string) => router.state.location.pathname.replace(/^\/next(?=\/|$)/, '') === to;
+
 /** A file from the person's disk: only a click or a drop has one. */
 const file: Schema<File> = {
   parse: (v, p) => (typeof File !== 'undefined' && v instanceof File ? { ok: true, value: v } : { ok: false, error: `${p || 'input'}: expected a file` }),
@@ -168,7 +171,11 @@ export const filesOpen = defineAction({
   title: 'Open a file',
   kind: 'view',
   input: s.object({ file: id, version: s.optional(s.number({ int: true, min: 1 })) }),
-  run: ({ router }, i) => set(router, { file: i.file, v: i.version }),
+  // On Files it keeps the page's filters; from anywhere else it goes to the file.
+  run: ({ router }, i) => {
+    const change = { file: i.file, v: i.version };
+    return on(router, '/library/files') ? set(router, change) : go(router, '/library/files', change);
+  },
   target: (i) => ({ kind: 'file', id: i.file }),
 });
 
@@ -487,8 +494,12 @@ export const contactsOpen = defineAction({
   id: 'contacts.open',
   title: 'Open a contact',
   kind: 'view',
-  input: s.object({ contact: s.nullable(id) }),
-  run: ({ router }, i) => set(router, { panel: i.contact ?? undefined }),
+  // `type` when the contact is not on the tab shown: its own tab opens behind it (People is the page with none).
+  input: s.object({ contact: s.nullable(id), type: s.optional(text(60)) }),
+  run: ({ router }, i) => {
+    const change = { panel: i.contact ?? undefined, ...(i.type ? { type: i.type === 'person' ? undefined : i.type, q: undefined } : {}) };
+    return on(router, '/library/contacts') ? set(router, change) : go(router, '/library/contacts', change);
+  },
   target: (i) => (i.contact ? { kind: 'contact', id: i.contact } : null),
 });
 
