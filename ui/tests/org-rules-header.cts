@@ -97,11 +97,18 @@ async function searchProblems(page: Page, width: number) {
   const box = page.locator('.ru-ph .rr-q');
   if (await page.locator('.ru-ph .ph-menu .rr-q').count()) return ['the search is in ⋯'];
   if (!await page.locator('.ru-ph > .ph-tools .rr-q').count()) return ['the search is not on the row'];
-  // A narrow header shows the search as its magnifier (.ph-find), which opens over the title line when tapped.
-  const find = await page.locator('.ru-ph.ph-find').count() > 0;
-  const onTop = await box.evaluate((el, min) => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return r.width >= min && r.right <= document.documentElement.clientWidth + 0.5 && !!top && el.contains(top); }, find ? 28 : 100);
-  if (!onTop) bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}`);
+  // A narrow header shows the search as its magnifier (.ph-find), which opens over the title line when tapped. The
+  // header's state and the box are read in one go, so a fit between two reads cannot pair one state with the other's box;
+  // a miss says what it saw (its width, its right edge, what is on top at its centre), as headerProblems does for a tab.
+  const seen = await box.evaluate(el => {
+    const r = el.getBoundingClientRect(), vw = document.documentElement.clientWidth, top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {find: !!el.closest('.ru-ph.ph-find'), width: Math.round(r.width), right: Math.round(r.right), vw, onTop: !!top && el.contains(top),
+      top: top ? top.tagName.toLowerCase() + [...top.classList].map(c => '.' + c).join('') : 'nothing'};
+  });
+  const find = seen.find;
+  if (seen.width < (find ? 28 : 100) || seen.right > seen.vw + 0.5 || !seen.onTop) {
+    bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}: ${seen.width}px wide, right edge ${seen.right} of ${seen.vw}, ${seen.onTop ? 'on top' : `covered by ${seen.top}`}`);
+  }
   await box.click({timeout: t(3000)});
   if (find && await box.evaluate(el => el.getBoundingClientRect().width) < 200) bad.push('the magnifier did not open to a search box');
   await page.keyboard.type('abc', {delay: 30});
