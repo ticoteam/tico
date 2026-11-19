@@ -49,12 +49,6 @@
 .pnl .went>span:first-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--ink-2)}
 .pnl .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pnl .pnl-chart{padding:var(--s-1h) 0 var(--s-2h)}
-.pnl .chart svg{display:block;width:100%;height:auto;overflow:visible}
-.pnl .chart text{font-size:var(--t-xs);fill:var(--muted);font-variant-numeric:tabular-nums}
-.pnl .chart .lim{stroke:var(--faint);stroke-width:1;stroke-dasharray:3 4}
-.pnl .chart .ln{fill:none;stroke:var(--ink-2);stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
-.pnl .chart .pt-now{fill:var(--ink)}
-.pnl .chart text.now{fill:var(--ink);font-weight:var(--w-strong)}
 .pnl .checkin{padding:var(--s-1h) 0}
 .pnl .checkin .row-age{display:block;text-align:left}
 .pnl .checkin p{margin-top:var(--s-0);color:var(--ink-2);line-height:20px}
@@ -74,7 +68,10 @@
 .pnl .gt-fig b{color:var(--ink);font-weight:var(--w-strong)}
 .pnl .kr-src,.pnl .kr-by{font-size:var(--t-sm);line-height:18px;color:var(--muted);white-space:nowrap}
 .pnl .kr-src{display:flex;align-items:center;gap:var(--s-1h);min-width:0}
-.pnl .kr-src>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pnl .kr-src>span:not(.src-tool){min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pnl .src-tool{width:16px;height:16px;flex:none;display:inline-grid;place-items:center;border-radius:var(--r-key);background:var(--well-2);color:var(--ink-2)}
+.pnl .src-tool .ico{width:11px;height:11px;stroke-width:2}
+.pnl .went .kr-src{flex:1}
 .pnl .kr-src i{font-style:normal;font-variant-numeric:tabular-nums}
 .pnl .kr-src i::before{content:"\00B7";margin-right:var(--s-1h);color:var(--faint)}
 .pnl .kr-by{text-align:right;font-variant-numeric:tabular-nums}
@@ -121,9 +118,17 @@
 .co .brand-frame{margin-top:0}
 
 /* ---------- Market ---------- */
-.co .chart{padding:0 var(--s-2) var(--s-1h)}
+/* the frame the bar chart measures; the svg inside keeps no padding */
+.co div.chart{padding:0 var(--s-2) var(--s-1h)}
 .co .chg2{grid-template-columns:minmax(0,1fr) 44px;column-gap:var(--s-2h)}
 .co .sec-note{font-size:var(--t-xs);color:var(--muted)}
+.co .legend{display:flex;align-items:center;gap:var(--s-3h);font-size:var(--t-xs);color:var(--muted)}
+.co .legend i{display:inline-block;width:8px;height:8px;border-radius:var(--r-key);margin-right:var(--s-1h)}
+.co .legend .c1{background:var(--ink-2)}
+.co .legend .c2{background:var(--muted)}
+.co .legend .c3{background:var(--line-strong)}
+/* a block the server has nothing for yet: its quiet line, so the page keeps its shape */
+.co .none{color:var(--muted)}
 .co .table .dim,.co .table td.dim{color:var(--muted)}
 .co .table tr.is-us td:first-child{font-weight:var(--w-strong)}
 

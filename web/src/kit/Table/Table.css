@@ -9,3 +9,10 @@
 .table tr.is-total td{font-weight:var(--w-strong)}
 .table tr.is-quiet td{color:var(--muted)}
 .table .zero{color:var(--faint)}
+/* A linked row: the first link of its first cell, or of the cell marked data-opens, covers the row */
+.table tr.is-link{position:relative}
+.table tr.is-link td :is(a,button){position:relative;z-index:var(--z-page)}
+.table tr.is-link:not(:has(td[data-opens])) td:first-child a:first-of-type,.table tr.is-link td[data-opens] a:first-of-type{position:static}
+.table tr.is-link:not(:has(td[data-opens])) td:first-child a:first-of-type::after,.table tr.is-link td[data-opens] a:first-of-type::after{content:"";position:absolute;inset:0}
+.table tr.is-link:not(:has(td[data-opens])) td:first-child a:first-of-type:focus-visible,.table tr.is-link td[data-opens] a:first-of-type:focus-visible{outline:none}
+.table tr.is-link:not(:has(td[data-opens])):has(td:first-child a:first-of-type:focus-visible),.table tr.is-link:has(td[data-opens] a:first-of-type:focus-visible){outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}

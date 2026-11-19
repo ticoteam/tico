@@ -1,13 +1,13 @@
 // Company, Strategy (Market, Org, Goals, Brand), Products and Risk. The only file other code imports from this feature.
 import type { QueryClient } from '@tanstack/react-query';
-import { floorQuery, goalsTreeQuery, productsQuery, riskQuery, risksQuery, strategyQuery } from './queries';
+import { floorQuery, goalsTreeQuery, mattersQuery, productsQuery, riskQuery, risksQuery, strategyQuery } from './queries';
 import { STRATEGY_TABS, type StrategyTab } from './StrategyPage';
 
 export { CompanyPage, type CompanySearch } from './CompanyPage';
 export { StrategyPage, STRATEGY_TABS, strategyTabs, type StrategyTab } from './StrategyPage';
 export type { GoalsSearch } from './GoalsPage';
 export { ProductsPage, type ProductsSearch } from './ProductsPage';
-export { RiskPage, type RiskSearch, type RiskView } from './RiskPage';
+export { RiskPage, riskTabs, type RiskSearch, type RiskView } from './RiskPage';
 export { floorQuery, goalsTreeQuery, productsQuery, risksQuery, riskQuery, strategyQuery } from './queries';
 
 const text = (v: unknown) => (typeof v === 'string' && v.length > 0 && v.length <= 200 ? v : undefined);
@@ -28,3 +28,4 @@ export const loadCompany = (qc: QueryClient) => quietly(qc.ensureQueryData(floor
 export const loadStrategy = (qc: QueryClient, tab: StrategyTab) => quietly(tab === 'goals' ? qc.ensureQueryData(goalsTreeQuery) : qc.ensureQueryData(strategyQuery));
 export const loadProducts = (qc: QueryClient) => quietly(qc.ensureQueryData(productsQuery));
 export const loadRisk = (qc: QueryClient, risk?: string) => quietly(risk ? qc.ensureQueryData(riskQuery(risk)) : qc.ensureQueryData(risksQuery));
+export const loadDisputes = (qc: QueryClient) => quietly(qc.ensureQueryData(mattersQuery('disputes')));

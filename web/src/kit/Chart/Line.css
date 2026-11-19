@@ -1,0 +1,8 @@
+/* Several lines in greys, darkest first, the dot at each line's end (pages/3-company/finance.css). */
+.lines .l1,.lines .l2,.lines .l3{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.lines .l1{stroke:var(--ink-2)}
+.lines .l2{stroke:var(--muted)}
+.lines .l3{stroke:var(--faint)}
+.lines .d1{fill:var(--ink-2)}
+.lines .d2{fill:var(--muted)}
+.lines .d3{fill:var(--faint)}

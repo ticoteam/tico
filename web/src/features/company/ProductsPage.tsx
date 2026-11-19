@@ -7,7 +7,7 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
 import { FoldButton } from '@/kit/SectionHead';
-import { Table, Th } from '@/kit/Table';
+import { Table, Th, Tr } from '@/kit/Table';
 import { List, RecordPanel, SidePanel } from '@/pagekinds';
 import type { Product } from '@/api/schema';
 import type { PRODUCT_FIELDS } from './actions';
@@ -82,9 +82,9 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
           </thead>
           <tbody>
             {products.map((p) => (
-              <tr key={p.id} className={[p.status === 'retired' && 'is-quiet', p.key === panel && 'is-selected'].filter(Boolean).join(' ') || undefined}>
+              <Tr key={p.id} kind={p.status === 'retired' ? 'quiet' : undefined} selected={p.key === panel} linked>
                 <td className="t-mark" />
-                <td className="t-title">
+                <td className="t-title" data-opens>
                   <PanelLink panel={p.key} data-target={`product:${p.key}`}>
                     {p.name}
                   </PanelLink>
@@ -94,7 +94,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
                 <td className="t-words">{word('tax_kind', p.tax_kind)}</td>
                 <td className={p.agreements.length ? 't-words' : 't-words is-none'}>{p.agreements.length ? p.agreements.map((a) => a.name).join(', ') : 'None'}</td>
                 <td className="num t-who">{p.owner_teammate && <Face id={p.owner_teammate} />}</td>
-              </tr>
+              </Tr>
             ))}
           </tbody>
         </Table>

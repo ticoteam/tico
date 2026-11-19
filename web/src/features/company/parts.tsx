@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
@@ -7,16 +7,6 @@ import { toast } from '@/kit/Toast';
 
 /* The small parts Company, Strategy, Products and Risk share, ported from pages/3-company/company.js and
    pages/10-records/records.js. */
-
-/** Flow's mark: it waits on you. The kit has none yet (shell/Menu.tsx draws the same). */
-export function FlowMark({ size = 10, className }: { size?: number; className?: string }) {
-  return (
-    <span className={className ? `dot flow ${className}` : 'dot flow'} style={{ '--d': `${size}px` } as CSSProperties} role="img" aria-label="Waits on you">
-      <i />
-      <b />
-    </span>
-  );
-}
 
 const bare = (id: string) => id.slice(id.indexOf(':') + 1);
 
@@ -57,14 +47,21 @@ export function PanelLink({ panel, className, title, children, ...rest }: { pane
   );
 }
 
-/** Run one of this feature's actions from a click; a refusal says so (the change is already taken back). */
+/** A refusal in words: the server's reason from its code (`owner_not_found` is "Owner not found"), else that it failed. */
+export function refusal(error = ''): string {
+  if (error === 'not_allowed') return 'Not allowed';
+  if (error.startsWith('bad_input')) return 'Check the fields';
+  return /^[a-z]+(_[a-z]+)*$/.test(error) ? error[0]!.toUpperCase() + error.slice(1).replace(/_/g, ' ') : "Couldn't save";
+}
+
+/** Run one of this feature's actions from a click; a refusal says why (the change is already taken back). */
 export function useDo(id: string) {
   const a = useAction(id);
   return {
     pending: a.pending,
     run: async (input: unknown): Promise<boolean> => {
       const r = await a.run(input);
-      if (!r.ok) toast({ text: r.error?.startsWith('bad_input') ? 'Check the fields' : "Couldn't save", kind: 'failed' });
+      if (!r.ok) toast({ text: refusal(r.error), kind: 'failed' });
       return r.ok;
     },
   };

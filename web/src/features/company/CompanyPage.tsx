@@ -3,11 +3,12 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { directoryQuery, meQuery } from '@/data';
 import { Sparkline } from '@/kit/Chart';
+import { FlowMark } from '@/kit/FlowMark';
 import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
 import { fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, SidePanel, type Figure } from '@/pagekinds';
-import { Face, FlowMark, Go, PanelLink, usd } from './parts';
+import { Face, Go, PanelLink, usd } from './parts';
 import { floorQuery, goalsTreeQuery, needsQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
 
@@ -207,7 +208,7 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
         {tasks.isError && <p className="pt-none">Tasks did not load</p>}
         {list.map((t) => (
           <Go key={t.id} to={t.number != null ? `/tasks/${encodeURIComponent(pipeline.id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`} className="pt" data-target={`task:${t.number ?? t.id}`}>
-            <span className="pt-mark">{mine(t) && <FlowMark />}</span>
+            <span className="pt-mark">{mine(t) && <FlowMark size={10} />}</span>
             <span className="pt-title">
               {t.title}
               {t.late && <LatePill />}

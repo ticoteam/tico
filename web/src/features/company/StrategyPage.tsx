@@ -14,26 +14,31 @@ import { brandQuery, groupsQuery, listeningStatsQuery, marketBriefingQuery, mark
 import './company.css';
 
 /* Strategy and its tabs, in the mock's order (pages/3-company/company.js strategyPage). Each tab is its own address
-   under /company/strategy, so Back and a shared link restore it. Budget belongs to another area: its page comes in
-   through `budget`. */
+   under /company/strategy, so Back and a shared link restore it. Budget belongs to Finance: its tab opens Finance's
+   Budgets. */
 
-export const STRATEGY_TABS = ['strategy', 'market', 'org', 'goals', 'budget', 'brand'] as const;
+export const STRATEGY_TABS = ['strategy', 'market', 'org', 'goals', 'brand'] as const;
 export type StrategyTab = (typeof STRATEGY_TABS)[number];
 const BASE = '/company/strategy';
-const LABEL: Record<StrategyTab, string> = { strategy: 'Strategy', market: 'Market', org: 'Org', goals: 'Goals', budget: 'Budget', brand: 'Brand' };
-export const strategyTabs: readonly PageTab[] = STRATEGY_TABS.map((t) => ({ label: LABEL[t], to: t === 'strategy' ? BASE : `${BASE}/${t}`, target: `tab:${t}` }));
-const head = (tab: StrategyTab) => ({ title: 'Strategy', path: tab === 'strategy' ? BASE : `${BASE}/${tab}`, tabs: strategyTabs, className: 'co' });
+const tab = (t: StrategyTab, label: string): PageTab => ({ label, to: t === 'strategy' ? BASE : `${BASE}/${t}`, target: `tab:${t}` });
+export const strategyTabs: readonly PageTab[] = [
+  tab('strategy', 'Strategy'),
+  tab('market', 'Market'),
+  tab('org', 'Org'),
+  tab('goals', 'Goals'),
+  { label: 'Budget', to: '/company/finance', search: { tab: 'budgets' }, target: 'tab:budget' },
+  tab('brand', 'Brand'),
+];
+const head = (t: StrategyTab) => ({ title: 'Strategy', path: t === 'strategy' ? BASE : `${BASE}/${t}`, tabs: strategyTabs, className: 'co' });
 
-export function StrategyPage({ tab, search = {}, budget }: { tab: StrategyTab; search?: GoalsSearch; budget?: ReactNode }) {
-  switch (tab) {
+export function StrategyPage({ tab: t, search = {} }: { tab: StrategyTab; search?: GoalsSearch }) {
+  switch (t) {
     case 'market':
       return <MarketTab />;
     case 'org':
       return <OrgTab />;
     case 'goals':
       return <GoalsPage head={head('goals')} search={search} />;
-    case 'budget':
-      return budget ?? <Document {...head('budget')} state="empty" empty={{ title: 'No budget yet' }} body={null} />;
     case 'brand':
       return <BrandTab />;
     default:
@@ -88,6 +93,9 @@ function StrategyText({ s }: { s: Strategy }) {
         </div>
       )}
       {(v?.summary || v?.vision) && <p className="read-lead">{v.summary || v.vision}</p>}
+      <Part name="Where we play">
+        <p className="none">None yet</p>
+      </Part>
       {bets.length > 0 && (
         <Part name="Bets">
           <ol className="bets">
@@ -152,24 +160,26 @@ function MarketTab() {
   const posts = useQuery(listeningStatsQuery);
   const segs = spend.data?.segments ?? [];
   const players = segs.flatMap((sg) => (sg.players ?? []).map((p) => ({ ...p, sells: sg.name, us: !!sg.self })));
-  const days = (posts.data?.daily ?? []).map((d) => ({ day: d.day, n: Object.values(d.sources ?? {}).reduce((a, b) => a + b, 0) }));
-  const items = brief.data?.briefing?.items ?? [];
-  const figures: Figure[] = [];
+  const daily = posts.data?.daily ?? [];
   const total = spend.data?.total?.spend_usd;
-  if (total != null) figures.push({ label: 'Market', value: usdShort(total), sub: spend.data?.name ?? undefined, target: 'figure:market' });
-  if (players.length) figures.push({ label: 'Organizations', value: players.length, target: 'figure:organizations' });
-  if (days.length) figures.push({ label: 'Buyer posts', value: days.at(-1)?.n ?? 0, sub: 'today', target: 'figure:posts' });
+  const items = brief.data?.briefing?.items ?? [];
+  const none = <span className="none">None yet</span>;
+  // The mock's four figures, each kept with its empty line until the server has it, so the page keeps its shape.
+  const figures: Figure[] = [
+    { label: 'Market', value: total != null ? usdShort(total) : none, sub: spend.data?.name ?? undefined, target: 'figure:market' },
+    { label: 'Reachable', value: none, target: 'figure:reachable' },
+    { label: 'Our share', value: none, target: 'figure:share' },
+    { label: 'Buyer posts', value: daily.length ? sum(daily.at(-1)?.sources) : none, sub: daily.length ? 'today' : undefined, target: 'figure:posts' },
+  ];
   const pending = spend.isPending && brief.isPending;
   const failed = spend.isError && brief.isError;
-  const state = pending ? 'loading' : failed ? 'fault' : figures.length || items.length ? 'ready' : 'empty';
   return (
     <Dashboard
       {...head('market')}
-      state={state}
+      state={pending ? 'loading' : failed ? 'fault' : 'ready'}
       onRetry={() => void Promise.all([spend.refetch(), brief.refetch()])}
-      empty={{ title: 'No market read yet' }}
-      figures={figures.length > 0 && <FiguresStrip figures={figures} label="Market figures" />}
-      chart={days.length > 1 && <PostsChart days={days} />}
+      figures={<FiguresStrip figures={figures} label="Market figures" />}
+      chart={daily.length > 1 && <PostsChart daily={daily} />}
       widgets={
         <>
           {items.length > 0 && (
@@ -207,23 +217,47 @@ function MarketTab() {
               </Table>
             </Section>
           )}
+          <Section name="Buyers talk about" actions={<span className="sec-note">Posts, 14 days</span>}>
+            <div className="row">
+              <span className="row-title none">None yet</span>
+            </div>
+          </Section>
         </>
       }
     />
   );
 }
 
-/** Buyer posts a day over the last two weeks, from Listening. */
-function PostsChart({ days }: { days: { day: string; n: number }[] }) {
+const sum = (sources: Record<string, number> | undefined) => Object.values(sources ?? {}).reduce((a, b) => a + b, 0);
+
+/** Buyer posts a day over the last two weeks, from Listening, stacked by source: the two biggest sources, then the
+    rest together (company.js postsSVG and its legend). */
+function PostsChart({ daily }: { daily: { day: string; sources?: Record<string, number> }[] }) {
   const [width, setWidth] = useState(640);
-  const max = Math.max(4, ...days.map((d) => d.n));
+  const totals = new Map<string, number>();
+  for (const d of daily) for (const [k, n] of Object.entries(d.sources ?? {})) totals.set(k, (totals.get(k) ?? 0) + n);
+  const ranked = [...totals.keys()].sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0));
+  const named = ranked.length > 3 ? ranked.slice(0, 2) : ranked;
+  const names = ranked.length > 3 ? [...named, 'Other'] : named;
+  const stack = (src: Record<string, number> | undefined) => {
+    const parts = named.map((k) => src?.[k] ?? 0);
+    return ranked.length > 3 ? [...parts, sum(src) - parts.reduce((a, b) => a + b, 0)] : parts;
+  };
+  const max = Math.max(4, ...daily.map((d) => sum(d.sources)));
   const top = Math.ceil(max / 4) * 4;
   return (
     <section className="stage pk-sec" aria-label="Buyer posts a day">
       <header className="stage-head">
         <h2 className="sec-name">Buyer posts a day</h2>
         <span className="grow" />
-        <span className="sec-note">Posts, 14 days</span>
+        <span className="legend">
+          {names.map((n, i) => (
+            <span key={n}>
+              <i className={`c${i + 1}`} />
+              {sourceName(n)}
+            </span>
+          ))}
+        </span>
       </header>
       <div
         className="chart"
@@ -235,21 +269,24 @@ function PostsChart({ days }: { days: { day: string; n: number }[] }) {
         }}
       >
         <BarChart
-          points={days.map((d) => d.n)}
+          points={daily.map((d) => stack(d.sources))}
           width={width}
           max={top}
           ticks={[0, top / 2, top]}
           fmt={(v) => String(Math.round(v))}
           xLabels={[
-            [0, fmtDate(days[0]?.day ?? '')],
-            [days.length - 1, 'Today'],
+            [0, fmtDate(daily[0]?.day ?? '')],
+            [daily.length - 1, 'Today'],
           ]}
-          label="Buyer posts a day"
+          label={`Buyer posts a day, by source: ${names.map(sourceName).join(', ')}`}
         />
       </div>
     </section>
   );
 }
+
+/** A Listening source as a name: `reddit` is Reddit. */
+const sourceName = (k: string) => (k ? k[0]!.toUpperCase() + k.slice(1).replace(/_/g, ' ') : k);
 
 // ---------------------------------------------------------------- Org: who reports to whom, as a light chart
 

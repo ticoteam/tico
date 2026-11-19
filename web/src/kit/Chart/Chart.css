@@ -7,6 +7,14 @@
 .chart .base{stroke:var(--line-strong);stroke-width:1}
 .chart .cbar{fill:var(--stack)}
 .chart .cbar.is-now{fill:var(--ink-2)}
+/* a stack, darkest at the bottom; a line with its target (pages/3-company/company.css) */
+.chart .c1{fill:var(--ink-2)}
+.chart .c2{fill:var(--muted)}
+.chart .c3{fill:var(--line-strong)}
+.chart .lim{stroke:var(--faint);stroke-width:1;stroke-dasharray:3 4}
+.chart .ln{fill:none;stroke:var(--ink-2);stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.chart .pt-now{fill:var(--ink)}
+.chart text.now{fill:var(--ink);font-weight:var(--w-strong)}
 /* R26: a sparkline is 1.25px --muted with its last point in ink-2 */
 .spark{width:72px;height:26px;flex:none;margin-bottom:calc(var(--s-1) - 1px)}
 .spark path{fill:none;stroke:var(--muted);stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}

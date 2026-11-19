@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
@@ -12,6 +12,8 @@ import { RiskPage } from './RiskPage';
 import { StrategyPage } from './StrategyPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+const toasts = vi.hoisted(() => vi.fn());
+vi.mock('@/kit/Toast', async (real) => ({ ...(await real<object>()), toast: toasts }));
 
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
 beforeEach(() => {
@@ -131,14 +133,43 @@ describe('Goals', () => {
     queryClient.setQueryData(kpiQuery('k1').queryKey, detail);
     show(<StrategyPage tab="goals" search={{ panel: 'kpi:k1' }} />, '/company/strategy/goals?panel=kpi:k1');
     const panel = await screen.findByRole('complementary', { name: 'Weekly signups' });
-    expect(within(panel).getByText(/Stripe/)).toBeTruthy();
+    expect(within(panel).getByTitle('Reads it: Stripe').querySelector('.src-tool')).toBeTruthy();
     fireEvent.click(within(panel).getByRole('button', { name: 'Add reading' }));
     fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Reading' }), { target: { value: '31' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(within(panel).getAllByText('31').length).toBeGreaterThan(0));
+    expect(within(panel).getByTitle('Reads it: me, by hand')).toBeTruthy();
     refuse({ status: 403, body: { detail: 'forbidden' } });
     await waitFor(() => expect(within(panel).queryAllByText('31')).toHaveLength(0));
     expect(within(panel).getAllByText('12').length).toBeGreaterThan(0);
+  });
+});
+
+/** Each route file's address, from its flat file name: `a.b_.$c.tsx` is /a/b/<any>. */
+const addresses = Object.keys(import.meta.glob('/src/routes/*.tsx')).map((f) => {
+  const parts = (f.split('/').pop() ?? '').replace(/\.tsx$/, '').split('.').map((s) => s.replace(/_$/, '')).filter((s) => s && s !== 'index' && s !== '__root');
+  return new RegExp(`^/${parts.map((s) => (s.startsWith('$') ? '[^/]+' : s.replace(/[-]/g, '\\-'))).join('/')}$`);
+});
+const tabHrefs = (name: string) =>
+  within(screen.getByRole('navigation', { name: `${name} pages` }))
+    .getAllByRole('link')
+    .map((a) => a.getAttribute('href') ?? '');
+
+describe('Tabs', () => {
+  it('sends every Strategy and Risk tab to an address the app has', async () => {
+    serve((url) => (url.includes('/api/v2/risks') ? { status: 200, body: { risks: [] } } : { status: 200, body: { matters: [], next_offset: null } }));
+    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
+    show(<StrategyPage tab="goals" />, '/company/strategy/goals');
+    await screen.findByText('Grow signups');
+    const strategy = tabHrefs('Strategy');
+    expect(strategy).toHaveLength(6);
+    expect(strategy).toContain('/company/finance?tab=budgets');
+    cleanup();
+    show(<RiskPage search={{}} />, '/company/risk');
+    await screen.findByText('No risks yet');
+    const risk = tabHrefs('Risk');
+    expect(risk).toEqual(['/company/risk', '/company/risk/disputes']);
+    for (const h of [...strategy, ...risk]) expect(addresses.some((re) => re.test(h.split('?')[0] ?? h)), h).toBe(true);
   });
 });
 
@@ -150,6 +181,26 @@ describe('Products and Risk', () => {
     show(<ProductsPage search={{}} />, '/company/products');
     expect(href(await screen.findByText('Widget'))).toBe('/company/products?panel=widget');
     expect(screen.getByText('Live')).toBeTruthy();
+  });
+
+  it("shows a product owner pick at once, and takes it back with the server's reason", async () => {
+    let refuse: (r: Reply) => void = () => {};
+    serve((_url, method) => (method === 'POST' ? new Promise<Reply>((ok) => (refuse = ok)) : nothing()));
+    const ana = { id: 'bot:ana', kind: 'agent', name: 'Ana', slug: 'ana' };
+    queryClient.setQueryData(['directory'], { actors: [ana], byId: { 'bot:ana': ana, ana } });
+    const list = { products: [{ id: 'pr1', key: 'widget', name: 'Widget', kind: 'software', status: 'live', tax_kind: null, owner_teammate: null, agreements: [], depends_on: [], repositories: [], risks: [], open_matters: 0 }] } as unknown as ProductList;
+    queryClient.setQueryData(productsQuery.queryKey, list);
+    show(<ProductsPage search={{ panel: 'widget' }} />, '/company/products?panel=widget');
+    const panel = await screen.findByRole('complementary', { name: 'Widget' });
+    fireEvent.click(within(panel).getByRole('combobox', { name: 'Owner' }));
+    const option = await screen.findByRole('option', { name: /Ana/ });
+    fireEvent.pointerDown(option, { pointerType: 'mouse' });
+    fireEvent.click(option);
+    await waitFor(() => expect(queryClient.getQueryData<ProductList>(productsQuery.queryKey)?.products[0]?.owner_teammate).toBe('bot:ana'));
+    expect(screen.getByRole('table', { name: 'Products' }).querySelector('.av')).toBeTruthy();
+    refuse({ status: 409, body: { error: { code: 'owner_not_found', detail: 'No such teammate' } } });
+    await waitFor(() => expect(queryClient.getQueryData<ProductList>(productsQuery.queryKey)?.products[0]?.owner_teammate).toBeNull());
+    expect(toasts).toHaveBeenCalledWith({ text: 'Owner not found', kind: 'failed' });
   });
 
   it('shows the empty Risk list', async () => {

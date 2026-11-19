@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { BarChart, Funnel, Sparkline } from './Chart';
+import { BarChart, Funnel, LineChart, Sparkline } from './Chart';
 
 describe('Chart', () => {
   it('draws a funnel whose bars are a share of the first step, with figures in the tabular class', () => {
@@ -51,5 +51,20 @@ describe('Chart', () => {
     const svg = screen.getByRole('img', { name: 'Revenue rising' });
     expect(svg.querySelector('path')?.getAttribute('d')).toBe('M3.0 22.0 L25.0 16.0 L47.0 19.0 L69.0 4.0');
     expect(svg.querySelector('circle')?.getAttribute('cx')).toBe('69.0');
+  });
+
+  it('stacks a bar in greys, darkest at the bottom, and names its total', () => {
+    render(<BarChart points={[[2, 1], [5, 3, 2]]} width={200} max={12} ticks={[0, 12]} fmt={String} xLabels={[]} label="Posts by source" />);
+    const svg = screen.getByRole('img', { name: 'Posts by source' });
+    expect(Array.from(svg.querySelectorAll('rect')).map((r) => r.getAttribute('class'))).toEqual(['c1', 'c2', 'c1', 'c2', 'c3']);
+    expect(svg.querySelector('text.lbl')?.textContent).toBe('10');
+  });
+
+  it('draws a line with its target dashed and both named', () => {
+    render(<LineChart points={[10, 14, 20]} target={40} fmt={(v) => `$${v}`} from="Sep 28" to="Nov 16" label="Cost against target" />);
+    const svg = screen.getByRole('img', { name: 'Cost against target' });
+    expect(svg.querySelector('line.lim')).toBeTruthy();
+    expect(svg.querySelector('text.now')?.textContent).toBe('$20');
+    expect(Array.from(svg.querySelectorAll('text')).map((t) => t.textContent)).toEqual(['$40', '$20', 'Sep 28', 'Nov 16']);
   });
 });

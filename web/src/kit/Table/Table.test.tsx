@@ -58,4 +58,22 @@ describe('Table', () => {
     expect(screen.getByRole('cell', { name: '48,210' }).className).toBe('num');
     expect(screen.getByRole('cell', { name: 'No orders yet' }).parentElement?.className).toBe('table-empty');
   });
+
+  it('opens a linked row through the real link in its first cell', () => {
+    render(
+      <Table label="Products">
+        <tbody>
+          <Tr linked selected>
+            <Td>
+              <a href="/products/widget">Widget</a>
+            </Td>
+            <Td num>3</Td>
+          </Tr>
+        </tbody>
+      </Table>,
+    );
+    const link = screen.getByRole('link', { name: 'Widget' });
+    expect(link.getAttribute('href')).toBe('/products/widget');
+    expect(link.closest('tr')?.className).toBe('is-selected is-link');
+  });
 });

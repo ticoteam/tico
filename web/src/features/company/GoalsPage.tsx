@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { useActors } from '@/data';
+import { useActor, useActors } from '@/data';
 import { Button } from '@/kit/Button';
+import { LineChart } from '@/kit/Chart';
 import { DatePick } from '@/kit/DatePick';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -12,7 +13,7 @@ import { fmtAge, fmtDate } from '@/lib';
 import { List, SidePanel, type PageTab } from '@/pagekinds';
 import { amount, Face, NameOf, PanelLink, Trend, useDo } from './parts';
 import { goalQuery, goalsTreeQuery, kpiQuery, type TreeGoal } from './queries';
-import type { Kpi, KpiDetail } from '@/api/schema';
+import type { Kpi, KpiDetail, KpiReadingView } from '@/api/schema';
 
 /* Goals (pages/3-company/company.js goalsBody): a List of the goal tree, a goal sits under the goal it feeds and each
    KPI is a quiet line under its goal's title. A goal, a KPI, and the KPI and goal forms open in the panel:
@@ -240,11 +241,16 @@ function GoalPanel({ gid }: { gid: string }) {
               {flag(k.status) && <Pill flag>{flag(k.status)}</Pill>}
             </span>
             <KpiFig k={k} className="gt-fig" />
-            <span className="kr-src">
-              {k.latest?.actor_id && <Face id={k.latest.actor_id} size={16} />}
-              <span>{k.latest ? <ReadBy r={k.latest} /> : <NameOf id={k.owner_id} />}</span>
-              {k.latest && <i>{fmtAge(k.latest.created_at ?? k.latest.period_end)}</i>}
-            </span>
+            {k.latest ? (
+              <From r={k.latest} when={fmtAge(k.latest.measured_at ?? k.latest.created_at ?? k.latest.period_end)} />
+            ) : (
+              <span className="kr-src">
+                <Face id={k.owner_id} size={16} />
+                <span>
+                  <NameOf id={k.owner_id} />
+                </span>
+              </span>
+            )}
             <span className="kr-by">{k.link?.deadline ? `by ${fmtDate(k.link.deadline)}` : ''}</span>
           </PanelLink>
         ))}
@@ -268,10 +274,27 @@ function GoalPanel({ gid }: { gid: string }) {
   );
 }
 
-/** Who or what recorded a reading: a teammate by name, else the name it came with, else its source. */
-function ReadBy({ r }: { r: { actor_id?: string | null; actor_name?: string; source?: string } }) {
-  if (r.actor_id) return <NameOf id={r.actor_id} />;
-  return <>{r.actor_name || r.source || 'Unknown'}</>;
+/** Who or what recorded a reading (company.js srcMark, srcSays): a teammate's face and name, or, for Tico's own
+    readings from a connected tool, the tool's mark and name. */
+function From({ r, when }: { r: KpiReadingView; when: string }) {
+  const a = useActor(r.actor_id);
+  // A teammate's id is 'human:<id>' or 'bot:<slug>'; Tico's own readings carry its bare system id.
+  const mate = a ?? (r.actor_id?.includes(':') ? { name: r.actor_name || r.actor_id.slice(r.actor_id.indexOf(':') + 1), kind: r.actor_id.startsWith('bot:') ? 'agent' : 'person' } : null);
+  const name = mate?.name ?? (r.source || r.actor_name || 'Tico');
+  const says = mate ? `${mate.name}, ${mate.kind === 'agent' ? 'at its check-in' : 'by hand'}` : name;
+  return (
+    <span className="kr-src" title={`Reads it: ${says}`}>
+      {mate ? (
+        <Face id={r.actor_id} size={16} />
+      ) : (
+        <span className="src-tool" aria-hidden="true">
+          <Icon name="link" />
+        </span>
+      )}
+      <span>{name}</span>
+      <i>{when}</i>
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------- one KPI
@@ -379,9 +402,7 @@ function KpiPanel({ kid }: { kid: string }) {
         )}
         {d.readings.map((r) => (
           <div key={r.id} className="went">
-            <span>
-              {fmtDate(r.period_end)}, <ReadBy r={r} />
-            </span>
+            <From r={r} when={fmtDate(r.period_end)} />
             <span className="row-fig">{amount(r.value, k.unit)}</span>
           </div>
         ))}
@@ -390,30 +411,22 @@ function KpiPanel({ kid }: { kid: string }) {
   );
 }
 
-/** The readings over time with the target as a dashed line (company.js kpiChart). */
+/** The readings over time with the target as a dashed line (company.js readings()). */
 function KpiChart({ d }: { d: KpiDetail }) {
-  const pts = [...d.readings].reverse().map((r) => r.value);
-  if (pts.length < 2) return null;
-  const W = 312;
-  const H = 124;
+  const rs = [...d.readings].reverse();
+  if (rs.length < 2) return null;
   const target = d.links[0]?.target ?? null;
-  const all = target != null ? [...pts, target] : pts;
-  const lo = Math.min(...all);
-  const hi = Math.max(...all);
-  const y = (v: number) => (hi === lo ? H / 2 : 8 + (1 - (v - lo) / (hi - lo)) * (H - 24));
-  const x = (i: number) => 4 + (i * (W - 48)) / (pts.length - 1);
-  const last = pts.length - 1;
-  const now = pts[last] ?? 0;
+  const short = (r: (typeof rs)[number] | undefined) => (r ? fmtDate(r.period_end) : undefined);
   return (
-    <div className="chart pnl-chart">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${d.kpi.name} over time`}>
-        {target != null && <line className="lim" x1="0" x2={W} y1={y(target)} y2={y(target)} />}
-        <path className="ln" d={pts.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ')} />
-        <circle className="pt-now" cx={x(last)} cy={y(now)} r="3" />
-        <text className="now" x={x(last) + 8} y={y(now) + 4}>
-          {amount(now, d.kpi.unit)}
-        </text>
-      </svg>
+    <div className="pnl-chart">
+      <LineChart
+        points={rs.map((r) => r.value)}
+        target={target}
+        fmt={(v) => amount(v, d.kpi.unit)}
+        from={short(rs[0])}
+        to={short(rs.at(-1))}
+        label={target != null ? `${d.kpi.name} over time, against ${amount(target, d.kpi.unit)}` : `${d.kpi.name} over time`}
+      />
     </div>
   );
 }

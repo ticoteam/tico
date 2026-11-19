@@ -66,11 +66,19 @@ export type TrProps = {
   /** A total line, or a quiet one (a projection, a line that does not count). */
   kind?: 'total' | 'quiet';
   selected?: boolean;
+  /**
+   * The row opens what the first link in its first cell opens, or in the cell marked `data-opens` when a mark column
+   * comes first. That link is stretched over the whole row, so a click anywhere on it, Enter and a middle-click all
+   * follow a real link. Other links and buttons in the row stay on top.
+   */
+  linked?: boolean;
+  /** A feature's own row look, beside the kit's. */
+  className?: string;
   children: ReactNode;
 };
 
-export function Tr({ kind, selected, children }: TrProps) {
-  const cls = [kind && `is-${kind}`, selected && 'is-selected'].filter(Boolean).join(' ') || undefined;
+export function Tr({ kind, selected, linked, className, children }: TrProps) {
+  const cls = [kind && `is-${kind}`, selected && 'is-selected', linked && 'is-link', className].filter(Boolean).join(' ') || undefined;
   return (
     <tr className={cls}>
       {children}

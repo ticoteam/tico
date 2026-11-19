@@ -6,17 +6,18 @@ import { useActors } from '@/data';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
-import { Table, Th } from '@/kit/Table';
+import { Table, Th, Tr } from '@/kit/Table';
 import { fmtAge, fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, List, Record, RecordPanel, Section, SidePanel, type PageTab } from '@/pagekinds';
 import type { Risk, RiskDetail } from '@/api/schema';
+import { Markdown } from '@/kit/Markdown';
 import { Face, Go, PanelLink, useDo } from './parts';
 import { mattersQuery, riskQuery, risksQuery, type MatterRow } from './queries';
 import './company.css';
 
 /* Risk (pages/10-records/records.js riskPage): a List of risks by level, a live one with its open matters under it.
-   A risk opens as its own Record (`?risk=<id>`), a matter in the panel (`?panel=matter:<task>`). Disputes is the
-   second tab: every dispute in one table. */
+   A risk opens as its own Record (`?risk=<id>`), a matter in the panel (`?panel=matter:<task>`), on the list and on
+   the one risk alike. Disputes is the second tab: every dispute in one table. */
 
 export interface RiskSearch {
   risk?: string;
@@ -25,7 +26,7 @@ export interface RiskSearch {
 export type RiskView = 'risks' | 'disputes';
 
 const BASE = '/company/risk';
-const tabs: readonly PageTab[] = [
+export const riskTabs: readonly PageTab[] = [
   { label: 'Risks', to: BASE, target: 'tab:risks' },
   { label: 'Disputes', to: `${BASE}/disputes`, target: 'tab:disputes' },
 ];
@@ -45,7 +46,7 @@ const claimed = (r: Risk) => r.claimed.map((c) => money(c.amount, c.currency)).j
 const taskPath = (t: MatterRow['task']) => (t.pipeline_id && t.number != null ? `/tasks/${encodeURIComponent(t.pipeline_id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`);
 
 export function RiskPage({ view = 'risks', search }: { view?: RiskView; search: RiskSearch }) {
-  if (search.risk) return <OneRisk id={search.risk} />;
+  if (search.risk) return <OneRisk id={search.risk} panel={search.panel} />;
   return view === 'disputes' ? <Disputes search={search} /> : <Risks search={search} />;
 }
 
@@ -74,7 +75,7 @@ function Risks({ search }: { search: RiskSearch }) {
     <List
       title="Risk"
       path={BASE}
-      tabs={tabs}
+      tabs={riskTabs}
       className="co"
       actions={add}
       state={state}
@@ -164,7 +165,7 @@ function Disputes({ search }: { search: RiskSearch }) {
     <List
       title="Risk"
       path={`${BASE}/disputes`}
-      tabs={tabs}
+      tabs={riskTabs}
       className="co"
       state={state}
       onRetry={() => void q.refetch()}
@@ -187,9 +188,9 @@ function Disputes({ search }: { search: RiskSearch }) {
               </thead>
               <tbody>
                 {list.map((m) => (
-                  <tr key={m.task.id} className={name === 'Closed' ? 'is-quiet' : undefined}>
+                  <Tr key={m.task.id} kind={name === 'Closed' ? 'quiet' : undefined} selected={search.panel === `matter:${m.task.id}`} linked>
                     <td className="t-mark" />
-                    <td className="t-title">
+                    <td className="t-title" data-opens>
                       <PanelLink panel={`matter:${m.task.id}`} data-target={`matter:${m.task.id}`}>
                         {m.task.title ?? m.task.label}
                       </PanelLink>
@@ -201,7 +202,7 @@ function Disputes({ search }: { search: RiskSearch }) {
                     <td className="num t-who">
                       <Face id={m.task.owner_id} />
                     </td>
-                  </tr>
+                  </Tr>
                 ))}
               </tbody>
             </Table>
@@ -269,7 +270,7 @@ function MatterPanel({ row }: { row: MatterRow }) {
 }
 
 /** One risk as its own page: figures, its matters, its dates, the rules and sources it rests on. */
-function OneRisk({ id }: { id: string }) {
+function OneRisk({ id, panel }: { id: string; panel?: string }) {
   const q = useQuery(riskQuery(id));
   const d = q.data;
   const state = q.isPending ? 'loading' : q.isError ? 'fault' : 'ready';
@@ -295,7 +296,8 @@ function OneRisk({ id }: { id: string }) {
           />
         )
       }
-      sections={d && <RiskSections d={d} />}
+      sections={d && <RiskSections d={d} open={panel} />}
+      panel={d && panel?.startsWith('matter:') && panelFor(panel, d.matters)}
     />
   );
 }
@@ -329,7 +331,7 @@ function RiskFacts({ d }: { d: RiskDetail }) {
 
 type Linked = { link_id: string; id?: string; text?: string; name?: string };
 
-function RiskSections({ d }: { d: RiskDetail }) {
+function RiskSections({ d, open }: { d: RiskDetail; open?: string }) {
   const rules = d.rules as Linked[];
   const sources = d.sources as Linked[];
   return (
@@ -337,7 +339,12 @@ function RiskSections({ d }: { d: RiskDetail }) {
       {d.matters.length > 0 && (
         <Section name="Matters" count={d.matters.length}>
           {d.matters.map((m) => (
-            <Go key={m.task.id} to={taskPath(m.task)} className={m.task.status === 'open' ? 'row rk-m is-one' : 'row rk-m is-one is-quiet'} data-target={`matter:${m.task.id}`}>
+            <PanelLink
+              key={m.task.id}
+              panel={`matter:${m.task.id}`}
+              className={['row rk-m is-one', m.task.status !== 'open' && 'is-quiet', open === `matter:${m.task.id}` && 'is-selected'].filter(Boolean).join(' ')}
+              data-target={`matter:${m.task.id}`}
+            >
               <span className="row-mark" />
               <span className="row-title">{m.task.title ?? m.task.label}</span>
               <span className="row-pills" />
@@ -346,7 +353,7 @@ function RiskSections({ d }: { d: RiskDetail }) {
               <span className="rk-stage">{m.task.stage}</span>
               <Face id={m.task.owner_id} />
               <span className="row-age">{m.task.created_at ? fmtAge(m.task.created_at) : ''}</span>
-            </Go>
+            </PanelLink>
           ))}
         </Section>
       )}
@@ -396,12 +403,7 @@ function RiskSections({ d }: { d: RiskDetail }) {
       )}
       {d.risk.markdown && (
         <div className="rk-text">
-          {d.risk.markdown
-            .split(/\n\s*\n/)
-            .filter((p) => p.trim())
-            .map((p, i) => (
-              <p key={i}>{p.trim()}</p>
-            ))}
+          <Markdown text={d.risk.markdown} />
         </div>
       )}
     </>
