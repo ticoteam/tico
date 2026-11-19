@@ -4,8 +4,9 @@ step and shown to admins on Library › Skills.
 
 - remove: an install skill_usage's coverage calls unused (a receipt, a target that reports usage, the install 30 days
   old, no use in 30 days). An install Tico cannot judge ("unknown") is never suggested for removal.
-- promote: a skill the directory does not have, and Tico does not ship (backend/skill_catalog.py), that bots used at
-  least PROMOTE_USES times, or that at least PROMOTE_BOTS bots used, in 30 days (`unlisted_skill_usage_dailies`). It
+- promote: a skill the directory does not have that bots used at least PROMOTE_USES times, or that at least
+  PROMOTE_BOTS bots used, in 30 days (`unlisted_skill_usage_dailies`), not counting a bot's uses of a skill its role
+  ships (backend/skill_catalog.py). It
   names the bot that used it most; Ask to submit sends that bot the admin's own message asking it to run
   `tico skill submit <name>`. Nothing here uploads anything.
 
@@ -86,9 +87,10 @@ def candidates(c: sqlite3.Connection, at: datetime) -> dict[tuple[str, str], dic
             "bots_count": 0,
         }
     active = _active_bots(c)
-    # A skill Tico ships is already on the Skills page, so it is never one to ask a bot to submit.
-    shipped: set[str] = set(SC.shipped())
-    for r in U.unlisted_usage(c, at, exclude=shipped):
+    # A skill a bot's role ships is already on the Skills page, so that bot's uses of it are never a reason to ask for
+    # it; another bot's own skill of the same name still is.
+    ships: dict[str, frozenset[str]] = SC.shipped_to(c)
+    for r in U.unlisted_usage(c, at, exclude=ships):
         if r["uses"] < PROMOTE_USES and len(r["bots"]) < PROMOTE_BOTS:
             continue
         asked = next((b for b, _ in r["bots"] if b in active), None)

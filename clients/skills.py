@@ -119,19 +119,22 @@ def _plain(value):
 
 
 def metadata(text):
-    """The `metadata:` map of a SKILL.md frontmatter ({} when it has none): each indented `key: value` under it, a
-    `[a, b]` value as the list of its items."""
+    """The `metadata:` map of a SKILL.md frontmatter ({} when it has none): each `key: value` directly under a top-level
+    `metadata:` (indented as its first key is; a deeper line belongs to a nested map and is not one), a `[a, b]` value as
+    the list of its items."""
     lines = (text or "").splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
-    out, inside = {}, False
+    out, inside, depth = {}, False, None
     for line in lines[1:]:
         if line.strip() == "---":
             return out
         if not line.strip():
             continue
         if line[:1] in (" ", "\t"):
-            match = _NESTED.match(line) if inside else None
+            indent = len(line) - len(line.lstrip())
+            depth = indent if inside and depth is None else depth
+            match = _NESTED.match(line) if inside and indent == depth else None
             if match:
                 value = match.group(2).strip()
                 if value.startswith("[") and value.endswith("]"):
@@ -139,7 +142,7 @@ def metadata(text):
                 else:
                     out[match.group(1)] = _plain(value)
             continue
-        inside = line.rstrip() == "metadata:"
+        inside, depth = line.rstrip() == "metadata:", None
     return {}
 
 

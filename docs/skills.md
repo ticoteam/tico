@@ -112,9 +112,11 @@ Library › Skills (`#/library/skills`) is one page.
   its current members at once, and nobody who joins later), its installs (Used, Unused or Unknown, a pinned one's version, and
   **Remove** where you have the rights to install it), and its usage over 7 or 30 days by trigger (model, person, nested), by
   who and the last 20 uses.
-- A skill Tico ships opens its files, the roles that have it, and the live bots made from those roles (what the catalog
-  gives them; a bot may have changed its copy since). Its usage is the bots' daily counts (below), so who triggered it and
-  people aren't shown.
+- A skill Tico ships opens its files, the roles that have it, and the bots made from those roles that you can see (not
+  planned or archived ones; what the catalog gives them, and a bot may have changed its copy since). When roles ship
+  different copies, the page shows one from a role that has bots here. Its usage is the daily counts (below) of the bots whose
+  role ships it, so who triggered it and people aren't shown. Once the directory has a version of it, its last use from
+  before stays.
 
 **Use in my Claude Code** shows the one line that sets up the skills helper on your computer, with Copy:
 `curl -fsSL --create-dirs <your Tico>/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs && node ~/.tico/skills-helper.mjs setup`.
@@ -135,7 +137,8 @@ reporting on), has had the install for 30 days, and has no use
 in those 30 days. Anything else is Unknown, never Unused.
 
 Not in directory. A bot's use of a skill the directory doesn't have (its repository's own, one in its home) is kept only as a
-daily count by name and bot, 90 days. That count is a Tico-shipped skill's usage. Admins see the most used of the rest below the
+daily count by name and bot, 90 days. A bot's count of a skill its role ships is that Tico-shipped skill's usage; any other
+bot's skill of the same name is its own. Admins see the most used of the rest below the
 skills as **Not in directory**: name, uses in 30 days, bots. People's own computers report directory skills only, so no person
 is counted there.
 
@@ -145,7 +148,8 @@ The maintenance run's Suggest step looks at this install's own data each day (no
 of suggestion on the Skills page for admins:
 
 - **Remove**: an install that is Unused (above). Unknown is never suggested.
-- **Ask to submit**: a skill outside the directory, and not one Tico ships, that 2 or more bots, or 10 or more uses, ran in 30 days. It names the bot that
+- **Ask to submit**: a skill outside the directory that 2 or more bots, or 10 or more uses, ran in 30 days, not counting a bot's
+  uses of a skill its role ships. It names the bot that
   used it most; **Ask to submit** sends that bot your message asking it to run `tico skill submit <name>`.
 
 Nothing is removed, sent or submitted until an admin clicks. Each subject (an install, a skill's name) has one suggestion: open

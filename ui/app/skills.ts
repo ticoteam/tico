@@ -78,6 +78,8 @@ const SKILLS_FUNCTIONS = ['tico', 'legal', 'marketing', 'growth', 'sales', 'cust
   'people', 'operations', 'hardware', 'data', 'security'];
 const skillsFnGroup = (f: string | null | undefined) => { const w = String(f || '').trim().toLowerCase(); return SKILLS_FUNCTIONS.includes(w) ? w : 'other'; };
 const skillsFnLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
+// A row's function as written, to match a filter that is none of the known ones (`?function=adtech`), as the API does.
+const skillsFnRaw = (f: string | null | undefined) => String(f || '').trim().toLowerCase();
 // The list's address: its function and search (the search is kept quietly as it is typed, see skillsQuietAddress).
 function skillsListHref(fn = SKILLS_FN, q = SKILLS_Q.trim()) {
   const p = new URLSearchParams();
@@ -86,11 +88,13 @@ function skillsListHref(fn = SKILLS_FN, q = SKILLS_Q.trim()) {
   const s = p.toString();
   return SKILLS_ROUTE + (s ? '?' + s : '');
 }
-// Keeps the address in step with the search box without a hashchange (the router would redraw and drop focus).
+// Keeps the address in step with the search box without a hashchange (the router would redraw and drop focus), and
+// the chip's clear link with it, so clearing the function keeps the search.
 function skillsQuietAddress() {
   const href = skillsListHref();
   if (location.hash !== href) history.replaceState(history.state, '', href);
   S.route = href;
+  document.querySelector('#skills-root [data-sk-filter-clear]')?.setAttribute('href', skillsListHref(''));
 }
 // A row's words for the search: its name, description and function.
 const skillsFind = (s: SkillRow) => [s.name, s.description || '', s.function || ''].join(' ').toLowerCase();
@@ -236,7 +240,7 @@ async function skillsList(body: HTMLElement, run: number) {
   SKILLS_ROWS = rows;
   // A skill only Tico ships has no version: Tico in its place, muted, marks it.
   const table = rows.length ? `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>On</th><th>Version</th><th>Last used</th></tr></thead>
-    <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}" data-sk-fn="${esc(skillsFnGroup(s.function))}" data-sk-find="${esc(skillsFind(s))}">
+    <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}" data-sk-fn="${esc(skillsFnGroup(s.function))}" data-sk-fn-raw="${esc(skillsFnRaw(s.function))}" data-sk-find="${esc(skillsFind(s))}">
       <td class="sk-name"><a href="${skillsHref(s.name)}"><strong>${esc(s.name)}</strong></a></td>
       <td class="sk-on" data-sk-on>${skillsOnHTML(s)}</td>
       <td class="sk-ver tnum">${s.latest ? 'v' + s.latest.number : s.source === 'tico' ? '<span class="muted" data-sk-source="tico">Tico</span>' : ''}</td>
@@ -252,11 +256,13 @@ function skillsOnHTML(s: SkillRow) {
   const on = s.on || [], more = Math.max(0, (s.on_count ?? s.installs_count ?? 0) - on.length);
   return esc(on.map(skillsWho).join(', ')) + (more ? `${on.length ? ' ' : ''}<span class="muted">+${more}</span>` : '');
 }
-// The search (every word, in the name, description or function) and the function filter, on the rows drawn.
+// The search (every word, in the name, description or function) and the function filter, on the rows drawn: a known
+// function or Other by the row's group, any other value only the rows that name it.
 function skillsFilter(body: HTMLElement) {
-  const q = SKILLS_Q.trim().toLowerCase();
+  const q = SKILLS_Q.trim().toLowerCase(), fn = SKILLS_FN, byGroup = fn === 'other' || SKILLS_FUNCTIONS.includes(fn);
   body.querySelectorAll<HTMLElement>('tr[data-sk-row]').forEach(tr => {
-    tr.hidden = !skillsMatches(tr.dataset.skFind || '', q) || (!!SKILLS_FN && tr.dataset.skFn !== skillsFnGroup(SKILLS_FN));
+    const off = !!fn && (byGroup ? tr.dataset.skFn !== fn : tr.dataset.skFnRaw !== fn);
+    tr.hidden = !skillsMatches(tr.dataset.skFind || '', q) || off;
   });
 }
 // The proposals waiting for an OK; nothing at all when none are.

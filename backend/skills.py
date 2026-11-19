@@ -376,6 +376,20 @@ def _installed_on(c, auth, who, skill_ids):
     return out
 
 
+def _directory_details(c, skill_ids):
+    """{skill id: row of its latest version's number, sha256 and approved_at, and installs_count}."""
+    if not skill_ids:
+        return {}
+    rows = c.execute(
+        "SELECT s.id, v.number, v.sha256, v.approved_at, "
+        "(SELECT COUNT(*) FROM skill_installs i WHERE i.skill_id = s.id) AS installs_count "
+        "FROM skills s LEFT JOIN skill_versions v ON v.id = s.latest_version_id "
+        f"WHERE s.id IN ({','.join('?' * len(skill_ids))})",
+        skill_ids,
+    ).fetchall()
+    return {r["id"]: r for r in rows}
+
+
 def _holds(row, q):
     """Whether the row's name, description and function hold every word of `q`."""
     words = (q or "").lower().split()
@@ -403,23 +417,24 @@ def _function_counts(rows):
 
 
 def _seen_bots(c, auth, who, bots):
-    """The ids, of these bots, the caller may see: an admin all of them."""
+    """The ids, of these bots, the caller may see: the rule the bots list keeps (backend/org_routes.py)."""
     ids = sorted({bot["id"] for bot in bots})
-    if not ids or _admin(auth, who):
-        return set(ids)
-    return {b for b, level in auth.bot_accesses(c, who, ids).items() if level.get("see")}
+    if not ids:
+        return set()
+    access = auth.bot_accesses(c, who, ids)
+    return {b for b in ids if access.get(b, auth.FULL)["see"]}
 
 
 def _shipped_rows(c, auth, who, entries):
-    """The list's rows of skills Tico ships that the directory does not have: on the live bots made from a role that
-    ships it (the first ON_CAP the caller may see, `on_count` all of them)."""
+    """The list's rows of skills Tico ships that the directory does not have: on the provisioned bots made from a role
+    that ships it and the caller may see (the first ON_CAP of them, `on_count` all of them)."""
     if not entries:
         return []
     by_template = SC.bots_by_template(c)
     seen = _seen_bots(c, auth, who, [bot for bots in by_template.values() for bot in bots])
     out = []
     for entry in entries:
-        bots = SC.bots_with(entry, by_template)
+        bots = [bot for bot in SC.bots_with(entry, by_template) if bot["id"] in seen]
         out.append(
             {
                 "id": None,
@@ -429,7 +444,7 @@ def _shipped_rows(c, auth, who, entries):
                 "source": "tico",
                 "latest": None,
                 "installs_count": 0,
-                "on": [{"type": "Bot", **bot} for bot in bots if bot["id"] in seen][:ON_CAP],
+                "on": [{"type": "Bot", **bot} for bot in bots[:ON_CAP]],
                 "on_count": len(bots),
             }
         )
@@ -437,18 +452,19 @@ def _shipped_rows(c, auth, who, entries):
 
 
 def _shipped_view(c, auth, who, store, entry, with_files):
-    """A skill Tico ships: the roles that ship it, the live bots made from them the caller may see, and its files."""
+    """A skill Tico ships: the roles that ship it, the provisioned bots made from them the caller may see, and its
+    files (the copy of a role that has bots here, when roles ship different copies)."""
     names = SC.role_names(store.settings.catalog_dir)
     by_template = SC.bots_by_template(c)
-    bots = SC.bots_with(entry, by_template)
-    seen = _seen_bots(c, auth, who, bots)
+    seen = _seen_bots(c, auth, who, SC.bots_with(entry, by_template))
+    bots = [bot for bot in SC.bots_with(entry, by_template) if bot["id"] in seen]
     value = {
         "roles": [{"template": t, "name": names.get(t, t)} for t in entry["templates"]],
-        "bots": [{"type": "Bot", **bot} for bot in bots if bot["id"] in seen],
+        "bots": [{"type": "Bot", **bot} for bot in bots],
         "bots_count": len(bots),
     }
     if with_files:
-        value["files"] = SC.files(entry)
+        value["files"] = SC.files(entry, with_bots=set(by_template), directory=store.settings.catalog_dir)
     return value
 
 
@@ -832,38 +848,44 @@ def install(app, store, auth, mutate):
         who = reader(request)
         shipped = SC.shipped(store.settings.catalog_dir)
         with store.read() as c:
-            rows = c.execute(
-                "SELECT s.id, s.name, s.description, s.function, v.number, v.sha256, v.approved_at, "
-                "(SELECT COUNT(*) FROM skill_installs i WHERE i.skill_id = s.id) AS installs_count "
-                "FROM skills s LEFT JOIN skill_versions v ON v.id = s.latest_version_id "
-                "WHERE s.deleted_at IS NULL ORDER BY s.name LIMIT ?",
-                (LIST_CAP,),
+            # Every name is searched and counted; only the first LIST_CAP the filter keeps get their versions and installs.
+            names = c.execute(
+                "SELECT id, name, description, function FROM skills WHERE deleted_at IS NULL ORDER BY name"
             ).fetchall()
-            on = _installed_on(c, auth, who, [r["id"] for r in rows])
-            found = [
+            directory = [
                 {
                     "id": r["id"],
                     "name": r["name"],
                     "description": r["description"],
                     "function": r["function"] or (shipped[r["name"]]["function"] if r["name"] in shipped else None),
                     "source": "directory",
-                    "latest": {"number": r["number"], "sha256": r["sha256"], "approved_at": r["approved_at"]}
-                    if r["number"] is not None
-                    else None,
-                    "installs_count": r["installs_count"],
-                    "on": on.get(r["id"], []),
-                    "on_count": r["installs_count"],
                 }
-                for r in rows
+                for r in names
             ]
-            listed = {r["name"] for r in rows}
-            extra = [entry for name, entry in shipped.items() if name not in listed]
-            found += _shipped_rows(c, auth, who, extra)
-        found = sorted((row for row in found if _holds(row, q)), key=lambda row: row["name"])
-        return {
-            "skills": [row for row in found if _in_function(row, function)],
-            "functions": _function_counts(found),
-        }
+            listed = {r["name"] for r in names}
+            directory = [row for row in directory if _holds(row, q)]
+            extra = [entry for name, entry in shipped.items() if name not in listed and _holds(entry, q)]
+            found = sorted(directory + _shipped_rows(c, auth, who, extra), key=lambda row: row["name"])
+            kept = [row for row in found if _in_function(row, function)]
+            ids = [row["id"] for row in kept if row["source"] == "directory"][:LIST_CAP]
+            details = _directory_details(c, ids)
+            on = _installed_on(c, auth, who, ids)
+            shown = set(ids)
+            out = []
+            for row in kept:
+                if row["source"] == "directory":
+                    if row["id"] not in shown:
+                        continue
+                    r = details[row["id"]]
+                    row["latest"] = (
+                        {"number": r["number"], "sha256": r["sha256"], "approved_at": r["approved_at"]}
+                        if r["number"] is not None
+                        else None
+                    )
+                    row["installs_count"] = row["on_count"] = r["installs_count"]
+                    row["on"] = on.get(row["id"], [])
+                out.append(row)
+        return {"skills": out, "functions": _function_counts(found)}
 
     @app.get(
         "/api/v2/skills/{name}",
