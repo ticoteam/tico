@@ -337,7 +337,7 @@ describe('Settings › Computers › when idle', () => {
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
     queryClient.setQueryData(computersQuery.queryKey, []);
     queryClient.setQueryData(sleepQuery.queryKey, { hosted: true, managed: false, hours: 2, runners: false });
-    show(<SettingsPage section="computers" />, '/settings/computers');
+    show(<SettingsPage section="computers" />, '/settings/computers', () => loadSection(queryClient, 'computers'));
     const sw = await screen.findByRole('switch', { name: "Agents' computers sleep too" });
     fireEvent.click(sw);
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/sleep', method: 'POST', body: { runners: true } }));
@@ -388,10 +388,15 @@ describe('Settings › Security', () => {
 
 describe('Settings › Models @s1076 @s710', () => {
   it('When a plan runs out has each computer’s Gateway switch, which sends at once', async () => {
-    serve(() => ({ status: 200, body: {} }));
+    const studio = { id: 'r1', label: 'Studio', online: true, gateway_fallback: false };
+    serve((url) => {
+      if (url === '/api/v2/providers') return { status: 200, body: { enabled: [], default: {}, revision: 0 } };
+      if (url === '/api/v2/operations') return { status: 200, body: { machines: [{ ...studio, gateway_fallback: true }] } };
+      return { status: 200, body: {} };
+    });
     queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm1', label: 'Sample Model', provider: 'anthropic' }] } as never);
-    queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Studio', online: true, gateway_fallback: false }] as never);
-    show(<SettingsPage section="models" />, '/settings/models');
+    queryClient.setQueryData(computersQuery.queryKey, [studio]);
+    show(<SettingsPage section="models" />, '/settings/models', () => loadSection(queryClient, 'models'));
     const out = await screen.findByRole('region', { name: 'When a plan runs out' });
     fireEvent.click(within(out).getByRole('switch', { name: 'Studio: use Tico Gateway' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/computers/r1/gateway-fallback', body: { on: true } }));

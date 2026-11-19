@@ -32,12 +32,12 @@ vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}
 type Reply = { status: number; body: unknown };
 let sent: { url: string; method: string; body: unknown }[] = [];
 let read: string[] = [];
-function serve(reply: (url: string, method: string) => Reply) {
+function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method === 'GET') read.push(String(url));
     else sent.push({ url: String(url), method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
-    const r = reply(String(url), method);
+    const r = await reply(String(url), method);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
@@ -154,12 +154,9 @@ describe('Loading Usage', () => {
   it('starts the chart and the selected model grouping together', async () => {
     let releaseDay!: () => void;
     const day = new Promise<void>((resolve) => { releaseDay = resolve; });
-    serve(() => ok({ from: '', to: '', totals: FIG, rows: [] }));
-    const fetch = globalThis.fetch;
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      const response = await fetch(url, init);
+    serve(async (url) => {
       if (url.includes('group=day')) await day;
-      return response;
+      return ok({ from: '', to: '', totals: FIG, rows: [] });
     });
     await loadUsage(queryClient, { by: 'model' });
     expect(read.map((url) => new URLSearchParams(url.split('?')[1]).get('group'))).toEqual(['day', 'model']);
