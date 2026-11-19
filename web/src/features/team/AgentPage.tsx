@@ -15,7 +15,7 @@ import { fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
-import { historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
+import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
 import { ConfirmDialog, EditDialog, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
 import {
@@ -57,7 +57,7 @@ export function AgentPage({ actor, tab }: AgentPageProps) {
 
   if (tab === 'computer' || tab === 'screen') return <ComputerPage agent={row} actor={actor} base={path} tab={tab} />;
 
-  const settings = tab === 'settings' || tab === 'instructions';
+  const settings = tab === 'settings' || tab === 'instructions' || tab === 'model';
   const sub = row ? modelLine(row, models?.models) : '';
   return (
     <AgentHead actor={actor} slug={slug} path={path} row={row} sub={sub} settings={settings} paused={paused?.state === 'paused'}>
@@ -65,7 +65,7 @@ export function AgentPage({ actor, tab }: AgentPageProps) {
         tab === 'instructions' ? (
           <Instructions slug={slug} path={path} head={head} />
         ) : settings ? (
-          <AgentSettings slug={slug} actor={actor} row={row} path={path} head={head} />
+          <AgentSettings slug={slug} actor={actor} row={row} path={path} head={head} pick={tab === 'model'} />
         ) : (
           <Widgets slug={slug} actor={actor} head={head} />
         )
@@ -82,6 +82,8 @@ interface Head {
   actions: ReactNode;
   more: ReactNode;
   className: string;
+  size: 'large';
+  onRename?: (name: string) => void;
 }
 
 /** The column's head: face, name, its model line, then the gear and More. */
@@ -108,12 +110,14 @@ function AgentHead({
   const pause = useAction('agents.pause');
   const resume = useAction('agents.resume');
   const archive = useAction('agents.archive');
-  const [renaming, setRenaming] = useState(false);
+  const rename = useAction('agents.rename');
   const [archiving, setArchiving] = useState(false);
   const head: Head = {
     title: actor.name,
     path,
     className: 'rec is-col',
+    size: 'large',
+    onRename: row?.can_manage === false ? undefined : (name) => void rename.run({ slug, name }),
     lead: <Avatar kind="agent" name={actor.name} hue={actor.hue} live={actor.working} size={36} />,
     after: (
       <>
@@ -133,7 +137,6 @@ function AgentHead({
     more: (
       <>
         <Menu trigger={<IconButton icon="more" label="More" />}>
-          <MenuItem label="Rename" icon="edit" onSelect={() => setRenaming(true)} />
           {paused ? (
             <MenuItem label="Resume" icon="play" onSelect={() => void resume.run({ slug })} />
           ) : (
@@ -142,15 +145,6 @@ function AgentHead({
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </Menu>
-        <EditDialog
-          open={renaming}
-          onOpenChange={setRenaming}
-          title="Rename"
-          label="Name"
-          value={actor.name}
-          action="agents.rename"
-          input={(name) => ({ slug, name })}
-        />
         <ConfirmDialog
           open={archiving}
           onOpenChange={setArchiving}
@@ -264,7 +258,9 @@ const HOW: Record<RuleLine['how'], [IconName, string]> = {
 const KIND: Record<HistLine['kind'], [IconName, string]> = { run: ['play', 'Run'], set: ['gear', 'Setting'], learn: ['spark', 'Learned'] };
 const HISTORY_ROWS = 40;
 
-function AgentSettings({ slug, actor, row, path, head }: { slug: string; actor: Actor; row: AgentRow | undefined; path: string; head: Head }) {
+/** `pick`: opened at `?tab=model` (the Settings page's link), the model picker over Settings; closing it leaves Settings. */
+function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; actor: Actor; row: AgentRow | undefined; path: string; head: Head; pick: boolean }) {
+  const open = useAction('team.open');
   const actors = useActors();
   const roster = useQuery(agentsQuery);
   const groups = useQuery(groupsQuery);
@@ -279,10 +275,11 @@ function AgentSettings({ slug, actor, row, path, head }: { slug: string; actor: 
   const [editing, setEditing] = useState<'' | 'role' | 'team' | 'reports' | 'model'>('');
   const close = (o: boolean) => !o && setEditing('');
 
-  const team = teamOf(groups.data ?? [], 'agent', slug);
+  const botId = bareId(actor.id);
+  const team = teamOf(groups.data ?? [], 'agent', botId);
   const reportsTo = row?.reports_to ?? detail.data?.reports_to ?? '';
-  const boss = actors.find((a) => (a.slug ?? a.id.slice(a.id.indexOf(':') + 1)) === reportsTo);
-  const computer = computers.data?.find((c) => c.id === row?.machine?.runner_id) ?? computers.data?.find((c) => c.bots?.includes(slug));
+  const boss = actors.find((a) => bareId(a.id) === reportsTo);
+  const computer = computers.data?.find((c) => c.id === row?.machine?.runner_id) ?? computers.data?.find((c) => c.bots?.includes(botId));
   const role = row?.description ?? detail.data?.description ?? '';
   const history = historyOf(runs.data ?? [], learned.data ?? [], changes.data ?? []);
   const lead = (instructions.data?.content ?? '')
@@ -378,7 +375,7 @@ function AgentSettings({ slug, actor, row, path, head }: { slug: string; actor: 
             options={(groups.data ?? []).map((g) => ({ value: g.id, label: g.name }))}
             value={team?.id ?? ''}
             action="team.move"
-            input={(t) => ({ kind: 'agent', id: slug, team: t })}
+            input={(t) => ({ kind: 'agent', id: botId, team: t })}
           />
           <PickDialog
             open={editing === 'reports'}
@@ -386,12 +383,22 @@ function AgentSettings({ slug, actor, row, path, head }: { slug: string; actor: 
             title="Reports to"
             options={actors
               .filter((a) => a.id !== actor.id)
-              .map((a) => ({ value: a.slug ?? a.id.slice(a.id.indexOf(':') + 1), label: a.name }))}
+              .map((a) => ({ value: bareId(a.id), label: a.name }))}
             value={reportsTo}
             action="agents.setReportsTo"
             input={(to) => ({ slug, to })}
           />
-          {row && <ModelPicker agent={row} open={editing === 'model'} onOpenChange={close} />}
+          {row && (
+            <ModelPicker
+              agent={row}
+              open={editing === 'model' || pick}
+              onOpenChange={(o) => {
+                if (o) return;
+                if (pick) void open.run({ who: slug, tab: 'settings' });
+                else setEditing('');
+              }}
+            />
+          )}
         </>
       }
     />

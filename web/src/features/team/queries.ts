@@ -264,10 +264,10 @@ export interface Group {
   id: string;
   name: string;
   parent: string;
-  /** `bot:<slug>` or `person:<id>`; "" when none is set. */
+  /** `bot:<bot id>` or `person:<id>`; "" when none is set. */
   lead?: string;
   people: string[];
-  /** Slugs. */
+  /** Bot ids (a uuid for newer agents; `bot_slugs` has the slugs). */
   bots: string[];
   order?: number;
 }
@@ -327,7 +327,7 @@ export interface Computer {
   revoked_at?: string | null;
   version?: string;
   platform?: string;
-  /** Slugs. */
+  /** Bot ids. */
   bots?: string[];
   restarting?: unknown;
   screen_available?: boolean;
@@ -559,6 +559,17 @@ export async function setPersonTitle(person: string, title: string) {
 }
 
 /** Remove them: their sign-in and tokens end; their history stays. */
+/** A person's name: an owner's or admin's edit (POST /api/v2/access/humans/{id}). */
+export async function renamePerson(person: string, name: string) {
+  const out = await write({
+    key: peopleQuery.queryKey,
+    optimistic: (rows: PersonRow[] | undefined) => rows?.map((p) => (p.id === person ? { ...p, name } : p)),
+    send: (idempotencyKey) => api.post(`/api/v2/access/humans/${at(person)}`, { name }, { idempotencyKey }),
+  });
+  directoryAgain();
+  return out;
+}
+
 export async function removePerson(person: string) {
   const out = await write({
     key: peopleQuery.queryKey,

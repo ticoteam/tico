@@ -6,10 +6,12 @@ import {
   addAgent,
   archiveAgent,
   changeAgent,
+  computersQuery,
   controlAgent,
   invitePerson,
   moveToTeam,
   removePerson,
+  renamePerson,
   restartComputer,
   setAgentModel,
   setPersonRole,
@@ -35,7 +37,7 @@ async function said<T>(fallback: string, send: () => Promise<T>): Promise<T> {
   }
 }
 
-export const TABS = ['settings', 'instructions', 'computer', 'screen'] as const;
+export const TABS = ['settings', 'instructions', 'model', 'computer', 'screen'] as const;
 export type Tab = (typeof TABS)[number];
 
 export const openTeammate = defineAction({
@@ -143,11 +145,14 @@ export const archive = defineAction({
   title: 'Archive an agent',
   kind: 'change',
   input: s.object({ slug }),
-  run: async ({ router }, { slug }) => {
+  // The page asks first; Tico may archive without that question, so the did line says plainly what happened.
+  run: async ({ router, queryClient }, { slug }) => {
+    const name = queryClient.getQueryData(directoryQuery.queryKey)?.byId[slug]?.name ?? slug;
     await said("Couldn't archive it", () => archiveAgent(slug));
     await router.navigate({ to: '/' });
+    return { name };
   },
-  did: () => 'Archived it',
+  did: ({ slug }, out) => `Archived ${out?.name ?? slug}. It takes no more work; its tasks and history stay.`,
 });
 
 export const add = defineAction({
@@ -212,6 +217,16 @@ export const setPermissions = defineAction({
   target: ({ person }) => onPage(person),
 });
 
+export const renameOne = defineAction({
+  id: 'people.rename',
+  title: 'Rename a person',
+  kind: 'change',
+  input: s.object({ person, name: s.string({ min: 1, max: 120 }) }),
+  run: (_ctx, { person, name }) => said("Couldn't rename them", () => renamePerson(person, name)),
+  did: ({ name }) => `Renamed them ${name}`,
+  target: ({ person }) => onPage(person),
+});
+
 export const setTitle = defineAction({
   id: 'people.setTitle',
   title: "Change a person's role",
@@ -244,7 +259,12 @@ export const restart = defineAction({
   title: 'Restart a computer',
   kind: 'change',
   input: s.object({ id: s.string({ min: 1, max: 100, what: "a computer's id" }) }),
-  run: (_ctx, { id }) => said("Couldn't restart it", () => restartComputer(id)),
-  did: () => 'Restarting it',
+  // The page asks first; Tico may restart without that question, so the did line says plainly what happened.
+  run: async ({ queryClient }, { id }) => {
+    const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === id)?.label ?? 'the computer';
+    await said("Couldn't restart it", () => restartComputer(id));
+    return { label };
+  },
+  did: (_input, out) => `Restarted ${out?.label ?? 'the computer'}. Its agents stopped their turns and start again in about a minute.`,
   target: () => ({ kind: 'team', id: 'computer' }),
 });

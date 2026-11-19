@@ -3,9 +3,9 @@ import type { Actor, Directory } from '@/data';
 import { computerStatus, GB, historyOf, managerOf, membersUnder, modelLine, resolveWho, runFigures, startOfWeek, teamSlug, whoHref } from './model';
 import type { AgentRow, Group, PersonRow } from './queries';
 
-const ana: Actor = { id: 'bot:ana', kind: 'agent', name: 'Ana', slug: 'ana' };
+const ana: Actor = { id: 'bot:0190-ana', kind: 'agent', name: 'Ana', slug: 'ana' };
 const pat: Actor = { id: 'human:p1', kind: 'person', name: 'Pat Doe' };
-const dir: Directory = { actors: [ana, pat], byId: { 'bot:ana': ana, ana, 'human:p1': pat, p1: pat } };
+const dir: Directory = { actors: [ana, pat], byId: { 'bot:0190-ana': ana, ana, 'human:p1': pat, p1: pat } };
 const group = (id: string, name: string, parent: string, bots: string[] = [], people: string[] = [], lead = ''): Group => ({
   id,
   name,
@@ -14,7 +14,7 @@ const group = (id: string, name: string, parent: string, bots: string[] = [], pe
   people,
   lead,
 });
-const groups = [group('g1', 'Product & Design', ''), group('g2', 'Design', 'g1', ['ana']), group('g3', 'Brand', 'g2', [], ['p1'])];
+const groups = [group('g1', 'Product & Design', ''), group('g2', 'Design', 'g1', ['0190-ana']), group('g3', 'Brand', 'g2', [], ['p1'])];
 
 describe('team model', () => {
   it('reads an address as an agent, a person or a team', () => {
@@ -22,6 +22,7 @@ describe('team model', () => {
     expect(resolveWho('p1', dir, groups)).toEqual({ kind: 'person', actor: pat });
     expect(resolveWho('product-design', dir, groups)).toEqual({ kind: 'team', group: groups[0] });
     expect(resolveWho('g2', dir, groups)).toEqual({ kind: 'team', group: groups[1] });
+    expect(resolveWho('0190-ana', dir, groups)).toEqual({ kind: 'agent', actor: ana });
     expect(resolveWho('nobody', dir, groups)).toBeNull();
     expect(resolveWho('ana', undefined, undefined)).toBeNull();
   });
@@ -33,14 +34,20 @@ describe('team model', () => {
   });
 
   it('finds the manager: the lead, else the teammate most members report to', () => {
-    expect(managerOf(group('x', 'X', '', ['ana'], ['p1'], 'person:p1'), [], [])).toBe('p1');
-    const agents = [{ slug: 'ana', reports_to: 'p1' }, { slug: 'bo', reports_to: 'p1' }] as AgentRow[];
-    expect(managerOf(group('x', 'X', '', ['ana', 'bo'], ['p1']), agents, [] as PersonRow[])).toBe('p1');
-    expect(managerOf(group('x', 'X', '', ['ana', 'bo']), agents, [])).toBeNull();
+    expect(managerOf(group('x', 'X', '', ['0190-ana'], ['p1'], 'person:p1'), [], [])).toBe('human:p1');
+    expect(managerOf(group('x', 'X', '', ['0190-ana'], [], 'bot:0190-ana'), [], [])).toBe('bot:0190-ana');
+    const agents = [
+      { id: '0190-ana', slug: 'ana', reports_to: 'p1' },
+      { id: 'bo', slug: 'bo', reports_to: 'p1' },
+      { id: 'cy', slug: 'cy', reports_to: '0190-ana' },
+    ] as AgentRow[];
+    expect(managerOf(group('x', 'X', '', ['0190-ana', 'bo'], ['p1']), agents, [] as PersonRow[])).toBe('human:p1');
+    expect(managerOf(group('x', 'X', '', ['0190-ana', 'cy']), agents, [])).toBe('bot:0190-ana');
+    expect(managerOf(group('x', 'X', '', ['0190-ana', 'bo']), agents, [])).toBeNull();
   });
 
   it('counts everyone in the teams inside a team', () => {
-    expect(membersUnder(groups, 'g1')).toEqual({ bots: ['ana'], people: ['p1'] });
+    expect(membersUnder(groups, 'g1')).toEqual({ bots: ['0190-ana'], people: ['p1'] });
     expect(membersUnder(groups, 'g3')).toEqual({ bots: [], people: ['p1'] });
   });
 

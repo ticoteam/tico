@@ -6,7 +6,7 @@ import { QUIET_STALE_MS, quietRoot } from '@/data/optimistic';
 
 /** A person or an agent, as every name and face in the app reads it. */
 export interface Actor {
-  /** 'human:<id>' | 'bot:<slug>' */
+  /** 'human:<id>' | 'bot:<id>'. An agent's id is its slug for older agents and a uuid for newer ones. */
   id: string;
   kind: 'person' | 'agent';
   name: string;
@@ -26,8 +26,9 @@ export interface Actor {
 }
 
 /**
- * `byId` answers every form an id comes in: 'human:<id>' and 'bot:<slug>' (tasks, messages, /me), a bare agent slug
- * (routes, status events, reports_to), and a bare person id where no agent has that slug.
+ * `byId` answers every form an id comes in: 'human:<id>' and 'bot:<id>' (tasks, messages, /me), a bare agent id
+ * (status events, groups, reports_to), an agent's slug bare or as 'bot:<slug>' (routes), and a bare person id where
+ * no agent answers to it.
  */
 export interface Directory {
   actors: Actor[];
@@ -68,11 +69,15 @@ function index(actors: Actor[]): Directory {
   const byId: Record<string, Actor> = {};
   for (const a of actors) {
     byId[a.id] = a;
-    if (a.slug) byId[a.slug] = a;
+    if (a.kind === 'agent') byId[a.id.slice(4)] = a;
   }
   for (const a of actors) {
-    const bare = a.id.slice(a.id.indexOf(':') + 1);
-    if (a.kind === 'person' && !byId[bare]) byId[bare] = a;
+    if (!a.slug) continue;
+    byId[a.slug] ??= a;
+    byId[`bot:${a.slug}`] ??= a;
+  }
+  for (const a of actors) {
+    if (a.kind === 'person') byId[a.id.slice(a.id.indexOf(':') + 1)] ??= a;
   }
   return { actors, byId };
 }
@@ -115,8 +120,8 @@ export function buildDirectory(org: GetOrgResponse, lines: StatusLine[]): Direct
  * The directory with one agent's status line changed (a `bots` event). The same directory when nothing changed;
  * null when it does not hold that agent (read it again). Only that agent's object is new, so only its rows redraw.
  */
-export function withStatus(dir: Directory, slug: string, line: StatusLine | null | undefined): Directory | null {
-  const held = dir.byId[`bot:${slug}`];
+export function withStatus(dir: Directory, bot: string, line: StatusLine | null | undefined): Directory | null {
+  const held = dir.byId[`bot:${bot}`];
   if (!held) return null;
   const next = statusOf(line);
   if (held.status === next.status && held.working === next.working) return dir;

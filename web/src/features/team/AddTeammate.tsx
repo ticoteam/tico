@@ -7,7 +7,6 @@ import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field, Search } from '@/kit/Field';
 import { Icon, type IconName } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import type { AddStep } from './actions';
@@ -32,13 +31,15 @@ export function AddTeammate({ step, team }: { step: AddStep; team: string }) {
       open
       onOpenChange={(o) => !o && close()}
       title={TITLE[step]}
-      actions={
-        step === 'pick' ? (
-          <Button onClick={close}>Cancel</Button>
-        ) : (
-          <IconButton icon="chevron" label="Back" size="sm" onClick={() => void go.run({ step: 'pick' })} />
+      className="add"
+      lead={
+        step !== 'pick' && (
+          <button type="button" className="ib ib-sm" aria-label="Back" title="Back" onClick={() => void go.run({ step: 'pick' })}>
+            <Icon name="chevron" className="flip" />
+          </button>
         )
       }
+      actions={step === 'pick' ? <Button onClick={close}>Cancel</Button> : undefined}
     >
       {step === 'pick' && (
         <>

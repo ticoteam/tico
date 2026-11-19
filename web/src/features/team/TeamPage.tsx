@@ -7,7 +7,7 @@ import { IconButton } from '@/kit/IconButton';
 import { FiguresStrip, List, Section, type PageState } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
-import { managerOf, membersUnder, startOfWeek, subTeams, teamSlug } from './model';
+import { managerOf, memberIds, membersUnder, startOfWeek, subTeams, teamSlug } from './model';
 import { MateRow, OwnerButton, waitsOn } from './parts';
 import { agentsQuery, allTasksQuery, groupsQuery, peopleQuery, type AgentRow, type Group, type OwnTask } from './queries';
 
@@ -34,7 +34,7 @@ export function TeamPage({ group, add }: TeamPageProps) {
   const lead = managerOf(group, roster.data ?? [], people.data ?? []);
   const manager = lead ? actorOf(lead) : undefined;
   const under = membersUnder(all, group.id);
-  const everyone = new Set([...under.bots, ...under.people].map((k) => actorOf(k)?.id).filter(Boolean));
+  const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter(Boolean));
   const tally = (tasks: readonly OwnTask[] | undefined) => {
     const by = new Map<string, OwnTask[]>();
     for (const t of tasks ?? []) {
@@ -61,7 +61,7 @@ export function TeamPage({ group, add }: TeamPageProps) {
     );
   };
   const members = (g: Group) =>
-    [...g.people, ...g.bots]
+    memberIds(g)
       .map(actorOf)
       .filter((a): a is Actor => !!a && a.id !== manager?.id)
       .sort((a, b) => a.name.localeCompare(b.name));

@@ -41,19 +41,20 @@ function show(node: ReactNode, at: string) {
   );
 }
 
-const ana: Actor = { id: 'bot:ana', kind: 'agent', name: 'Ana', slug: 'ana' };
+// Ana is a newer agent: her bot id is not her slug, as groups, computers and tasks name her.
+const ana: Actor = { id: 'bot:0190-ana', kind: 'agent', name: 'Ana', slug: 'ana' };
 const bo: Actor = { id: 'bot:bo', kind: 'agent', name: 'Bo', slug: 'bo' };
 const pat: Actor = { id: 'human:p1', kind: 'person', name: 'Pat Doe' };
 const actors = [ana, bo, pat];
 const byId = Object.fromEntries(actors.flatMap((a) => [[a.id, a], [a.slug ?? a.id.slice(6), a]]));
 const groups: Group[] = [
-  { id: 'g1', name: 'Design', parent: '', lead: '', bots: ['ana'], people: ['p1'] },
+  { id: 'g1', name: 'Design', parent: '', lead: '', bots: ['0190-ana'], people: ['p1'] },
   { id: 'g2', name: 'Brand', parent: 'g1', lead: '', bots: ['bo'], people: [] },
   { id: 'g3', name: 'Sales', parent: '', lead: '', bots: [], people: [] },
 ];
 const roster: AgentRow[] = [
-  { id: 'a1', slug: 'ana', display_name: 'Ana', description: 'Writes copy', revision: 3 },
-  { id: 'a2', slug: 'bo', display_name: 'Bo', revision: 1 },
+  { id: '0190-ana', slug: 'ana', display_name: 'Ana', description: 'Writes copy', revision: 3 },
+  { id: 'bo', slug: 'bo', display_name: 'Bo', revision: 1 },
 ];
 
 const link = (title: string) => screen.queryAllByTitle(title).find((el) => el.tagName === 'A');
@@ -85,7 +86,7 @@ describe('Team pages', () => {
     await waitFor(() => expect(link('Ana')).toBeTruthy());
     let done!: Promise<unknown>;
     act(() => {
-      done = moveToTeam('agent', 'ana', 'g3').catch(() => 'refused');
+      done = moveToTeam('agent', '0190-ana', 'g3').catch(() => 'refused');
     });
     await waitFor(() => expect(link('Ana')).toBeUndefined());
     await waitFor(() => expect(refuse).toBeTypeOf('function'));
@@ -124,6 +125,13 @@ describe('Team pages', () => {
     await screen.findByText('Write short.');
     expect(screen.getByTitle('Open the instructions').getAttribute('href')).toBe('/team/ana?tab=instructions');
     expect(screen.getByText('None').closest('a')?.getAttribute('href')).toBe('/team/ana?tab=computer');
+  });
+
+  it('opens the model picker over Settings at ?tab=model', async () => {
+    serve(() => undefined);
+    show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
+    expect(await screen.findByRole('dialog', { name: 'Model' })).toBeTruthy();
+    expect(await screen.findByText('Writes copy')).toBeTruthy();
   });
 
   it('says so for a team with nobody in it', async () => {

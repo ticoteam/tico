@@ -32,8 +32,8 @@ export interface ComputerPageProps {
 /** The computer an agent runs on (mates.js compPage): Info and Screen, its agents, how it is doing, Restart. */
 export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
   const computers = useQuery(computersQuery);
-  const slug = agent?.slug ?? actor.slug ?? '';
-  const c = computers.data?.find((x) => x.id === agent?.machine?.runner_id) ?? computers.data?.find((x) => x.bots?.includes(slug));
+  const botId = agent?.id ?? actor.id.slice(actor.id.indexOf(':') + 1);
+  const c = computers.data?.find((x) => x.id === agent?.machine?.runner_id) ?? computers.data?.find((x) => x.bots?.includes(botId));
   const restart = useAction('computers.restart');
   const [asking, setAsking] = useState(false);
   const title = c?.label ?? agent?.machine?.label ?? (agent?.cloud_machine?.shared ? 'Shared computer' : 'Computer');
@@ -60,8 +60,8 @@ export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
         )
       }
       tabs={[
-        { label: 'Info', to: `${base}?tab=computer` },
-        { label: 'Screen', to: `${base}?tab=screen` },
+        { label: 'Info', to: base, search: { tab: 'computer' } },
+        { label: 'Screen', to: base, search: { tab: 'screen' } },
       ]}
       state={state}
       onRetry={() => void computers.refetch()}
@@ -91,7 +91,7 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
   const { data: models } = useQuery(modelsQuery);
   const perf = useQuery({ ...performanceQuery(c.id), enabled: c.online });
   const [picking, setPicking] = useState<AgentRow | null>(null);
-  const on = (roster.data ?? []).filter((r) => c.bots?.includes(r.slug) || r.machine?.runner_id === c.id);
+  const on = (roster.data ?? []).filter((r) => c.bots?.includes(r.id) || r.machine?.runner_id === c.id);
   const points = perf.data?.points ?? [];
   const last = points.at(-1);
   const series = (i: number) => points.map((p: PerfPoint) => p[i] ?? 0);
@@ -158,7 +158,7 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
 function Screen({ c }: { c: Computer }) {
   const actors = useActors();
   if (!c.online) return <Empty icon="offline" title="It did not answer" />;
-  const busy = actors.filter((a) => a.kind === 'agent' && a.working && a.slug && c.bots?.includes(a.slug));
+  const busy = actors.filter((a) => a.kind === 'agent' && a.working && c.bots?.includes(a.id.slice(a.id.indexOf(':') + 1)));
   return (
     <>
       {busy.length > 0 && (

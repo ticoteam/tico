@@ -16,7 +16,7 @@ export type Who =
 
 /** `/team/<who>`: an agent's slug, a person's id, or a team (its id or its name as the menu writes it). */
 export function resolveWho(who: string, dir: Directory | undefined, groups: readonly Group[] | undefined): Who | null {
-  const actor = dir?.byId[who] ?? dir?.byId[`human:${who}`];
+  const actor = dir?.byId[who] ?? dir?.byId[`human:${who}`] ?? dir?.byId[`bot:${who}`];
   if (actor) return actor.kind === 'agent' ? { kind: 'agent', actor } : { kind: 'person', actor };
   const group = groups?.find((g) => g.id === who || teamSlug(g.name) === who);
   return group ? { kind: 'team', group } : null;
@@ -26,19 +26,24 @@ export function resolveWho(who: string, dir: Directory | undefined, groups: read
 export const whoHref = (a: Pick<Actor, 'id' | 'kind' | 'slug'>) =>
   `/team/${encodeURIComponent(a.kind === 'agent' && a.slug ? a.slug : a.id.slice(a.id.indexOf(':') + 1))}`;
 
-/** A `bot:<slug>` / `person:<id>` lead, or a bare slug or id, as a key the directory answers. */
-const leadKey = (lead: string) => lead.replace(/^(bot|person|human):/, '');
+/** The id inside an actor id: an agent's bot id (a uuid for newer agents, not its slug) or a person's id. */
+export const bareId = (actor: string) => actor.slice(actor.indexOf(':') + 1);
+
+/** A team's members as actor ids (`human:<id>`, `bot:<bot id>`): groups list agents by bot id, not slug. */
+export const memberIds = (g: Pick<Group, 'people' | 'bots'>) => [...g.people.map((p) => `human:${p}`), ...g.bots.map((b) => `bot:${b}`)];
 
 /**
  * A team's manager: its lead when one is set; otherwise the teammate most of its members report to, when that one is in
- * the team (ui/app team pages took the same vote). A key the directory answers, or null.
+ * the team (ui/app team pages took the same vote). An actor id, or null.
  */
 export function managerOf(group: Group, agents: readonly AgentRow[], people: readonly PersonRow[]): string | null {
-  if (group.lead) return leadKey(group.lead);
-  const members = new Set([...group.bots, ...group.people]);
+  if (group.lead) return group.lead.replace(/^person:/, 'human:');
+  // reports_to holds a bare bot id or person id.
+  const actorOf = (id: string) => (agents.some((a) => a.id === id) ? `bot:${id}` : `human:${id}`);
+  const members = new Set(memberIds(group));
   const votes = new Map<string, number>();
-  for (const a of agents) if (group.bots.includes(a.slug) && a.reports_to) votes.set(a.reports_to, (votes.get(a.reports_to) ?? 0) + 1);
-  for (const p of people) if (group.people.includes(p.id) && p.reports_to) votes.set(p.reports_to, (votes.get(p.reports_to) ?? 0) + 1);
+  for (const a of agents) if (group.bots.includes(a.id) && a.reports_to) votes.set(actorOf(a.reports_to), (votes.get(actorOf(a.reports_to)) ?? 0) + 1);
+  for (const p of people) if (group.people.includes(p.id) && p.reports_to) votes.set(actorOf(p.reports_to), (votes.get(actorOf(p.reports_to)) ?? 0) + 1);
   let best: string | null = null;
   let most = 0;
   for (const [k, n] of votes) if (members.has(k) && n > most) [best, most] = [k, n];
@@ -65,7 +70,7 @@ export function membersUnder(groups: readonly Group[], id: string): { bots: stri
   return { bots: [...bots], people: [...people] };
 }
 
-/** The team a teammate is in: its group. */
+/** The team a teammate is in: its group. `id` is a bot id or a person id. */
 export const teamOf = (groups: readonly Group[], kind: 'agent' | 'person', id: string) =>
   groups.find((g) => (kind === 'agent' ? g.bots : g.people).includes(id));
 

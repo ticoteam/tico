@@ -7,7 +7,7 @@ import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
-import { startOfMonth, teamOf } from './model';
+import { bareId, startOfMonth, teamOf } from './model';
 import { ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
 import { accessQuery, agentsQuery, doneTasksQuery, groupsQuery, openTasksQuery, peopleQuery } from './queries';
 
@@ -22,10 +22,15 @@ export function PersonPage({ actor, settings }: PersonPageProps) {
   const path = `/team/${encodeURIComponent(id)}`;
   useFollow({ party: actor.id });
   const open = useAction('team.open');
-  const head = {
+  const rename = useAction('people.rename');
+  const { data: access } = useQuery(accessQuery);
+  const admin = access?.you === 'owner' || access?.you === 'admin';
+  const head: Head = {
     title: actor.name,
     path,
     className: 'rec is-col',
+    size: 'large',
+    onRename: admin ? (name) => void rename.run({ person: id, name }) : undefined,
     lead: <Avatar kind="person" name={actor.name} hue={actor.hue} size={36} />,
     after: actor.title ? <p className="col-sub">{actor.title}</p> : undefined,
     actions: (
@@ -41,7 +46,16 @@ export function PersonPage({ actor, settings }: PersonPageProps) {
   return settings ? <PersonSettings actor={actor} id={id} head={head} /> : <PersonWidgets actor={actor} id={id} head={head} />;
 }
 
-type Head = { title: string; path: string; className: string; lead: ReactNode; after: ReactNode; actions: ReactNode };
+type Head = {
+  title: string;
+  path: string;
+  className: string;
+  size: 'large';
+  onRename?: (name: string) => void;
+  lead: ReactNode;
+  after: ReactNode;
+  actions: ReactNode;
+};
 
 function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: Head }) {
   const { data: me } = useQuery(meQuery);
@@ -55,10 +69,10 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   const waits = tasks.filter((t) => waitsOn(t, me?.id));
   const rest = tasks.filter((t) => !waitsOn(t, me?.id));
   const reports = new Set([
-    ...(roster.data ?? []).filter((r) => r.reports_to === id).map((r) => r.slug),
+    ...(roster.data ?? []).filter((r) => r.reports_to === id).map((r) => r.id),
     ...(people.data ?? []).filter((p) => p.reports_to === id).map((p) => p.id),
   ]);
-  const manages = actors.filter((a) => reports.has(a.slug ?? a.id.slice(a.id.indexOf(':') + 1)));
+  const manages = actors.filter((a) => reports.has(bareId(a.id)));
   const doneN = done.data?.tasks.length ?? 0;
   const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : 'ready';
   return (
@@ -121,7 +135,7 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
   const admin = access?.you === 'owner' || access?.you === 'admin';
   const self = me?.id === actor.id;
   const team = teamOf(groups.data ?? [], 'person', id);
-  const boss = p?.reports_to ? actors.find((a) => (a.slug ?? a.id.slice(a.id.indexOf(':') + 1)) === p.reports_to) : undefined;
+  const boss = p?.reports_to ? actors.find((a) => bareId(a.id) === p.reports_to) : undefined;
   const company = config?.company_name || config?.app_name || 'the company';
   const state: PageState = people.isError ? 'fault' : people.isPending ? 'loading' : 'ready';
   const title = p?.title ?? actor.title ?? '';

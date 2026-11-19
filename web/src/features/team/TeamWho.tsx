@@ -14,7 +14,7 @@ export interface TeamSearch {
   add?: AddStep;
 }
 
-/** `?tab=settings|instructions|computer|screen&add=pick|new|template|person`; anything else is dropped. */
+/** `?tab=settings|instructions|model|computer|screen&add=pick|new|template|person`; anything else is dropped. */
 export function validateTeamSearch(raw: Record<string, unknown>): TeamSearch {
   const out: TeamSearch = {};
   if (TABS.includes(raw.tab as Tab)) out.tab = raw.tab as Tab;
