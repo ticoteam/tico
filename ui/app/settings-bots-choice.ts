@@ -90,7 +90,7 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
     // fallback of None has none. (A task's or a step's own run on Same as bot runs on the bot's task model.)
     const same = bot && spec.kind === 'run' && bot.task_model?.model ? bot.task_model : bot;
     const size = compact && (spec.mode === 'bulk' || (spec.mode === 'task' && settingsCompacts(same ? settingsBotHarness(same) : ''))) ? settingsSizeWords(compact) : '';
-    const effort = spec.mode === 'task' ? c.effort : '';
+    const effort = spec.kind === 'task' && spec.mode === 'task' ? c.effort : '';
     return {short: [spec.none, settingsEffortShort(effort), size].filter(Boolean).join(' '),
       long: [spec.none, effort ? `${settingsEffortName(effort)} effort` : '', size ? `compacts at ${size.toLowerCase()}` : ''].filter(Boolean).join(', ')};
   }
@@ -258,7 +258,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   };
   // A task pick on Same as bot runs on the bot's model: its Effort row lists that model's efforts, Default first
   // meaning the bot's own effort ('').
-  const asBot = () => mode === 'task' && !picked.harness && !!runModel();
+  const asBot = () => spec.kind === 'task' && mode === 'task' && !picked.harness && !!runModel();
   const defaultEffort = () => asBot() ? '' : inTier() ? tierEfforts(shown()).def : settingsModel(picked.model)?.default_effort || '';
   const efforts = () => asBot() ? ['', ...settingsModelEfforts(runModel())] : inTier() ? tierEfforts(shown()).list
     : choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);

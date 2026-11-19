@@ -108,6 +108,8 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     // after Same as bot.
     assert.deepEqual(await offered(panel, 'harness'), ['Same as bot', 'Claude Code', 'Codex', 'Cursor', 'Plain']);
     assert.equal(await chosen(panel, 'harness'), '');
+    // A task's run on Same as bot has no Effort of its own: it runs at the bot's (only the bot's Task model picker has one).
+    assert.equal(await panel.locator('[data-choice-effort]').isVisible(), false, 'no Effort row on Same as bot');
     const compact = panel.locator('[data-choice-compact]');
     assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', ...SIZES]);
     assert.equal(await panel.locator('[data-choice-apply]').isDisabled(), true, 'nothing to apply yet');
@@ -149,6 +151,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     // Back to Same as bot keeps the task's own window ("Same as bot 500K")...
     await choose(open, 'harness', '');
     assert.equal(await compact.inputValue(), '500000', 'the window stays when the model goes');
+    assert.equal(await open.locator('[data-choice-effort]').isVisible(), false, 'the Effort row goes with the model');
     await applyPicker(open);
     await page.waitForFunction(() => document.querySelector('[data-task-run-model] .sb-pick-text')?.textContent?.trim() === 'Same as bot 500K');
     assert.deepEqual(posted.at(-1), {model: null, compact_at: 500000});
