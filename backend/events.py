@@ -3000,12 +3000,12 @@ def needs_baseline(c, auth, who, task_view):
 class _Baseline:
     """One build of a person's Needs-you baseline for every stream of theirs that joined it before its snapshot began."""
 
-    __slots__ = ("task", "begun", "seq", "held")
+    __slots__ = ("begun", "seq", "held")
 
     def __init__(self):
-        self.task = None
         self.begun = False  # set on the lane just before the build's read snapshot begins
-        self.seq = self.held = None
+        self.seq = 0
+        self.held = {"marks": {}, "version": ""}
 
     def copy(self):
         """A stream's own copy: _needs_list moves it on for that stream alone."""
@@ -3034,13 +3034,15 @@ class Baselines:
 
         loop = asyncio.get_running_loop()
         key = (loop, needs_cache.viewer(who), task_view)
-        build = self._open.get(key)
-        if build is None or build.begun:
-            build = self._open[key] = _Baseline()
-            build.task = loop.create_task(needs_lane.run(app, self._build, build, auth, who, task_view))
-            build.task.add_done_callback(lambda done: self._finished(key, build, done))
+        entry = self._open.get(key)
+        if entry is None or entry[0].begun:
+            build = _Baseline()
+            task = loop.create_task(needs_lane.run(app, self._build, build, auth, who, task_view))
+            entry = self._open[key] = (build, task)
+            task.add_done_callback(lambda done, entry=entry: self._finished(key, entry, done))
+        build, task = entry
         # Shielded: one client leaving does not cancel the build the others wait on.
-        await asyncio.shield(build.task)
+        await asyncio.shield(task)
         return build.seq, build.copy()
 
     def _build(self, build, auth, who, task_view):
@@ -3054,8 +3056,8 @@ class Baselines:
                 if c.in_transaction:
                     c.rollback()
 
-    def _finished(self, key, build, task):
-        if self._open.get(key) is build:
+    def _finished(self, key, entry, task):
+        if self._open.get(key) is entry:
             del self._open[key]
         if not task.cancelled():
             task.exception()  # retrieved here: each stream that joined raises it itself
@@ -3782,7 +3784,7 @@ def install(app, store, auth, task_views, task_view):
 
         # Where a stream without a Needs-you baseline starts, read before its response as always. One with a baseline
         # starts where its baseline's snapshot stands, which begins after it asked (Baselines).
-        opened_at = None if held is not None else await asyncio.to_thread(newest)
+        opened_at = await asyncio.to_thread(newest) if held is None else 0
 
         async def generate():
             # The stream opens at once: its Needs-you baseline, the one costly part of starting, comes before `ready`,
