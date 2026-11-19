@@ -20,6 +20,8 @@ SCHEMAS.update(
                 "body_sha256": "s",
                 "subject": "s",
                 "approval_id": "s",
+                "task_id": "n",
+                "approval_task_id": "n",
                 "state": "s",
                 "created_at": "s",
                 "send_after": "s",
