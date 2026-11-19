@@ -526,11 +526,12 @@ def draft_get(c, mailbox, draft_id):
 
 
 DRAFT_PAGE = 500  # drafts one list call returns (Gmail's most)
-DRAFT_PAGES = 10  # pages scanned for a draft by its message or thread
+DRAFT_PAGES = 1000  # pages of ids a lookup by message or thread reads before it refuses (half a million drafts)
 
 
-def _draft_page(c, mailbox, q="", page_token="", limit=DRAFT_PAGE):
+def _draft_page(c, mailbox, q="", page_token="", limit=None):
     """One page of drafts as [{id, message, thread}], and Gmail's continuation token or None."""
+    limit = limit or DRAFT_PAGE
     query = {"maxResults": limit, "fields": "drafts(id,message(id,threadId)),nextPageToken"}
     if q:
         query["q"] = q
@@ -543,21 +544,27 @@ def _draft_page(c, mailbox, q="", page_token="", limit=DRAFT_PAGE):
     return [_draft(row) for row in rows], nxt
 
 
-def draft_scan(c, mailbox, wanted, q=""):
-    """The drafts `wanted({id, message, thread})` keeps, newest first, over at most DRAFT_PAGES pages."""
-    found, cursor = [], ""
+def draft_scan(c, mailbox, wanted, q="", enough=None):
+    """The drafts `wanted({id, message, thread})` keeps, newest first, paging through every draft (ids only) until
+    `enough(found)` says to stop or Gmail has no more. A mailbox past DRAFT_PAGES pages is refused, never cut short."""
+    found, cursor, seen = [], "", set()
     for _ in range(DRAFT_PAGES):
         rows, cursor = _draft_page(c, mailbox, q, cursor)
         found.extend(row for row in rows if wanted(row))
-        if not cursor:
+        if not cursor or (enough and enough(found)):
+            return found
+        if cursor in seen:
             break
-    return found
+        seen.add(cursor)
+    raise Problem("gmail_size", "This mailbox has too many drafts to look through; find the draft in Gmail", 502)
 
 
 def draft_resolve(c, mailbox, ident):
     """The draft named by its own id or by its message's id, as {id, message, thread}; None when neither names one.
     Any draft in the mailbox counts, whoever made it."""
-    return draft_get(c, mailbox, ident) or next(iter(draft_scan(c, mailbox, lambda row: row["message"] == ident)), None)
+    return draft_get(c, mailbox, ident) or next(
+        iter(draft_scan(c, mailbox, lambda row: row["message"] == ident, enough=bool)), None
+    )
 
 
 def draft_ids(c, mailbox, message_ids):
@@ -565,7 +572,8 @@ def draft_ids(c, mailbox, message_ids):
     wanted = set(message_ids)
     if not wanted:
         return {}
-    return {row["message"]: row["id"] for row in draft_scan(c, mailbox, lambda row: row["message"] in wanted)}
+    rows = draft_scan(c, mailbox, lambda row: row["message"] in wanted, enough=lambda found: len(found) >= len(wanted))
+    return {row["message"]: row["id"] for row in rows}
 
 
 DRAFT_FIELDS = "id,message(" + LIST_FIELDS + ")"
@@ -573,10 +581,13 @@ DRAFT_FIELDS = "id,message(" + LIST_FIELDS + ")"
 
 def drafts(c, mailbox, q="", thread="", page_token="", limit=50):
     """One bounded page of drafts, newest first: each its draft id with its message's headers, snippet and attachment
-    names. `thread` keeps the drafts in that thread (scanned, so there is no next page)."""
+    names. `thread` keeps the drafts in that thread: every draft is looked through for them, and the cursor is how
+    many of them came before."""
     cap = min(LIMIT_MAX, max(1, limit))
     if thread:
-        rows, nxt = draft_scan(c, mailbox, lambda row: row["thread"] == thread, q)[:cap], None
+        matched = draft_scan(c, mailbox, lambda row: row["thread"] == thread, q)
+        start = int(page_token) if page_token.isdigit() else 0
+        rows, nxt = matched[start : start + cap], str(start + cap) if start + cap < len(matched) else None
     else:
         rows, nxt = _draft_page(c, mailbox, q, page_token, cap)
     token = _token(c, mailbox)
@@ -656,7 +667,7 @@ DRAFT_RAW_MAX_BYTES = MAX_RAW * 4 // 3 + 1024 * 1024
 
 
 def draft_raw(c, mailbox, draft_id):
-    """A draft's MIME (base64url) and thread, as Gmail holds it now: what a send of the draft freezes."""
+    """A draft's MIME (base64url), thread and message id, as Gmail holds it now: what a send of the draft freezes."""
     found = _call(
         mailbox,
         "drafts/" + urllib.parse.quote(draft_id, safe=""),
@@ -667,7 +678,11 @@ def draft_raw(c, mailbox, draft_id):
     message = found.get("message") if isinstance(found, dict) else None
     if not isinstance(message, dict) or not isinstance(message.get("raw"), str) or not message["raw"]:
         raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)
-    return {"raw": message["raw"].rstrip("="), "thread": str(message.get("threadId") or "")}
+    return {
+        "raw": message["raw"].rstrip("="),
+        "thread": str(message.get("threadId") or ""),
+        "message": str(message.get("id") or ""),
+    }
 
 
 def draft_delete(c, mailbox, draft_id):

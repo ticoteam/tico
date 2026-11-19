@@ -159,6 +159,8 @@ class Enqueue(Contract):
     # The frozen MIME (base64url), or none with `draft_id`: the server freezes the draft as Gmail holds it now.
     raw: str = Field(default="", max_length=MAX_RAW * 4 // 3 + 8)
     draft_id: str = Field(default="", max_length=200)
+    # With draft_id: the draft's message id the caller last saw; a draft changed since is refused (409).
+    draft_message: str = Field(default="", max_length=200)
     thread_id: str = Field(default="", max_length=200)
     reply_to_id: str = Field(default="", max_length=200)
     approval_id: str = Field(default="", max_length=200)
@@ -1542,7 +1544,18 @@ def install(app, store, auth, mutate):
                     404,
                 )
             found = gmail_live.draft_raw(c, mailbox, named["id"])
-            body = body.model_copy(update={"draft_id": named["id"]})
+        # The version the caller saw: named by its message id, or `draft_message`. A draft changed since is refused,
+        # never frozen with words or recipients the caller did not read.
+        expected = body.draft_message or (body.draft_id if body.draft_id == named["message"] else "")
+        if expected and found["message"] and expected != found["message"]:
+            raise Problem(
+                "draft_changed",
+                f"Draft {named['id']} in {mailbox} changed since you read it (its message is now {found['message']}). "
+                f"Read it again with `tico email draft-show {mailbox} {named['id']}` before sending it",
+                409,
+                extra={"draft": named["id"], "message": found["message"]},
+            )
+        body = body.model_copy(update={"draft_id": named["id"]})
         if len(found["raw"]) > MAX_RAW * 4 // 3 + 8:
             raise Problem("raw", "This draft is too large to send through Tico; send it from Gmail", 413)
         # Gmail files every draft in a thread, a new email in a thread of its own: only a draft that answers a message
@@ -1564,14 +1577,25 @@ def install(app, store, auth, mutate):
     )
     def queue(request: Request, body: Enqueue):
         who = request.state.identity
+        # The receipt is bound to the request as the caller sent it, not to the draft's MIME read from Gmail: a retry
+        # after a lost answer replays the send it queued (after the access checks), before anything reads Gmail, so
+        # it holds even when the draft was edited or discarded since, or Gmail is down.
+        asked = body
+        with store.read() as c:
+            if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
+                if not access.may(c, who.actor, body.mailbox.strip().lower())["send"]:
+                    raise Problem("forbidden", "The sender cannot send from this inbox", 403)
+
+                def unchecked(c):
+                    # Only a replay skips the checks; a receipt gone since it was seen is never queued unchecked.
+                    raise Problem("receipt_expired", "This send's receipt expired; retry with a new operation id", 409)
+
+                return mutate(request, asked, unchecked, durable=True)
         if not body.raw:
             if not body.draft_id:
                 raise Problem("raw", "Send the frozen MIME (raw) or name a Gmail draft (draft_id)", 422)
             body = frozen_draft(who, body)
         with store.read() as c:
-            # A retry of a send already queued gets its answer back without asking the reviewer again: a caller that
-            # gave up waiting is answered at once.
-            replay = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
             if body.calendar_action_id or body.automation_action_id:
                 # Tico books calendars and runs automations on the server; it enqueues those emails itself.
                 raise Problem("forbidden", "Only the server sends a calendar or automation email", 403)
@@ -1598,12 +1622,7 @@ def install(app, store, auth, mutate):
                 },
             )
             # A bot's own email (not one Tico composed for an automation or the calendar) is linted and reviewed.
-            writing = (
-                actor.startswith("bot:")
-                and not body.automation_action_id
-                and not body.calendar_action_id
-                and not replay
-            )
+            writing = actor.startswith("bot:") and not body.automation_action_id and not body.calendar_action_id
             review = review_context(c, auth, actor, body, mailbox, snap) if writing else None
             lint = (
                 lint_errors(
@@ -1612,23 +1631,16 @@ def install(app, store, auth, mutate):
                 if writing
                 else []
             )
-        classification = {} if replay else {**classify(app, store, snap, review), "lint": lint}
+        classification = {**classify(app, store, snap, review), "lint": lint}
         # Every bot's writing, the Assistant's for its person included, meets the org rules (`rule_gate` answers None
         # for a person's own mail); Tico's own automation and calendar email does not.
-        composed = body.automation_action_id or body.calendar_action_id or replay
+        composed = body.automation_action_id or body.calendar_action_id
         rules = None if composed else rule_gate(app, store, who, snap)
         via = who.via or ("agent:" + who.agent if who.agent else "")
-
-        def unchecked(c):
-            # Only a replay skips the checks; a receipt gone since it was seen is never queued unchecked.
-            raise Problem("receipt_expired", "This send's receipt expired; retry with a new operation id", 409)
-
         return mutate(
             request,
-            body,
-            unchecked
-            if replay
-            else lambda c: {
+            asked,
+            lambda c: {
                 "send": enqueue(
                     c,
                     auth,

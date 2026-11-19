@@ -387,6 +387,10 @@ def email_draft_show(api, args):
     return api.get('mail/drafts/' + quote(args['draft'], safe=''), mailbox=args['mailbox'])
 
 
+# The version a draft change, discard or send acts on: refused (409 draft_changed) when the draft changed since.
+_MESSAGE = _s('The draft\'s message id you last read (msg_id); a draft changed since is refused, not overwritten')
+
+
 @tool(
     'tico_email_draft_update',
     'Change a Gmail draft in place, keeping its draft id: any of to, cc, subject, body and attachments; what you '
@@ -400,12 +404,14 @@ def email_draft_show(api, args):
         'subject': _s('New subject'),
         'body': _s('The new email text, whole'),
         'attachments': {**_ATTACHMENTS, 'description': _ATTACHMENTS['description'] + '; replaces the draft\'s files'},
+        'message': _MESSAGE,
     },
     required=('mailbox', 'draft'),
     writes=True,
 )
 def email_draft_update(api, args):
-    fields = {k: args[k] for k in ('mailbox', 'to', 'cc', 'subject', 'body', 'attachments') if args.get(k) is not None}
+    keys = ('mailbox', 'to', 'cc', 'subject', 'body', 'attachments', 'message')
+    fields = {k: args[k] for k in keys if args.get(k) is not None}
     return api.call('PATCH', 'mail/drafts/' + quote(args['draft'], safe=''), fields, _key(args))
 
 
@@ -417,6 +423,7 @@ def email_draft_update(api, args):
     {
         'mailbox': _s('Mailbox address'),
         'draft': _s('Draft id (r-...) or the draft\'s message id'),
+        'message': _MESSAGE,
         'approval_id': _s('A person\'s Tico message this send relies on'),
         'task': _SEND_TASK,
     },
@@ -425,6 +432,8 @@ def email_draft_update(api, args):
 )
 def email_send(api, args):
     body = {'mailbox': args['mailbox'], 'draft_id': args['draft']}
+    if args.get('message'):
+        body['draft_message'] = args['message']
     if args.get('approval_id'):
         body['approval_id'] = args['approval_id']
     if args.get('task'):
@@ -451,6 +460,7 @@ def email_reply(api, args):
     send = {
         'mailbox': args['mailbox'],
         'draft_id': made['draft'],
+        'draft_message': made['message'],  # the draft just written, not one changed since
         **({'task_id': args['task']} if args.get('task') else {}),
     }
     sent = api.post('email/sends', send, key=_key(args, ':send'))
@@ -461,14 +471,13 @@ def email_reply(api, args):
     'tico_email_discard',
     'Discard one Gmail draft in a mailbox you may draft in, by its draft id or its message id, whoever made it. '
     'Gmail deletes a draft for good. A name that is no draft is not_found.',
-    {'mailbox': _s('Mailbox address'), 'draft': _s('Draft id (r-...) or the draft\'s message id')},
+    {'mailbox': _s('Mailbox address'), 'draft': _s('Draft id (r-...) or the draft\'s message id'), 'message': _MESSAGE},
     required=('mailbox', 'draft'),
     writes=True,
 )
 def email_discard(api, args):
-    return api.call(
-        'DELETE', 'mail/drafts/' + quote(args['draft'], safe=''), None, _key(args), {'mailbox': args['mailbox']}
-    )
+    query = {'mailbox': args['mailbox'], **({'message': args['message']} if args.get('message') else {})}
+    return api.call('DELETE', 'mail/drafts/' + quote(args['draft'], safe=''), None, _key(args), query)
 
 
 @tool(
