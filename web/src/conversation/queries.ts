@@ -3,7 +3,8 @@
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { keys, queryClient, write } from '@/data';
+import type { Feedback as FeedbackRow, FeedbackMarkers, FeedbackReasons, FeedbackRuleDraft, FeedbackRuleMade } from '@/api/schema';
+import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
 import type { ChatMessage, LiveRun, PageRef, TimelinePage, Variant } from './types';
@@ -314,4 +315,110 @@ export function installConversationLive(): void {
     for (const [key, runs] of queryClient.getQueriesData<LiveRun[]>({ queryKey: ['thread'] }))
       if (key[2] === 'live' && runs?.length) queryClient.setQueryData(key, []);
   });
+}
+
+/* ---------------------------------------------------------------- outline */
+
+export interface OutlinePrompt {
+  id: string;
+  created_at: string;
+  text: string;
+  task?: { id: string; title: string } | null;
+}
+
+/** The people's prompts in a chat, oldest first, past the loaded pages (up to 500). */
+export const outlineQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['thread', id, 'outline'] as const,
+    queryFn: async ({ signal }) =>
+      (await api.get<{ prompts?: OutlinePrompt[] }>(`/api/v2/conversations/${enc(id)}/outline`, { signal })).prompts ?? [],
+    staleTime: 0,
+  });
+
+/* ---------------------------------------------------------------- feedback on a message */
+
+quietRoot('feedback');
+
+export type Feedback = FeedbackRow;
+export type Rating = 'up' | 'down';
+export const feedbackKey = (id: string) => ['feedback', 'chat', id] as const;
+const reasonsKey = ['feedback', 'reasons'] as const;
+
+/** The person's own feedback on the messages of one chat (the newest 200 that can be rated). */
+export const feedbackQuery = (id: string, messages: string[]) =>
+  queryOptions({
+    queryKey: feedbackKey(id),
+    queryFn: async ({ signal }) =>
+      messages.length
+        ? (await api.get<FeedbackMarkers>(`/api/v2/feedback?subject_type=message&subject_ids=${messages.slice(-200).map(enc).join(',')}`, { signal })).items
+        : [],
+    enabled: messages.length > 0,
+  });
+
+/** The reasons the person gave lately, most recent first, with how often each. */
+export const reasonsQuery = queryOptions({
+  queryKey: reasonsKey,
+  queryFn: async ({ signal }) => (await api.get<FeedbackReasons>('/api/v2/feedback/recent-reasons', { signal })).reasons,
+  staleTime: 60_000,
+});
+
+const swap = (list: Feedback[] | undefined, message: string, next: Feedback | null) => [
+  ...(list ?? []).filter((f) => f.subject_id !== message),
+  ...(next ? [next] : []),
+];
+
+/** Rate a message: shown at once, replaced by what the server keeps. Rating again replaces it. */
+export function rateMessage(chat: string, message: string, rating: Rating, reason = '', tellAgent = false) {
+  const now = new Date().toISOString();
+  const draft = (old?: Feedback): Feedback => ({
+    id: old?.id ?? `tmp-${newId()}`,
+    bot_id: old?.bot_id ?? '',
+    person_id: old?.person_id ?? '',
+    created_at: old?.created_at ?? now,
+    updated_at: now,
+    subject_type: 'message',
+    subject_id: message,
+    rating,
+    reason,
+    outcome: old?.outcome ?? 'none',
+    note_id: old?.note_id ?? null,
+    note_status: old?.note_status ?? null,
+    org_rule_id: old?.org_rule_id ?? null,
+    rule_status: old?.rule_status ?? null,
+  });
+  return write({
+    key: feedbackKey(chat),
+    optimistic: (d: Feedback[] | undefined) => swap(d, message, draft(d?.find((f) => f.subject_id === message))),
+    send: (idempotencyKey) =>
+      api.post<Feedback>(
+        '/api/v2/feedback',
+        { subject_type: 'message', subject_id: message, rating, ...(reason && { reason }), ...(tellAgent && { tell_bot: true }) },
+        { idempotencyKey },
+      ),
+    settle: (d: Feedback[] | undefined, f) => (f?.id ? swap(d, message, f) : d),
+  });
+}
+
+/** Take a rating back. */
+export function unrateMessage(chat: string, feedback: string) {
+  return write({
+    key: feedbackKey(chat),
+    optimistic: (d: Feedback[] | undefined) => (d ?? []).filter((f) => f.id !== feedback),
+    send: (idempotencyKey) => api.delete(`/api/v2/feedback/${enc(feedback)}`, { idempotencyKey }),
+  });
+}
+
+/** One sentence drafted from a "Not good" and the rated work; stores nothing, so it is read like a query. */
+export const ruleDraftQuery = (feedback: string) =>
+  queryOptions({
+    queryKey: ['ruleDraft', feedback] as const, // outside the quiet 'feedback' root: a draft is a model call, read once
+    queryFn: () => api.post<FeedbackRuleDraft>(`/api/v2/feedback/${enc(feedback)}/rule-draft`, {}),
+    staleTime: Infinity,
+  });
+
+/** Make a "Not good" a rule for the agent, or for every agent: active when the person manages it, else suggested. */
+export async function makeRule(chat: string, feedback: string, text: string, allAgents: boolean) {
+  const out = await api.post<FeedbackRuleMade>(`/api/v2/feedback/${enc(feedback)}/rule`, { text, all_bots: allAgents });
+  queryClient.setQueryData(feedbackKey(chat), (d: Feedback[] | undefined) => (d ?? []).map((f) => (f.id === feedback ? out.feedback : f)));
+  return out;
 }

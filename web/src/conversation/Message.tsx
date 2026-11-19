@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState, type MouseEvent } from 'react';
 import { useAction } from '@/actions';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
 import { ConfirmCard } from '@/kit/ConfirmCard';
@@ -7,7 +8,9 @@ import { Icon } from '@/kit/Icon';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
-import { proposalQuery } from './queries';
+import { PictureViewer, type Picture } from '@/kit/PictureViewer';
+import { Rate } from './Feedback';
+import { proposalQuery, type Feedback } from './queries';
 import type { Attachment, ChatMessage, LiveRun, Variant } from './types';
 
 export interface Who {
@@ -49,11 +52,40 @@ export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant
 
 const fileHref = (f: Attachment) => `/api/v2/files/${encodeURIComponent(f.id)}`;
 const fileMeta = (f: Attachment) => (f.content_type?.split('/')[1] ?? '').toUpperCase();
+const fileLabel = (f: Attachment) => f.title?.trim() || f.name || 'File';
+const isPicture = (f: Attachment) => /^image\//.test(f.content_type ?? '');
+const MD_PICTURE = /!\[([^\]]*)\]\((\/api\/[^()\s]+)\)/g;
 
-function Files({ files, pending }: { files: Attachment[] | undefined; pending: boolean }) {
+/** Every picture a message holds, in the order it reads: those in its text, then its attached ones. */
+export function picturesOf(m: Pick<ChatMessage, 'body' | 'refs' | 'pending' | 'deleted'>): Picture[] {
+  if (m.pending || m.deleted) return [];
+  const inText = [...(m.body ?? '').matchAll(MD_PICTURE)].map((x) => ({ src: x[2]!, name: x[1] || 'Picture' }));
+  const attached = (m.refs?.attachments ?? []).filter(isPicture).map((f) => ({ src: fileHref(f), name: fileLabel(f) }));
+  return [...inText, ...attached];
+}
+
+/** A message's pictures open full size over the page, not in a new tab; the arrows walk the message's others. */
+function usePictures(m: ChatMessage) {
+  const [at, setAt] = useState<number | null>(null);
+  const pictures = picturesOf(m);
+  const openAt = (src: string) => {
+    const i = pictures.findIndex((p) => p.src === src);
+    if (i >= 0) setAt(i);
+    return i >= 0;
+  };
+  // A picture drawn in the text is an <img> the Markdown made: a click on it opens it.
+  const onClick = (e: MouseEvent) => {
+    const img = (e.target as Element).closest?.('img.md-img');
+    if (img && openAt(img.getAttribute('src') ?? '')) e.preventDefault();
+  };
+  const viewer = pictures.length ? <PictureViewer pictures={pictures} at={at} onAtChange={setAt} /> : null;
+  return { openAt, onClick, viewer };
+}
+
+function Files({ files, pending, onPicture }: { files: Attachment[] | undefined; pending: boolean; onPicture?: (src: string) => boolean }) {
   if (!files?.length) return null;
   return files.map((f) => {
-    const label = f.title?.trim() || f.name || 'File';
+    const label = fileLabel(f);
     const inner = (
       <>
         <Icon name="file" />
@@ -61,14 +93,35 @@ function Files({ files, pending }: { files: Attachment[] | undefined; pending: b
         {fileMeta(f) && <em>{fileMeta(f)}</em>}
       </>
     );
-    return pending ? (
-      <span key={f.id} className="file">{inner}</span>
-    ) : (
-      <a key={f.id} className="file" href={fileHref(f)} target="_blank" rel="noreferrer">
+    if (pending) return <span key={f.id} className="file">{inner}</span>;
+    const href = fileHref(f);
+    const open =
+      isPicture(f) && onPicture
+        ? (e: MouseEvent) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+            if (onPicture(href)) e.preventDefault();
+          }
+        : undefined;
+    return (
+      <a key={f.id} className="file" href={href} target="_blank" rel="noreferrer" onClick={open}>
         {inner}
       </a>
     );
   });
+}
+
+/** Said in Slack: a link to the message there (the app cannot read a Slack thread for a person yet). */
+function FromSlack({ m }: { m: ChatMessage }) {
+  const s = m.refs?.slack;
+  const href = typeof s?.permalink === 'string' && /^https:\/\//.test(s.permalink) ? s.permalink : null;
+  if (!href) return null;
+  const where = s?.channel_name ? `#${s.channel_name.replace(/^#/, '')}` : 'Slack';
+  return (
+    <a className="fold msg-from" href={href} target="_blank" rel="noreferrer" title="Open in Slack">
+      <Icon name="popout" />
+      <span>{where === 'Slack' ? 'Slack' : `Slack ${where}`}</span>
+    </a>
+  );
 }
 
 /** "3 steps · 21s": the work behind a reply. */
@@ -132,23 +185,28 @@ export interface MessageProps {
   /** Same sender as the row above: no face, no name. */
   cont?: boolean;
   onRetry?: (m: ChatMessage) => void;
+  /** The chat it is in, when the person may rate it: Good and Not good show under it. */
+  rateIn?: string;
+  /** The person's own rating of it. */
+  feedback?: Feedback | null;
 }
 
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
-export function Message({ m, variant, me, cont, onRetry }: MessageProps) {
+export function Message({ m, variant, me, cont, onRetry, rateIn, feedback = null }: MessageProps) {
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
   const files = m.refs?.attachments;
+  const pics = usePictures(m);
   if (m.pending || (me && m.sender_id === me)) {
     const failed = m.pending === 'failed' || m.pending === 'held';
     return (
       <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
-        <div className="mine-col">
+        <div className="mine-col" onClick={pics.onClick}>
           {text && (
             <div className="bubble">
               <Markdown text={text} compact />
             </div>
           )}
-          <Files files={files} pending={!!m.pending} />
+          <Files files={files} pending={!!m.pending} onPicture={pics.openAt} />
           {failed && (
             <div className="msg-fail">
               <Icon name="alert" />
@@ -161,6 +219,7 @@ export function Message({ m, variant, me, cont, onRetry }: MessageProps) {
             </div>
           )}
         </div>
+        {pics.viewer}
       </div>
     );
   }
@@ -169,7 +228,7 @@ export function Message({ m, variant, me, cont, onRetry }: MessageProps) {
   return (
     <div className={['msg', cont && 'is-cont'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
       {cont ? <span className="av-gap av-22" /> : <Face who={who} size={22} />}
-      <div className="msg-main">
+      <div className="msg-main" onClick={pics.onClick}>
         {!cont && (
           <div className="msg-meta">
             <b>{who.name}</b>
@@ -178,9 +237,12 @@ export function Message({ m, variant, me, cont, onRetry }: MessageProps) {
         )}
         {text && <Markdown text={text} compact />}
         <Steps run={m.run} />
-        <Files files={files} pending={false} />
+        <Files files={files} pending={false} onPicture={pics.openAt} />
         {aid && <Proposal aid={aid} />}
+        <FromSlack m={m} />
+        {rateIn && <Rate chat={rateIn} m={m} feedback={feedback} />}
       </div>
+      {pics.viewer}
     </div>
   );
 }

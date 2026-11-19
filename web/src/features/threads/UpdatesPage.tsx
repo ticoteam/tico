@@ -34,6 +34,8 @@ export function UpdatesPage({ tab = 'all', open }: UpdatesPageProps) {
   return open ? <UpdateOpen id={open} tab={tab} /> : <UpdatesList tab={tab} />;
 }
 
+const ARCHIVE_CRUMB = [{ label: 'Updates', to: '/updates' }] as const;
+
 const pathOf = (tab: UpdateTab) => (tab === 'all' ? '/updates' : `/updates/${tab}`);
 /** The tab an update opens from, for the action's input (All has none). */
 const tabInput = (tab: UpdateTab) => (tab === 'all' ? {} : { tab });
@@ -43,7 +45,9 @@ type Item = { k: 'day'; day: string; n: number } | { k: 'up'; u: Update };
 function UpdatesList({ tab }: { tab: UpdateTab }) {
   const list = useInfiniteQuery(updateListQuery(tab));
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
-  const all = list.data?.pages.flatMap((p) => p.updates) ?? [];
+  const archive = tab === 'archive';
+  // An update archived or moved back stays in the cache flagged until the next read; each list shows its own side.
+  const all = (list.data?.pages.flatMap((p) => p.updates) ?? []).filter((u) => !!u.archived === archive);
   const unread = all.filter((u) => !u.read).length;
   const items: Item[] = byDay(all).flatMap((g) => [
     { k: 'day' as const, day: g.day, n: g.rows.length },
@@ -60,16 +64,26 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
   const state = list.isPending ? 'loading' : list.isError ? 'fault' : all.length === 0 ? 'empty' : 'ready';
   return (
     <List
-      title="Updates"
+      title={archive ? 'Archive' : 'Updates'}
       path={pathOf(tab)}
-      tabs={TABS}
+      crumb={archive ? ARCHIVE_CRUMB : undefined}
+      tabs={archive ? undefined : TABS}
       actions={
-        <Button variant="primary" disabled={!unread} onClick={() => void press('updates.markRead', {})}>
-          Mark read
-        </Button>
+        archive ? undefined : (
+          <Button variant="primary" disabled={!unread} onClick={() => void press('updates.markRead', {})}>
+            Mark read
+          </Button>
+        )
+      }
+      more={
+        archive ? undefined : (
+          <Menu trigger={<IconButton icon="more" label="More" />}>
+            <MenuItem label="Archive" icon="archive" onSelect={() => void press('updates.openArchive', {})} />
+          </Menu>
+        )
       }
       state={state}
-      empty={{ title: 'No updates yet' }}
+      empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
       onRetry={() => void list.refetch()}
       sections={
         <VirtualList
@@ -144,7 +158,11 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
     <Menu trigger={<IconButton icon="more" label="More" />}>
       <MenuItem label="Mark unread" icon="updates" onSelect={() => void press('updates.markRead', { ids: [u.id], read: false })} />
       <MenuRule />
-      <MenuItem label="Archive update" icon="archive" onSelect={() => void press('updates.archive', { ids: [u.id] })} />
+      {u.archived ? (
+        <MenuItem label="Move back to Updates" icon="updates" onSelect={() => void press('updates.archive', { ids: [u.id], archived: false })} />
+      ) : (
+        <MenuItem label="Archive update" icon="archive" onSelect={() => void press('updates.archive', { ids: [u.id] })} />
+      )}
     </Menu>
   );
   const parts = u ? updateParagraphs(u) : [];
@@ -153,7 +171,7 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
     <Document
       title={title}
       path={`${pathOf(tab)}?open=${id}`}
-      crumb={[{ label: 'Updates', to: pathOf(tab) }]}
+      crumb={tab === 'archive' ? [...ARCHIVE_CRUMB, { label: 'Archive', to: pathOf(tab) }] : [{ label: 'Updates', to: pathOf(tab) }]}
       actions={<Steps id={id} tab={tab} />}
       more={more}
       state={isPending ? 'loading' : isError ? 'fault' : 'ready'}

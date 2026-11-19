@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { catchUpQuery, threadListQuery, threadQuery, threadSearchQuery, updateListQuery, updateQuery, type UpdateTab } from './queries';
+import { catchUpQuery, learnedQuery, viewersQuery, threadListQuery, threadQuery, threadSearchQuery, updateListQuery, updateQuery, type UpdateTab } from './queries';
 
 /* What the routes read before they draw, and their search params. A read that fails shows the page's own fault
    state, so a loader never throws. */
@@ -28,3 +28,6 @@ export const updatesSearch = (s: Record<string, unknown>): UpdatesSearch => ({ o
 
 export const loadUpdates = (qc: QueryClient, tab: UpdateTab, open?: string) =>
   (open ? qc.ensureQueryData(updateQuery(open)) : qc.ensureInfiniteQueryData(updateListQuery(tab))).catch(() => undefined);
+
+export const loadLearned = (qc: QueryClient) =>
+  Promise.all([qc.ensureQueryData(learnedQuery), qc.ensureQueryData(viewersQuery)]).catch(() => undefined);

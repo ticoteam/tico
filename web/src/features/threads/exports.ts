@@ -3,7 +3,8 @@ export { ThreadsPage, type ThreadsPageProps } from './ThreadsPage';
 export { MailPage, MessagingPage, type MailPageProps, type MessagingPageProps } from './MailPage';
 export { UpdatesPage, type UpdatesPageProps } from './UpdatesPage';
 export { ChatSheet, type ChatSheetProps } from './ChatSheet';
-export { threadsSearch, loadThreads, updatesSearch, loadUpdates, type ThreadsSearch, type UpdatesSearch } from './routing';
+export { LearnedPage } from './LearnedPage';
+export { threadsSearch, loadThreads, updatesSearch, loadUpdates, loadLearned, type ThreadsSearch, type UpdatesSearch } from './routing';
 export {
   threadListQuery,
   threadQuery,

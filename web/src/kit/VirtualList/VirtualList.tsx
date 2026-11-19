@@ -5,6 +5,8 @@ import './VirtualList.css';
 /** What a list's owner may do to it: a chat goes to its end when the person sends. */
 export type VirtualListHandle = {
   scrollToEnd: () => void;
+  /** Bring one row to the middle of the window; false when no row has that key. */
+  scrollToKey: (key: string) => boolean;
   /** How far the scroller is from its end, in px (0 before it is drawn). */
   fromEnd: () => number;
 };
@@ -64,6 +66,11 @@ export function VirtualList<T>({
     scrollToEnd: () => {
       const el = scrollRef.current;
       el?.scrollTo({ top: el.scrollHeight });
+    },
+    scrollToKey: (key) => {
+      const i = items.findIndex((it) => getKey(it) === key);
+      if (i >= 0) v.scrollToIndex(i, { align: 'center' });
+      return i >= 0;
     },
     fromEnd: () => {
       const el = scrollRef.current;

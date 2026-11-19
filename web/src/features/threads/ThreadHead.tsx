@@ -1,19 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useActors, type Actor } from '@/data';
-import { Avatar } from '@/kit/Avatar';
-import { Button } from '@/kit/Button';
-import { Combobox } from '@/kit/Combobox';
+import { Outline } from '@/conversation';
 import { Count } from '@/kit/Count';
-import { Dialog } from '@/kit/Dialog';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { ItemHead } from '@/pagekinds';
+import { AddPeople, Members } from './Members';
 import { isDm, isMuted, othersOf } from './model';
 import { Face, press, useMe, useTitle } from './people';
 import { threadQuery } from './queries';
+import { Settings } from './Settings';
 
 const FACES = 6;
 
@@ -23,7 +21,8 @@ export function ThreadHead({ id }: { id: string }) {
   const me = useMe();
   const title = useTitle(t) || 'Thread';
   const [editing, setEditing] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState<'people' | 'add' | 'settings' | 'outline' | null>(null);
+  const close = () => setOpen(null);
   const people = t ? othersOf(t, me) : [];
   const muted = isMuted(t);
   const manage = t?.me?.can_manage !== false;
@@ -32,8 +31,10 @@ export function ThreadHead({ id }: { id: string }) {
   const more = (
     <Menu trigger={<IconButton icon="more" label="More" />}>
       <MenuItem label="Rename" icon="edit" disabled={!manage} onSelect={() => setEditing(true)} />
-      <MenuItem label="Add people" icon="people" onSelect={() => setAdding(true)} />
+      <MenuItem label="People" icon="people" onSelect={() => setOpen('people')} />
       <MenuItem label={muted ? 'Unmute' : 'Mute'} icon="asleep" onSelect={() => void press('threads.mute', { thread: id, muted: !muted })} />
+      <MenuItem label="Outline" icon="list" onSelect={() => setOpen('outline')} />
+      <MenuItem label="Settings" icon="gear" onSelect={() => setOpen('settings')} />
       <MenuRule />
       <MenuItem label="Archive thread" icon="archive" disabled={!manage} onSelect={() => void press('threads.archive', { thread: id })} />
     </Menu>
@@ -55,13 +56,13 @@ export function ThreadHead({ id }: { id: string }) {
       {t && (
         <div className="conv-about">
           <div className="ab-row">
-            <span className="faces ab-people">
+            <button type="button" className="faces ab-people" aria-label="People" title="People" onClick={() => setOpen('people')}>
               {people.slice(0, FACES).map((a) => (
                 <Face key={a} actor={a} />
               ))}
-            </span>
-            {people.length > FACES && <Count n={people.length - FACES} className="ab-n" label={`${people.length - FACES} more`} />}
-            <button type="button" className="ab-chip ab-add" onClick={() => setAdding(true)}>
+              {people.length > FACES && <Count n={people.length - FACES} className="ab-n" label={`${people.length - FACES} more`} />}
+            </button>
+            <button type="button" className="ab-chip ab-add" onClick={() => setOpen('add')}>
               <Icon name="plus" />
               Add people
             </button>
@@ -74,60 +75,10 @@ export function ThreadHead({ id }: { id: string }) {
           </div>
         </div>
       )}
-      {adding && <AddPeople id={id} have={new Set([...(me ? [me] : []), ...people])} onClose={() => setAdding(false)} />}
+      {t && open === 'people' && <Members thread={t} onClose={close} onAdd={() => setOpen('add')} />}
+      {t && open === 'add' && <AddPeople thread={t} have={new Set([...(me ? [me] : []), ...people])} onClose={close} />}
+      {t && open === 'settings' && <Settings thread={t} onClose={close} />}
+      <Outline id={id} open={open === 'outline'} onOpenChange={(o) => setOpen(o ? 'outline' : null)} />
     </>
-  );
-}
-
-function AddPeople({ id, have, onClose }: { id: string; have: Set<string>; onClose: () => void }) {
-  const actors = useActors();
-  const [picked, setPicked] = useState<Actor[]>([]);
-  const [busy, setBusy] = useState(false);
-  const left = actors.filter((a) => !have.has(a.id) && !picked.some((p) => p.id === a.id));
-  const add = async () => {
-    setBusy(true);
-    const ok = await press('threads.addPeople', { thread: id, actors: picked.map((a) => a.id) });
-    setBusy(false);
-    if (ok) onClose();
-  };
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => !open && onClose()}
-      title="Add people"
-      actions={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!picked.length} busy={busy} onClick={() => void add()}>
-            Add
-          </Button>
-        </>
-      }
-    >
-      <Combobox
-        label="Teammate"
-        labelHidden
-        placeholder="Name a teammate"
-        items={left.map((a) => ({ value: a.id, label: a.name, lead: <Avatar kind={a.kind} name={a.name} hue={a.hue} size={16} decorative /> }))}
-        value={null}
-        onValueChange={(v) => {
-          const a = actors.find((x) => x.id === v);
-          if (a) setPicked([...picked, a]);
-        }}
-      />
-      {picked.length > 0 && (
-        <div className="to-list">
-          {picked.map((a) => (
-            <span key={a.id} className="to-chip">
-              <Avatar kind={a.kind} name={a.name} hue={a.hue} size={16} decorative />
-              {a.name}
-              <button type="button" aria-label={`Remove ${a.name}`} onClick={() => setPicked(picked.filter((p) => p.id !== a.id))}>
-                <Icon name="close" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </Dialog>
   );
 }

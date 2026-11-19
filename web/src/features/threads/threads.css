@@ -119,3 +119,32 @@
   .lt .msg-meta{flex-wrap:wrap}
   .lt-to{flex:1 1 100%;order:3}
 }
+
+/* ---------- People, Settings, Browse: dialogs the mocks do not draw, built from the kit's ---------- */
+button.ab-people{display:flex;align-items:center;border:0;background:none;padding:0;cursor:pointer;font-family:inherit}
+.mb-list{max-height:50dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
+.mb-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto auto;column-gap:var(--s-2)}
+.mb-note{color:var(--muted)}
+.ts-acts{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.br-list{max-height:50dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
+.br-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto auto;column-gap:var(--s-2)}
+
+/* ---------- Learned: a list of sentences (pages/2-threads/threads.css lr-*). A line may wrap; it is never cut. ---------- */
+.lr-body{padding-top:var(--s-1)}
+.lr-sec+.lr-sec{margin-top:var(--s-4)}
+.lr-sec .stage-head{padding-left:var(--s-2)}
+.lr-row{display:grid;grid-template-columns:minmax(0,1fr) var(--av-sm) 64px 28px;column-gap:var(--s-3);align-items:start;min-height:var(--row);padding:var(--s-1h) var(--s-1) var(--s-1h) var(--s-2);border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.lr-row:hover{background:var(--hover)}
+.lr-row.is-on{background:var(--selected)}
+.lr-text{line-height:22px;max-width:68ch;text-wrap:pretty}
+.lr-row .row-age{line-height:22px}
+.lr-row .tl-kind{height:22px}
+.lr-more{width:28px;height:22px;display:grid;place-items:center;color:var(--muted);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.lr-row:hover .lr-more,.lr-more:focus-within,.lr-more:has([aria-expanded="true"]){opacity:1}
+.lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 64px 28px}
+a.lr-row{color:inherit}
+@media (max-width:760px){
+  .lr-row{grid-template-columns:minmax(0,1fr) var(--av-sm) 52px 28px;padding:calc(var(--s-2) + 3px) var(--s-2)}
+  .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 52px 28px}
+  .lr-more{opacity:1}
+}

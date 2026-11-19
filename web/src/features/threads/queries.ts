@@ -231,7 +231,9 @@ export interface Mailbox {
   address: string;
   name?: string;
   error?: string | null;
-  agent_bot?: string | null;
+  agent_bot?: string | boolean | null;
+  /** Set when an agent works this mailbox from written instructions. */
+  agent_instructions?: string | boolean | null;
 }
 
 export const mailboxesQuery = queryOptions({
@@ -274,7 +276,8 @@ export const textQuery = (id: string) =>
 
 /* ---------------------------------------------------------------- updates */
 
-export type UpdateTab = 'all' | 'daily' | 'weekly';
+/** `archive` is the updates the person archived (or a later day's update replaced). */
+export type UpdateTab = 'all' | 'daily' | 'weekly' | 'archive';
 interface UpdatePage {
   updates: Update[];
   unread: number;
@@ -286,7 +289,10 @@ export const updateListQuery = (tab: UpdateTab) =>
   infiniteQueryOptions({
     queryKey: updateKeys.list(tab),
     queryFn: ({ pageParam, signal }) =>
-      api.get<UpdatePage>(`/api/v2/updates${qs({ kind: tab === 'all' ? undefined : tab, limit: PAGE, before: pageParam })}`, { signal }),
+      api.get<UpdatePage>(
+        `/api/v2/updates${qs({ kind: tab === 'daily' || tab === 'weekly' ? tab : undefined, archive: tab === 'archive' || undefined, limit: PAGE, before: pageParam })}`,
+        { signal },
+      ),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_before ?? undefined,
   });
@@ -297,7 +303,7 @@ export const updateQuery = (id: string) =>
     queryFn: async ({ signal }) => (await api.get<{ update: Update }>(`/api/v2/updates/${enc(id)}`, { signal })).update,
   });
 
-const TABS: UpdateTab[] = ['all', 'daily', 'weekly'];
+const TABS: UpdateTab[] = ['all', 'daily', 'weekly', 'archive'];
 const setRead = (ids: string[] | 'all', read: boolean) => (d: UpdateList | undefined) =>
   d && {
     ...d,
@@ -316,11 +322,262 @@ export function markUpdatesRead(ids: string[] | 'all', read = true) {
   });
 }
 
+/** Archive or move back. Rows keep their place with the new mark; each list shows only its own side (inArchive). */
 export function archiveUpdates(ids: string[], archived = true) {
   return write({
     key: TABS.map(updateKeys.list),
     optimistic: (d: UpdateList | undefined) =>
-      d && { ...d, pages: d.pages.map((p) => ({ ...p, updates: p.updates.filter((u) => !ids.includes(u.id) || !archived) })) },
+      d && { ...d, pages: d.pages.map((p) => ({ ...p, updates: p.updates.map((u) => (ids.includes(u.id) ? { ...u, archived } : u)) })) },
     send: (idempotencyKey) => api.post('/api/v2/updates/archive', { ids, archived }, { idempotencyKey }),
+  });
+}
+
+/* ---------------------------------------------------------------- members, settings, browse */
+
+const memberKeys = {
+  list: (id: string) => ['threads', 'members', id] as const,
+  browse: (q: string) => ['threads', 'browse', q] as const,
+  archived: ['threads', 'archived'] as const,
+};
+
+export interface MemberRow {
+  actor: string;
+  role: 'owner' | 'member' | string;
+  added_by?: string | null;
+  created_at?: string;
+}
+interface MemberPage {
+  members: MemberRow[];
+  next_cursor?: string | null;
+}
+export type MemberList = InfiniteData<MemberPage, string | null>;
+
+/** Who is in a thread, by actor id, a page at a time (a company thread can hold everyone). */
+export const membersQuery = (id: string) =>
+  infiniteQueryOptions({
+    queryKey: memberKeys.list(id),
+    queryFn: ({ pageParam, signal }) =>
+      api.get<MemberPage>(`/api/v2/threads/${enc(id)}/members${qs({ limit: 200, cursor: pageParam })}`, { signal }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+
+const refreshThread = (id: string) => {
+  void queryClient.invalidateQueries({ queryKey: memberKeys.list(id) });
+  void queryClient.invalidateQueries({ queryKey: threadKeys.view(id) });
+};
+
+/** Take someone out of a thread (a manager, or yourself to leave). */
+export async function removeMember(id: string, actor: string) {
+  const out = await write({
+    key: [memberKeys.list(id), threadKeys.view(id)],
+    optimistic: (d: MemberList | Thread | undefined) => {
+      if (!d) return d;
+      if ('pages' in d) return { ...d, pages: d.pages.map((p) => ({ ...p, members: p.members.filter((m) => m.actor !== actor) })) };
+      return { ...d, members: { ...d.members, members: (d.members?.members ?? []).filter((m) => m.actor !== actor) } };
+    },
+    send: (idempotencyKey) => api.delete(`/api/v2/threads/${enc(id)}/members/${enc(actor)}`, { idempotencyKey }),
+  });
+  refreshThread(id);
+  return out;
+}
+
+export type Notify = 'live' | 'mentions' | 'digest' | 'muted';
+
+/** How the viewer hears about a thread; following it is what joins a company or team thread. */
+export async function followThread(id: string, notify: Notify) {
+  const p = patchRow(id, (t) => ({ ...t, me: { ...t.me, following: true, notify } }));
+  const out = await write({
+    key: [threadKeys.list, threadKeys.view(id)],
+    optimistic: (d: ThreadList | Thread | undefined) => (d && 'pages' in d ? p.list(d) : p.view(d)),
+    send: (idempotencyKey) => api.put(`/api/v2/threads/${enc(id)}/follow`, { notify }, { idempotencyKey }),
+  });
+  return out;
+}
+
+export interface ThreadChange {
+  pinned_for_everyone?: boolean;
+  retention_days?: number | null;
+  audience?: 'members' | 'team' | 'company';
+  audience_group_id?: string | null;
+}
+
+/** A manager's change to the thread itself (PATCH answers with the thread's view). */
+export function changeThread(id: string, change: ThreadChange) {
+  const p = patchRow(id, (t) => ({ ...t, ...change }) as Thread);
+  return write({
+    key: [threadKeys.list, threadKeys.view(id)],
+    optimistic: (d: ThreadList | Thread | undefined) => (d && 'pages' in d ? p.list(d) : p.view(d)),
+    send: (idempotencyKey) => api.patch<Thread>(`/api/v2/threads/${enc(id)}`, change, { idempotencyKey }),
+    settle: (d: ThreadList | Thread | undefined, t) => (d && !('pages' in d) && t?.id ? { ...d, ...t, members: d.members } : d),
+  });
+}
+
+export interface Summary {
+  posted?: unknown;
+  words?: string;
+}
+
+/** Tico reads what is new here and posts a summary in the person's own chat with Tico. */
+export const summarizeThread = (id: string) => api.post<Summary>(`/api/v2/threads/${enc(id)}/catch-up`, { scope: 'subtree' });
+
+/** A bot's Home: open the messages from before it had its own room to the Home's readers. */
+export async function openEarlier(id: string) {
+  const out = await api.post<{ home: string; messages: number }>(`/api/v2/threads/${enc(id)}/open-earlier`, {});
+  void queryClient.invalidateQueries({ queryKey: threadKeys.view(id) });
+  void queryClient.invalidateQueries({ queryKey: keys.thread.timeline(id) });
+  return out;
+}
+
+/** Delete a thread for good: the server allows it only when nobody else is in it and nothing in it is left. */
+export function deleteThread(id: string) {
+  return write({
+    key: threadKeys.list,
+    optimistic: (d: ThreadList | undefined) =>
+      d && { ...d, pages: d.pages.map((p) => ({ ...p, rows: p.rows.filter((t) => t.id !== id) })) },
+    send: (idempotencyKey) => api.delete<{ deleted: string }>(`/api/v2/threads/${enc(id)}`, { idempotencyKey }),
+  });
+}
+
+export type BrowseRow = Thread & { member_count?: number };
+interface BrowsePage {
+  threads: BrowseRow[];
+  next_cursor: string | null;
+}
+export type BrowseList = InfiniteData<BrowsePage, string | null>;
+
+/** Company and team threads the viewer can read and is not in, newest activity first; `q` matches the title. */
+export const browseQuery = (q: string) =>
+  infiniteQueryOptions({
+    queryKey: memberKeys.browse(q),
+    queryFn: ({ pageParam, signal }) =>
+      api.get<BrowsePage>(`/api/v2/threads/browse${qs({ limit: PAGE, q, cursor: pageParam })}`, { signal }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    staleTime: 30_000,
+  });
+
+/** Archived threads the viewer manages. */
+export const archivedQuery = infiniteQueryOptions({
+  queryKey: memberKeys.archived,
+  queryFn: ({ pageParam, signal }) => api.get<BrowsePage>(`/api/v2/threads/archived${qs({ limit: PAGE, cursor: pageParam })}`, { signal }),
+  initialPageParam: null as string | null,
+  getNextPageParam: (last) => last.next_cursor ?? undefined,
+  staleTime: 30_000,
+});
+
+const dropFrom = (id: string) => (d: BrowseList | undefined) =>
+  d && { ...d, pages: d.pages.map((p) => ({ ...p, threads: p.threads.filter((t) => t.id !== id) })) };
+
+/** Join a thread from Browse: follow it, then it is in the list. */
+export async function joinThread(id: string) {
+  await write({
+    key: queryClient.getQueriesData({ queryKey: ['threads', 'browse'] }).map(([k]) => k),
+    optimistic: dropFrom(id),
+    send: (idempotencyKey) => api.put(`/api/v2/threads/${enc(id)}/follow`, { notify: 'live' }, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: threadKeys.list });
+}
+
+/** Bring an archived thread back into the list. */
+export async function unarchiveThread(id: string) {
+  await write({
+    key: memberKeys.archived,
+    optimistic: dropFrom(id),
+    send: (idempotencyKey) => api.patch<Thread>(`/api/v2/threads/${enc(id)}`, { archived: false }, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: threadKeys.list });
+}
+
+/* ---------------------------------------------------------------- a mailbox's instructions */
+
+export interface MailInstructions {
+  mailbox: string;
+  bot: string;
+  instructions: string;
+  updated_at?: string | null;
+}
+
+/** What the mailbox's agent works from (written by the agent's own files; read only here). */
+export const mailInstructionsQuery = (box: string) =>
+  queryOptions({
+    queryKey: ['mail', 'agent', box] as const,
+    queryFn: ({ signal }) => api.get<MailInstructions>(`/api/v2/mail/agent${qs({ mailbox: box })}`, { signal }),
+    enabled: !!box,
+  });
+
+/* ---------------------------------------------------------------- what Tico has learned */
+
+quietRoot('learned');
+
+export interface LearnedEntry {
+  id: string;
+  layer: 'personal' | 'company' | string;
+  text: string;
+  created_at: string;
+  updated_at?: string | null;
+  taught_in_chat?: boolean;
+}
+export interface Learned {
+  personal: LearnedEntry[];
+  company: {
+    vision?: string | null;
+    description?: string | null;
+    priorities?: { id: string; title: string; status?: string }[];
+    entries: LearnedEntry[];
+  } | null;
+}
+export interface Viewers {
+  bots: { bot: string; slug?: string; name?: string; added_at?: string; last_read_at?: string | null }[];
+  include_learned: boolean;
+}
+
+const learnedKeys = { all: ['learned', 'entries'] as const, viewers: ['learned', 'viewers'] as const };
+
+export const learnedQuery = queryOptions({
+  queryKey: learnedKeys.all,
+  queryFn: ({ signal }) => api.get<Learned>('/api/v2/assistant/learned', { signal }),
+});
+
+/** The agents that can read the person's chat with Tico. */
+export const viewersQuery = queryOptions({
+  queryKey: learnedKeys.viewers,
+  queryFn: ({ signal }) => api.get<Viewers>('/api/v2/assistant/viewers', { signal }),
+});
+
+const mapEntries = (d: Learned | undefined, fn: (list: LearnedEntry[]) => LearnedEntry[]): Learned | undefined =>
+  d && { personal: fn(d.personal), company: d.company && { ...d.company, entries: fn(d.company.entries) } };
+
+export function editLearned(id: string, text: string) {
+  return write({
+    key: learnedKeys.all,
+    optimistic: (d: Learned | undefined) => mapEntries(d, (l) => l.map((e) => (e.id === id ? { ...e, text } : e))),
+    send: (idempotencyKey) => api.patch<{ entry: LearnedEntry }>(`/api/v2/assistant/learned/${enc(id)}`, { text }, { idempotencyKey }),
+  });
+}
+
+export function forgetLearned(id: string) {
+  return write({
+    key: learnedKeys.all,
+    optimistic: (d: Learned | undefined) => mapEntries(d, (l) => l.filter((e) => e.id !== id)),
+    send: (idempotencyKey) => api.delete(`/api/v2/assistant/learned/${enc(id)}`, { idempotencyKey }),
+  });
+}
+
+export function addViewer(bot: string) {
+  return write({
+    key: learnedKeys.viewers,
+    optimistic: (d: Viewers | undefined) => d && { ...d, bots: [...d.bots.filter((b) => b.bot !== bot && b.slug !== bot), { bot, slug: bot }] },
+    send: (idempotencyKey) => api.post<Viewers>('/api/v2/assistant/viewers', { bot }, { idempotencyKey }),
+    settle: (_d: Viewers | undefined, answer) => answer,
+  });
+}
+
+export function removeViewer(bot: string) {
+  return write({
+    key: learnedKeys.viewers,
+    optimistic: (d: Viewers | undefined) => d && { ...d, bots: d.bots.filter((b) => b.bot !== bot && b.slug !== bot) },
+    send: (idempotencyKey) => api.delete<Viewers>(`/api/v2/assistant/viewers/${enc(bot)}`, { idempotencyKey }),
+    settle: (_d: Viewers | undefined, answer) => answer,
   });
 }

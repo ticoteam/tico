@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { toast } from '@/kit/Toast';
 import { meQuery } from '@/data';
 import { useFollow } from '@/live';
 import { Icon, type IconName } from '@/kit/Icon';
@@ -8,14 +9,19 @@ import { SheetHead } from '@/shell';
 import { dot, type DotState } from '@/tico/dot';
 import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
+import { canRate } from './Feedback';
 import { DidLine, Face, LiveRow, Message, whoOf } from './Message';
-import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
+import { onJump } from './Outline';
+import { feedbackQuery, installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read. */
 const READ_PX = 24;
 /** A row's guess before it is measured. */
 const ROW_PX = 60;
+/** Pages a jump from the Outline loads before it gives up (the old app's 40). */
+const JUMP_PAGES = 40;
+const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
 
 export interface ConversationProps {
   id: string;
@@ -118,6 +124,29 @@ export function Conversation({ id, variant, title, actor, page, foot }: Conversa
     scroller.current?.scrollToEnd();
   });
 
+  /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
+  const { fetchNextPage } = timeline;
+  useEffect(
+    () =>
+      onJump(id, (message) => {
+        void (async () => {
+          for (let n = 0; n <= JUMP_PAGES; n++) {
+            if (scroller.current?.scrollToKey(message)) return;
+            if (n === JUMP_PAGES) break;
+            const r = await fetchNextPage();
+            await frame();
+            if (!r.hasNextPage && !scroller.current?.scrollToKey(message)) break;
+          }
+          if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
+        })();
+      }),
+    [id, fetchNextPage],
+  );
+
+  /* ---- the person's Good and Not good on what others said */
+  const rateable = rows.filter((m) => canRate(m, myId, variant === 'tico')).map((m) => m.id);
+  const { data: ratings = [] } = useQuery(feedbackQuery(id, rateable));
+
   /* ---- read up to the last message shown, while it is in view */
   const lastSeq = rows.reduce((n, m) => (typeof m.seq === 'number' && m.seq > n ? m.seq : n), 0);
   useEffect(() => {
@@ -161,7 +190,18 @@ export function Conversation({ id, variant, title, actor, page, foot }: Conversa
           );
         if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
         if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
-        return <Message m={it.m} variant={variant} me={myId} cont={it.cont} onRetry={(m) => send(m.body ?? '', m.files ?? [], m.id)} />;
+        const rate = rateable.includes(it.m.id);
+        return (
+          <Message
+            m={it.m}
+            variant={variant}
+            me={myId}
+            cont={it.cont}
+            onRetry={(m) => send(m.body ?? '', m.files ?? [], m.id)}
+            rateIn={rate ? id : undefined}
+            feedback={rate ? (ratings.find((f) => f.subject_id === it.m.id) ?? null) : null}
+          />
+        );
       }}
     />
   );

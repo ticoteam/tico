@@ -46,3 +46,28 @@ textarea.composer-text::placeholder{color:var(--muted)}
 /* iPhone Safari zooms into a field under 16px (platforms.md 2) */
 @media (pointer:coarse){textarea.composer-text{font-size:var(--t-md)}}
 .composer input[type=file]{display:none}
+
+/* a picture in a message opens full size over the page (kit/PictureViewer) */
+.msg .md-img{cursor:zoom-in}
+
+/* Good and Not good under what others said: quiet fold-style words, shown on hover; a chosen one stays. The mocks draw
+   no rating, so these are the steps fold's look. */
+.rate{display:flex;gap:var(--s-3);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.rate .fold{cursor:pointer;font-family:inherit}
+.rate .fold:hover,.rate .fold[aria-pressed="true"]{color:var(--ink)}
+.msg:hover .rate,.rate:focus-within,.rate.is-rated{opacity:1}
+.rate.is-rated .fold[aria-pressed="false"]{visibility:hidden}
+.msg:hover .rate.is-rated .fold,.rate.is-rated:focus-within .fold{visibility:visible}
+@media (hover:none){.rate{opacity:1}}
+.rate-chips{display:flex;flex-wrap:wrap;gap:var(--s-1h)}
+.rate-chip{height:28px;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:var(--well-2);color:var(--ink-2);font-family:inherit;font-size:var(--t-sm);cursor:pointer}
+.rate-chip:hover{color:var(--ink)}
+.rate-chip[aria-pressed="true"]{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.rate-note{color:var(--muted);font-size:var(--t-sm)}
+.msg-from{text-decoration:none}
+.msg-from:hover{color:var(--ink)}
+
+/* the Outline: one row per prompt, in a dialog-high scroller */
+.co-list{max-height:60dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
+.co-row{width:100%;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);border:0;background:none;color:var(--ink-2);font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
+.co-row:hover{background:var(--hover);color:var(--ink)}

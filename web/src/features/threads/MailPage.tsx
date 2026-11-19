@@ -4,13 +4,15 @@ import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
+import { Icon } from '@/kit/Icon';
+import { Markdown } from '@/kit/Markdown';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { VirtualList } from '@/kit/VirtualList';
 import { ItemHead, ListAndItem } from '@/pagekinds';
 import { letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
 import { press } from './people';
-import { letterQuery, mailboxesQuery, mailListQuery, textListQuery, textQuery } from './queries';
+import { letterQuery, mailboxesQuery, mailInstructionsQuery, mailListQuery, textListQuery, textQuery } from './queries';
 import { NewButton, threadTabs } from './ThreadsPage';
 import './threads.css';
 
@@ -22,12 +24,16 @@ export interface MailPageProps {
   box?: string;
   /** The open mail thread's id. */
   open?: string;
+  /** The mailbox agent's instructions open instead of a mail. */
+  view?: 'instructions';
 }
 
 /** Mail: the company's mailboxes, a row per conversation, the open one in full. Read only. */
-export function MailPage({ box, open }: MailPageProps) {
+export function MailPage({ box, open, view }: MailPageProps) {
   const boxes = useQuery(mailboxesQuery);
   const current = box ?? boxes.data?.[0]?.address ?? '';
+  const agent = !!boxes.data?.find((b) => b.address === current)?.agent_instructions;
+  const reading = view === 'instructions' && agent;
   const list = useInfiniteQuery(mailListQuery(current));
   const rows = letterRows(list.data?.pages.flatMap((p) => p.messages) ?? []);
   const state =
@@ -35,7 +41,7 @@ export function MailPage({ box, open }: MailPageProps) {
       ? 'loading'
       : boxes.isError || list.isError
         ? 'fault'
-        : rows.length === 0 && !open
+        : rows.length === 0 && !open && !agent
           ? 'empty'
           : 'ready';
   const more = () => {
@@ -59,21 +65,47 @@ export function MailPage({ box, open }: MailPageProps) {
       tabs={TABS}
       listLabel="Mail"
       list={
-        <VirtualList
-          className="tl-vl"
-          label="Mail"
-          items={rows}
-          getKey={(r) => r.letter.thread_id}
-          estimateSize={35}
-          onReachEnd={more}
-          renderItem={(r) => <MailRow r={r} box={current} selected={r.letter.thread_id === open} />}
-        />
+        <>
+          {agent && (
+            <Row
+              className="tl-row tl-catch"
+              title="Instructions"
+              href={`/threads/mail${q({ box: current, view: 'instructions' })}`}
+              selected={!!reading}
+              target="page:/threads/mail?view=instructions"
+            >
+              <span className="tl-kind">
+                <Icon name="rules" />
+              </span>
+              <span className="row-title">Instructions</span>
+              <span />
+              <span className="tl-slot" />
+            </Row>
+          )}
+          <VirtualList
+            className="tl-vl"
+            label="Mail"
+            items={rows}
+            getKey={(r) => r.letter.thread_id}
+            estimateSize={35}
+            onReachEnd={more}
+            renderItem={(r) => <MailRow r={r} box={current} selected={!reading && r.letter.thread_id === open} />}
+          />
+        </>
       }
-      open={!!open}
+      open={!!open || !!reading}
       state={state}
       empty={{ title: boxes.data?.length === 0 ? 'No mailboxes yet' : 'No mail' }}
       onRetry={() => void (boxes.isError ? boxes.refetch() : list.refetch())}
-      {...(open && current ? { itemHead: <LetterHead box={current} id={open} />, item: <LetterBody box={current} id={open} />, itemLabel: 'Mail' } : {})}
+      {...(reading
+        ? {
+            itemHead: <ItemHead title="Instructions" target="page:/threads/mail?view=instructions" back={BACK} />,
+            item: <Instructions box={current} />,
+            itemLabel: 'Instructions',
+          }
+        : open && current
+          ? { itemHead: <LetterHead box={current} id={open} />, item: <LetterBody box={current} id={open} />, itemLabel: 'Mail' }
+          : {})}
     />
   );
 }
@@ -140,6 +172,24 @@ function LetterBody({ box, id }: { box: string; id: string }) {
         <LetterPart key={l.msg_id} l={l} />
       ))}
     </>
+  );
+}
+
+/** What the mailbox's agent works from; written in the agent's own files, so read only here. */
+function Instructions({ box }: { box: string }) {
+  const { data, isPending, isError, refetch } = useQuery(mailInstructionsQuery(box));
+  if (isPending) return null;
+  if (isError)
+    return (
+      <Empty icon="alert" title="The instructions did not load">
+        <Button onClick={() => void refetch()}>Try again</Button>
+      </Empty>
+    );
+  if (!data.instructions.trim()) return <Empty icon="rules" title="No instructions" />;
+  return (
+    <article className="lt">
+      <Markdown text={data.instructions} />
+    </article>
   );
 }
 

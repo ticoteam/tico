@@ -8,9 +8,12 @@ import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Row, ThreadRow } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
 import { ItemHead, ListAndItem, type PageTab } from '@/pagekinds';
+import { Browse } from './Browse';
 import { isDm, othersOf, rowsOf, unreadOf, type Thread } from './model';
 import { NewMessage, NewMessageFoot, useNewDraft } from './NewMessage';
 import { Face, press, useMe, useTitle } from './people';
@@ -50,6 +53,7 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
   const list = useInfiniteQuery(threadListQuery);
   const draft = useNewDraft();
   const [words, setWords] = useState(q);
+  const [browsing, setBrowsing] = useState(false);
   const navigate = useNavigate();
   useEffect(() => {
     const next = words.trim();
@@ -96,10 +100,17 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
     );
 
   return (
+    <>
     <ListAndItem
       title="Threads"
       path="/threads"
       actions={<NewButton />}
+      more={
+        <Menu trigger={<IconButton icon="more" label="More" />}>
+          <MenuItem label="Browse threads" icon="search" onSelect={() => setBrowsing(true)} />
+          <MenuItem label="Learned" icon="spark" onSelect={() => void press('learned.open', {})} />
+        </Menu>
+      }
       search={<Search label="Find a thread" placeholder="Find a thread" value={words} onValueChange={setWords} wide />}
       tabs={threadTabs(here)}
       list={listNode}
@@ -110,6 +121,8 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
       onRetry={() => void list.refetch()}
       {...item}
     />
+    {browsing && <Browse onClose={() => setBrowsing(false)} />}
+    </>
   );
 }
 

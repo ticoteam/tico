@@ -29,6 +29,9 @@ export type Thread = Omit<ThreadView, 'me' | 'members'> & {
   dm_with_count?: number;
   me?: Mine;
   members?: { members?: Member[]; next_cursor?: string | null };
+  /** An agent's Home with messages from before it had its own room, still closed to its readers. */
+  earlier?: { count: number } | null;
+  deletable?: boolean;
 };
 
 export interface ListPage {
