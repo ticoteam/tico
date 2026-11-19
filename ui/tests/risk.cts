@@ -21,7 +21,8 @@ async function flow(page: Page, tag: string, phone: boolean) {
   const company = await page.locator('#rd-co .nav-link').evaluateAll(links => links.map(a => (a as HTMLElement).dataset['nav']));
   assert.equal(company.indexOf('risk'), company.indexOf('growth') + 1, tag + ': Risk follows Growth');
   await page.locator('#side a[data-nav="risk"][aria-current="page"]').waitFor({state: 'attached', timeout: t(10000)});
-  assert.match(await text(page, '#main h1'), /^Risk$/);
+  // The nav row turns current before the lazy page draws, so the heading is waited for, not read once.
+  await page.waitForFunction(() => document.querySelector('#main h1')?.textContent?.trim() === 'Risk', null, {timeout: t(20000)});
 
   // The live risk: loud and open, its matters under it, the rules icon (never a count) beside its counts.
   const live = page.locator('[data-rk-level="live"][data-rk-risk="risk:customer-theft-claims"]');
@@ -46,7 +47,7 @@ async function flow(page: Page, tag: string, phone: boolean) {
   await page.waitForFunction(() => location.hash === '#/risk/r/customer-theft-claims', null, {timeout: t(10000)});
   const matters = page.locator('[data-rk-matters]');
   await matters.locator('.rk-matter').first().waitFor({timeout: t(20000)});
-  assert.match(await text(page, '#main h1'), /Customer theft claims/);
+  await page.waitForFunction(() => /Customer theft claims/.test(document.querySelector('#main h1')?.textContent || ''), null, {timeout: t(20000)});
   const randazzo = matters.locator('.rk-matter').filter({hasText: 'Randazzo'});
   assert.match(await randazzo.innerText(), /\$50,000 jewelry/);
   assert.match(await all(randazzo), /Demand/);
