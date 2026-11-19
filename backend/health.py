@@ -25,6 +25,7 @@ from . import (
     model_login,
     models_preset,
     providers,
+    read_cache,
     releases,
     replication,
     runner_versions,
@@ -196,16 +197,20 @@ def _plural(n, one, many=None):
     return f"{n} {one if n == 1 else many or one + 's'}"
 
 
+# Each active, placed bot's computer and configuration: the login and gateway checks both read it, once a snapshot.
+ACTIVE_CONFIGS_SQL = (
+    f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+    f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
+)
+
+
 def _login_dependencies(c, settings):
     """Active bots' primary and fallback tools that actually use a computer login."""
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
 
     record, found = providers.load(c, settings), {}
-    for row in c.execute(
-        f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
-        f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
-    ):
+    for row in read_cache.rows(c, ACTIVE_CONFIGS_SQL):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
         for choice in (config, fallback):
@@ -228,10 +233,7 @@ def _gateway_covered(c, settings, documents):
     from .shared_bots import follow
 
     record, covered = providers.load(c, settings), {}
-    for row in c.execute(
-        f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
-        f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
-    ):
+    for row in read_cache.rows(c, ACTIVE_CONFIGS_SQL):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         if models_preset.gateway_line(c, row['bot'], documents.get(row['runner_id'], {}), settings, config=config):
             covered.setdefault(row['runner_id'], set()).add(config.get('runtime'))
