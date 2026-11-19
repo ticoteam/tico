@@ -151,12 +151,13 @@ impl ClaudeProcess {
             return Ok(());
         }
         let label = self.label;
-        tokio::time::timeout(STOP_WAIT, &mut self.exited)
+        let exit = tokio::time::timeout(STOP_WAIT, &mut self.exited)
             .await
-            .map_err(|_| failed(format!("Claude did not stop for the {label} restart")))?
-            .map_err(|e| failed(e.to_string()))?
-            .map_err(|e| failed(e.to_string()))?;
+            .map_err(|_| failed(format!("Claude did not stop for the {label} restart")))?;
+        // The receiver has given its one answer, an error or not: polled again it would panic.
         self.gone = true;
+        exit.map_err(|e| failed(e.to_string()))?
+            .map_err(|e| failed(e.to_string()))?;
         Ok(())
     }
 
