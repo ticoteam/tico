@@ -125,6 +125,7 @@
         "lease_until": {"type": "string"},
         "lease_seconds": {"type": "integer"},
         "start_reservation_seconds": {"type": "integer", "x-note": "Sent when the claim asked with start_places."},
+        "start_reserved": {"const": true, "x-note": "The claim granted the turn its start place (backend/start_places.py admit); omitted when it did not. The runner keeps that place without asking start-place again before `started`, which asks the same admission (runner-rs/src/execute.rs keep_start_place). An older server omits it and the runner asks, as before; an older runner ignores it."},
         "token": {"type": "string", "x-note": "The turn's own bearer token; a fixture holds a placeholder."},
         "message": {"type": "object", "additionalProperties": true},
         "conversation": {"type": "object", "additionalProperties": true},

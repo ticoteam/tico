@@ -1023,13 +1023,22 @@ impl Runner {
             .unwrap()
             .take()
             .filter(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY);
+        let replayed = pending.is_some();
         let (key, body, at) =
             pending.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), body, Instant::now()));
         let result = self.client.post("jobs/claim", &body, Some(&key)).await;
         if matches!(&result, Err(e) if e.retryable) {
             *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
         }
-        result.and_then(decode)
+        let mut answer: ClaimAnswer = result.and_then(decode)?;
+        // A replayed answer's start place was granted when the first claim was: too long ago to keep (execute.rs
+        // keep_start_place), so the turn asks for it again.
+        if replayed {
+            if let Some(attempt) = answer.attempt.as_mut() {
+                attempt.remove("start_reserved");
+            }
+        }
+        Ok(answer)
     }
 
     fn state_bot(&self, aid: &str) -> Option<String> {
