@@ -203,7 +203,7 @@ def test_a_heartbeat_over_the_capability_cap_is_refused_in_the_shape_the_runner_
     body["capabilities"] = (list(RUNNER_CAPABILITIES) * M.CAPABILITY_LIMIT)[: M.CAPABILITY_LIMIT]
     post(api, "runners/heartbeat", body, token=computer["token"])
     body["capabilities"].append(RUNNER_CAPABILITIES[0])
-    detail = post(api, "runners/heartbeat", body, token=computer["token"], expected=422)["detail"]
+    detail = post(api, "runners/heartbeat", body, token=computer["token"], expected=422)["error"]["detail"]
     lanes = (W.ROOT / "runner-rs" / "src" / "lanes.rs").read_text()
     caps = re.search(r'Regex::new\(r"([^"]*\bcapabilities\b[^"]*)"\)', lanes)
     assert caps, "lanes.rs refused_field's capabilities pattern moved"
