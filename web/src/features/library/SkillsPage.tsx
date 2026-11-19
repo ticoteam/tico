@@ -16,8 +16,9 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Document, List, type PageState } from '@/pagekinds';
+import { Document, List, PageMore, type PageState } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
+import { MenuItem } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
 import { Face, Find, OwnerButton, press, when, Who } from './parts';
 import {
@@ -36,6 +37,7 @@ import {
   type SkillUse,
   type SkillVersion,
   previewDevice,
+  SKILL_NAME,
 } from './queries';
 import type { SkillsSearch } from './search';
 import './library.css';
@@ -91,6 +93,7 @@ function SkillsList({ search }: { search: SkillsSearch }) {
   const byName = new Map((skills.data ?? []).map((s) => [s.name, s]));
   const pending = (asks.data ?? []).filter(match);
   const rows = (skills.data ?? []).filter(match);
+  const [making, setMaking] = useState(false);
 
   let state: PageState = 'ready';
   if (skills.isError) state = 'fault';
@@ -106,10 +109,16 @@ function SkillsList({ search }: { search: SkillsSearch }) {
         <>
           <Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />
           <OwnerButton page="skills" />
-          <Button icon="computer" title="Connect Claude Code" onClick={() => void press('skills.connect', {})} data-target="skills:connect">
-            Claude Code
+          <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
+            New skill
           </Button>
+          {making && <NewSkill onClose={() => setMaking(false)} />}
         </>
+      }
+      more={
+        <PageMore target="skills:connect">
+          <MenuItem label="Connect Claude Code" icon="computer" onSelect={() => void press('skills.connect', {})} />
+        </PageMore>
       }
       state={state}
       empty={{ title: 'No skills yet' }}
@@ -139,6 +148,36 @@ function SkillsList({ search }: { search: SkillsSearch }) {
         )
       }
     />
+  );
+}
+
+// The front matter a skill's SKILL.md opens with; the server names the skill from the Name field.
+const START = '---\ndescription: \n---\n\n';
+
+/** New skill: its name and its SKILL.md, sent as a proposal for an admin's OK; lands on that proposal. */
+function NewSkill({ onClose }: { onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [text, setText] = useState(START);
+  const [busy, setBusy] = useState(false);
+  const ready = SKILL_NAME.test(name) && !!text.trim() && text.trim() !== START.trim();
+  const propose = async () => {
+    setBusy(true);
+    const r = await run('skills.propose', { name, text }, { via: 'click' });
+    setBusy(false);
+    if (r.ok) return onClose();
+    const why = r.error === 'exists' ? `${name} is already a skill` : r.error === 'not_allowed' ? 'You cannot do that here' : 'Not proposed';
+    toast({ text: why, kind: 'failed' });
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="New skill"
+      actions={<Foot onClose={onClose} label="Propose" busy={busy} ready={ready} onGo={() => void propose()} />}
+    >
+      <Field label="Name" value={name} onValueChange={(v) => setName(v.toLowerCase().replace(/\s+/g, '-'))} placeholder="triage-calls" autoFocus />
+      <Field label="Text" area value={text} onValueChange={setText} />
+    </Dialog>
   );
 }
 

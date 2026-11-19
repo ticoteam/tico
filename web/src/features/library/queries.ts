@@ -19,6 +19,7 @@ import type {
   LetterOutPage,
   LibraryFile,
   MailboxDetail,
+  SkillPropose,
   SourceCreate,
   SourceDocumentList,
   SourceEdit,
@@ -456,6 +457,28 @@ export const previewDevice = (code: string) =>
 
 export const decideDevice = (code: string, approve: boolean, share: boolean) =>
   api.post(`/api/v2/skills/devices/codes/${enc(code)}/${approve ? 'approve' : 'deny'}`, { reporting_enabled: approve && share });
+
+/** How a skill is named (clients/skills.py NAME, the rule the server checks). */
+export const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+
+/** A new skill as its SKILL.md, waiting for an admin's OK after screening (backend/skills.py propose: no
+    `base_version`, so nothing it replaces). It waits at the top of the list once the answer is in. */
+export function proposeSkill(input: { name: string; text: string; note?: string; task?: string }) {
+  const body: SkillPropose = {
+    name: input.name,
+    files: [{ path: 'SKILL.md', content: input.text }],
+    ...(input.note && { note: input.note }),
+    ...(input.task && { task_id: input.task }),
+  };
+  return write<{ proposal: Proposal }>({
+    key: proposalsQuery.queryKey,
+    // nothing to show before the server names it
+    optimistic: (cur: Proposal[] | undefined) => cur,
+    send: (idempotencyKey) => api.post<{ proposal: Proposal }>('/api/v2/skills/proposals', body, { idempotencyKey }),
+    // the server withdraws the proposer's earlier pending one for the name
+    settle: (cur: Proposal[] | undefined, answer) => cur && [answer.proposal, ...cur.filter((p) => p.name !== answer.proposal.name)],
+  }).then((r) => r.proposal);
+}
 
 export function declineProposal(id: string, reason: string) {
   return write<unknown>({

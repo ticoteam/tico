@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAction } from '@/actions';
 import { useActor, useActors } from '@/data';
@@ -37,8 +37,8 @@ export function RequestersDialog({ task, title, onClose }: { task: string; title
 }
 
 function List({ task, title, onEdit, onClose }: { task: string; title: string; onEdit: (who: Requester | null) => void; onClose: (open: boolean) => void }) {
-  const list = useQuery(requestersQuery(task));
-  const rows = list.data?.requesters ?? [];
+  const list = useInfiniteQuery(requestersQuery(task));
+  const rows = list.data?.pages.flatMap((p) => p.requesters) ?? [];
   let body;
   if (list.isError)
     body = (
@@ -54,7 +54,11 @@ function List({ task, title, onEdit, onClose }: { task: string; title: string; o
         {rows.map((r) => (
           <RequesterRow key={r.id} r={r} onEdit={() => onEdit(r)} />
         ))}
-        {list.data.next_offset != null && <p className="rq-line">The first {rows.length} shown</p>}
+        {list.hasNextPage && (
+          <Button variant="quiet" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+            More requesters
+          </Button>
+        )}
       </div>
     );
   return (

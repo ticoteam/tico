@@ -5649,13 +5649,7 @@
       "kind": "view",
       "input": {
         "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 40
-          }
-        },
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -5757,6 +5751,42 @@
         },
         "required": [
           "proposal"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.propose",
+      "title": "Propose a new skill",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$",
+            "description": "a skill name in lowercase letters, digits, dots and hyphens"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 90000
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "name",
+          "text"
         ],
         "additionalProperties": false
       }

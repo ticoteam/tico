@@ -5,19 +5,27 @@ import { api } from '@/api/client';
 import type { Assistant } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import { ticoRoomQuery } from '@/conversation';
+import { onRefetch } from '@/live';
 
-// No topic on the stream says Tico was turned on or off: read again after the person's own turn-on and when the stream is back.
+// Read again after the person's own turn-on and when the stream is back.
 quietRoot('tico');
 
-export type TicoPower = Pick<Assistant, 'available' | 'can_turn_on' | 'state'>;
+export type TicoPower = Pick<Assistant, 'available' | 'bot' | 'can_turn_on' | 'state'>;
 
 export const ticoPowerQuery = queryOptions({
   queryKey: ['tico', 'power'] as const,
   queryFn: async ({ signal }): Promise<TicoPower> => {
     const a = await api.get<Assistant>('/api/v2/assistant', { signal });
-    return { available: a.available, can_turn_on: a.can_turn_on, state: a.state };
+    return { available: a.available, bot: a.bot, can_turn_on: a.can_turn_on, state: a.state };
   },
   staleTime: QUIET_STALE_MS,
+});
+
+/* Someone turned the Assistant on or off: the server sends every stream a `bots` event naming it (backend/events.py
+   `_bots`). The event's `status` is a status line, not the power, so this reads the power again instead. */
+onRefetch<{ bot?: string }>('bots', (e) => {
+  const slug = queryClient.getQueryData(ticoPowerQuery.queryKey)?.bot ?? 'assistant';
+  return e.bot === slug ? [ticoPowerQuery.queryKey] : [];
 });
 
 /** Turns Tico on; resolves with its state ('active', or 'planned' when it still needs a computer). */

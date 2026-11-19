@@ -46,6 +46,8 @@ import {
   saveDoc,
   saveFact,
   setAccess,
+  proposeSkill,
+  SKILL_NAME,
   skillsQuery,
   startSignIn,
   toolsQuery,
@@ -333,13 +335,37 @@ export const skillsOpenProposal = defineAction({
   target: (i) => ({ kind: 'proposal', id: i.proposal }),
 });
 
-/** The setup steps, or (with the code the helper shows) approving that computer. */
+/** A new skill as its SKILL.md. Open to Tico: it only waits for an admin's OK after screening (backend/skills.py
+   propose), and changes nothing until then. A name already in the list is refused: proposing it would replace that
+   skill's whole folder with this one file. Lands on the proposal. */
+export const skillsPropose = defineAction({
+  id: 'skills.propose',
+  title: 'Propose a new skill',
+  kind: 'change',
+  input: s.object({
+    name: s.string({ min: 1, max: 80, pattern: SKILL_NAME, what: 'a skill name in lowercase letters, digits, dots and hyphens' }),
+    text: s.string({ min: 1, max: 90_000 }),
+    note: s.optional(text(200)),
+    task: s.optional(id),
+  }),
+  run: async ({ router, queryClient }, i) => {
+    const skills = await queryClient.ensureQueryData(skillsQuery);
+    if (skills.some((k) => k.name === i.name)) throw Object.assign(new Error(`${i.name} is already a skill`), { code: 'exists' });
+    const p = await proposeSkill({ name: i.name, text: i.text, note: i.note?.trim() || undefined, task: i.task });
+    await go(router, '/library/skills', { proposal: p.id }, true);
+    return p.id;
+  },
+  did: (i) => `Proposed ${i.name}`,
+  target: (_i, out) => (out ? { kind: 'page', id: `/library/skills?proposal=${out}` } : null),
+});
+
+/** The setup steps. A helper's approval code is never put in the address: the page holds one from an old link itself. */
 export const skillsConnect = defineAction({
   id: 'skills.connect',
   title: 'Connect Claude Code to skills',
   kind: 'view',
-  input: s.object({ code: s.optional(s.string({ min: 1, max: 40 })) }),
-  run: ({ router }, i) => set(router, { connect: i.code ?? 'setup' }),
+  input: s.object({}),
+  run: ({ router }) => set(router, { connect: 'setup' }),
   target: () => ({ kind: 'skills', id: 'connect' }),
 });
 

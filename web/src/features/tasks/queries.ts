@@ -1,4 +1,4 @@
-import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
+import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
   NeedsYou,
@@ -650,14 +650,21 @@ export const REQUESTERS_PAGE = 100;
 
 const requestersKey = (task: string) => ['requesters', task] as const;
 
-/** GET /api/v2/tasks/{tid}/requesters: the first page, oldest first. */
+/** GET /api/v2/tasks/{tid}/requesters: oldest first, a page at a time, following `next_offset` (backend/roadmaps.py). */
 export const requestersQuery = (task: string) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: requestersKey(task),
-    queryFn: ({ signal }) =>
-      api.get<RequesterList>(`/api/v2/tasks/${encodeURIComponent(task)}/requesters?limit=${REQUESTERS_PAGE}`, { signal }),
+    queryFn: ({ pageParam, signal }) =>
+      api.get<RequesterList>(
+        `/api/v2/tasks/${encodeURIComponent(task)}/requesters?limit=${REQUESTERS_PAGE}${pageParam ? `&offset=${pageParam}` : ''}`,
+        { signal },
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.next_offset ?? undefined,
     staleTime: QUIET_STALE_MS,
   });
+
+type RequesterPages = InfiniteData<RequesterList, number>;
 
 const blank: Omit<Requester, 'id' | 'created_at'> = {
   kind: 'external',
@@ -679,7 +686,9 @@ const asRow = (input: RequesterInput, base: Omit<Requester, 'id' | 'created_at'>
   ...(input.important !== undefined && { important: input.important ? (1 as const) : (0 as const) }),
 });
 
-const withRows = (cur: RequesterList | undefined, change: (rows: Requester[]) => Requester[]) => cur && { ...cur, requesters: change(cur.requesters) };
+/** `change` each loaded page's rows; `page` is its place and `last` whether it is the last page read. */
+const withRows = (cur: RequesterPages | undefined, change: (rows: Requester[], page: number, last: boolean) => Requester[]) =>
+  cur && { ...cur, pages: cur.pages.map((p, i) => ({ ...p, requesters: change(p.requesters, i, i === cur.pages.length - 1) })) };
 
 /** Add who asked for a task: the row shows at once, and is taken back if refused. */
 export async function addRequester(task: string, input: RequesterInput): Promise<void> {
@@ -687,11 +696,12 @@ export async function addRequester(task: string, input: RequesterInput): Promise
   const row: Requester = { ...asRow(input, blank), id: tmp, created_at: new Date().toISOString() };
   await write<RequesterAdded>({
     key: requestersKey(task),
-    optimistic: (cur: RequesterList | undefined) => withRows(cur, (rows) => [...rows, row]),
+    // a new requester is the newest: it goes at the end of the last page read
+    optimistic: (cur: RequesterPages | undefined) => withRows(cur, (rows, _page, last) => (last ? [...rows, row] : rows)),
     send: (idempotencyKey) => api.post<RequesterAdded>(`/api/v2/tasks/${encodeURIComponent(task)}/requesters`, input, { idempotencyKey }),
-    settle: (cur: RequesterList | undefined, answer) =>
+    settle: (cur: RequesterPages | undefined, answer) =>
       withRows(cur, (rows) => (answer.id ? rows.map((r) => (r.id === tmp ? { ...r, id: answer.id as string } : r)) : rows.filter((r) => r.id !== tmp))),
-    revert: (cur: RequesterList | undefined) => withRows(cur, (rows) => rows.filter((r) => r.id !== tmp)),
+    revert: (cur: RequesterPages | undefined) => withRows(cur, (rows) => rows.filter((r) => r.id !== tmp)),
   });
 }
 
@@ -700,7 +710,7 @@ export async function updateRequester(task: string, id: string, input: Omit<Requ
   let before: Requester | undefined;
   await write<unknown>({
     key: requestersKey(task),
-    optimistic: (cur: RequesterList | undefined) =>
+    optimistic: (cur: RequesterPages | undefined) =>
       withRows(cur, (rows) =>
         rows.map((r) => {
           if (r.id !== id) return r;
@@ -710,25 +720,28 @@ export async function updateRequester(task: string, id: string, input: Omit<Requ
       ),
     send: (idempotencyKey) =>
       api.post(`/api/v2/tasks/${encodeURIComponent(task)}/requesters/${encodeURIComponent(id)}`, input, { idempotencyKey }),
-    revert: (cur: RequesterList | undefined) => withRows(cur, (rows) => rows.map((r) => (r.id === id && before ? before : r))),
+    revert: (cur: RequesterPages | undefined) => withRows(cur, (rows) => rows.map((r) => (r.id === id && before ? before : r))),
   });
 }
 
 /** Remove a requester: gone at once, back if refused. */
 export async function removeRequester(task: string, id: string): Promise<void> {
+  let from = -1;
   let at = -1;
   let gone: Requester | undefined;
+  const there = (cur: RequesterPages | undefined) => !!cur?.pages.some((p) => p.requesters.some((r) => r.id === id));
   await write<unknown>({
     key: requestersKey(task),
-    optimistic: (cur: RequesterList | undefined) =>
-      withRows(cur, (rows) => {
-        at = rows.findIndex((r) => r.id === id);
-        gone = rows[at];
-        return rows.filter((r) => r.id !== id);
+    optimistic: (cur: RequesterPages | undefined) =>
+      withRows(cur, (rows, page) => {
+        const i = rows.findIndex((r) => r.id === id);
+        if (i < 0) return rows;
+        [from, at, gone] = [page, i, rows[i]];
+        return rows.toSpliced(i, 1);
       }),
     send: (idempotencyKey) =>
       api.post(`/api/v2/tasks/${encodeURIComponent(task)}/requesters/${encodeURIComponent(id)}/delete`, {}, { idempotencyKey }),
-    revert: (cur: RequesterList | undefined) =>
-      withRows(cur, (rows) => (gone && !rows.some((r) => r.id === id) ? [...rows.slice(0, at), gone, ...rows.slice(at)] : rows)),
+    revert: (cur: RequesterPages | undefined) =>
+      gone && !there(cur) ? withRows(cur, (rows, page) => (page === from && gone ? rows.toSpliced(at, 0, gone) : rows)) : cur,
   });
 }
