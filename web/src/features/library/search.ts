@@ -56,15 +56,29 @@ export interface SkillsSearch {
 export const skillsSearch = (raw: Record<string, unknown>): SkillsSearch =>
   clean({ q: str(raw.q), skill: str(raw.skill), proposal: str(raw.proposal), connect: str(raw.connect) });
 
-/** `kind`: one kind of tool (api, website...); `needs`: only the tools that need someone. */
+/** The words GitHub's install and sign-in returns carry (backend/github_app.py). */
+export const GITHUB_RETURNS = ['connected', 'installed', 'authorized', 'pending', 'declined', 'finish', 'again', 'expired'] as const;
+export type GithubReturn = (typeof GITHUB_RETURNS)[number];
+
+/**
+ * `kind`: one kind of tool (api, website...); `needs`: only the tools that need someone. `github`: GitHub's return, a
+ * known word, or `other` for anything else (anyone can write it into an address; the page only cleans it away).
+ */
 export interface ToolsSearch {
   q?: string;
   tool?: string;
   kind?: string;
   needs?: 1;
+  github?: GithubReturn | 'other';
 }
 export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
-  clean({ q: str(raw.q), tool: str(raw.tool), kind: str(raw.kind), needs: flag(raw.needs) });
+  clean({
+    q: str(raw.q),
+    tool: str(raw.tool),
+    kind: str(raw.kind),
+    needs: flag(raw.needs),
+    github: raw.github === undefined ? undefined : (GITHUB_RETURNS.find((w) => w === raw.github) ?? ('other' as const)),
+  });
 
 /** `type`: person, organization, place...; `panel`: the contact open beside the list. */
 export interface ContactsSearch {

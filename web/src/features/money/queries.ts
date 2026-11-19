@@ -140,6 +140,12 @@ export const sourcesQuery = (as?: string) =>
     ...quiet,
   });
 
+/** After a books sign-in's return: Finance read again, and the sources as the server has them now. */
+export async function rereadSources(as?: string): Promise<{ groups: SourceGroup[] } | null> {
+  await queryClient.invalidateQueries({ queryKey: ['finance'] });
+  return queryClient.fetchQuery(sourcesQuery(as));
+}
+
 export interface AccessTeammate {
   teammate: string;
   kind: string;

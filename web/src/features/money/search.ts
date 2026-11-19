@@ -29,7 +29,28 @@ export interface FinanceSearch {
   from?: string;
   /** The owner reads Finance as this teammate (`human:…` or `bot:…`), read only. */
   as?: string;
+  /** A QuickBooks or Xero sign-in's return (backend/finance_routes.py); `other` is a value we do not know, only cleaned. */
+  books?: 'connected' | 'error' | 'other';
+  /** Why the books did not connect: a known code, anything else `unknown`. */
+  reason?: BooksReason;
 }
+
+/** The codes a books return can carry (backend/finance/books_link.py and HQ's consent answers). */
+export const BOOKS_REASONS = [
+  'access_denied',
+  'already_connected',
+  'connected_elsewhere',
+  'reconnect_required',
+  'not_connected',
+  'no_refresh_token',
+  'access_expired',
+  'vault_write_failed',
+  'gateway_refused',
+  'bad_answer',
+  'superseded',
+  'unknown',
+] as const;
+export type BooksReason = (typeof BOOKS_REASONS)[number];
 
 export interface GrowthSearch {
   tab?: 'sources';
@@ -55,6 +76,9 @@ export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSear
   if (isYm(raw.from)) out.from = raw.from;
   const as = text(raw.as);
   if (as && /^(human|bot):\S+$/.test(as)) out.as = as;
+  // Anyone can write these into an address: only known words pass, and anything present is kept so the page cleans it.
+  if (raw.books !== undefined) out.books = raw.books === 'connected' || raw.books === 'error' ? raw.books : 'other';
+  if (raw.reason !== undefined) out.reason = BOOKS_REASONS.find((r) => r === raw.reason) ?? 'unknown';
   return out;
 }
 

@@ -15,6 +15,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
+import { BrowserDialog } from '@/features/team/exports';
 import { FilterRow, ItemHead, ListAndItem, Section, type PageState } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import {
@@ -43,6 +44,7 @@ import {
   webhookSendsQuery,
   websiteToolQuery,
 } from './queries';
+import { useGithubReturn } from './githubReturn';
 import type { ToolsSearch } from './search';
 import './library.css';
 
@@ -119,6 +121,7 @@ export function entries(rows: ToolIndexRow[]): Entry[] {
 
 export function ToolsPage({ search }: { search: ToolsSearch }) {
   const tools = useQuery(toolsQuery);
+  const githubProblem = useGithubReturn(search);
   const [words, setWords] = useState(search.q ?? '');
   const w = words.trim().toLowerCase();
   const rows = narrow(tools.data?.rows ?? [], search).filter(
@@ -212,7 +215,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
             <Empty title="Nothing matches" />
           )
         }
-        conversation={open ? <Tool id={open} row={tools.data?.rows.find((r) => r.id === open)} /> : <NoTool none={none} onAdd={setAdding} />}
+        conversation={open ? <Tool id={open} row={tools.data?.rows.find((r) => r.id === open)} problem={open === 'github' ? githubProblem : null} /> : <NoTool none={none} onAdd={setAdding} />}
       />
       {adding && <AddDialog adding={adding} onClose={() => setAdding(null)} />}
     </>
@@ -238,7 +241,7 @@ function NoTool({ none, onAdd }: { none: boolean; onAdd: (a: Adding) => void }) 
 /* ---------------------------------------------------------------- one tool */
 
 /** The open tool: its head, then the five sections the kind has. */
-function Tool({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
+function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined; problem?: string | null }) {
   const at = id.indexOf(':');
   const kind = at > 0 ? id.slice(0, at) : id;
   const key = at > 0 ? id.slice(at + 1) : '';
@@ -250,7 +253,7 @@ function Tool({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   if (kind === 'tico' || kind === 'number') return <InboxView inbox={key} row={row} number={kind === 'number'} />;
   if (kind === 'address') return <AddressView row={row} />;
   if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
-  return <PlainView row={row} kind={kind} />;
+  return <PlainView row={row} kind={kind} problem={problem} />;
 }
 
 interface ShellProps {
@@ -599,6 +602,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const [adding, setAdding] = useState(false);
   const [replacing, setReplacing] = useState<WebsiteTool['accounts'][number] | null>(null);
   const [dialog, setDialog] = useState<SiteDialog | null>(null);
+  const [browsing, setBrowsing] = useState<string | null>(null);
   return (
     <Shell
       name={name}
@@ -628,6 +632,11 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
                   <Button variant="quiet" onClick={() => setReplacing(a)}>
                     Replace login
                   </Button>
+                  {a.can_open && (
+                    <Button variant="quiet" onClick={() => setBrowsing(a.id)}>
+                      Open browser
+                    </Button>
+                  )}
                   {a.can_use && (a.has_password || a.has_totp) && (
                     <Menu trigger={<IconButton icon="more" label={`${a.username || 'Account'} options`} size="sm" />}>
                       {a.has_password && <MenuItem label="Show password" onSelect={() => setDialog({ is: 'password', account: a.id })} />}
@@ -665,6 +674,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           {dialog?.is === 'sites' && <SitesDialog tool={id} sites={t.tool.sites} onClose={() => setDialog(null)} />}
           {dialog?.is === 'password' && <RevealDialog credential={dialog.account} title="Password" onClose={() => setDialog(null)} />}
           {dialog?.is === 'code' && <CodeDialog tool={id} account={dialog.account} onClose={() => setDialog(null)} />}
+          {browsing && <BrowserDialog tool={id} account={browsing} title={name} onClose={() => setBrowsing(null)} />}
           {t.recent.length > 0 && (
             <Section name="Recent use">
               {t.recent.map((r) => (
@@ -984,10 +994,19 @@ function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined })
 
 /* ---------------------------------------------------------------- Slack, GitHub, meetings... */
 
-function PlainView({ row, kind }: { row: ToolIndexRow | undefined; kind: string }) {
-  if (!row) return <Shell name="Tool" kind={kind} state="loading" target={`tool:${kind}`} />;
+function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind: string; problem?: string | null }) {
+  if (!row && !problem) return <Shell name="Tool" kind={kind} state="loading" target={`tool:${kind}`} />;
+  // A GitHub return that did not work (useGithubReturn): what happened, and the install when the App waits for it.
+  const returned = problem && (
+    <Section name="Not connected">
+      <p className="t-read">{problem}</p>
+      {row?.kind === 'github' && row.status.tone === 'wait' && <Button onClick={() => void press('tools.installGithub', {})}>Install</Button>}
+    </Section>
+  );
+  if (!row) return <Shell name={KIND[kind] ?? 'Tool'} kind={kind} target={`tool:${kind}`}>{returned}</Shell>;
   return (
     <Shell name={row.name} kind={row.kind} problem={bad(row)} target={`tool:${row.id}`}>
+      {returned}
       <Section name="What it is">
         <Facts>
           <LabelValue label="Kind">{KIND[row.kind] ?? row.kind}</LabelValue>

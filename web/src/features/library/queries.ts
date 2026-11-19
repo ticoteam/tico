@@ -491,6 +491,12 @@ export const toolsQuery = queryOptions({
   ...quiet,
 });
 
+/** After GitHub's return: Tools read again, and the index as the server has it now. */
+export async function rereadTools(): Promise<ToolIndex> {
+  await queryClient.invalidateQueries({ queryKey: ['tools'] });
+  return queryClient.fetchQuery(toolsQuery);
+}
+
 export const apiToolQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'api', id],

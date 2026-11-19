@@ -11,7 +11,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
-import { List, Section, type PageState } from '@/pagekinds';
+import { List, Section, SidePanel, type PageState } from '@/pagekinds';
 import { plural, useFinanceHead } from './head';
 import { cash, count } from './model';
 import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
@@ -52,23 +52,28 @@ function Page({
   empty,
   actions,
   more,
+  panel,
   children,
 }: {
   q: Read;
   empty?: { title: string; action?: ReactNode };
   actions?: ReactNode;
   more?: ReactNode;
+  panel?: ReactNode;
   children: ReactNode;
 }) {
   const head = useFinanceHead();
-  return <List {...head} state={stateOf(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} sections={children} />;
+  return (
+    <List {...head} state={stateOf(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} panel={panel || undefined} sections={children} />
+  );
 }
 
 /** The page's ⋯ with its items, or nothing when it has none. */
 const More = ({ children }: { children: ReactNode[] }) =>
   children.some(Boolean) ? <Menu trigger={<IconButton icon="more" label="More" />}>{children}</Menu> : null;
 
-export function BooksPage({ tab }: { tab: FinanceTab }) {
+/** `failure`: a books sign-in that came back unconnected (useBooksReturn), shown beside Sources until put away. */
+export function BooksPage({ tab, failure = null, onDismiss = () => {} }: { tab: FinanceTab; failure?: string | null; onDismiss?: () => void }) {
   switch (tab) {
     case 'transactions':
       return <Transactions />;
@@ -85,7 +90,7 @@ export function BooksPage({ tab }: { tab: FinanceTab }) {
     case 'attribution':
       return <Attribution />;
     case 'sources':
-      return <Sources />;
+      return <Sources failure={failure} onDismiss={onDismiss} />;
     default:
       return <Access />;
   }
@@ -765,7 +770,7 @@ const mirroring = (r: SourceRow) => r.mirror === 'mirror' || r.mirror === 'expor
 const booksName = (r: SourceRow) => BOOKS[r.provider as keyof typeof BOOKS] ?? r.name;
 
 /** Each feed, with a finance admin's way to connect another and, per source, the books, its webhook and Disconnect. */
-function Sources() {
+function Sources({ failure, onDismiss }: { failure: string | null; onDismiss: () => void }) {
   const press = usePress();
   const may = useMay();
   const admin = may('finance.admin');
@@ -839,6 +844,30 @@ function Sources() {
       {shown && <ShownOnce title="Stripe webhook" pairs={shown} onClose={() => setShown(null)} />}
     </>
   );
+  // The books sign-in that came back unconnected: what happened, and the way to connect again.
+  const panel = failure && (
+    <SidePanel
+      title="Books not connected"
+      target="source:books"
+      onClose={onDismiss}
+      foot={
+        admin &&
+        (Object.keys(BOOKS) as (keyof typeof BOOKS)[]).map((p) => (
+          <Button
+            key={p}
+            onClick={() => {
+              onDismiss();
+              setOpen({ kind: 'books', provider: p });
+            }}
+          >
+            {`Connect ${BOOKS[p]}`}
+          </Button>
+        ))
+      }
+    >
+      <p className="t-read">{failure}</p>
+    </SidePanel>
+  );
   return (
     <Page
       q={q}
@@ -848,6 +877,7 @@ function Sources() {
           {dialogs}
         </>
       }
+      panel={panel}
       empty={q.data !== undefined && rows.length === 0 ? { title: 'No source connected' } : undefined}
     >
       <div className="t-scroll">

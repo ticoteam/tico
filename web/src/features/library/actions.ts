@@ -429,6 +429,17 @@ export const toolsConnect = defineAction({
   target: (i) => ({ kind: 'tool', id: i.tool }),
 });
 
+/** GitHub's install page for the App; the server sends the browser there and GitHub brings it back to Tools. */
+export const toolsInstallGithub = defineAction({
+  id: 'tools.installGithub',
+  title: 'Install the GitHub App',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  run: () => window.location.assign('/api/v2/github/app/install'),
+  target: () => ({ kind: 'tool', id: 'github' }),
+});
+
 /** Add a key, or replace one. The value goes to the server once and is never shown again. */
 export const toolsSetKey = defineAction({
   id: 'tools.setKey',

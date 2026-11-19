@@ -5,6 +5,7 @@ import { Lines, Sparkline } from '@/kit/Chart';
 import { Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
 import { BooksPage } from './Books';
+import { useBooksReturn } from './booksReturn';
 import { BudgetsPage } from './Budgets';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
 import { FIN, plural, TAB_NAME, useFinanceHead } from './head';
@@ -23,11 +24,12 @@ import type { FinanceSearch, FinanceTab } from './search';
 
 /** Finance: twelve pages under one title, the tab in `?tab=`. The overview is a dashboard; the rest are lists. */
 export function FinancePage({ search }: { search: FinanceSearch }) {
+  const [failure, dismiss] = useBooksReturn(search);
   const tab = search.tab ?? 'overview';
   if (tab === 'overview') return <Overview />;
   if (tab === 'pnl') return <PnlPage search={search} />;
   if (tab === 'budgets') return <BudgetsPage search={search} />;
-  return <BooksPage tab={tab} />;
+  return <BooksPage tab={tab} failure={failure} onDismiss={dismiss} />;
 }
 
 /** Where each kind of waiting item is dealt with. */
