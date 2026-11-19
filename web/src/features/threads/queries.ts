@@ -1,20 +1,8 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { ChatMessage } from '@/conversation';
-import { queryClient, quietRoot, write } from '@/data';
-import { onTopic } from '@/live';
-import {
-  patchList,
-  toPage,
-  type Letter,
-  type ListPage,
-  type Member,
-  type Text,
-  type Thread,
-  type ThreadEvent,
-  type ThreadList,
-  type Update,
-} from './model';
+import { sendMessage, timelineQuery, type ChatMessage } from '@/conversation';
+import { keys, queryClient, quietRoot, write } from '@/data';
+import { toPage, type Letter, type ListPage, type Member, type Text, type Thread, type ThreadList, type Update } from './model';
 
 const enc = encodeURIComponent;
 const qs = (params: Record<string, string | number | boolean | null | undefined>) => {
@@ -26,11 +14,13 @@ const qs = (params: Record<string, string | number | boolean | null | undefined>
 
 /* ---------------------------------------------------------------- keys */
 
+// The list, a view and Catch up sit under `keys.threads`, where live/patch.ts patches them from the `threads` topic.
 export const threadKeys = {
-  list: ['threads', 'list'] as const,
-  view: (id: string) => ['threads', 'view', id] as const,
-  catchUp: ['threads', 'catch-up'] as const,
+  list: keys.threads.list(),
+  view: keys.threads.view,
+  catchUp: keys.threads.catchUp(),
   chat: (chat: string) => ['threads', 'chat', chat] as const,
+  search: (q: string) => ['threads', 'search', q] as const,
 };
 const mailKeys = {
   boxes: ['mail', 'boxes'] as const,
@@ -86,6 +76,33 @@ export const catchUpQuery = queryOptions({
   queryKey: threadKeys.catchUp,
   queryFn: ({ signal }) => api.get<CatchUp>('/api/v2/threads/catch-up?limit=20', { signal }),
 });
+
+export interface SearchHit {
+  thread_id: string;
+  message_id: string;
+  title?: string;
+  excerpt: string;
+  created_at?: string;
+}
+interface SearchPage {
+  hits: SearchHit[];
+  next_cursor: string | null;
+}
+
+/**
+ * Threads whose messages hold every word of `q`, newest first, from the server's search (a company has far more
+ * threads than the list loads). Not live: read again when it is stale.
+ */
+export const threadSearchQuery = (q: string) =>
+  infiniteQueryOptions({
+    queryKey: threadKeys.search(q),
+    queryFn: ({ pageParam, signal }) =>
+      api.get<SearchPage>(`/api/v2/threads/search${qs({ q, limit: PAGE, before: pageParam })}`, { signal }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    staleTime: 30_000,
+    enabled: q.length > 0,
+  });
 
 /**
  * The second chat's thread. `thread:<id>` is the thread itself; `agent:<slug>` and `person:<id>` are the viewer's DM
@@ -175,14 +192,19 @@ export function readAll(ids: string[]) {
 
 /**
  * A new DM with these people and its first message; two or more others need a name. Nothing shows before the server
- * answers (there is no thread id to show it under); the answer goes first in the list.
+ * answers (there is no thread id to show it under); the answer goes first in the list. Without `body` the DM is only
+ * opened (or made).
  */
-export function startNew(members: string[], body: string, title?: string) {
+export function startNew(members: string[], body?: string, title?: string) {
   return write({
     key: threadKeys.list,
     optimistic: (d: ThreadList | undefined) => d,
     send: (idempotencyKey) =>
-      api.post<Thread & { message?: unknown }>('/api/v2/threads/dm', { members, body, ...(title ? { title } : {}) }, { idempotencyKey }),
+      api.post<Thread & { message?: unknown }>(
+        '/api/v2/threads/dm',
+        { members, ...(body ? { body } : {}), ...(title ? { title } : {}) },
+        { idempotencyKey },
+      ),
     settle: (d: ThreadList | undefined, t) => {
       const [first, ...more] = d?.pages ?? [];
       if (!d || !first || !t?.id) return d;
@@ -191,45 +213,17 @@ export function startNew(members: string[], body: string, title?: string) {
   });
 }
 
-/* ---------------------------------------------------------------- live */
-
-let lastCatchUp = 0;
-let catchUpTimer: ReturnType<typeof setTimeout> | null = null;
-const CATCH_UP_EVERY_MS = 3000;
-
-// The contract: re-read Catch up at most every few seconds while activity comes in.
-function catchUpAgain() {
-  if (catchUpTimer) return;
-  const wait = Math.max(0, lastCatchUp + CATCH_UP_EVERY_MS - Date.now());
-  catchUpTimer = setTimeout(() => {
-    catchUpTimer = null;
-    lastCatchUp = Date.now();
-    void queryClient.invalidateQueries({ queryKey: threadKeys.catchUp });
-  }, wait);
+/**
+ * A first message with files. The DM's start takes no files, so the DM is made first and the message then goes the
+ * conversation's own way (its upload form), showing in the thread at once and marked "Not sent" if it fails.
+ */
+export async function startWithFiles(members: string[], text: string, files: File[], me: string, title?: string) {
+  const t = await startNew(members, undefined, title);
+  if (!t?.id) return t;
+  await queryClient.ensureInfiniteQueryData(timelineQuery(t.id)).catch(() => undefined);
+  void sendMessage({ id: t.id, variant: 'page', text, files, me });
+  return t;
 }
-
-/** Apply one frame of `threads` events to the list and the open views. Exported for the tests. */
-export function applyThreadEvents(batch: ThreadEvent[]) {
-  let readFirstPage = false;
-  for (const e of batch) {
-    const list = queryClient.getQueryData<ThreadList>(threadKeys.list);
-    if (list) {
-      const next = patchList(list, e);
-      if (next === null) readFirstPage = true;
-      else if (next !== list) queryClient.setQueryData(threadKeys.list, next);
-    }
-    const id = e.thread_id;
-    if (id && e.thread && queryClient.getQueryData(threadKeys.view(id)))
-      queryClient.setQueryData<Thread>(threadKeys.view(id), (t) => t && { ...t, ...e.thread, members: t.members });
-    if (e.kind === 'members' && id) void queryClient.invalidateQueries({ queryKey: threadKeys.view(id) });
-    if (e.kind === 'activity' || e.kind === 'read' || e.kind === 'archived') catchUpAgain();
-  }
-  if (readFirstPage)
-    void queryClient.invalidateQueries({ queryKey: threadKeys.list, refetchType: 'active' }, { cancelRefetch: false });
-}
-
-// The `threads` topic's patcher, here until live/patch.ts has one. The topic is always followed (live/follow.ts BASE).
-onTopic<ThreadEvent>('threads', applyThreadEvents);
 
 /* ---------------------------------------------------------------- mail */
 

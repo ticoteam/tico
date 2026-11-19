@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byDay, letterRows, patchList, rowsOf, senderName, titleOf, toPage, type Letter, type Thread, type ThreadList } from './model';
+import { byDay, letterRows, senderName, titleOf, toPage, type Letter, type Thread } from './model';
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const row = (id: string, min: number, extra: Partial<Thread> = {}): Thread => ({
@@ -13,8 +13,6 @@ const row = (id: string, min: number, extra: Partial<Thread> = {}): Thread => ({
   root_id: id,
   ...extra,
 });
-const list = (...rows: Thread[]): ThreadList => ({ pages: [{ rows, next: null }], pageParams: [null] });
-const ids = (d: ThreadList | null) => rowsOf(d ?? undefined).map((t) => t.id);
 
 describe('the threads list', () => {
   it('puts threads and DMs in one list, newest first, without archived or sub-threads', () => {
@@ -25,28 +23,6 @@ describe('the threads list', () => {
     });
     expect(page.rows.map((t) => t.id)).toEqual(['dm', 'a']);
     expect(page.next).toBe('n1');
-  });
-
-  it('moves a thread with new activity to the top and shows its unread count', () => {
-    const next = patchList(list(row('a', 5), row('b', 1)), { kind: 'activity', thread_id: 'b', root_id: 'b', unread_count: 3, thread: { id: 'b', last_message_at: at(9) } });
-    expect(ids(next)).toEqual(['b', 'a']);
-    expect(rowsOf(next ?? undefined)[0]?.me?.unread).toBe(3);
-  });
-
-  it('asks for a read when activity comes for a thread it never held and cannot place', () => {
-    expect(patchList(list(row('a', 5)), { kind: 'activity', thread_id: 'x/sub', root_id: 'x' })).toBeNull();
-  });
-
-  it('takes an archived thread out and puts a renamed one right in place', () => {
-    const start = list(row('a', 5), row('b', 1));
-    expect(ids(patchList(start, { kind: 'archived', thread_id: 'a', root_id: 'a' }))).toEqual(['b']);
-    const renamed = patchList(start, { kind: 'renamed', thread_id: 'b', root_id: 'b', thread: { ...row('b', 1), title: 'Launch plan' } });
-    expect(rowsOf(renamed ?? undefined).find((t) => t.id === 'b')?.title).toBe('Launch plan');
-  });
-
-  it('clears the unread count on read', () => {
-    const next = patchList(list(row('a', 5, { me: { unread: 4 } })), { kind: 'read', thread_id: 'a', root_id: 'a', last_read_seq: 9 });
-    expect(rowsOf(next ?? undefined)[0]?.me?.unread).toBe(0);
   });
 });
 

@@ -5,7 +5,6 @@ import { Empty } from '@/kit/Empty';
 import { isDm, othersOf } from './model';
 import { useMe, useNameOf, useTitle } from './people';
 import { chatQuery } from './queries';
-import './threads.css';
 
 /** The face in the sheet's head: the agent or person the address names, or the other one in a DM. */
 function actorOf(chat: string): string | undefined {
@@ -21,21 +20,9 @@ export interface ChatSheetProps {
   chat: string;
 }
 
-/**
- * The second chat: the address resolved to a thread, drawn as the side conversation. Features may not import
- * `@/shell`, so the sheet's own element (shell `Sheet kind="chat"`) is drawn here.
- */
+/** The second chat's body: the address resolved to a thread, drawn as the side conversation (its head and the
+    conversation). The root puts it in the shell's chat sheet. */
 export function ChatSheet({ chat }: ChatSheetProps) {
-  const { data: t } = useQuery(chatQuery(chat));
-  const label = useTitle(t);
-  return (
-    <aside className="pane side chat chat-2" aria-label={label ? `Chat with ${label}` : 'Chat'}>
-      <ChatBody chat={chat} />
-    </aside>
-  );
-}
-
-function ChatBody({ chat }: ChatSheetProps) {
   const { data: t, isError, refetch } = useQuery(chatQuery(chat));
   const me = useMe();
   const nameOf = useNameOf();

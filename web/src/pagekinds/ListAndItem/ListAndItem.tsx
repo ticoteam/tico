@@ -1,8 +1,8 @@
 import { Link, type LinkProps } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { PageHead, PageTabs, SkRows, StateBody } from '@/pagekinds/_parts';
+import { EditableTitle, PageHead, PageTabs, SkRows, StateBody } from '@/pagekinds/_parts';
 import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 
 export interface ListAndItemProps extends PageBaseProps {
@@ -10,6 +10,8 @@ export interface ListAndItemProps extends PageBaseProps {
   search?: ReactNode;
   /** The tab row, under the search, in the list column. */
   tabs?: readonly PageTab[];
+  /** At the tab row's end: the controls that act on the open tab. */
+  tabsAfter?: ReactNode;
   /** The rows (`.tl-row`). They scroll in the column. */
   list: ReactNode;
   /** Names the list column ("Threads"). */
@@ -32,6 +34,7 @@ export interface ListAndItemProps extends PageBaseProps {
 export function ListAndItem({
   search,
   tabs,
+  tabsAfter,
   list,
   listLabel,
   itemHead,
@@ -62,7 +65,7 @@ export function ListAndItem({
       <section className="tl" aria-label={listLabel ?? head.title}>
         <PageHead {...head} />
         {state === 'ready' && search}
-        {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} />}
+        {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
         <StateBody
           state={state}
           title={head.title}
@@ -112,10 +115,40 @@ export interface ItemHeadProps {
   actions?: ReactNode;
   /** "⋯": a menu node, or a function the plain "⋯" button calls. */
   more?: ReactNode | (() => void);
+  /**
+   * The title renames in place: a click on it turns it into a field on the same line; Enter or leaving it saves (when
+   * the words changed), Escape keeps the old name.
+   */
+  onRename?: (title: string) => void;
+  /** Start renaming from outside (a menu's Rename); `onRenamingChange` hears when it starts and ends. */
+  renaming?: boolean;
+  onRenamingChange?: (renaming: boolean) => void;
+  /** Names the field ("Thread name"). */
+  renameLabel?: string;
 }
 
 /** The open item's head, one bar tall, its title in one line. */
-export function ItemHead({ title, target, back, lead, actions, more }: ItemHeadProps) {
+export function ItemHead({ title, target, back, lead, actions, more, onRename, renaming, onRenamingChange, renameLabel = 'Name' }: ItemHeadProps) {
+  const [own, setOwn] = useState(false);
+  const editing = !!onRename && (renaming ?? own);
+  const setEditing = (on: boolean) => {
+    setOwn(on);
+    onRenamingChange?.(on);
+  };
+  if (editing)
+    return (
+      <header className="conv-head">
+        {lead}
+        <EditableTitle
+          title={title}
+          label={renameLabel}
+          onDone={(next) => {
+            setEditing(false);
+            if (next && next !== title) onRename(next);
+          }}
+        />
+      </header>
+    );
   return (
     <header className="conv-head">
       {back && (
@@ -124,7 +157,7 @@ export function ItemHead({ title, target, back, lead, actions, more }: ItemHeadP
         </Link>
       )}
       {lead}
-      <h2 data-target={target} title={title}>
+      <h2 data-target={target} title={title} className={onRename ? 'is-editable' : undefined} onClick={onRename ? () => setEditing(true) : undefined}>
         {title}
       </h2>
       <span className="grow" />

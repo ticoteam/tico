@@ -140,18 +140,15 @@ function AppMenu({ note }: { note: ReactNode }) {
 /* ---------------------------------------------------------------- the second chat */
 
 function SecondChat({ chat }: { chat: string }) {
-  if (ChatSheet) return <ChatSheet chat={chat} />;
-  return <SideChat chat={chat} />;
-}
-
-function SideChat({ chat }: { chat: string }) {
   const kind = chat.slice(0, chat.indexOf(':'));
   const id = bare(chat);
   const { data: dir } = useQuery(directoryQuery);
   const who = dir?.byId[id];
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
-      {kind === 'thread' ? (
+      {ChatSheet ? (
+        <ChatSheet chat={chat} />
+      ) : kind === 'thread' ? (
         <Conversation id={id} variant="side" title={who?.name} />
       ) : (
         <SheetHead kind="side" title={who?.name ?? id} />

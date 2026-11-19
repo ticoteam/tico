@@ -3,6 +3,7 @@ export { ThreadsPage, type ThreadsPageProps } from './ThreadsPage';
 export { MailPage, MessagingPage, type MailPageProps, type MessagingPageProps } from './MailPage';
 export { UpdatesPage, type UpdatesPageProps } from './UpdatesPage';
 export { ChatSheet, type ChatSheetProps } from './ChatSheet';
+export { threadsSearch, loadThreads, updatesSearch, loadUpdates, type ThreadsSearch, type UpdatesSearch } from './routing';
 export {
   threadListQuery,
   threadQuery,
@@ -14,6 +15,3 @@ export {
   updateQuery,
   type UpdateTab,
 } from './queries';
-
-/** Words the thread address keeps for pages of its own: `/threads/new`, `/threads/catch-up`, the Mail and Messaging tabs. */
-export const THREAD_PAGES = ['new', 'catch-up', 'mail', 'messaging'] as const;

@@ -380,6 +380,118 @@ function patchDirectory(batch: BotEvent[]): void {
   else if (dir !== held) queryClient.setQueryData(keys.directory(), dir);
 }
 
+// ---------------------------------------------------------------- threads
+
+/** A row of the Threads list (GET /api/v2/threads `threads` and `dms`), as much of it as a patch reads. */
+export interface ThreadListRow {
+  id: string;
+  last_message_at?: string | null;
+  archived_at?: string | null;
+  parent_id?: string | null;
+  last_seq?: number;
+  last_unread_seq?: number;
+  me?: { unread?: number; activity?: boolean };
+  members?: unknown;
+}
+
+/** The Threads list as cached under `keys.threads.list()`: pages of rows, newest first. */
+export interface ThreadListData<T extends ThreadListRow = ThreadListRow> {
+  pages: { rows: T[]; next: string | null }[];
+  pageParams: unknown[];
+}
+
+/** One frame of the `threads` topic (docs/dev/threads-contract.md 9). */
+export interface ThreadEvent<T extends ThreadListRow = ThreadListRow> {
+  thread_id?: string;
+  root_id?: string;
+  kind?: string;
+  thread?: Partial<T> & { id?: string };
+  last_read_seq?: number;
+  last_seq?: number;
+  last_unread_seq?: number;
+  unread?: boolean;
+  unread_count?: number;
+  message_id?: string;
+}
+
+const FULL_THREAD = new Set(['created', 'renamed', 'unarchived', 'audience', 'members']);
+const unreadIn = (t: ThreadListRow) => Number(t.me?.unread) || 0;
+
+function mapThreads<T extends ThreadListRow>(data: ThreadListData<T>, fn: (t: T) => T | null): ThreadListData<T> {
+  let changed = false;
+  const pages = data.pages.map((p) => {
+    const rows: T[] = [];
+    for (const t of p.rows) {
+      const next = fn(t);
+      if (next !== t) changed = true;
+      if (next) rows.push(next);
+    }
+    return changed ? { ...p, rows } : p;
+  });
+  return changed ? { ...data, pages } : data;
+}
+
+function threadFirst<T extends ThreadListRow>(data: ThreadListData<T>, row: T): ThreadListData<T> {
+  const rest = mapThreads(data, (t) => (t.id === row.id ? null : t));
+  const [first, ...more] = rest.pages;
+  if (!first) return data;
+  return { ...rest, pages: [{ ...first, rows: [row, ...first.rows] }, ...more] };
+}
+
+/**
+ * The Threads list after one event. The same object when nothing it holds changed; null when the event names a row
+ * the list never read and cannot place by itself (the caller reads the first page again).
+ */
+export function patchThreadList<T extends ThreadListRow>(data: ThreadListData<T>, e: ThreadEvent<T>): ThreadListData<T> | null {
+  const id = e.root_id ?? e.thread_id;
+  if (!id) return data;
+  const sub = !!e.thread_id && e.thread_id !== id;
+  switch (e.kind) {
+    case 'archived':
+      return mapThreads(data, (t) => (t.id === id ? null : t));
+    case 'read':
+      return mapThreads(data, (t) => (t.id === id && unreadIn(t) ? { ...t, me: { ...t.me, unread: 0, activity: false } } : t));
+    case 'counters':
+      if (sub) return data;
+      return mapThreads(data, (t) =>
+        t.id === id ? { ...t, last_seq: e.last_seq ?? t.last_seq, last_unread_seq: e.last_unread_seq ?? t.last_unread_seq } : t,
+      );
+    case 'activity': {
+      const held = data.pages.flatMap((p) => p.rows).find((t) => t.id === id);
+      if (!held) return e.thread && !sub && e.thread.id === id ? threadFirst(data, e.thread as T) : null;
+      const unread = typeof e.unread_count === 'number' ? e.unread_count : unreadIn(held) + (e.unread ? 1 : 0);
+      const at = e.thread?.last_message_at ?? new Date().toISOString();
+      return threadFirst(data, { ...held, ...(sub ? {} : e.thread), id, last_message_at: at, me: { ...held.me, unread } });
+    }
+    default: {
+      if (!FULL_THREAD.has(e.kind ?? '') || sub || !e.thread?.id) return data;
+      const row = e.thread as T;
+      if (row.archived_at || row.parent_id) return mapThreads(data, (t) => (t.id === id ? null : t));
+      if (!data.pages.some((p) => p.rows.some((t) => t.id === id))) return threadFirst(data, row);
+      return mapThreads(data, (t) => (t.id === id ? { ...t, ...row } : t));
+    }
+  }
+}
+
+/** The list, the open threads' views and Catch up's count, from one frame of the `threads` topic. */
+export function applyThreadEvents(batch: ThreadEvent[]): void {
+  let readFirstPage = false;
+  for (const e of batch) {
+    const list = queryClient.getQueryData<ThreadListData>(keys.threads.list());
+    if (list) {
+      const next = patchThreadList(list, e);
+      if (next === null) readFirstPage = true;
+      else if (next !== list) queryClient.setQueryData(keys.threads.list(), next);
+    }
+    const id = e.thread_id;
+    if (id && e.thread && queryClient.getQueryData(keys.threads.view(id)))
+      queryClient.setQueryData<ThreadListRow>(keys.threads.view(id), (t) => t && { ...t, ...e.thread, members: t.members });
+    if (e.kind === 'members' && id) void queryClient.invalidateQueries({ queryKey: keys.threads.view(id) });
+    if (e.kind === 'activity' || e.kind === 'read' || e.kind === 'archived') refetchSoon(keys.threads.catchUp());
+  }
+  if (readFirstPage) refetchSoon(keys.threads.list());
+}
+
 // ---------------------------------------------------------------- the built-in patchers
 
 let installed = false;
@@ -391,7 +503,10 @@ export function installPatchers(): void {
   onTopic<MessageEvent>('messages', patchMessages);
   onRefetch('calendar', () => [['calendar']]);
   onRefetch('setup', () => [['setup']]);
+  // What waits on the person changed: Flow's list and the start page's read again.
+  onRefetch('needs', () => [['flow'], ['needs']]);
   onTopic<BotEvent>('bots', patchDirectory);
+  onTopic<ThreadEvent>('threads', applyThreadEvents);
   // An agent added, archived or brought back.
   onRefetch<{ area?: string }>('setup', (e) => (e.area === 'org' ? [keys.directory()] : []));
   onRefetch<{ meeting_id?: string }>('meeting_items', (e) => [e.meeting_id ? ['meetings', e.meeting_id] : ['meetings']]);

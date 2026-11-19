@@ -10,4 +10,10 @@ export const keys = {
   thread: {
     timeline: (id: string) => ['thread', id, 'timeline'] as const,
   },
+  /** The Threads page: the list (one cache for every tab that shows it), one thread's view, Catch up. */
+  threads: {
+    list: () => ['threads', 'list'] as const,
+    view: (id: string) => ['threads', 'view', id] as const,
+    catchUp: () => ['threads', 'catch-up'] as const,
+  },
 } as const;

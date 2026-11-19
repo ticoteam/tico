@@ -1,9 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+import { ItemHead } from '@/pagekinds';
 import type { Thread, ThreadList } from './model';
 import { renameThread, threadKeys } from './queries';
 import { ThreadsPage } from './ThreadsPage';
@@ -65,7 +66,7 @@ describe('Threads', () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(threadKeys.list, seeded());
     queryClient.setQueryData(threadKeys.catchUp, { count: 2, items: [] });
-    show(<ThreadsPage />, '/threads');
+    show(<ThreadsPage pane="catch-up" />, '/threads');
     const launch = await screen.findByTitle('Launch plan');
     expect(launch.getAttribute('href')).toBe('/threads/t1');
     expect(launch.className).toContain('is-unread');
@@ -83,7 +84,7 @@ describe('Threads', () => {
     );
     queryClient.setQueryData(threadKeys.list, seeded());
     queryClient.setQueryData(threadKeys.catchUp, { count: 0, items: [] });
-    show(<ThreadsPage />, '/threads');
+    show(<ThreadsPage pane="catch-up" />, '/threads');
     await screen.findByTitle('Hiring');
     let done!: Promise<unknown>;
     act(() => {
@@ -99,10 +100,27 @@ describe('Threads', () => {
     expect(screen.queryByTitle('Hiring plan')).toBeNull();
   });
 
+  it('finds threads with the server search, keeping the words in each row address', async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      asked.push(url);
+      return url.includes('/threads/search')
+        ? { status: 200, body: { hits: [{ thread_id: 't9', message_id: 'm1', title: 'Pricing', excerpt: 'the launch price' }], next_cursor: null } }
+        : { status: 200, body: {} };
+    });
+    queryClient.setQueryData(threadKeys.list, seeded());
+    queryClient.setQueryData(threadKeys.catchUp, { count: 0, items: [] });
+    show(<ThreadsPage pane="catch-up" q="launch price" />, '/threads?q=launch%20price');
+    const hit = await screen.findByTitle('Pricing');
+    expect(hit.getAttribute('href')).toBe('/threads/t9?q=launch%20price');
+    expect(asked.some((u) => u.includes('/api/v2/threads/search?q=launch+price'))).toBe(true);
+    expect(screen.queryByTitle('Hiring')).toBeNull();
+  });
+
   it('says so when there are no threads yet', async () => {
     serve(() => ({ status: 200, body: { count: 0, items: [] } }));
     queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [], next: null }], pageParams: [null] });
-    show(<ThreadsPage />, '/threads');
+    show(<ThreadsPage pane="catch-up" />, '/threads');
     expect(await screen.findByRole('heading', { name: 'No threads yet' })).toBeTruthy();
   });
 });
@@ -127,5 +145,21 @@ describe('Updates', () => {
     show(<UpdatesPage />, '/updates');
     const rowLink = await screen.findByTitle('Shipped the launch page');
     expect(rowLink.getAttribute('href')).toBe('/updates?open=u1');
+  });
+});
+
+describe('A head renamed in place', () => {
+  it('turns the title into a field, saves on Enter and keeps the old name on Escape', async () => {
+    const renamed = vi.fn();
+    show(<ItemHead title="Hiring" onRename={renamed} renameLabel="Thread name" />, '/threads/t2');
+    fireEvent.click(await screen.findByRole('heading', { name: 'Hiring' }));
+    const field = screen.getByRole('textbox', { name: 'Thread name' });
+    fireEvent.change(field, { target: { value: 'Hiring plan' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(renamed).toHaveBeenCalledExactlyOnceWith('Hiring plan');
+    fireEvent.click(screen.getByRole('heading', { name: 'Hiring' }));
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Thread name' }), { key: 'Escape' });
+    expect(renamed).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: 'Hiring' })).toBeTruthy();
   });
 });

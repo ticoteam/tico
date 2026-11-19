@@ -41,17 +41,17 @@ export function ThreadHead({ id }: { id: string }) {
 
   return (
     <>
-      {editing ? (
-        <RenameHead id={id} title={t?.title || title} onDone={() => setEditing(false)} />
-      ) : (
-        <ItemHead
-          title={title}
-          target={`thread:${id}`}
-          back={{ to: '/threads', label: 'Threads' }}
-          lead={other ? <Face actor={other} /> : undefined}
-          more={more}
-        />
-      )}
+      <ItemHead
+        title={title}
+        target={`thread:${id}`}
+        back={{ to: '/threads', label: 'Threads' }}
+        lead={other ? <Face actor={other} /> : undefined}
+        more={more}
+        onRename={manage ? (next) => void press('threads.rename', { thread: id, title: next }) : undefined}
+        renaming={editing}
+        onRenamingChange={setEditing}
+        renameLabel="Thread name"
+      />
       {t && (
         <div className="conv-about">
           <div className="ab-row">
@@ -76,32 +76,6 @@ export function ThreadHead({ id }: { id: string }) {
       )}
       {adding && <AddPeople id={id} have={new Set([...(me ? [me] : []), ...people])} onClose={() => setAdding(false)} />}
     </>
-  );
-}
-
-/** The title as a field: Enter or leaving it saves, Escape keeps the old one. */
-function RenameHead({ id, title, onDone }: { id: string; title: string; onDone: () => void }) {
-  const [value, setValue] = useState(title);
-  const save = () => {
-    const next = value.trim();
-    onDone();
-    if (next && next !== title) void press('threads.rename', { thread: id, title: next });
-  };
-  return (
-    <header className="conv-head">
-      <input
-        className="th-title"
-        aria-label="Thread name"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') save();
-          else if (e.key === 'Escape') onDone();
-        }}
-        autoFocus
-      />
-    </header>
   );
 }
 

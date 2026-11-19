@@ -62,15 +62,17 @@ export default defineConfig(
   // The boundaries table.
   {
     files: ['src/routes/**'],
+    // the root route is the shell's wiring: it starts the stream and mounts the action layer
+    ignores: ['src/routes/__root.tsx'],
     rules: ban(NO('api', 'Routes load through data/ or a feature'), NO('live', 'Routes do not open the stream'), NO('actions', 'Routes do not run actions')),
   },
   {
     files: ['src/features/**'],
     rules: ban(
-      ['^@/live/(?!follow$)', 'Features use live only through follow'],
+      ['^@/live(?!/follow$)', 'Features use live only through @/live/follow'],
       NO('shell', 'Features do not reach into the shell'),
       ['^@/actions/(?!run$|types$)', 'Features use actions only through run and types'],
-      NO('tico', 'Features do not reach into Tico'),
+      ['^@/tico(?!/dot$)(/|$)', 'Features reach Tico only through @/tico/dot'],
     ),
   },
   {

@@ -1,3 +1,4 @@
+import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s } from '@/actions';
 import {
   addPeople,
@@ -32,7 +33,7 @@ export const composeThread = defineAction({
   title: 'New message',
   kind: 'view',
   input: s.object({}),
-  run: ({ router }) => router.navigate({ to: '/threads/$thread', params: { thread: 'new' } }),
+  run: ({ router }) => router.navigate({ to: '/threads/new' }),
   did: () => 'Opened New message',
   target: () => ({ kind: 'page', id: '/threads/new' }),
 });
@@ -117,7 +118,7 @@ export const openLetter = defineAction({
   kind: 'view',
   input: s.object({ box: id('a mailbox address'), letter: id('a mail thread id') }),
   run: ({ router }, { box, letter }) =>
-    router.navigate({ to: '/threads/$thread', params: { thread: 'mail' }, search: { box, open: letter } }),
+    router.navigate({ to: '/threads/mail', search: { box, open: letter } }),
   did: () => 'Opened the mail',
   target: ({ letter }) => ({ kind: 'letter', id: letter }),
 });
@@ -127,7 +128,7 @@ export const pickMailbox = defineAction({
   title: 'Read another mailbox',
   kind: 'view',
   input: s.object({ box: id('a mailbox address') }),
-  run: ({ router }, { box }) => router.navigate({ to: '/threads/$thread', params: { thread: 'mail' }, search: { box } }),
+  run: ({ router }, { box }) => router.navigate({ to: '/threads/mail', search: { box } }),
   did: ({ box }) => `Reading ${box}`,
   target: () => ({ kind: 'page', id: '/threads/mail' }),
 });
@@ -137,20 +138,25 @@ export const openText = defineAction({
   title: 'Open a text',
   kind: 'view',
   input: s.object({ text: id('a text id') }),
-  run: ({ router }, { text }) => router.navigate({ to: '/threads/$thread', params: { thread: 'messaging' }, search: { open: text } }),
+  run: ({ router }, { text }) => router.navigate({ to: '/threads/messaging', search: { open: text } }),
   did: () => 'Opened the text',
   target: ({ text }) => ({ kind: 'text', id: text }),
 });
 
 /* ---------------------------------------------------------------- updates */
 
+const openUpdateIn = (router: AnyRouter, { update, tab }: { update: string; tab?: string }) =>
+  tab
+    ? router.navigate({ to: '/updates/$tab', params: { tab }, search: { open: update } })
+    : router.navigate({ to: '/updates', search: { open: update } });
+
 export const openUpdate = defineAction({
   id: 'updates.open',
   title: 'Open an update',
   kind: 'view',
-  input: s.object({ update: id('an update id') }),
-  run: ({ router }, { update }) => router.navigate({ to: '/updates', search: { open: update } }),
-  show: ({ router }, { update }) => router.navigate({ to: '/updates', search: { open: update } }),
+  input: s.object({ update: id('an update id'), tab: s.optional(s.string({ pattern: /^(daily|weekly)$/, what: 'daily or weekly' })) }),
+  run: ({ router }, input) => openUpdateIn(router, input),
+  show: ({ router }, input) => openUpdateIn(router, input),
   did: () => 'Opened the update',
   target: ({ update }) => ({ kind: 'update', id: update }),
 });
@@ -173,7 +179,7 @@ export const archiveUpdatesAction = defineAction({
   run: async ({ router }, { ids, archived = true }) => {
     await archiveUpdates(ids, archived);
     const open = (router.state.location.search as { open?: string }).open;
-    if (archived && open && ids.includes(open)) await router.navigate({ to: '/updates' });
+    if (archived && open && ids.includes(open)) await router.navigate({ to: router.state.location.pathname, search: {} });
   },
   did: ({ archived = true }) => (archived ? 'Archived' : 'Moved back'),
   target: () => ({ kind: 'page', id: '/updates' }),

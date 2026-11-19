@@ -31,8 +31,12 @@ export interface UpdatesPageProps {
 
 /** Updates: what each teammate reports, a section a day, newest first. An update opens as a page to read. */
 export function UpdatesPage({ tab = 'all', open }: UpdatesPageProps) {
-  return open ? <UpdateOpen id={open} /> : <UpdatesList tab={tab} />;
+  return open ? <UpdateOpen id={open} tab={tab} /> : <UpdatesList tab={tab} />;
 }
+
+const pathOf = (tab: UpdateTab) => (tab === 'all' ? '/updates' : `/updates/${tab}`);
+/** The tab an update opens from, for the action's input (All has none). */
+const tabInput = (tab: UpdateTab) => (tab === 'all' ? {} : { tab });
 
 type Item = { k: 'day'; day: string; n: number } | { k: 'up'; u: Update };
 
@@ -57,7 +61,7 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
   return (
     <List
       title="Updates"
-      path="/updates"
+      path={pathOf(tab)}
       tabs={TABS}
       actions={
         <Button variant="primary" disabled={!unread} onClick={() => void press('updates.markRead', {})}>
@@ -81,7 +85,7 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
             it.k === 'day' ? (
               <SectionHead name={dayLabel(it.day)} count={it.n} open={!folded.has(it.day)} onToggle={() => fold(it.day)} />
             ) : (
-              <UpdateRow u={it.u} />
+              <UpdateRow u={it.u} tab={tab} />
             )
           }
         />
@@ -90,11 +94,11 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
   );
 }
 
-function UpdateRow({ u }: { u: Update }) {
+function UpdateRow({ u, tab }: { u: Update; tab: UpdateTab }) {
   const who = useActor(actorOf(u));
   const title = updateTitle(u);
   return (
-    <Row className="up-row" title={title} href={`/updates?open=${encodeURIComponent(u.id)}`} unread={!u.read} target={`update:${u.id}`}>
+    <Row className="up-row" title={title} href={`${pathOf(tab)}?open=${encodeURIComponent(u.id)}`} unread={!u.read} target={`update:${u.id}`}>
       <Face actor={actorOf(u)} />
       <span className="row-title">{title}</span>
       <span className="row-pills" />
@@ -105,9 +109,27 @@ function UpdateRow({ u }: { u: Update }) {
   );
 }
 
-const CRUMB = [{ label: 'Updates', to: '/updates' }];
+/** Newer and Older: the next update in the list it was opened from, reading the next page when the list ends. */
+function Steps({ id, tab }: { id: string; tab: UpdateTab }) {
+  const list = useInfiniteQuery(updateListQuery(tab));
+  const order = (d = list.data) => byDay(d?.pages.flatMap((p) => p.updates) ?? []).flatMap((g) => g.rows);
+  const rows = order();
+  const i = rows.findIndex((u) => u.id === id);
+  const go = (u: Update | undefined) => u && void press('updates.open', { update: u.id, ...tabInput(tab) });
+  const older = async () => {
+    if (rows[i + 1]) return go(rows[i + 1]);
+    const r = await list.fetchNextPage();
+    go(order(r.data)[i + 1]);
+  };
+  return (
+    <>
+      <IconButton icon="chevdown" className="flip" label="Newer" disabled={i <= 0} onClick={() => go(rows[i - 1])} />
+      <IconButton icon="chevdown" label="Older" disabled={i < 0 || (!rows[i + 1] && !list.hasNextPage)} onClick={() => void older()} />
+    </>
+  );
+}
 
-function UpdateOpen({ id }: { id: string }) {
+function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
   const { data: u, isPending, isError, refetch } = useQuery(updateQuery(id));
   const who = useActor(u ? actorOf(u) : undefined);
   const marked = useRef<string | null>(null);
@@ -130,8 +152,9 @@ function UpdateOpen({ id }: { id: string }) {
   return (
     <Document
       title={title}
-      path={`/updates?open=${id}`}
-      crumb={CRUMB}
+      path={`${pathOf(tab)}?open=${id}`}
+      crumb={[{ label: 'Updates', to: pathOf(tab) }]}
+      actions={<Steps id={id} tab={tab} />}
       more={more}
       state={isPending ? 'loading' : isError ? 'fault' : 'ready'}
       onRetry={() => void refetch()}

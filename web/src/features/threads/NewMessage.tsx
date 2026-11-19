@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Composer } from '@/conversation';
 import { useActors, type Actor } from '@/data';
@@ -5,6 +6,7 @@ import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { toast } from '@/kit/Toast';
 import { press, useMe } from './people';
+import { startWithFiles } from './queries';
 
 const SHOWN = 8;
 
@@ -96,14 +98,27 @@ export function NewMessageFoot({ draft }: { draft: NewDraft }) {
   const me = useMe();
   const [fill, setFill] = useState<{ text: string } | null>(null);
   const { to, name } = draft;
-  const send = async (text: string) => {
+  const navigate = useNavigate();
+  const send = async (text: string, files: File[]) => {
     if (!to.length || (to.length >= 2 && !name.trim())) {
       toast({ text: to.length ? 'Name the thread first' : 'Choose who it goes to', kind: 'failed' });
       setFill({ text });
       return;
     }
-    const ok = await press('threads.new', { members: to.map((a) => a.id), body: text, ...(name.trim() ? { title: name.trim() } : {}) });
-    if (!ok) setFill({ text });
+    const members = to.map((a) => a.id);
+    const title = name.trim() || undefined;
+    if (!files.length) {
+      const ok = await press('threads.new', { members, body: text, ...(title ? { title } : {}) });
+      if (!ok) setFill({ text });
+      return;
+    }
+    // Files are no action input: the DM is made, then the message goes up the conversation's own way.
+    const t = await startWithFiles(members, text, files, me ?? '', title).catch(() => null);
+    if (t?.id) void navigate({ to: '/threads/$thread', params: { thread: t.id } });
+    else {
+      toast({ text: "Couldn't send", kind: 'failed' });
+      setFill({ text });
+    }
   };
   if (!me) return null;
   return (
@@ -111,7 +126,7 @@ export function NewMessageFoot({ draft }: { draft: NewDraft }) {
       id="new"
       me={me}
       to={to.length ? to.map((a) => a.name).join(', ') : 'a teammate'}
-      onSend={(text) => void send(text)}
+      onSend={(text, files) => void send(text, files)}
       fill={fill}
     />
   );
