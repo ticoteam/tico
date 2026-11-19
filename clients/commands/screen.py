@@ -1,10 +1,17 @@
+# pyright: strict
 """The person's open app: the Assistant shows things on their screen (backend/screen_actions.py).
 
 clients/commands/__init__.py says how the table is put together. No `tico` command: it moves an open app, which a
 shell has none of."""
 
-from clients.commands._registry import tool
-from clients.commands._schemas import _s
+from collections.abc import Callable
+from typing import Any, cast
+
+from clients.commands import _registry, _schemas
+
+_Tool = Callable[[Callable[[Any, dict[str, Any]], Any]], Any]
+tool = cast(Callable[..., _Tool], _registry.tool)  # pyright: ignore[reportUnknownMemberType]
+_s = cast(Callable[..., dict[str, Any]], _schemas._s)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
 
 
 @tool(
@@ -21,8 +28,8 @@ from clients.commands._schemas import _s
     },
     required=("action",),
 )
-def screen_show(api, args):
-    body = {"action": args["action"], "input": args.get("input") or {}}
+def screen_show(api: Any, args: dict[str, Any]) -> Any:
+    body: dict[str, Any] = {"action": args["action"], "input": args.get("input") or {}}
     if args.get("done"):
         body["done"] = True
     return api.post("screen-actions", body)

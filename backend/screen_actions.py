@@ -1,3 +1,4 @@
+# pyright: strict
 """Tico acts on the person's open app: the `screen` topic of the live stream (backend/events.py).
 
 A turn of the person's Assistant moves their screen with one tool, `tico_screen_show` (POST /api/v2/screen-actions): an
@@ -17,16 +18,17 @@ never reaches the database.
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from fastapi import Request
+from fastapi import FastAPI, Request
 from pydantic import Field
 
 from . import models as M
+from . import views
 from .api_contract import api_v2, error
 from .store import Problem
-from .views import human_only
 
 ACTIONS = Path(__file__).resolve().parents[1] / "contracts" / "screen-actions.json"
 WAIT_SECONDS = 3.0  # how long the tool waits for the app's report; tests shorten it
@@ -35,10 +37,14 @@ ROW = (
     "VALUES('screen',?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
 )
 
+Event = dict[str, Any]  # what a stream sends: {id, action, input, done}
+Result = dict[str, Any]  # the app's report: {ok, did?, error?}
+_human_only = cast(Callable[[object], None], views.human_only)  # pyright: ignore[reportUnknownMemberType]
+
 
 class Show(M.Contract):
     action: str = Field(min_length=1, max_length=120)
-    input: dict[str, Any] = Field(default_factory=dict)
+    input: dict[str, Any] = Field(default_factory=dict[str, Any])
     done: bool = False  # Tico already made the change with its own tool: the app only shows it
 
 
@@ -51,26 +57,29 @@ class Report(M.Contract):
 class _Asked:
     __slots__ = ("id", "person", "event", "answered", "result")
 
-    def __init__(self, person, event):
-        self.id, self.person, self.event = event["id"], person, event
-        self.answered, self.result = threading.Event(), None
+    def __init__(self, person: str, event: Event) -> None:
+        self.id: str = event["id"]
+        self.person = person
+        self.event = event
+        self.answered = threading.Event()
+        self.result: Result | None = None
 
 
 class Screens:
     """Who has a stream open that follows `screen`, and the requests waiting on an answer. Thread-safe: streams are
     read on the event loop's worker threads and tools wait on the route's."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._streams = {}
-        self._asked = {}
+        self._streams: dict[str, int] = {}
+        self._asked: dict[str, _Asked] = {}
 
-    def follow(self, person):
+    def follow(self, person: str) -> Callable[[], None]:
         """A stream of `person`'s opened; call the result once when it ends."""
         with self._lock:
             self._streams[person] = self._streams.get(person, 0) + 1
 
-        def leave():
+        def leave() -> None:
             with self._lock:
                 left = self._streams.get(person, 0) - 1
                 if left > 0:
@@ -80,24 +89,24 @@ class Screens:
 
         return leave
 
-    def open(self, person):
+    def open(self, person: str) -> bool:
         with self._lock:
             return self._streams.get(person, 0) > 0
 
-    def ask(self, person, action, input_, done):
+    def ask(self, person: str, action: str, input_: dict[str, Any], done: bool) -> _Asked:
         asked = _Asked(person, {"id": str(uuid.uuid4()), "action": action, "input": input_, "done": done})
         with self._lock:
             self._asked[asked.id] = asked
         return asked
 
-    def event(self, ident, person):
+    def event(self, ident: str, person: str) -> Event | None:
         """What a stream of `person`'s sends for request `ident`: None once it is answered or no longer waited on, and
         always for anyone else."""
         with self._lock:
             asked = self._asked.get(ident)
             return dict(asked.event) if asked is not None and asked.person == person else None
 
-    def answer(self, ident, person, result):
+    def answer(self, ident: str, person: str, result: Result) -> bool:
         """The app's report on request `ident`; False when there is no such request waiting for `person`."""
         with self._lock:
             asked = self._asked.get(ident)
@@ -108,38 +117,40 @@ class Screens:
         asked.answered.set()
         return True
 
-    def wait(self, asked, seconds):
+    def wait(self, asked: _Asked, seconds: float) -> Result | None:
         """The app's report, or None after `seconds`; either way the request is no longer waited on."""
         asked.answered.wait(seconds)
         return self.forget(asked)
 
-    def forget(self, asked):
+    def forget(self, asked: _Asked) -> Result | None:
         with self._lock:
             self._asked.pop(asked.id, None)
             return asked.result
 
 
-def screens(store):
+def screens(store: Any) -> Screens:
     """The store's screens (one per Store, so per database), as events.bell is."""
     existing = getattr(store, "screen_actions", None)
-    if existing is None:
-        existing = store.screen_actions = Screens()
+    if not isinstance(existing, Screens):
+        existing = Screens()
+        store.screen_actions = existing
     return existing
 
 
-def actions():
+def actions() -> dict[str, dict[str, Any]]:
     """The actions the app can do, by id, read now: the web app rewrites the file."""
     try:
-        listed = json.loads(ACTIONS.read_text())["actions"]
-        return {entry["id"]: entry for entry in listed}
+        listed = cast(list[dict[str, Any]], json.loads(ACTIONS.read_text())["actions"])
+        return {str(entry["id"]): entry for entry in listed}
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise Problem("unavailable", "The list of screen actions cannot be read", 503) from exc
 
 
-def check(action, input_):
+def check(action: str, input_: dict[str, Any]) -> None:
     """Refuse an action the app does not have, or input its schema does not take, saying what would do."""
-    from clients.hubtools import argument_error
+    from clients.hubtools import argument_error  # pyright: ignore[reportUnknownVariableType]
 
+    wrong_of = cast(Callable[[object, object, str], str | None], argument_error)
     known = actions()
     entry = known.get(action)
     if entry is None:
@@ -149,11 +160,11 @@ def check(action, input_):
             + "; ".join(f"{ident} ({known[ident].get('title', '')})" for ident in sorted(known)),
             422,
         )
-    if wrong := argument_error(input_, entry.get("input") or {}, "input"):
+    if wrong := wrong_of(input_, entry.get("input") or {}, "input"):
         raise Problem("validation", f"{action}: {wrong}", 422)
 
 
-def outcome(asked, result, seconds):
+def outcome(asked: _Asked, result: Result | None, seconds: float) -> dict[str, Any]:
     """What the tool hands back to the turn, so it says only what really happened on the screen."""
     if result is None:
         return {
@@ -178,10 +189,14 @@ def outcome(asked, result, seconds):
     }
 
 
-NOT_OPEN = {"id": None, "status": "not_open", "message": "The app is not open, so nothing moved on their screen."}
+NOT_OPEN: dict[str, Any] = {
+    "id": None,
+    "status": "not_open",
+    "message": "The app is not open, so nothing moved on their screen.",
+}
 
 
-def install(app, store):
+def install(app: FastAPI, store: Any) -> None:
     hub = screens(store)
 
     @app.post(
@@ -195,17 +210,22 @@ def install(app, store):
             idempotency="Optional: each call is its own request and the header is not checked.",
         ),
     )
-    def show(request: Request, body: Show):
-        who = request.state.identity
-        human_only(who)
+    def show(request: Request, body: Show) -> dict[str, Any]:
+        who: Any = request.state.identity
+        _human_only(who)
         check(body.action, body.input)
-        if not hub.open(who.actor):
+        person = str(who.actor)
+        if not hub.open(person):
             return dict(NOT_OPEN)
-        asked = hub.ask(who.actor, body.action, body.input, body.done)
+        asked = hub.ask(person, body.action, body.input, body.done)
         # The person's Assistant moves the screen, so its event says so; the person's own call says them.
-        actor = who.task_actor if who.via == "assistant" and who.task_actor else who.actor
+        actor = str(who.task_actor) if who.via == "assistant" and who.task_actor else person
+
+        def log(c: Any) -> None:
+            c.execute(ROW, (body.action, person, asked.id, actor))
+
         try:
-            store.write(who, lambda c: c.execute(ROW, (body.action, who.actor, asked.id, actor)))
+            store.write(who, log)
         except BaseException:
             hub.forget(asked)
             raise
@@ -223,9 +243,9 @@ def install(app, store):
             idempotency="Optional: a request is answered once and the header is not checked.",
         ),
     )
-    def report(request: Request, ident: str, body: Report):
-        who = request.state.identity
-        human_only(who)
-        if not hub.answer(ident, who.actor, body.model_dump(exclude_none=True)):
+    def report(request: Request, ident: str, body: Report) -> dict[str, bool]:
+        who: Any = request.state.identity
+        _human_only(who)
+        if not hub.answer(ident, str(who.actor), body.model_dump(exclude_none=True)):
             raise Problem("not_found", "No such screen request", 404)
         return {"ok": True}
