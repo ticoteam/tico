@@ -25,6 +25,7 @@ from .store import ledger as SL
 from .store import mirror as SX
 from .store import raw_totals as SR
 from .store import statement_uploads as SS
+from .store import tico
 
 Row = dict[str, object]
 MAX_PAGE = 200
@@ -1146,6 +1147,7 @@ def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bo
 
 def view_as(c: sqlite3.Connection, viewer: str, target: str, at: str | None = None) -> str:
     """Whom a read runs as: the owner may view Finance exactly as any teammate sees it; nobody else may."""
+    target = tico.teammate(c, target)
     if not target or target == viewer:
         return viewer
     ctx = load(c, at)

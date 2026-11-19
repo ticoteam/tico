@@ -145,3 +145,31 @@ def test_the_expenses_view_shows_a_bot_its_own_budget_outside_its_lines(owner_on
         mine = [r for r in panel if r["teammate"] == "bot:paid-rental-ads"]
         assert mine and mine[0]["budget"] == 300_000, panel
         assert w["google"]
+
+
+def test_a_bot_whose_slug_is_not_its_id_is_found_by_its_slug(owner_only_books: Store):
+    """A custom (or renamed) bot's slug differs from its id: `bot:<slug>` names it wherever Finance takes a teammate,
+    and what is kept is its id."""
+    from backend import hubdb as H
+
+    w = world(owner_only_books)
+    with owner_only_books.transaction() as c:
+        H.rename_bot(c, "cmo", "consumer-example-ad-owner")
+        assert reads.view_as(c, OWNER, "bot:consumer-example-ad-owner", AT) == "bot:cmo"
+        assert reads.view_as(c, OWNER, "bot:cmo", AT) == "bot:cmo"
+        with pytest.raises(FinanceError) as missing:
+            reads.view_as(c, OWNER, "bot:no-such-bot", AT)
+        assert missing.value.code == NOT_FOUND
+        body = {
+            "name": "Example tests",
+            "teammate": "bot:consumer-example-ad-owner",
+            "account_id": w["adv"],
+            "parent_id": w["marketing"],
+        }
+        done = act(c, OWNER, "budget_create", body)
+        assert done.status == "committed", done
+        kept = c.execute("SELECT teammate FROM fin_budgets WHERE id=?", (done.result["budget_id"],)).fetchone()[0]
+        assert kept == "bot:cmo"
+        grant = {"subject": "bot:consumer-example-ad-owner", "what": "expenses", "whose": "own"}
+        assert act(c, OWNER, "view_grant", grant).status == "committed"
+        assert load(c, AT).view("bot:cmo").sees_anything()

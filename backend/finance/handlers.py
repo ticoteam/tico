@@ -980,7 +980,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             account_id=V.opt_text(p, "account_id", 80) or "",
             catch_all=V.flag(p, "catch_all"),
             team=V.opt_text(p, "team", 80) or "",
-            teammate=V.opt_text(p, "teammate", 120) or "",
+            teammate=tico.teammate(ctx.c, V.opt_text(p, "teammate", 120) or ""),
             vendor=SAP.vendor_resolved(ctx.c, ctx.book.id, L.vendor_text(p, "vendor")),
             parent_id=V.opt_text(p, "parent_id", 80) or "",
             owner=who,
@@ -1252,6 +1252,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     b = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, b)
     kind, target = V.choice(p, "target_kind", B.TARGETS), V.text(p, "target_id", 120)
+    target = tico.teammate(ctx.c, target) if kind == "teammate" else target
     amount = V.amount(p)
     if amount < 0:
         raise invalid("an allocation is 0 or more")
@@ -1378,6 +1379,7 @@ def view_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("subject_kind", "subject", "what", "whose", "whose_team", "account_ids", "new_members", "expires_at"))
     kind = V.choice(p, "subject_kind", ("teammate", "team"), "teammate")
     subject = V.text(p, "subject", 120)
+    subject = tico.teammate(ctx.c, subject) if kind == "teammate" else subject
     ids = frozenset(V.texts(p, "account_ids")) if p.get("account_ids") else frozenset[str]()
     members = (
         ctx.org.members(ctx.org.below(subject)) if kind == "team" and subject in ctx.org.teams else frozenset[str]()
@@ -1492,7 +1494,7 @@ def view_defaults_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("teammate", "right", "expires_at"))
-    mate, right = V.text(p, "teammate", 120), V.choice(p, "right", R.RIGHTS)
+    mate, right = tico.teammate(ctx.c, V.text(p, "teammate", 120)), V.choice(p, "right", R.RIGHTS)
     if mate not in ctx.org.humans | ctx.org.bots:
         raise invalid("no such teammate")
     if mate == who:
@@ -1511,7 +1513,7 @@ def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def right_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("teammate", "right"))
-    mate, right = V.text(p, "teammate", 120), V.choice(p, "right", R.RIGHTS)
+    mate, right = tico.teammate(ctx.c, V.text(p, "teammate", 120)), V.choice(p, "right", R.RIGHTS)
     if right not in SA.rights_of(ctx.c, mate, ctx.at):
         raise FinanceError(CONFLICT, f"{mate} does not hold {right}")
     if right == R.ADMIN and who != ctx.org.owner:

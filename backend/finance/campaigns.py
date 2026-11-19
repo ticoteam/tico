@@ -34,6 +34,7 @@ from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, invalid
 from .handlers import Plan, Result
 from .store import ads as SAD
+from .store import tico
 
 MAX_TEXT = 80
 Row = dict[str, Any]
@@ -202,7 +203,7 @@ def campaign_owner_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("campaign_id", "team", "teammate"))
     campaign_id = V.text(p, "campaign_id", 80)
     team = V.opt_text(p, "team", MAX_TEXT) or ""
-    mate = V.opt_text(p, "teammate", MAX_TEXT) or ""
+    mate = tico.teammate(ctx.c, V.opt_text(p, "teammate", MAX_TEXT) or "")
     if team and mate:
         raise invalid("a campaign has one owner: a team or a teammate")
     if team and team not in ctx.org.teams:
