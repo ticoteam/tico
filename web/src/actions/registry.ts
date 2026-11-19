@@ -21,9 +21,26 @@ export function buildRegistry(sources: Record<string, Record<string, unknown>>):
   return all;
 }
 
+/* Every actions file imports `@/actions`, which holds this registry, and the registry imports every actions file: a
+   loop. Whichever file loads first is still running when the registry loads, so its exports are not set yet. The
+   registry therefore reads its files on first use, never while modules load (cycle.test.ts tries every load order). */
 const found = import.meta.glob<Record<string, unknown>>(['/src/*/actions.ts', '/src/features/*/actions.ts'], { eager: true });
 
-export const registry = buildRegistry({ '/src/actions/base.ts': base, ...found });
+let built: ReadonlyMap<string, AnyAction> | null = null;
+const all = () => (built ??= buildRegistry({ '/src/actions/base.ts': base, ...found }));
+
+export const registry: ReadonlyMap<string, AnyAction> = {
+  get: (id) => all().get(id),
+  has: (id) => all().has(id),
+  get size() {
+    return all().size;
+  },
+  forEach: (fn, self) => all().forEach(fn, self),
+  keys: () => all().keys(),
+  values: () => all().values(),
+  entries: () => all().entries(),
+  [Symbol.iterator]: () => all()[Symbol.iterator](),
+};
 
 export interface CatalogEntry {
   id: string;

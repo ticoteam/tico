@@ -1,4 +1,4 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -111,5 +111,47 @@ describe('Your plan needs attention @s1224', () => {
     expect(await checkPlan()).toBe(false);
     paid = true;
     expect(await checkPlan()).toBe(true);
+  });
+
+  it('shows at the first refusal, while its retry is still out', async () => {
+    let tries = 0;
+    void queryClient.prefetchQuery({
+      queryKey: ['directory'],
+      queryFn: () => (++tries === 1 ? Promise.reject(locked()) : new Promise(() => {})),
+      retry: 1,
+      retryDelay: 0,
+    });
+    show(<PlanLock />);
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(queryClient.getQueryState(['directory'])?.status).toBe('pending');
+  });
+
+  it('stays while a refused read is read again, lifts when it answers, and never updates React mid-render', async () => {
+    const fault = vi.spyOn(console, 'error');
+    await refuse(() => {
+      throw locked();
+    });
+    let answer: (v: unknown) => void = () => {};
+    // Read again on mount: the refused query goes back to pending with its error cleared.
+    const again = { queryKey: ['directory'], queryFn: () => new Promise((r) => (answer = r)), retryOnMount: true };
+    const other = { queryKey: ['other'], queryFn: () => new Promise(() => {}) };
+    function Reader() {
+      useQuery(again);
+      useQuery(other);
+      return <div data-testid="app">App</div>;
+    }
+    show(
+      <>
+        <Reader />
+        <PlanLock />
+      </>,
+    );
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    await waitFor(() => expect(queryClient.getQueryState(['directory'])?.fetchStatus).toBe('fetching'));
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    await act(async () => answer({ actors: [], byId: {} }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(fault.mock.calls.flat().join(' ')).not.toMatch(/while rendering a different component/);
+    fault.mockRestore();
   });
 });

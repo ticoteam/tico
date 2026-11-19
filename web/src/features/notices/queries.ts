@@ -1,4 +1,4 @@
-import type { Query } from '@tanstack/react-query';
+import type { Query, QueryCacheNotifyEvent } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { ApiError } from '@/api/client';
 import type { Problem } from '@/api/schema';
@@ -32,29 +32,79 @@ export function lockOf(error: unknown): PlanLockState | null {
   return { reason: typeof cloud?.reason === 'string' && cloud.reason ? cloud.reason : null, billingUrl: url };
 }
 
-const refused = (q: Query): boolean => q.state.status === 'error' && lockOf(q.state.error) !== null;
 const same = (a: PlanLockState | null, b: PlanLockState | null) => a === b || (!!a && !!b && a.reason === b.reason && a.billingUrl === b.billingUrl);
 
+/* The lock is held, not re-derived from each query's state: a refused read that is read again goes back to pending
+   (its error cleared) and a first refusal is only a failed attempt while its retry runs. Either way the company is
+   still locked. It lifts only on proof: a read the lock refused answers, or the whole cache is cleared (signed out). */
 let held: PlanLockState | null = null;
+/** The reads the lock refused, by query hash: what proves it gone when they answer, and what Check again reads. */
+const refused = new Set<string>();
+const listeners = new Set<() => void>();
+let watching = false;
 
-/** The newest lock among the reads the cache holds, or null: the company is open (or not a cloud one). */
-export function currentLock(): PlanLockState | null {
-  let latest: Query | undefined;
-  for (const q of queryClient.getQueryCache().getAll()) {
-    if (refused(q) && (!latest || q.state.errorUpdatedAt > latest.state.errorUpdatedAt)) latest = q;
+function hold(next: PlanLockState | null): void {
+  if (same(next, held)) return;
+  held = next;
+  for (const fn of listeners) fn();
+}
+
+function seen(q: Query, error: unknown): void {
+  const lock = lockOf(error);
+  if (!lock) return;
+  refused.add(q.queryHash);
+  hold(lock);
+}
+
+/* Only answers and removals: the cache also reports queries made while a component renders, and telling React then
+   is the "update while rendering a different component" fault. Answers and removals never come during a render. */
+function onEvent(e: QueryCacheNotifyEvent): void {
+  if (e.type === 'removed') {
+    refused.delete(e.query.queryHash);
+    if (queryClient.getQueryCache().getAll().length === 0) hold(null);
+    return;
   }
-  const next = latest ? lockOf(latest.state.error) : null;
-  if (!same(next, held)) held = next;
+  if (e.type !== 'updated') return;
+  const a = e.action;
+  // 'failed' is an attempt with a retry still to come: one 402 is enough.
+  if (a.type === 'error' || a.type === 'failed') seen(e.query, a.error);
+  // From the server only: a write shown ahead of its answer (setQueryData) proves nothing.
+  else if (a.type === 'success' && !a.manual && refused.has(e.query.queryHash)) {
+    refused.clear();
+    hold(null);
+  }
+}
+
+function watch(): void {
+  if (watching) return;
+  watching = true;
+  const cache = queryClient.getQueryCache();
+  // Refusals that came before anything asked for the lock.
+  for (const q of cache.getAll()) if (q.state.status === 'error') seen(q, q.state.error);
+  cache.subscribe(onEvent);
+}
+
+/** The lock, or null: the company is open (or not a cloud one). */
+export function currentLock(): PlanLockState | null {
+  watch();
   return held;
 }
 
-const subscribe = (fn: () => void) => queryClient.getQueryCache().subscribe(fn);
+function subscribe(fn: () => void): () => void {
+  watch();
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 
-/** For the lock: re-reads as the cache changes. */
+/** For the lock: changes only when a lock arrives or lifts. */
 export const usePlanLock = (): PlanLockState | null => useSyncExternalStore(subscribe, currentLock, () => null);
 
-/** Read again everything the lock refused. True when it all came back: the plan is paid and the app is open again. */
+/** The person's own Check again: read again everything the lock refused. True when it all came back, which lifts it. */
 export async function checkPlan(): Promise<boolean> {
-  await queryClient.refetchQueries({ predicate: refused });
-  return currentLock() === null;
+  watch();
+  const again = [...refused];
+  await queryClient.refetchQueries({ predicate: (q) => again.includes(q.queryHash) });
+  // An answer lifts it (onEvent), a refusal keeps it. With nothing left to read, the reload after it reads anew.
+  if (again.length === 0) hold(null);
+  return held === null;
 }

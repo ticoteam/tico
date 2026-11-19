@@ -46,12 +46,14 @@ function Locked({ reason }: { reason: string | null }) {
                 Download files
               </Button>
             )}
-            <Button busy={check.pending} onClick={() => void again()}>
-              Check again
-            </Button>
-            <Button variant="primary" onClick={() => void run('notices.openBilling', {}, click)}>
-              Open billing
-            </Button>
+            <span className="nt-pair">
+              <Button busy={check.pending} onClick={() => void again()}>
+                Check again
+              </Button>
+              <Button variant="primary" onClick={() => void run('notices.openBilling', {}, click)}>
+                Open billing
+              </Button>
+            </span>
           </>
         }
         foot={

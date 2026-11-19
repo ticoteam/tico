@@ -1,7 +1,10 @@
 /* Notices over the whole app: the plan lock and the failed-files card. Each is the centered card (pagekinds.css .q,
    pages/15-start) laid over the frame on the window's own ground. */
 .nt-cover{position:fixed;inset:0;z-index:var(--z-dialog);background:var(--ground);overflow:auto}
-.nt-cover .q-row{flex-wrap:wrap}
+/* Three buttons are wider than the card's column: the row takes the column's side margins (as the mock overflows it),
+   and where even that is too narrow Check again and Open billing move down together, never one alone. */
+.nt-cover .q-row{width:calc(100% + 2 * var(--s-6));flex-wrap:wrap}
+.nt-pair{display:inline-flex;gap:var(--s-2)}
 .nt-foot{display:inline-flex;align-items:center;gap:var(--s-2)}
 .nt-foot .btn-quiet{font-size:inherit;color:inherit}
 .nt-foot .btn-quiet:hover{color:var(--ink)}
