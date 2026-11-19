@@ -57,8 +57,8 @@ class _Rooms:
 
     def get(self, cid, default=None):
         self.nodes.add("c:" + str(cid))
-        if not isinstance(cid, str):
-            return default  # a room id is text: no room has this key
+        if not isinstance(cid, (str, bytes)):
+            return default  # a stored key is text or a blob: equal by key exactly when equal in Python
         if cid not in self.found:
             row = self.c.execute("SELECT task_id FROM conversations WHERE id=?", (cid,)).fetchone()
             self.found[cid] = (row[0],) if row else None
@@ -75,8 +75,8 @@ class _Tasks:
 
     def __call__(self, tid):
         self.nodes.add("t:" + str(tid))
-        if not isinstance(tid, str):
-            return False  # a task id is text: no task has this key
+        if not isinstance(tid, (str, bytes)):
+            return False  # a stored key is text or a blob: equal by key exactly when equal in Python
         if tid not in self.found:
             self.found[tid] = self.c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is not None
         return self.found[tid]

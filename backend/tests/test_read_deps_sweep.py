@@ -250,3 +250,23 @@ def test_a_sweep_write_reads_no_whole_task_or_room_table_under_the_lock(api):
     assert {"c:history", "t:no-such-task"} <= deps
     assert not [s for s in statements if s.strip() in (row_clock.TASK_IDS, row_clock.ROOM_TASKS)]
     assert not [s for s in statements if "room_key" in s and "substr" in s]
+
+
+def test_a_room_whose_id_is_a_blob_still_names_its_task_to_the_walk(api):
+    """SQLite keeps a blob id as given: the walk finds the room by it as the shared map did, so a message there still
+    depends on the room's task (here one that does not exist, which leaves it unsettled)."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO conversations(id,kind,task_id,created_at) VALUES(?,'chat','no-such-task',?)",
+            (b"room", H.now()),
+        )
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
+            "VALUES('in-blob-room',?,'human:ana','bot:ops','say','Synthetic history',?,'{}')",
+            (b"room", H.now()),
+        )
+    with store.read() as c:
+        read_deps.sweep(c)
+        assert not c.execute("SELECT 1 FROM read_index WHERE key='m:in-blob-room'").fetchone()
+        assert c.execute("SELECT 1 FROM read_deps WHERE key='m:in-blob-room' AND dep='t:no-such-task'").fetchone()
