@@ -16,7 +16,7 @@ const {unrouted} = require('./support/routes.cts') as import('./support/routes.c
 interface Wrote { builds: number; parsed: number; inner: number; treeAdded: number; treeRemoved: number; treeAttrs: string[]; treeText: number; sideAdded: number; sideRemoved: number; sideAttrs: number; own: string[]; others: string[] }
 declare const S: {route: string; v2: {on: boolean; status: Record<string, unknown>}};
 declare const LIVE_SOON: Map<string, unknown>;
-declare const THREADS: {on: unknown};
+declare const THREADS: {on: unknown; dms: Record<string, number>};
 declare var INBOX_NAV: unknown;
 declare var TREE_DRAWN: {html: string} | null;
 declare var sidebarTree: () => unknown;
@@ -24,6 +24,8 @@ declare function liveEmit(topic: string, data: unknown): void;
 declare function refresh(force?: boolean): Promise<void>;
 declare function renderTree(): void;
 declare function renderTreeSoon(): void;
+declare function treeKids(old: Element, fresh: ParentNode): void;
+declare function v2Refresh(): Promise<void>;
 declare const window: Window & typeof globalThis & {
   sbrStart(): void; sbrStop(): Wrote; sbrKeep(): void; sbrSame(): string[]; sbrFaithful(): boolean; sbrPasses: number;
 };
@@ -234,6 +236,45 @@ function counters(): void {
     }
     await gone('a count change');
 
+    // 4b. An unread DM arrives on the row that has a count: a dot is added beside the count, which keeps its node (the
+    // two share their first class). The dot goes again the same way.
+    const badgeKept = () => page.evaluate(() => (window as unknown as {sbrBadge: Element}).sbrBadge === document.querySelector('#tree a.node[data-org="b:builder"] .cnt.needs'));
+    report['a DM dot beside a count'] = await wrote(() => page.evaluate(() => { THREADS.dms = {...THREADS.dms, 'bot:builder': 2}; renderTree(); }),
+      () => row('builder').locator('.cnt.tree-dm.dot').waitFor({state: 'attached'}));
+    {
+      const w = report['a DM dot beside a count']!;
+      check(await badgeKept(), 'a DM dot arriving beside a count leaves the count its node');
+      check(w.treeAdded === 1 && w.treeRemoved === 0 && w.treeText === 0, `a DM dot is one node added (${JSON.stringify(w)})`);
+    }
+    await gone('a DM dot arriving');
+    await page.evaluate(() => { const {'bot:builder': _gone, ...rest} = THREADS.dms; THREADS.dms = rest; renderTree(); });
+    check(await row('builder').locator('.cnt.tree-dm').count() === 0 && await badgeKept(), 'the DM dot going leaves the count its node');
+    await gone('a DM dot going');
+
+    // 4c. Needs you read again with no draw of the list (a snoozed ask coming back is read by a timer, hub-v2.ts
+    // needsWakeAt): the next burst draws the count, though no bot in it changed what its row shows.
+    needs = 4;
+    await page.evaluate(() => v2Refresh());
+    await burst(status('builder', 'running', 'Still at it'));
+    await row('builder').locator('.cnt.needs', {hasText: /^4$/}).waitFor({timeout: t(5000)}).catch(() => {});
+    check(await row('builder').locator('.cnt.needs').innerText() === '4' && await badgeKept(), 'a burst draws a count that was read without a draw');
+    await burstDone();
+    await gone('a count read without a draw');
+
+    // 4d. A draw asked for after the address changed without a page change (the Tasks page rewrites it when its layout
+    // switches) is still made before renderTree() returns: its caller reads the list right after.
+    check(await page.evaluate(() => {
+      const route = S.route, had = S.v2.status.reviewer, shown = () => !!document.querySelector('#tree a.node[data-org="b:reviewer"] .tree-spin');
+      S.route = route + '?layout=list'; S.v2.status.reviewer = {bot: 'reviewer', state: 'running'};
+      renderTree();
+      const drawn = shown();
+      S.route = route;
+      if (had) S.v2.status.reviewer = had; else delete S.v2.status.reviewer;
+      renderTree();
+      return drawn && !shown();
+    }), 'renderTree() draws before it returns, whatever the address');
+    await gone('a draw after the address changed');
+
     // 5. Focus on a row, where the rail is scrolled to and the folds survive a burst that changes the row beside it.
     await row('reviewer').focus();
     await scroller.evaluate(el => { el.scrollTop = 60; });
@@ -290,6 +331,30 @@ function counters(): void {
     await frames();
     check(await page.evaluate(() => window.sbrPasses) === 1, 'a burst of three status lines is one pass');
     await gone('a burst of three');
+
+    // 9. A deep chart: a leaf that changes under forty rows reads each row's markup once, not once for every row above.
+    {
+      const read = await page.evaluate(() => {
+        const chain = (leaf: string): string => {
+          let html = `<li><div class="noderow"><a class="node" data-org="b:leaf">${leaf}</a></div></li>`;
+          for (let i = 40; i > 0; i--) html = `<li class="dept"><div class="noderow"><a class="node" data-org="b:up${i}">Manager ${i}</a></div><ul>${html}</ul></li>`;
+          return html;
+        };
+        const parsed = (html: string): DocumentFragment => { const fresh = document.createElement('template'); fresh.innerHTML = html; return fresh.content; };
+        const host = document.createElement('ul');
+        treeKids(host, parsed(chain('one'))); treeKids(host, parsed(chain('two')));
+        const leaf = host.querySelector('[data-org="b:leaf"]'), top = host.querySelector('[data-org="b:up1"]');
+        const outer = Object.getOwnPropertyDescriptor(Element.prototype, 'outerHTML')!;
+        let chars = 0;
+        Object.defineProperty(Element.prototype, 'outerHTML', {...outer, get(this: Element): string { const text = String(outer.get!.call(this)); chars += text.length; return text; }});
+        try { treeKids(host, parsed(chain('three'))); } finally { Object.defineProperty(Element.prototype, 'outerHTML', outer); }
+        return {chars, whole: chain('three').length, text: leaf?.textContent,
+          same: leaf === host.querySelector('[data-org="b:leaf"]') && top === host.querySelector('[data-org="b:up1"]')};
+      });
+      check(read.same && read.text === 'three', `a leaf under forty rows changes in place (${JSON.stringify(read)})`);
+      check(read.chars < read.whole * 2, `a deep chart's markup is read once: ${read.chars} characters read for ${read.whole} of markup`);
+      console.log(`  deep chart (40 rows above one leaf): ${read.chars} characters of markup read for ${read.whole} drawn`);
+    }
 
     assert.deepEqual(failed, []);
     assert.deepEqual(errors, []);

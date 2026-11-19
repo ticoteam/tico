@@ -838,14 +838,15 @@ function orgTopPerson(byParent: OrgByParent): OrgPersonNode | null | undefined {
     || (roles.length === 1 ? roles[0] : tops.length === 1 ? tops[0] : null);
 }
 // ----------------------------------------------------------------- drawing the Team list
-// The list is changed in place. A page change moves the mark of the page you are on and writes nothing else (a row's
-// markup never depends on the route). A draw builds the list's markup, and when it differs from the last draw's, each
-// row that changed takes its new attributes and text on the nodes it has: a count that changes is that count's text, a
-// bot that starts working is a class on its row and one ring added. Only a row that came or went is added or removed.
+// The list is changed in place. A draw builds the list's markup, and when it differs from the last draw's, each row
+// that changed takes its new attributes and text on the nodes it has: a count that changes is that count's text, a bot
+// that starts working is a class on its row and one ring added. Only a row that came or went is added or removed. A
+// page change draws the same markup (a row's markup never depends on the route), so it moves the mark of the page you
+// are on and writes nothing else.
 // So a row keeps its node through every draw, and with it hover, focus, where the rail is scrolled to, a ring that is
 // turning, a group name being typed and the button an open menu hangs from. Before, one changed row replaced its whole
 // top-level row (patchHTML): a group and every row in it, a name being typed in it too.
-/** Each row's markup as last drawn: a row whose markup is the same is not looked into. */
+/** Each row's own markup as last drawn (treeOwn): a row that reads the same is not written to. */
 const TREE_SRC = new WeakMap<Element, string>();
 /** The markup the list was last drawn from, and the children that draw left (nobody else has redrawn it since). */
 let TREE_DRAWN: {html: string; first: ChildNode | null; count: number} | null = null;
@@ -854,13 +855,14 @@ let TREE_DRAWN: {html: string; first: ChildNode | null; count: number} | null = 
 const TREE_OWN_CLASSES = ['cur', 'org-moved', 'dragging', 'drop-target', 'drop-before', 'drop-after', 'drop-refused'];
 // What a node is among its siblings, so a new draw's node meets the one it replaces: a row by who it is for (its
 // data-org, data-seat or data-toggle, a list item by its row's), a link by where it goes, anything else by its tag and
-// first class.
+// first class. A row's two counts share their first class (treeDmBadge, treeBadge): the unread one is told apart, so
+// a dot that arrives beside a count does not take the count's node.
 function treeKey(n: Node): string {
   if (!(n instanceof Element)) return '#' + n.nodeType;
   const who = (el: Element | null | undefined): string | null => el ? el.getAttribute('data-org') ?? el.getAttribute('data-seat') ?? el.getAttribute('data-toggle') : null;
   const row = n.localName === 'li' ? who(n.querySelector(':scope > .noderow[data-org], :scope > .noderow > [data-org], :scope > .noderow > [data-seat]'))
     ?? n.querySelector(':scope > a[href]')?.getAttribute('href') : null;
-  return n.localName + '|' + (who(n) ?? row ?? n.getAttribute('href') ?? n.classList[0] ?? '');
+  return n.localName + '|' + (who(n) ?? row ?? n.getAttribute('href') ?? (n.classList.contains('tree-dm') ? 'tree-dm' : n.classList[0]) ?? '');
 }
 // A row that changed places moves as it is where the browser can (moveBefore keeps focus and what is animating).
 function treeMove(parent: Node, node: ChildNode, before: ChildNode | null): void {
@@ -883,10 +885,23 @@ function treeKids(old: Element, fresh: ParentNode): void {
     else if (met.nodeValue !== node.nodeValue) met.nodeValue = node.nodeValue;
   }
 }
+const treeTag = (el: Element): string => { let tag = '<' + el.localName; for (const a of el.attributes) tag += ' ' + a.name + '="' + a.value + '"'; return tag + '>'; };
+const treeIsList = (el: Element): boolean => el.localName === 'ul';
+// A row's own markup: its tag, and all it holds but the rows of its lists (a list is its tag alone here: its rows are
+// compared one by one). Each node's markup is read once a draw, however deep the chart goes.
+function treeOwn(row: Element): string {
+  let own = treeTag(row);
+  for (const n of row.childNodes) own += !(n instanceof Element) ? n.nodeValue : treeIsList(n) ? treeTag(n) : n.outerHTML;
+  return own;
+}
 // One kept node brought up to date: its attributes, its classes (TREE_OWN_CLASSES stay), then its children.
 function treeSync(old: Element, fresh: Element): void {
-  const row = fresh.localName === 'li', src = row ? fresh.outerHTML : '';
-  if (row && TREE_SRC.get(old) === src) return;
+  const row = fresh.localName === 'li', src = row ? treeOwn(fresh) : '';
+  if (row && TREE_SRC.get(old) === src) {
+    // The row reads the same: only the rows in its lists are looked at.
+    const lists = [...old.children].filter(treeIsList), now = [...fresh.children].filter(treeIsList);
+    if (lists.length === now.length) { for (const [i, list] of lists.entries()) treeKids(list, now[i]!); return; }
+  }
   for (const a of [...old.attributes]) if (a.name !== 'class' && a.name !== 'aria-current' && !fresh.hasAttribute(a.name)) old.removeAttribute(a.name);
   for (const a of fresh.attributes) if (a.name !== 'class' && old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value);
   const want = new Set(fresh.classList);
@@ -907,30 +922,36 @@ function treePatch(tree: Element, html: string): void {
 /** What each drawn bot's row shows of its live status line (hub-v2.ts S.v2.status): its state and its limit mark. */
 let TREE_BOTS = new Map<string, string>();
 const treeBotShows = (slug: string, state = stateOf(slug), limit = treeLimitMark(slug)): string => state + '\n' + limit;
+/** The Needs you list the rows' counts were last drawn from (hub-v2.ts puts a new list in place of the old one; it
+    never changes one it holds). Not every change to it asks for a draw: a snoozed ask that comes back is read by a
+    timer (needsWakeAt), which draws no list. */
+let TREE_NEEDS: {list: unknown; version: unknown; bots: unknown; next: unknown} | null = null;
+const treeNeedsNow = () => ({list: S.v2?.needs, version: S.v2?.needsVersion, bots: S.v2?.needsBots, next: S.v2?.needsNext});
+function treeNeedsStale(): boolean {
+  const was = TREE_NEEDS, now = treeNeedsNow();
+  return !was || was.list !== now.list || was.version !== now.version || was.bots !== now.bots || was.next !== now.next;
+}
+/** Draws the list, in the next frame, when Needs you is no longer the list its counts were drawn from. */
+function renderTreeForNeeds(): void { if (treeNeedsStale()) renderTreeSoon(); }
 /** Live status lines came for these bots (ui/app/refresh.ts). The list reads two things from a status line, the bot's
-    state and its limit: when no row would show either differently, nothing is built and nothing is drawn. */
+    state and its limit: when no row would show either differently and Needs you is the list the counts were drawn
+    from, nothing is built and nothing is drawn. */
 function renderTreeForBots(slugs: Iterable<string>): void {
-  let stale = !TREE_DRAWN;
+  let stale = !TREE_DRAWN || treeNeedsStale();
   for (const slug of slugs) { const shown = TREE_BOTS.get(slug); if (shown !== undefined && shown !== treeBotShows(slug)) stale = true; }
   if (stale) renderTreeSoon();
 }
 // At most one draw a frame: every renderTreeSoon() in a frame is one draw at its start, and a draw made at once
 // (renderTree) leaves none waiting. A hidden tab has no frames: its one draw waits for it to be shown.
 let TREE_FRAME = 0, TREE_BUSY = false, TREE_AGAIN = false;
-/** The page the marks were last put for. */
-let TREE_ROUTE: string | null = null;
 function renderTreeSoon(): void {
   if (TREE_FRAME) return;
   if (typeof requestAnimationFrame !== 'function') { treeDraw(); return; }
   TREE_FRAME = requestAnimationFrame(() => { TREE_FRAME = 0; treeDraw(); });
 }
-// Draws the Team list now: its callers read the list right after. A page change (ui/app/router.ts) is the one caller
-// with nothing new to draw: the mark moves at once (treeMarks), and the list is checked against its data once, in
-// that frame, with whatever else asks in it.
-function renderTree(): void {
-  if (TREE_DRAWN && TREE_ROUTE !== null && S.route !== TREE_ROUTE) { treeMarks(); renderTreeSoon(); return; }
-  treeDraw();
-}
+// Draws the Team list now, for every caller: each may read the list right after (a drop looks for its Move button).
+// With nothing new to draw it builds the markup, finds it the same and writes only the marks that moved.
+function renderTree(): void { treeDraw(); }
 // One draw at a time: a draw asked for from inside one (a move's strip going under another row, a name field that
 // lost focus as it left) runs when that one is done, not in the middle of it.
 function treeDraw(): void {
@@ -943,10 +964,9 @@ function treeDraw(): void {
   } finally { TREE_BUSY = false; ORG_MINE_DRAW = null; }
   if (TREE_AGAIN) { TREE_AGAIN = false; renderTreeSoon(); }   // still asked for after four in a row: in the next frame
 }
-// The page you are on, marked on its row in the list, in the message bots' list and on the pages above them. This is
-// all a page change writes in the sidebar.
+// The page you are on, marked on its row in the list, in the message bots' list and on the pages above them: all a
+// page change writes in the sidebar, and all a page change needs to call (it builds nothing and reads no data).
 function treeMarks(): void {
-  TREE_ROUTE = S.route;
   navCurSync($('#tree'));
   const inboxes = $('#inbox-list');
   if (inboxes) navCurSync(inboxes);
@@ -1017,6 +1037,7 @@ function treePass(): void {
   ensureCollapsed(byParent);
   ORG_MINE_DRAW = null; ORG_MINE_DRAW = {mine: orgMine()};
   const shows = new Map<string, string>();                               // TREE_BOTS for this draw
+  TREE_NEEDS = treeNeedsNow();
   let needCounts: ReturnType<typeof needsMeCounts> | undefined;                                   // counted once per render, on first use
   const needN = (slug: string): number => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -1149,7 +1170,6 @@ function treePass(): void {
   treePatch(tree, html);
   TREE_BOTS = shows;
   if (confirmFocus && !document.activeElement?.closest?.('#tree [data-org-confirm]')) $(`#tree [data-org-confirm="${confirmFocus}"]`)?.focus({preventScroll: true});
-  TREE_ROUTE = S.route;
   navCurSync(tree);
   orgPendingMark(tree);
   renderInboxNav();                                   // after the tree, which places what it can

@@ -61,8 +61,8 @@ async function refresh(force = false): Promise<void> {
 // ----------------------------------------------------------------- live events (ui/app/live.ts)
 // What the 30 s refresh used to find by reading everything again now arrives as it changes: a task moved (the open
 // board, the bot's columns and ticker, a person's tasks, the open task), a bot's status line (the tree, the
-// paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once per burst, and
-// only when the burst changed what it shows.
+// paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws at most once per
+// burst; the tree only when the burst changed what it shows.
 // The same JSON value, whatever order its keys come in (a live event's copy of a task is built apart from the list's).
 // A JSON object read by key: sameData checks it is one before it reads a key.
 const fieldsOf = (v: object): Record<string, unknown> => v as Record<string, unknown>;
@@ -124,9 +124,9 @@ function liveWire(): void {
       renderTreeForBots(changed);
       // The account's status dot says whether Tico is reached and bots run at all (heartbeat.ts reads /status and the
       // computers): no bot's line moves it, so it is not drawn here.
-      // The notice over a chat is about the bot whose chat or page is open.
-      const open = V2C?.slug || BOT?.slug;
-      if (open && changed.has(open)) pausedRender();
+      // The notice over the open chat or bot page: one notice, and it also comes on by the clock (a computer offline
+      // for ten minutes, which no status line says), so every burst looks.
+      pausedRender();
       botAvatarsSync(); goalsFollowRoster();
       // The page's chat shows its owner's face, which carries that bot's state.
       const owner = PGC ? pgcOwner(PGC) : null;
@@ -140,7 +140,9 @@ function liveWire(): void {
   liveOn('needs', (d: unknown) => void v2NeedsChanged(d).then(moved => {
     // A live change reaches the browser notifications too, not only the refresh (hub-v2.ts); one memory serves both.
     if (typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
-    if (!moved) return;
+    // A change the page already holds: the list may still show the counts from before it (a snoozed ask that came back
+    // was read by a timer, which draws no list).
+    if (!moved) { renderTreeForNeeds(); return; }
     liveEmit('needs-list', S.v2.needs || []);
     liveSoon('needs', () => {
       renderTreeSoon();   // with a burst of status lines in the same frame, one draw
