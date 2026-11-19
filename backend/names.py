@@ -235,9 +235,15 @@ def install_route_class(app, store):
             handler = super().get_route_handler()
 
             async def named_response(request):
+                from . import shared_reads
                 from .json_response import compress
 
-                return await compress(request, run_names(request, await display_names(request, await handler(request))))
+                async def answer():
+                    return run_names(request, await display_names(request, await handler(request)))
+
+                # A person's identical reads are computed once (backend/shared_reads.py); each request then gets its
+                # own validators and wire encoding.
+                return await compress(request, await shared_reads.answer(store, request, self.path, answer))
 
             return named_response
 

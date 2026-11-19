@@ -55,6 +55,8 @@ TAGGED = frozenset(
         "/api/v2/task-types",
         "/api/v2/health",
         "/api/v2/config",
+        "/api/v2/bots",
+        "/api/v2/company/floor",
     }
 )
 
