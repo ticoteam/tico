@@ -19,6 +19,7 @@ import { DETAILS, failedToast, isPage, tabAddress } from './model';
 import { Face, Go } from './parts';
 import { frameDoc, parsePage } from './changes';
 import { pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
+import { isWord, WordPages } from './Word';
 
 /* What a task shows in its page sheet: one of its pages (a tab), or one of its files opened from Details. Both keep
    their own look in a frame (page-types: a file is a Document with its content in a frame). */
@@ -64,6 +65,20 @@ export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
   const v = currentOf(f);
   if (!v) return null;
   const name = f.title || f.name;
+  // A Word file is drawn as its words on paper, with Download beside it.
+  if (isWord(f.name, v.mime))
+    return (
+      <>
+        <div className="fv-bar">
+          <b>{name}</b>
+          <span className="grow" />
+          <a className="ib ib-sm" href={v.url} download={f.name} aria-label="Download" title="Download">
+            <Icon name="download" />
+          </a>
+        </div>
+        <WordPages url={v.url} name={name} />
+      </>
+    );
   const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={f.name} size={v.size} />;
   return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} file={file} />;
 }

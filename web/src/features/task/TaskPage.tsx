@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
 import { Conversation, MessageBones } from '@/conversation';
-import { useActor } from '@/data';
+import { meQuery, useActor } from '@/data';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
@@ -17,8 +17,8 @@ import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { Email as EmailView } from './Email';
 import { FileTab, FileView } from './FileView';
-import { FlowSteps, FlowTop, MoreMenu, WhereLine } from './Head';
-import { defaultTab, DETAILS, failedToast, tabAddress, tabsOf, type TaskTab } from './model';
+import { FlowSteps, FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
+import { changesAskedOf, decisionOf, defaultTab, DETAILS, failedToast, tabAddress, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
@@ -103,7 +103,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
     void navigate({ to: a.to as never, search: a.search as never, replace: true });
   }, [known, first, opened, flow, t, navigate]);
   const [adding, setAdding] = useState<Adding | null>(null);
+  const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
+  const me = useQuery(meQuery).data?.id;
+  const owner = useActor(t.owner_id);
 
   const current = tabs.find((x) => x.slug === on);
   const versions = useVersions(current?.doc, search.v, search.vs);
@@ -114,6 +117,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const onAt = (n: number) => setStep({ key, at: n });
   const address = tabAddress(t, on, flow);
   const details = on === DETAILS;
+  // An approval's view (plan/approvals.html): the title, one quiet line and the thing's tabs; its facts are under ⋯.
+  const quiet = !details && !!(decisionOf(t) ?? changesAskedOf(t, me));
   // The page alone: the sheets beside it fold (the shell's own keys unfold them).
   const expand = () => {
     for (const sheet of ['tico', 'menu', 'list'] as const) void run('shell.fold', { sheet, folded: true }, { via: 'click' });
@@ -123,10 +128,12 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
     if (!r.ok) toast(failedToast(r));
   };
 
-  const pageTabs: PageTab[] = tabs.map((x) => {
-    const a = tabAddress(t, x.slug, flow);
-    return { label: x.label, to: a.to, ...(flow && { search: { tab: x.slug } }), mark: markOf(x), target: `task-tab:${x.slug}` };
-  });
+  const pageTabs: PageTab[] = tabs
+    .filter((x) => !(quiet && x.slug === DETAILS))
+    .map((x) => {
+      const a = tabAddress(t, x.slug, flow);
+      return { label: x.label, to: a.to, ...(flow && { search: { tab: x.slug } }), mark: markOf(x), target: `task-tab:${x.slug}`, ...(x.chat && { className: 'tab-chat' }) };
+    });
 
   const body =
     file && details ? (
@@ -139,19 +146,29 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       <FileTab task={t.id} f={current.file} />
     ) : current?.email ? (
       <EmailView task={t.id} send={current.email} part={search.part} at={address} />
+    ) : current?.chat && t.conversation_id ? (
+      // A phone's Chat tab: the decision sits over its message box, and stands in for it while changes are asked.
+      <Conversation
+        id={t.conversation_id}
+        variant="page"
+        title={owner?.name ?? 'Teammate'}
+        actor={t.owner_id ?? undefined}
+        foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
+        canPost={!asking}
+      />
     ) : null;
 
   return (
     <Document
-      className={['tv', details && 'is-details', flow && 'is-flow'].filter(Boolean).join(' ')}
-      title={t.title}
+      className={['tv', details && 'is-details', flow && 'is-flow', quiet && 'is-quiet'].filter(Boolean).join(' ')}
+      title={quiet ? t.title.replace(/^send:\s*/i, '') : t.title}
       path={address.to}
       crumb={flow ? [{ label: 'Flow', to: '/flow' }] : [{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
-      sub={<WhereLine t={t} />}
+      sub={quiet ? <QuietLine t={t} /> : <WhereLine t={t} />}
       onRename={(title) => void rename(title)}
       actions={flow ? <FlowSteps t={t} /> : undefined}
       top={flow ? <FlowTop t={t} /> : undefined}
-      more={<MoreMenu t={t} flow={flow} />}
+      more={<MoreMenu t={t} flow={flow} details={quiet} />}
       tabs={pageTabs}
       tabsAfter={
         <>
@@ -163,7 +180,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       body={
         <div className="tv-view">
           {body}
-          <Decision t={t} flow={flow} dock />
+          {!current?.chat && <Decision t={t} flow={flow} dock />}
         </div>
       }
     />
@@ -183,6 +200,7 @@ export interface TaskChatProps {
 export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
   const owner = useActor(t?.owner_id);
+  const [asking, setAsking] = useState(false);
   if (!t) return <MessageBones />;
   const name = owner?.name ?? 'Teammate';
   return (
@@ -209,7 +227,14 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
         <span className="grow" />
       </header>
       {t.conversation_id ? (
-        <Conversation id={t.conversation_id} variant="task" title={name} actor={t.owner_id ?? undefined} foot={<Decision t={t} flow={flow} />} />
+        <Conversation
+          id={t.conversation_id}
+          variant="task"
+          title={name}
+          actor={t.owner_id ?? undefined}
+          foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
+          canPost={!asking}
+        />
       ) : (
         <Decision t={t} flow={flow} />
       )}

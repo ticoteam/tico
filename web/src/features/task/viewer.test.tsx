@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -17,6 +17,39 @@ vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: 
    one file viewer. Made-up rows only; every answer is stubbed. */
 
 type Reply = { status?: number; body: unknown; type?: string };
+
+/** A zip holding one deflated file, as a .docx holds word/document.xml. */
+async function zipOf(name: string, text: string): Promise<Uint8Array> {
+  const raw = new TextEncoder().encode(text);
+  const data = new Uint8Array(await new Response(new Response(raw).body?.pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+  const n = new TextEncoder().encode(name);
+  const local = new DataView(new ArrayBuffer(30));
+  local.setUint32(0, 0x04034b50, true);
+  local.setUint16(8, 8, true);
+  local.setUint32(18, data.length, true);
+  local.setUint32(22, raw.length, true);
+  local.setUint16(26, n.length, true);
+  const central = new DataView(new ArrayBuffer(46));
+  central.setUint32(0, 0x02014b50, true);
+  central.setUint16(10, 8, true);
+  central.setUint32(20, data.length, true);
+  central.setUint32(24, raw.length, true);
+  central.setUint16(28, n.length, true);
+  const at = 30 + n.length + data.length;
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, 1, true);
+  end.setUint16(10, 1, true);
+  end.setUint32(12, 46 + n.length, true);
+  end.setUint32(16, at, true);
+  const out = new Uint8Array(30 + n.length + data.length + 46 + n.length + 22);
+  let at2 = 0;
+  for (const part of [new Uint8Array(local.buffer), n, data, new Uint8Array(central.buffer), n, new Uint8Array(end.buffer)]) {
+    out.set(part, at2);
+    at2 += part.length;
+  }
+  return out;
+}
 const calls: string[] = [];
 let reply: (url: string) => Reply | null = () => null;
 
@@ -33,7 +66,7 @@ beforeEach(() => {
     calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
     const r = reply(String(url)) ?? base(String(url));
     const type = r.type ?? 'application/json';
-    return new Response(type.includes('json') ? JSON.stringify(r.body) : (r.body as string), { status: r.status ?? 200, headers: { 'Content-Type': type } });
+    return new Response(type.includes('json') ? JSON.stringify(r.body) : (r.body as string | Uint8Array<ArrayBuffer>), { status: r.status ?? 200, headers: { 'Content-Type': type } });
   });
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -239,7 +272,7 @@ describe('the file viewer, by type', () => {
 
 describe('an email the task asks about', () => {
   const send = {
-    send: { id: 's1', subject: 'Your quote', recipients: ['pat@example.test'], attachments: [{ part: 2, name: 'quote.docx', size: 2048, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }, { part: 3, name: 'terms.pdf', size: 4096, type: 'application/octet-stream' }] },
+    send: { id: 's1', subject: 'Your quote', mailbox: 'sales@example.test', recipients: ['Pat Lee <pat@example.test>'], attachments: [{ part: 2, name: 'quote.docx', size: 2048, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }, { part: 3, name: 'terms.pdf', size: 4096, type: 'application/octet-stream' }] },
     body: 'Hello Pat, the quote is attached.',
     bodies: [],
     preview_complete: true,
@@ -262,14 +295,33 @@ describe('an email the task asks about', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
   });
 
-  it('opens a Word attachment in the viewer: name, size and Download from its frozen address', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
-    fireEvent.click(await screen.findByRole('link', { name: /quote\.docx/ }));
-    expect(await screen.findByRole('heading', { name: 'quote.docx' })).toBeTruthy();
-    const links = screen.getAllByRole('link', { name: 'Download' });
-    expect(links.every((a) => a.getAttribute('href') === '/api/v2/email/sends/s1/attachments/2')).toBe(true);
-    // the frozen address only downloads, so nothing offers to open it elsewhere
-    expect(screen.queryByRole('link', { name: 'Open' })).toBeNull();
+  it('opens on the email that waits, as it will go: subject, From, To, its files as cards @approvals', async () => {
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const tabs = await screen.findByRole('navigation', { name: 'Answer the letter pages' });
+    // the email is the first tab, marked as waiting on the person
+    await waitFor(() => expect(tabs.querySelector('.doc-tab')?.textContent).toBe('Email'));
+    expect(tabs.querySelector('.doc-tab .dot')).toBeTruthy();
+    expect(await screen.findByText('sales@example.test')).toBeTruthy();
+    expect(screen.getByText('Pat Lee <pat@example.test>')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /quote\.docx/ }).getAttribute('href')).toBe('/tasks/p1/12/email?part=2');
+  });
+
+  it('draws a Word attachment as its words, with Download from its frozen address @approvals', async () => {
+    const docx = await zipOf(
+      'word/document.xml',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Quote</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Total:</w:t></w:r><w:r><w:t xml:space="preserve"> 40 boxes</w:t></w:r></w:p>' +
+        '</w:body></w:document>',
+    );
+    const before = reply;
+    reply = (url) => (url.includes('/attachments/2') ? { body: docx, type: 'application/octet-stream' } : before(url));
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=2');
+    const sheet = await screen.findByRole('article', { name: 'quote.docx' });
+    expect(within(sheet).getByRole('heading', { name: 'Quote' })).toBeTruthy();
+    expect(within(sheet).getByText('Total:').tagName).toBe('B');
+    expect(sheet.textContent).toContain('Total: 40 boxes');
+    expect(screen.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/email/sends/s1/attachments/2');
   });
 
   it('shows a PDF attachment inline, read and held as a PDF', async () => {

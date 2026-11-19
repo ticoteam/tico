@@ -101,7 +101,7 @@ export function PageTabs({ tabs, label, after }: PageTabsProps) {
           return (
             <TabLink
               key={keyOf(t)}
-              className={on ? 'doc-tab is-on' : 'doc-tab'}
+              className={['doc-tab', on && 'is-on', t.className].filter(Boolean).join(' ')}
               on={on}
               activeProps={NO_ACTIVE}
               to={t.to as LinkProps['to']}

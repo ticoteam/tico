@@ -1,7 +1,8 @@
-import { queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
-import { keys, queryClient, quietRoot, write } from '@/data';
+import { sendMessage } from '@/conversation';
+import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -211,10 +212,15 @@ export const snoozeTask = (id: string, until: string | null) =>
     ? change(id, { snoozed: true }, (idem) => post(`${taskPath(id)}/snooze`, { until }, idem))
     : change(id, { snoozed: false, snooze: null }, (idem) => post(`${taskPath(id)}/unsnooze`, {}, idem));
 
-/** Approve or send back one requirement. The row leaves Flow at once and comes back if the server refuses. */
-export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string): Promise<TaskResult> {
+/** Approve or ask changes on one requirement. The row leaves Flow at once and comes back if the server refuses.
+    `shown` is the hash of what the person was shown (decisionShownQuery): an OK bound to it is given with it; null
+    answers a stage's own OK, which has no grant, with the page version it was asked on (ui/app/decide.ts). */
+export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string, shown?: string | null): Promise<TaskResult & { answer_id?: string }> {
+  const me = queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
   const answered = (t: TaskData): Fields => ({
-    to_leave: (t.to_leave ?? []).map((r) => (r.requirement_id === rid ? { ...r, met: value === 'ok', may: [] } : r)),
+    to_leave: (t.to_leave ?? []).map((r) =>
+      r.requirement_id === rid ? { ...r, met: value === 'ok', may: [], answer: { id: 'pending', value, note: note ?? null, by: me, at: new Date().toISOString() } } : r,
+    ),
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });
   const gone = (cur: unknown): unknown => {
@@ -225,32 +231,64 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     return { ...f, items, count: items.length };
   };
   const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
-  return write<TaskResult>({
+  return write<TaskResult & { answer_id?: string }>({
     key: [...shownIn(id), ...flows],
     optimistic: (cur) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? gone(cur) : patch(id, answered)(cur)),
-    send: (idem) => sendAnswer(id, rid, value, note, idem),
+    send: (idem) => (value === 'ok' && shown ? post(`${taskPath(id)}/asks/${enc(rid)}/ok`, { shown_hash: shown }, idem) : sendAnswer(id, rid, value, note, idem)),
     settle: (cur, answer) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? cur : settled(id)(cur, answer)),
   });
 }
 
-/* An OK bound to what was shown is given with the hash of it (GET /api/v2/oks/{rid}); a stage's own OK has no grant
-   (404) and is answered with the page version it was asked on (ui/app/decide.ts). */
-async function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | undefined, idem: string): Promise<TaskResult> {
+/* A plain answer: a stage's own OK (no grant) with the page version it was asked on, or changes asked with a note. */
+function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | undefined, idem: string): Promise<TaskResult> {
   const held = queryClient.getQueryData<TaskData>(keys.tasks.detail(id));
   const req = held?.to_leave?.find((r) => r.requirement_id === rid);
-  if (value === 'ok') {
-    const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`).catch((e: unknown) => {
-      if (e instanceof ApiError && e.status === 404) return null;
-      throw e;
-    });
-    if (shown) return post(`${taskPath(id)}/asks/${enc(rid)}/ok`, { shown_hash: shown.shown_hash }, idem);
-  }
   const page = req?.approval?.page_version ?? req?.page?.page_version;
   return post(
     `${taskPath(id)}/asks/${enc(rid)}/answer`,
     { value, ...(note && { note }), ...(page && { page_version: page }), ...(req?.approval?.visit_id && { visit_id: req.approval.visit_id }) },
     idem,
   );
+}
+
+/** What the decision binds Approve to (plan/approvals.html): the hash of exactly what was shown. An OK's own preview
+    (GET /api/v2/oks/{rid}) gives it, or an email's (GET /api/v2/email/sends/{sid}, which the Email tab reads too).
+    A stage's own OK has no grant (404): `hash` is null and Approve answers with the page version. `complete` is false
+    when part of what it shows did not load, and Approve stays off. Read again at each new version of the task, so a
+    change while it is open shows. */
+export const decisionShownQuery = (task: string, rid: string, version: number) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(task), 'shown', rid, version] as const,
+    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean }> => {
+      const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      });
+      if (!shown) return { hash: null, complete: true };
+      if (!shown.subject.startsWith('email_send:')) return { hash: shown.shown_hash, complete: true };
+      const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, shown.subject.slice(11)), staleTime: 0 });
+      return { hash: mail.preview_complete ? (mail.shown_hash ?? null) : null, complete: mail.preview_complete && !!mail.shown_hash };
+    },
+    placeholderData: keepPreviousData,
+  });
+
+/** Request changes (plan/approvals.html): the person's words go to the agent as their message in the task's chat, and
+    the request is answered `no` with them, which marks it Changes asked and takes it out of Flow until a new version.
+    The answer goes first: a refused one posts nothing. */
+export async function requestChanges(id: string, rid: string, note: string): Promise<TaskResult> {
+  const r = await answerAsk(id, rid, 'no', note);
+  const chat = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.conversation_id;
+  const me = queryClient.getQueryData(meQuery.queryKey)?.id;
+  if (chat && me) await sendMessage({ id: chat, variant: 'task', text: note, me });
+  return r;
+}
+
+/** Take an answer back (POST /api/v2/answers/{aid}/undo): the task is read again, and Flow with it. */
+export async function undoAnswer(id: string, answer: string): Promise<TaskResult> {
+  const r = await api.post<TaskResult>(`/api/v2/answers/${enc(answer)}/undo`, {});
+  queryClient.setQueryData(keys.tasks.detail(id), settled(id)(queryClient.getQueryData(keys.tasks.detail(id)), r));
+  void queryClient.invalidateQueries({ queryKey: ['flow'] });
+  return r;
 }
 
 /* What the answer cannot patch in place (a relation named by number, a new subtask, a parent): sent, then the task is
@@ -339,7 +377,6 @@ export function dropLink(id: string, link: string) {
 /* ---------------------------------------------------------------- Details' facts and the head's ⋯ (s58) */
 
 import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
-import { meQuery } from '@/data';
 
 /** Someone following a task (backend/task_followers.py). */
 export interface Follower {
@@ -544,10 +581,80 @@ export const emailSendQuery = (task: string, send: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'email', send] as const,
     queryFn: async ({ signal }) => {
-      const r = await api.get<EmailSendDetail>(`/api/v2/email/sends/${enc(send)}`, { signal });
+      // The answer carries `shown_hash` too (backend/email_sending.py send_detail), which the schema leaves out.
+      const r = await api.get<EmailSendDetail & { shown_hash?: string | null }>(`/api/v2/email/sends/${enc(send)}`, { signal });
       return { ...r, files: r.send.attachments as unknown as EmailFile[] };
     },
   });
 
 /** Where one of its frozen files downloads from (GET /api/v2/email/sends/{sid}/attachments/{part}). */
 export const emailFileUrl = (send: string, part: number) => `/api/v2/email/sends/${enc(send)}/attachments/${part}`;
+
+/* ---------------------------------------------------------------- a Word file, read to draw it */
+
+export interface WordRun {
+  text: string;
+  b?: boolean;
+  i?: boolean;
+}
+export interface WordPara {
+  kind: 'h' | 'li' | 'p';
+  runs: WordRun[];
+}
+
+const wordOn = (el: Element | null) => !!el && !/^(0|false|none)$/i.test(el.getAttribute('w:val') ?? '');
+const wordChild = (el: Element | null | undefined, name: string) => (el ? ([...el.children].find((c) => c.localName === name) ?? null) : null);
+
+/** The paragraphs of a Word file's `word/document.xml`, in order (a table's cells read as their paragraphs). */
+export function wordParagraphs(xml: string): WordPara[] {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  return [...doc.getElementsByTagNameNS('*', 'p')].map((p) => {
+    const props = wordChild(p, 'pPr');
+    const style = wordChild(props, 'pStyle')?.getAttribute('w:val') ?? '';
+    const kind = /^(heading|title)/i.test(style) ? 'h' : wordChild(props, 'numPr') ? 'li' : 'p';
+    const runs = [...p.getElementsByTagNameNS('*', 'r')].map((r): WordRun => {
+      const rp = wordChild(r, 'rPr');
+      const text = [...r.children].map((c) => (c.localName === 't' ? (c.textContent ?? '') : c.localName === 'tab' ? '\t' : c.localName === 'br' ? '\n' : '')).join('');
+      return { text, ...(wordOn(wordChild(rp, 'b')) && { b: true }), ...(wordOn(wordChild(rp, 'i')) && { i: true }) };
+    });
+    return { kind, runs: runs.filter((r) => r.text) };
+  });
+}
+
+/** One file out of a zip (a .docx is one): its bytes, unpacked with the browser's own DecompressionStream. */
+async function unzip(zip: ArrayBuffer, name: string): Promise<string | null> {
+  const v = new DataView(zip);
+  let end = zip.byteLength - 22;
+  while (end >= 0 && v.getUint32(end, true) !== 0x06054b50) end--;
+  if (end < 0) return null;
+  let at = v.getUint32(end + 16, true);
+  for (let n = v.getUint16(end + 10, true); n > 0 && v.getUint32(at, true) === 0x02014b50; n--) {
+    const method = v.getUint16(at + 10, true);
+    const size = v.getUint32(at + 20, true);
+    const nameLen = v.getUint16(at + 28, true);
+    const local = v.getUint32(at + 42, true);
+    const here = new TextDecoder().decode(new Uint8Array(zip, at + 46, nameLen));
+    at += 46 + nameLen + v.getUint16(at + 30, true) + v.getUint16(at + 32, true);
+    if (here !== name) continue;
+    const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+    const bytes = new Uint8Array(zip, start, size);
+    if (method === 0) return new TextDecoder().decode(bytes);
+    const out = new Response(bytes).body?.pipeThrough(new DecompressionStream('deflate-raw'));
+    return out ? new Response(out).text() : null;
+  }
+  return null;
+}
+
+/** A Word file's paragraphs (word/document.xml), read once: an email's frozen file never changes. */
+export const wordQuery = (url: string) =>
+  queryOptions({
+    queryKey: ['files', 'word', url] as const,
+    queryFn: async ({ signal }): Promise<WordPara[]> => {
+      const res = await fetch(url, { credentials: 'same-origin', signal });
+      if (!res.ok) throw new ApiError(res.status, `http_${res.status}`, res.statusText, res.status >= 500);
+      const xml = await unzip(await res.arrayBuffer(), 'word/document.xml');
+      if (xml == null) throw new ApiError(0, 'not_word', 'Not a Word file');
+      return wordParagraphs(xml);
+    },
+    staleTime: Infinity,
+  });

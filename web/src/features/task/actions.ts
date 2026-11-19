@@ -3,6 +3,8 @@ import { defineAction, s } from '@/actions';
 import {
   addSubtask,
   answerAsk,
+  requestChanges,
+  undoAnswer,
   askSomeone,
   giveTask,
   linkTask,
@@ -192,28 +194,40 @@ export const removeLink = defineAction({
   target: (i) => ({ kind: 'task-links', id: i.task }),
 });
 
-/* An approval is the person's own: Tico never presses it for them. */
-const answer = s.object({ task, requirement: s.string({ min: 1, max: 100 }) });
-
+/* An approval is the person's own: Tico never presses it for them. Approve carries the hash of what was shown
+   (`shown`, from decisionShownQuery; null for a stage's own OK, which has no grant). */
 export const approve = defineAction({
   id: 'task.approve',
   title: 'Approve',
   kind: 'change',
-  input: answer,
+  input: s.object({ task, requirement: s.string({ min: 1, max: 100 }), shown: s.nullable(s.string({ min: 1, max: 200 })) }),
   tico: false,
-  run: (_ctx, i) => said(answerAsk(i.task, i.requirement, 'ok')),
+  run: (_ctx, i) => said(answerAsk(i.task, i.requirement, 'ok', undefined, i.shown)),
   did: () => 'Approved',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
 });
 
-export const sendBack = defineAction({
-  id: 'task.sendBack',
-  title: 'Send back',
+/* The person's words to the agent, in its chat, and the request marked Changes asked: their own press. */
+export const askChanges = defineAction({
+  id: 'task.requestChanges',
+  title: 'Request changes',
   kind: 'change',
   input: s.object({ task, requirement: s.string({ min: 1, max: 100 }), note: s.string({ min: 1, max: 4000 }) }),
   tico: false,
-  run: (_ctx, i) => said(answerAsk(i.task, i.requirement, 'no', i.note.trim())),
-  did: () => 'Sent back',
+  run: (_ctx, i) => said(requestChanges(i.task, i.requirement, i.note.trim())),
+  did: () => 'Asked for changes',
+  target: (i) => ({ kind: 'task-answer', id: i.task }),
+});
+
+/* Taking back an approval of what was shown is the person's own click too (the server refuses anyone acting for them). */
+export const undoApproval = defineAction({
+  id: 'task.undoAnswer',
+  title: 'Take an answer back',
+  kind: 'change',
+  input: s.object({ task, answer: s.string({ min: 1, max: 100 }) }),
+  tico: false,
+  run: (_ctx, i) => said(undoAnswer(i.task, i.answer)),
+  did: () => 'Undone',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
 });
 

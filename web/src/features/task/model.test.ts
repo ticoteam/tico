@@ -9,15 +9,17 @@ const req = (id: string, more: Partial<TaskRequirement> = {}) =>
 const task = (more: Partial<TaskData> = {}) => ({ id: 't1', number: 12, pipeline_id: 'p1', documents: [], to_leave: [], ...more }) as TaskData;
 
 describe('the open task', () => {
-  it('lists its pages with their marks, then Details', () => {
+  it('lists what waits on the person first, then its other pages with their marks, the chat, then Details @approvals', () => {
     const t = task({
+      conversation_id: 'c7',
       documents: [doc('f1', 'Spec', { approved_version: 2 }), doc('f2', 'QA report'), doc('f3', 'Notes', { approved_version: 1 })],
       to_leave: [req('r1', { approval: { file_id: 'f2' } as TaskRequirement['approval'] })],
     });
     expect(tabsOf(t).map((x) => [x.slug, x.mark])).toEqual([
-      ['spec', 'ok'],
       ['qa-report', 'ask'],
+      ['spec', 'ok'],
       ['notes', 'none'],
+      ['chat', undefined],
       ['details', undefined],
     ]);
   });

@@ -6,9 +6,14 @@ import { Icon } from '@/kit/Icon';
 import { PageBones } from './FileView';
 import { Go } from './parts';
 import { emailFileUrl, emailSendQuery } from './queries';
+import { isWord, WordPages } from './Word';
 
-/* An email the task asks about, as it will be sent (ui/app/email-preview.ts): its subject, who it goes to, its words
-   and its files. A file opens in the file viewer in its place; the address keeps which (`part`). */
+/* An email the task asks about, exactly as it will go (plan/approvals.html, "Email"): the envelope in Tico's look (its
+   subject, From, To and its files as cards), then the message on paper. A file opens in this same sheet in its
+   place, and the address keeps which (`part`); a Word file is drawn as its pages, with Download beside it. */
+
+/** "DOCX", "PDF": the type badge on a file's card. */
+const extOf = (name: string) => /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]?.toUpperCase() ?? 'FILE';
 
 export function Email({ task, send, part, at }: { task: string; send: string; part?: number; at: { to: string; search: { tab?: string } } }) {
   const q = useQuery(emailSendQuery(task, send));
@@ -26,7 +31,7 @@ export function Email({ task, send, part, at }: { task: string; send: string; pa
     return (
       <>
         <div className="fv-bar">
-          <Go to={at.to} search={at.search} className="ib ib-sm" aria-label="Back to Email" title="Back to Email">
+          <Go to={at.to} search={at.search} className="ib ib-sm" aria-label="Back to the email" title="Back to the email">
             <Icon name="chevron" className="flip" />
           </Go>
           <b>{f.name}</b>
@@ -36,26 +41,52 @@ export function Email({ task, send, part, at }: { task: string; send: string; pa
             <Icon name="download" />
           </a>
         </div>
-        <div className="frame fv">
-          <FileFrame mime={f.type ?? ''} title={f.name} url={url} name={f.name} size={f.size} held />
-        </div>
+        {isWord(f.name, f.type) ? (
+          <WordPages url={url} name={f.name} />
+        ) : (
+          <div className="frame fv">
+            <FileFrame mime={f.type ?? ''} title={f.name} url={url} name={f.name} size={f.size} held />
+          </div>
+        )}
       </>
     );
   }
   return (
-    <div className="frame fv">
-      <article className="tv-mail" aria-label="Email">
-        <h2>{s.subject}</h2>
-        <p className="tv-mail-to">To {s.recipients.join(', ')}</p>
-        <div className="tv-mail-body">{body}</div>
-        {files.map((x) => (
-          <Go key={x.part} to={at.to} search={{ ...at.search, part: x.part }} className="file">
-            <Icon name="file" />
-            <span>{x.name}</span>
-            <em>{fileSize(x.size)}</em>
-          </Go>
-        ))}
-      </article>
+    <div className="ap-scroll">
+      <div className="ap-env">
+        <h2 className="ap-subj">{s.subject}</h2>
+        {/* The send keeps To and Cc as one list (backend/email_sending.py `recipients`): Cc is not apart yet. */}
+        <dl className="ap-hdr">
+          {s.mailbox.includes('@') && (
+            <>
+              <dt>From</dt>
+              <dd>{s.mailbox}</dd>
+            </>
+          )}
+          <dt>To</dt>
+          <dd>{s.recipients.join(', ')}</dd>
+        </dl>
+        {files.length > 0 && (
+          <div className="ap-atts">
+            {files.map((x) => (
+              <Go key={x.part} to={at.to} search={{ ...at.search, part: x.part }} className="ap-att" title={`Open ${x.name}`}>
+                <Icon name="file" />
+                <span>
+                  <b>{x.name}</b>
+                  <small>
+                    {extOf(x.name)} · {fileSize(x.size)}
+                  </small>
+                </span>
+              </Go>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="ap-desk">
+        <article className="ap-paper ap-mail" aria-label="Email">
+          {body}
+        </article>
+      </div>
     </div>
   );
 }
