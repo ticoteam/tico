@@ -184,7 +184,7 @@ function DocLine({ d, archived }: { d: DocRow; archived: boolean }) {
 /** A search hit: a team doc as its list row; an outside doc opens here, read as it was; a linked page where it lives. */
 function HitLine({ hit, row }: { hit: DocHit; row: DocRow | undefined }) {
   if (hit.type === 'internal' && row) return <DocLine d={row} archived={false} />;
-  const href = hit.type === 'internal' ? docHref(hit.id) : hit.type === 'external' ? `/library/ext:${encodeURIComponent(hit.id)}` : hit.url;
+  const href = hit.type === 'internal' ? docHref(hit.id) : hit.type === 'external' ? `/library/ext:${encodeURIComponent(hit.id)}${hit.commit ? `?revision=${encodeURIComponent(hit.commit)}` : ''}` : hit.url;
   const under =
     hit.type === 'external' ? hit.source_title : hit.type === 'internal' ? folder(hit.path).filter(Boolean).join(' / ') : hostOf(hit.url);
   return (
@@ -307,7 +307,7 @@ function SourcePanel({ id }: { id: string }) {
       {src.isError && <Empty title="This source did not load" icon="alert" />}
       {src.data && !src.data.documents.length && <Empty title="No documents yet" />}
       {src.data?.documents.map((d) => (
-        <Link key={d.id} className="row lrow frow" to="/library/$doc" params={{ doc: `ext:${d.id}` }} title={d.title}>
+        <Link key={d.id} className="row lrow frow" to="/library/$doc" params={{ doc: `ext:${d.id}` }} search={d.commit ? { revision: d.commit } : {}} title={d.title}>
           <span className="lead">
             <Icon name="file" />
           </span>

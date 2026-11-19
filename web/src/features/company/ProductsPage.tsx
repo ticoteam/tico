@@ -5,14 +5,16 @@ import { useActors } from '@/data';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { FoldButton } from '@/kit/SectionHead';
 import { Table, Th, Tr } from '@/kit/Table';
 import { List, RecordPanel, SidePanel } from '@/pagekinds';
 import type { Product } from '@/api/schema';
 import type { PRODUCT_FIELDS } from './actions';
-import { Face, PanelLink, useDo } from './parts';
-import { productsQuery } from './queries';
+import { Face, Go, PanelLink, useDo } from './parts';
+import { productMattersQuery, productsQuery, repositoriesQuery, type ProductListField } from './queries';
 import './company.css';
 
 /* Products (pages/10-records/records.js productsPage): a List whose one table names every product; a row opens its
@@ -108,7 +110,19 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
 function ProductRecord({ p }: { p: Product }) {
   const close = useDo('company.closePanel');
   const update = useDo('products.update');
+  const rename = useDo('products.rename');
+  const remove = useDo('products.removeFrom');
+  const [naming, setNaming] = useState<string | null>(null);
   const actors = useActors();
+  const matters = useQuery(productMattersQuery(p.key)).data ?? [];
+  const off = (field: ProductListField, value: string, name: string) => (
+    <IconButton icon="close" label={`Remove ${name}`} size="sm" quiet onClick={() => void remove.run({ product: p.key, field, value })} />
+  );
+  const saveName = async () => {
+    const name = naming?.trim();
+    setNaming(null);
+    if (name && name !== p.name) await rename.run({ product: p.key, name });
+  };
   const owners = actors.map((a) => ({ value: a.id, label: a.name, meta: a.kind === 'agent' ? 'Agent' : undefined }));
   const set = (field: Field) => (value: string) => void update.run({ product: p.key, field, value });
   const pick = (field: keyof typeof OPTIONS, label: string) => (
@@ -124,8 +138,23 @@ function ProductRecord({ p }: { p: Product }) {
       title={p.name}
       target={`product:${p.key}`}
       onClose={() => void close.run({})}
+      actions={
+        <Menu trigger={<IconButton icon="more" label="More" quiet />}>
+          <MenuItem label="Rename" onSelect={() => setNaming(p.name)} />
+        </Menu>
+      }
       facts={
         <div className="rec-flds">
+          {naming != null && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void saveName();
+              }}
+            >
+              <Field label="Name" labelHidden value={naming} onValueChange={setNaming} autoFocus />
+            </form>
+          )}
           {pick('kind', 'Kind')}
           {pick('status', 'Status')}
           {pick('tax_kind', 'Tax kind')}
@@ -139,31 +168,47 @@ function ProductRecord({ p }: { p: Product }) {
       }
       sections={
         <>
-          <RecSec name="Agreement" n={p.agreements.length}>
+          <RecSec name="Agreement" n={p.agreements.length} add={{ product: p.key, field: 'agreements', label: 'Add an agreement' }}>
             <div className="chips">
               {p.agreements.map((a) => (
                 <span key={a.id} className="chip-file">
-                  <Icon name="file" />
-                  <span>{a.file?.title ?? a.name}</span>
+                  {a.file ? (
+                    <a href={a.file.page ? `/library/${encodeURIComponent(a.file.id)}` : `/api/v2/files/${encodeURIComponent(a.file.id)}`} {...(!a.file.page && { target: '_blank', rel: 'noopener' })}>
+                      <Icon name="file" />
+                      <span>{a.file.title || a.name}</span>
+                    </a>
+                  ) : (
+                    <>
+                      <Icon name="file" />
+                      <span>{a.name}</span>
+                    </>
+                  )}
+                  {off('agreements', a.id, a.name)}
                 </span>
               ))}
             </div>
           </RecSec>
-          <RecSec name="Code" n={p.repositories.length}>
+          <RecSec name="Code" n={p.repositories.length} add={{ product: p.key, field: 'repositories', label: 'Add a repository', have: p.repositories }}>
             {p.repositories.map((r) => (
               <div key={r} className="row lk">
                 <Icon name="link" />
-                <span className="row-title">{r}</span>
+                <a className="row-title" href={`https://github.com/${r}`} target="_blank" rel="noopener noreferrer">
+                  {r}
+                </a>
+                {off('repositories', r, r)}
               </div>
             ))}
           </RecSec>
-          <RecSec name="Depends on" n={p.depends_on.length}>
+          <RecSec name="Depends on" n={p.depends_on.length} add={{ product: p.key, field: 'depends_on', label: 'Add a vendor' }}>
             {p.depends_on.map((d) => (
               <div key={d.id} className="row lk">
                 <span className="org-mark" aria-hidden="true">
                   {d.name.slice(0, 2).toUpperCase()}
                 </span>
-                <span className="row-title">{d.name}</span>
+                <Go to="/library/contacts" search={{ contact: d.id }} className="row-title">
+                  {d.name}
+                </Go>
+                {off('depends_on', d.id, d.name)}
               </div>
             ))}
           </RecSec>
@@ -175,24 +220,78 @@ function ProductRecord({ p }: { p: Product }) {
               </Link>
             ))}
           </RecSec>
+          <RecSec name="Matters" n={matters.length}>
+            {matters.map((m) => (
+              <Go
+                key={m.task.id}
+                to={m.task.pipeline_id && m.task.number != null ? `/tasks/${encodeURIComponent(m.task.pipeline_id)}/${m.task.number}` : `/task/${encodeURIComponent(m.task.id)}`}
+                className={m.task.status === 'open' ? 'row lk' : 'row lk is-quiet'}
+              >
+                <Icon name="tasks" />
+                <span className="row-title">{m.task.title || m.task.label || m.task.id}</span>
+                <span className="lk-meta">{m.task.status === 'open' ? (m.task.stage ?? '') : 'Closed'}</span>
+              </Go>
+            ))}
+          </RecSec>
         </>
       }
     />
   );
 }
 
-/** A record's section: its name, a count, and its rows; folds. An empty one is left out. */
-function RecSec({ name, n, children }: { name: string; n: number; children: ReactNode }) {
+type Adds = { product: string; field: ProductListField; label: string; have?: readonly string[] };
+
+/** The quiet + of a list: a field under its name that adds one in place (a pick of the team's repositories for Code,
+    a name otherwise; a new name makes the record). */
+function AddTo({ add, onDone }: { add: Adds; onDone: () => void }) {
+  const run = useDo('products.addTo');
+  const repos = useQuery({ ...repositoriesQuery, enabled: add.field === 'repositories' });
+  const [value, setValue] = useState('');
+  const free = (repos.data ?? []).filter((r) => !add.have?.some((h) => h.toLowerCase() === r.toLowerCase()));
+  const save = async () => {
+    if (value.trim() && (await run.run({ product: add.product, field: add.field, value: value.trim() }))) onDone();
+  };
+  const label = add.field === 'repositories' ? 'Repository' : add.field === 'agreements' ? 'Agreement' : 'Vendor';
+  return (
+    <form
+      className="went"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      {add.field === 'repositories' && free.length ? (
+        <Select label={label} labelHidden placeholder={label} options={free.map((r) => ({ value: r, label: r }))} value={value || null} onValueChange={setValue} />
+      ) : (
+        <Field label={label} labelHidden placeholder={add.field === 'repositories' ? 'owner/name' : label} value={value} onValueChange={setValue} autoFocus wide={false} />
+      )}
+      <Button type="submit" variant="primary" busy={run.pending}>
+        Add
+      </Button>
+      <Button variant="quiet" onClick={onDone}>
+        Cancel
+      </Button>
+    </form>
+  );
+}
+
+/** A record's section: its name, a count, its rows and, for a list one adds to, the quiet +; folds. An empty one is
+    left out unless it takes additions. */
+function RecSec({ name, n, add, children }: { name: string; n: number; add?: Adds; children: ReactNode }) {
   const [open, setOpen] = useState(true);
-  if (!n) return null;
+  const [adding, setAdding] = useState(false);
+  if (!n && !add) return null;
   return (
     <section className={open ? 'rail-sec' : 'rail-sec is-shut'} aria-label={name}>
       <div className="rec-head">
         <h3 className="sec-name">
           <FoldButton name={name} count={n} open={open} onToggle={() => setOpen(!open)} />
         </h3>
+        <span className="grow" />
+        {add && <IconButton icon="plus" label={add.label} size="sm" quiet onClick={() => setAdding(true)} />}
       </div>
-      {open && children}
+      {add && adding && <AddTo add={add} onDone={() => setAdding(false)} />}
+      {open && n > 0 && children}
     </section>
   );
 }

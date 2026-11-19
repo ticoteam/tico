@@ -89,9 +89,10 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
 }
 
 function OrgTeam({ team, subs, open: picked }: { team: Team; subs: Team[]; open: string | null }) {
-  const [open, setOpen] = useState(true);
   const lead = leadOf(team);
   const mates = members(team).filter((m) => m !== lead);
+  // The built-in agents stay folded until someone opens them (redesign-org.ts), unless one of them is the open sheet.
+  const [open, setOpen] = useState(team.id !== BUILT_IN || (!!picked && members(team).includes(picked)));
   const n = mates.length + subs.reduce((a, s) => a + members(s).length, 0);
   return (
     <section className="oc-team" role="treeitem" aria-expanded={open} aria-label={team.name}>

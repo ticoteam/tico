@@ -16,9 +16,9 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Document, List, PageMore, type PageState } from '@/pagekinds';
+import { Document, FilterRow, List, PageMore, Section, type PageState } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
-import { MenuItem } from '@/kit/Menu';
+import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
 import { Face, Find, OwnerButton, press, when, Who } from './parts';
@@ -28,10 +28,16 @@ import {
   proposalQuery,
   proposalsQuery,
   skillQuery,
-  skillRecentQuery,
   skillsQuery,
   skillTextQuery,
   skillUsageQuery,
+  functionGroup,
+  skillDetailUsageQuery,
+  skillsElsewhereQuery,
+  skillSuggestionsQuery,
+  SKILL_FUNCTIONS,
+  type SkillCoverage,
+  type SkillSuggestion,
   type Proposal,
   type SkillActor,
   type SkillFile,
@@ -96,8 +102,11 @@ function SkillsList({ search }: { search: SkillsSearch }) {
   const used = new Map((usage.data ?? []).map((u) => [u.name, u]));
   const byName = new Map((skills.data ?? []).map((s) => [s.name, s]));
   const pending = (asks.data ?? []).filter(match);
-  const rows = (skills.data ?? []).filter(match);
+  const found = (skills.data ?? []).filter(match);
+  const fn = search.function;
+  const rows = fn ? found.filter((s) => inFunction(s, fn)) : found;
   const [making, setMaking] = useState(false);
+  const decider = useDecider();
 
   let state: PageState = 'ready';
   if (skills.isError) state = 'fault';
@@ -109,9 +118,11 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       title="Skills"
       path="/library/skills"
       className="lib"
-      search={<Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />}
+      search={<Find label="Search skills" value={search.q} onFind={(q) => void press(fn ? 'skills.filter' : 'skills.list', fn ? { q, function: fn } : { q })} />}
+      filter={fn && <FilterRow filters={[{ label: fnLabel(fn), onClear: () => void press('skills.filter', { q: search.q }) }]} />}
       actions={
         <>
+          <FunctionFilter rows={found} on={fn} q={search.q} />
           <OwnerButton page="skills" phone />
           <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
             New skill
@@ -146,11 +157,117 @@ function SkillsList({ search }: { search: SkillsSearch }) {
                 <SkillLine key={s.name} s={s} use={used.get(s.name)} />
               ))}
             </section>
+            {decider && <ForAdmins />}
           </>
         ) : (
           <Empty title="Nothing matches" />
         )
       }
+    />
+  );
+}
+
+/* ---------------------------------------------------------------- the function filter (old skills.ts skillsFilterMenu) */
+
+/** A row's job function as SKILL.md names it (backend/skills.py skills_list). */
+const fnOf = (s: SkillRow) => (s as SkillRow & { function?: string | null }).function;
+const fnLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
+/** A known function or Other by the row's group; any other value only the rows that name it (as the API does). */
+function inFunction(s: SkillRow, fn: string) {
+  if (fn === 'other' || (SKILL_FUNCTIONS as readonly string[]).includes(fn)) return functionGroup(fnOf(s)) === fn;
+  return (fnOf(s) ?? '').trim().toLowerCase() === fn;
+}
+
+/** The head's Filter: All, then each function the searched rows have, with its count. Choosing it again takes it off. */
+function FunctionFilter({ rows, on, q }: { rows: SkillRow[]; on: string | undefined; q: string | undefined }) {
+  const counts = new Map<string, number>();
+  for (const s of rows) counts.set(functionGroup(fnOf(s)), (counts.get(functionGroup(fnOf(s))) ?? 0) + 1);
+  const shown = [...SKILL_FUNCTIONS, 'other'].filter((f) => counts.get(f) || f === on);
+  const pick = (f: string | undefined) => void press('skills.filter', { function: f, q }, 'Not filtered');
+  return (
+    <Menu trigger={<IconButton icon="filter" label="Filter" on={!!on} data-target="skills:filter" data-phone />}>
+      <MenuItem label="All" on={!on} onSelect={() => pick(undefined)} />
+      {shown.map((f) => (
+        <MenuItem key={f} label={fnLabel(f)} meta={String(counts.get(f) ?? 0)} on={on === f} onSelect={() => pick(on === f ? undefined : f)} />
+      ))}
+    </Menu>
+  );
+}
+
+/* ---------------------------------------------------------------- an admin's Suggestions and Not in directory */
+
+/** Below the list, for an owner or admin (old skills.ts skillsIdeasHTML, skillsElsewhereHTML). */
+function ForAdmins() {
+  const ideas = useQuery(skillSuggestionsQuery).data ?? [];
+  const elsewhere = useQuery(skillsElsewhereQuery).data ?? [];
+  return (
+    <>
+      {ideas.length > 0 && (
+        <Section name="Suggestions" count={ideas.length}>
+          {ideas.map((x) => (
+            <Idea key={x.id} x={x} />
+          ))}
+        </Section>
+      )}
+      {elsewhere.length > 0 && (
+        <Section name="Not in directory" count={elsewhere.length}>
+          {elsewhere.map((r) => (
+            <Row key={r.name} className="lrow skillrow" title={r.name} target={`skill-elsewhere:${r.name}`}>
+              <span className="lead" />
+              <span className="skill-name">
+                <span className="row-title">{r.name}</span>
+              </span>
+              <span className="row-ctx" />
+              <Stack on={r.bots} total={r.bots_count} />
+              <span className="row-fig">{r.uses}</span>
+              <span className="row-age" />
+            </Row>
+          ))}
+        </Section>
+      )}
+    </>
+  );
+}
+
+/** One suggestion: Remove (an install nobody used in 30 days) or Ask to submit (a skill agents run that the directory
+    lacks), and Dismiss, in its ⋯. */
+function Idea({ x }: { x: SkillSuggestion }) {
+  const [removing, setRemoving] = useState(false);
+  const who = x.target?.name ?? 'Teammate';
+  const agent = x.target?.type === 'Bot' ? x.target.id : null;
+  return (
+    <Row className="lrow skillrow" title={x.name} target={`suggestion:${x.id}`}>
+      <span className="lead" />
+      <span className="skill-name">
+        <span className="row-title">{x.name}</span>
+        <span className="skill-does">{x.kind === 'remove' ? `Not used in 30 days by ${who}` : `Not in the directory, run by ${who}`}</span>
+      </span>
+      <span className="row-ctx" />
+      <span className="avs">{x.target && <Face actor={actorOf(x.target)} name={x.target.name} />}</span>
+      <span className="row-fig">{x.kind === 'promote' ? x.uses_30d : ''}</span>
+      <Menu trigger={<IconButton icon="more" label={`More on ${x.name}`} size="sm" />}>
+        {x.kind === 'remove' ? (
+          <MenuItem label="Remove" onSelect={() => setRemoving(true)} />
+        ) : (
+          agent && <MenuItem label="Ask to submit" onSelect={() => void press('skills.askSubmit', { suggestion: x.id, skill: x.name, agent }, 'Not asked')} />
+        )}
+        <MenuItem label="Dismiss" onSelect={() => void press('skills.dismissSuggestion', { suggestion: x.id }, 'Not dismissed')} />
+      </Menu>
+      {removing && <RemoveDialog who={who} id="skills.removeUnused" input={{ suggestion: x.id }} onClose={() => setRemoving(false)} />}
+    </Row>
+  );
+}
+
+/** Taking a skill off someone: it leaves on their next session. */
+function RemoveDialog({ who, id, input, onClose }: { who: string; id: string; input: unknown; onClose: () => void }) {
+  const [busy, go] = useGo(onClose);
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Remove from ${who}`}
+      description="It leaves on the next session."
+      actions={<Foot onClose={onClose} label="Remove" busy={busy} ready onGo={() => void go(id, input, 'Not removed')} />}
     />
   );
 }
@@ -264,7 +381,11 @@ function SkillPage({ name }: { name: string }) {
   const latest = d.data?.skill.latest;
   const text = useQuery(skillTextQuery(name, latest?.number ?? 0));
   const usage = useQuery(skillUsageQuery);
-  const recent = useQuery(skillRecentQuery(name));
+  const detail = useQuery(skillDetailUsageQuery(name));
+  const recent = detail.data?.recent ?? [];
+  const coverage = new Map<string, SkillCoverage>((detail.data?.installs ?? []).map((i) => [i.id, i]));
+  const removable = (d.data?.installs ?? []).filter((i) => coverage.get(i.id)?.removable);
+  const [removing, setRemoving] = useState<{ id: string; who: string } | null>(null);
   const asks = useQuery(proposalsQuery);
   const ask = asks.data?.find((p) => p.name === name);
   const use = usage.data?.find((u) => u.name === name);
@@ -287,7 +408,21 @@ function SkillPage({ name }: { name: string }) {
             </Button>
           )}
           {installing && <InstallDialog name={name} versions={d.data?.versions ?? []} onClose={() => setInstalling(false)} />}
+          {removing && (
+            <RemoveDialog who={removing.who} id="skills.removeInstall" input={{ skill: name, install: removing.id }} onClose={() => setRemoving(null)} />
+          )}
         </>
+      }
+      more={
+        <PageMore target={`skill-more:${name}`}>
+          {removable.length > 0 && (
+            <MenuSub label="Remove from">
+              {removable.map((i) => (
+                <MenuItem key={i.id} label={i.target.name ?? 'Teammate'} onSelect={() => setRemoving({ id: i.id, who: i.target.name ?? 'Teammate' })} />
+              ))}
+            </MenuSub>
+          )}
+        </PageMore>
       }
       state={stateOf(d)}
       onRetry={() => void d.refetch()}
@@ -329,15 +464,15 @@ function SkillPage({ name }: { name: string }) {
                   <span key={i.id} className="sp-who">
                     <Face actor={actorOf(i.target)} name={i.target.name} />
                     <span>{i.target.name ?? 'Teammate'}</span>
-                    <em />
+                    <em>{coverage.get(i.id)?.uses_30d ?? ''}</em>
                   </span>
                 ))}
               </>
             )}
-            {(recent.data?.length ?? 0) > 0 && (
+            {recent.length > 0 && (
               <>
                 <h3 className="sp-h t-label">Recent runs</h3>
-                {recent.data?.map((r, n) => {
+                {recent.map((r, n) => {
                   const href = r.task_id ? `/task/${r.task_id}` : r.thread_id ? `/threads/${r.thread_id}` : undefined;
                   const inner = (
                     <>
@@ -443,6 +578,11 @@ function ProposalPage({ id }: { id: string }) {
   const risky = s && (s.risk === 'high' || s.verdict === 'unsafe');
   const skill = skills.data?.find((k) => k.name === p?.name);
   const open = p?.status === 'pending';
+  const me = useQuery(meQuery).data;
+  const mine = !!p && !!me && proposer(p) === me.id;
+  // What the server says to do about a screening that did not run (backend/skills.py SCREEN_REASONS).
+  const action = (p as (Proposal & { screen_action?: string | null }) | undefined)?.screen_action;
+  const screening = !s ? (p?.screen_status === 'not_screened' ? 'Not screened' : 'Not done yet') : risky ? 'High risk' : 'Nothing risky';
 
   const approve = async (acknowledged = false) => {
     setBusy(true);
@@ -463,6 +603,14 @@ function ProposalPage({ id }: { id: string }) {
       crumb={CRUMB}
       className="lib"
       actions={<OwnerButton page="skills" phone />}
+      more={
+        <PageMore target={`proposal-more:${id}`}>
+          {open && (decider || mine) && (
+            <MenuItem label="Screen again" onSelect={() => void press('skills.rescreen', { proposal: id }, 'Not sent to screening').then((ok) => ok && toast({ text: 'Screening' }))} />
+          )}
+          {open && mine && <MenuItem label="Withdraw" onSelect={() => void press('skills.withdraw', { proposal: id }, 'Not withdrawn')} />}
+        </PageMore>
+      }
       state={stateOf(d)}
       onRetry={() => void d.refetch()}
       noAccess={{ text: 'Only an admin or the one who proposed it can read it.' }}
@@ -499,8 +647,20 @@ function ProposalPage({ id }: { id: string }) {
               <LabelValue label="From">{from && <Who actor={from} className="fact-who" />}</LabelValue>
               <LabelValue label="Sent">{when(p.created_at)}</LabelValue>
               {p.base_version ? <LabelValue label="Changes">{`${added} added, ${cut} removed`}</LabelValue> : null}
-              <LabelValue label="Screening">{!s ? 'Not done yet' : risky ? 'High risk' : 'Nothing risky'}</LabelValue>
+              {open ? <LabelValue label="Screening">{screening}</LabelValue> : <LabelValue label="Status">{STATUS[p.status] ?? p.status}</LabelValue>}
             </Facts>
+            {p.decline_reason && (
+              <>
+                <h3 className="sp-h t-label">What to change</h3>
+                <p className="sp-why">{p.decline_reason}</p>
+              </>
+            )}
+            {open && !s && p.screen_status === 'not_screened' && action && (
+              <>
+                <h3 className="sp-h t-label">Screening</h3>
+                <p className="sp-why">{action}</p>
+              </>
+            )}
             {p.note && (
               <>
                 <h3 className="sp-h t-label">Why</h3>
@@ -545,6 +705,9 @@ function ProposalPage({ id }: { id: string }) {
     />
   );
 }
+
+/** A decided proposal's state, in the words the page uses (declining is Send back). */
+const STATUS: Record<string, string> = { approved: 'Approved', declined: 'Sent back', withdrawn: 'Withdrawn' };
 
 function SendBack({ id, onClose }: { id: string; onClose: () => void }) {
   const [reason, setReason] = useState('');

@@ -83,6 +83,7 @@ import {
 import type { PolicyUpdate, ToolIndex } from '@/api/schema';
 import { viewing } from './viewing';
 import { startResearch } from './queries';
+import { askToSubmit, closeSuggestion, removeInstall, rescreenProposal, withdrawProposal } from './queries';
 import {
   addMailboxAccess,
   checkInboxes,
@@ -482,7 +483,7 @@ export const skillsDecline = defineAction({
   id: 'skills.decline',
   title: 'Send back a skill change',
   kind: 'change',
-  tico: false,
+  // Open to Tico: sending a change back only keeps the skill as it is (the server still asks for an admin).
   input: s.object({ proposal: id, reason: s.string({ min: 1, max: 300 }) }),
   run: async ({ router }, i) => {
     await declineProposal(i.proposal, i.reason.trim());
@@ -872,12 +873,11 @@ export const toolsAddTicoAddress = defineAction({
   target: () => ({ kind: 'page', id: '/library/tools' }),
 });
 
-/** A monthly number has a price: asking for one is the person's own. */
+/** Asking buys nothing: a price comes back, and accepting it (`tools.acceptQuote`) is the person's own. */
 export const toolsRequestNumber = defineAction({
   id: 'tools.requestNumber',
   title: 'Ask for a US mobile number',
   kind: 'change',
-  tico: false,
   input: s.object({ name: s.string({ min: 1, max: 80 }) }),
   run: (_ctx, i) => requestNumber(i.name.trim()),
   did: () => 'Asked for a number',
@@ -938,6 +938,8 @@ export const toolsPauseWebhook = defineAction({
   title: 'Pause or restart an outgoing webhook',
   kind: 'change',
   input: s.object({ webhook: id, on: s.boolean() }),
+  // Sending again sends company events outside again (as `tools.resumeSlack`): Tico may pause, never restart.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.on,
   run: (_ctx, i) => setWebhookOn(i.webhook, i.on),
   did: (i) => (i.on ? 'Sending again' : 'Paused'),
   target: (i) => ({ kind: 'tool', id: `webhook:${i.webhook}` }),
@@ -1607,4 +1609,263 @@ export const toolsResumeSlack = defineAction({
   run: (_ctx, i) => resumeSlack(i.link),
   did: () => 'Checked',
   target: () => ({ kind: 'tool', id: 'slack' }),
+});
+
+// ---------------------------------------------------------------- tier-2 gaps: skills (s781 s782 s783 s804)
+
+/* All open to Tico: each one only narrows the list, takes a skill off (installing it again puts it back), ends or
+   re-screens a proposal, or answers the maintenance run's suggestion. The server checks the rights of each. */
+
+/** Narrow Skills to one job function (`other`: any other or none) and the words searched; nothing given shows them all. */
+export const skillsFilter = defineAction({
+  id: 'skills.filter',
+  title: 'Filter skills by function',
+  kind: 'view',
+  input: s.object({ function: s.optional(text(80)), q: s.optional(text(200)) }),
+  run: ({ router }, i) => go(router, '/library/skills', { function: i.function?.toLowerCase(), q: i.q }, on(router, '/library/skills')),
+  target: () => ({ kind: 'page', id: '/library/skills' }),
+});
+
+export const skillsRemoveInstall = defineAction({
+  id: 'skills.removeInstall',
+  title: 'Take a skill off a teammate',
+  kind: 'change',
+  input: s.object({ skill: s.string({ min: 1, max: 120 }), install: id }),
+  run: (_ctx, i) => removeInstall(i.skill, i.install),
+  did: () => 'Removed',
+  target: (i) => ({ kind: 'page', id: `/library/skills?skill=${i.skill}` }),
+});
+
+/** The proposer's own: it leaves the list; proposing it again starts a new one. */
+export const skillsWithdraw = defineAction({
+  id: 'skills.withdraw',
+  title: 'Withdraw a skill change',
+  kind: 'change',
+  input: s.object({ proposal: id }),
+  run: async ({ router }, i) => {
+    await withdrawProposal(i.proposal);
+    await go(router, '/library/skills', {}, true);
+  },
+  did: () => 'Withdrawn',
+  target: () => ({ kind: 'page', id: '/library/skills' }),
+});
+
+export const skillsRescreen = defineAction({
+  id: 'skills.rescreen',
+  title: 'Screen a skill change again',
+  kind: 'change',
+  input: s.object({ proposal: id }),
+  run: (_ctx, i) => rescreenProposal(i.proposal),
+  did: () => 'Screening',
+  target: (i) => ({ kind: 'proposal', id: i.proposal }),
+});
+
+/** An install nobody used in 30 days, taken off with the rights of uninstalling it. */
+export const skillsRemoveUnused = defineAction({
+  id: 'skills.removeUnused',
+  title: 'Take off a skill nobody uses',
+  kind: 'change',
+  input: s.object({ suggestion: id }),
+  run: (_ctx, i) => closeSuggestion(i.suggestion, 'remove'),
+  did: () => 'Removed',
+  target: () => ({ kind: 'page', id: '/library/skills' }),
+});
+
+export const skillsAskSubmit = defineAction({
+  id: 'skills.askSubmit',
+  title: 'Ask an agent to submit a skill',
+  kind: 'change',
+  input: s.object({ suggestion: id, skill: s.string({ min: 1, max: 120 }), agent: id }),
+  run: (_ctx, i) => askToSubmit(i.suggestion, i.skill, i.agent),
+  did: () => 'Asked',
+  target: () => ({ kind: 'page', id: '/library/skills' }),
+});
+
+/** It comes back only after 30 days, if it still holds. */
+export const skillsDismissSuggestion = defineAction({
+  id: 'skills.dismissSuggestion',
+  title: 'Dismiss a skill suggestion',
+  kind: 'change',
+  input: s.object({ suggestion: id }),
+  run: (_ctx, i) => closeSuggestion(i.suggestion, 'dismiss'),
+  did: () => 'Dismissed',
+  target: () => ({ kind: 'page', id: '/library/skills' }),
+});
+
+// ---------------------------------------------------------------- tools: tier-2 gaps (webhooks, letters, messages)
+
+/* s515 s868 s869 s870 s932. The person's own: deleting an endpoint (cannot be undone), a new signing secret and a
+   message's code (each shows a secret). Giving someone Read on an address or send access to letters is a right only
+   the person gives; Tico may take either away. An agent's letter rules Tico may only tighten. Sending a webhook's
+   failed or missed events again, a letter retried and an address checked are ordinary work: open to Tico (the endpoint
+   is already on, and each goes where it was always meant to). */
+
+// This section's calls live in toolMail.ts.
+import {
+  checkAddresses,
+  deleteWebhook,
+  letterSendersQuery,
+  readCode,
+  recoverWebhook,
+  replayWebhook,
+  retryLetterIn,
+  retryWebhookSend,
+  rotateWebhookSecret,
+  setAddressGrant,
+  setAgentLetters,
+  setLetterSender,
+} from './toolMail';
+
+const sinceDay = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day like 2026-11-12' });
+const hookAt = (webhook: string) => ({ kind: 'tool', id: `webhook:${webhook}` });
+
+export const toolsDeleteWebhook = defineAction({
+  id: 'tools.deleteWebhook',
+  title: 'Delete an outgoing webhook',
+  kind: 'change',
+  // Nothing more goes to it and what waits is canceled: it cannot be undone.
+  tico: false,
+  input: s.object({ webhook: id }),
+  run: async ({ router }, i) => {
+    await deleteWebhook(i.webhook);
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Deleted',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** A new signing secret. The value is the result's `out` only, shown once in the dialog that asked. */
+export const toolsNewWebhookSecret = defineAction({
+  id: 'tools.newWebhookSecret',
+  title: 'Make a new signing secret for an outgoing webhook',
+  kind: 'change',
+  // It shows a secret.
+  tico: false,
+  input: s.object({ webhook: id }),
+  run: (_ctx, i) => rotateWebhookSecret(i.webhook),
+  did: () => 'Made a new secret',
+  target: () => null,
+});
+
+export const toolsRetryWebhook = defineAction({
+  id: 'tools.retryWebhook',
+  title: 'Send an outgoing webhook’s failed sends again',
+  kind: 'change',
+  input: s.object({ webhook: id, since: sinceDay }),
+  run: (_ctx, i) => recoverWebhook(i.webhook, i.since),
+  did: (_i, out) => (out ? `Retrying ${out.count}${out.more ? ', more wait' : ''}` : 'Retrying'),
+  target: (i) => hookAt(i.webhook),
+});
+
+export const toolsSendMissed = defineAction({
+  id: 'tools.sendMissed',
+  title: 'Send an outgoing webhook the events it missed',
+  kind: 'change',
+  input: s.object({ webhook: id, since: sinceDay }),
+  run: (_ctx, i) => replayWebhook(i.webhook, i.since),
+  did: (_i, out) => (out ? `Sending ${out.count}${out.more ? ', more wait' : ''}` : 'Sending'),
+  target: (i) => hookAt(i.webhook),
+});
+
+export const toolsRetrySend = defineAction({
+  id: 'tools.retrySend',
+  title: 'Send one webhook send again',
+  kind: 'change',
+  input: s.object({ webhook: id, send: id }),
+  run: (_ctx, i) => retryWebhookSend(i.webhook, i.send),
+  did: () => 'Retrying',
+  target: (i) => hookAt(i.webhook),
+});
+
+/* A mailing address. */
+
+export const toolsSetAddressAccess = defineAction({
+  id: 'tools.setAddressAccess',
+  title: 'Change who may read one address’s letters',
+  kind: 'change',
+  input: s.object({ address: id, type: s.oneOf(['person', 'bot'] as const), who: id, read: s.boolean() }),
+  // Read takes in private letters and scans: Tico may take it away, never give it.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.read,
+  run: (_ctx, i) => setAddressGrant(i.address, i.type, i.who, i.read),
+  did: (i) => (i.read ? 'Can read its letters' : 'Removed'),
+  target: (i) => ({ kind: 'tool', id: `address:${i.address}` }),
+});
+
+export const toolsRetryLetter = defineAction({
+  id: 'tools.retryLetter',
+  title: 'Try a failed letter again',
+  kind: 'change',
+  input: s.object({ letter: id }),
+  run: (_ctx, i) => retryLetterIn(i.letter),
+  did: () => 'Retrying',
+  target: () => null,
+});
+
+const ADDRESS_WORD: Record<string, string> = { pending_1583: 'Waiting for Form 1583', active: 'Connected', closed: 'Closed' };
+
+/** The address as the Gateway has it now: its state, or why it could not be read. */
+export const toolsCheckAddress = defineAction({
+  id: 'tools.checkAddress',
+  title: 'Check a mailing address',
+  kind: 'change',
+  input: s.object({ address: id }),
+  run: async (_ctx, i) => {
+    const r = await checkAddresses();
+    const a = (r.addresses ?? []).find((x) => String(x.assignment_id || x.id || '') === i.address || x.address === i.address);
+    return a ? { ok: a.status === 'active', text: ADDRESS_WORD[a.status] ?? a.status } : { ok: false, text: 'Not found' };
+  },
+  did: (_i, out) => out?.text ?? 'Checked',
+  target: (i) => ({ kind: 'tool', id: `address:${i.address}` }),
+});
+
+/* Letters out: who may send them, and each agent's own rule. */
+
+export const toolsSetLetterSender = defineAction({
+  id: 'tools.setLetterSender',
+  title: 'Change who may send letters',
+  kind: 'change',
+  input: s.object({ type: s.oneOf(['person', 'bot'] as const), who: id, send: s.boolean() }),
+  // Each letter is paid: Tico may take sending away, never give it.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.send,
+  run: (_ctx, i) => setLetterSender(i.type, i.who, i.send),
+  did: (i) => (i.send ? 'Can send letters' : 'Removed'),
+  target: () => ({ kind: 'tool-set', id: 'letter-senders' }),
+});
+
+export const toolsSetAgentLetters = defineAction({
+  id: 'tools.setAgentLetters',
+  title: 'Change one agent’s letter rule and monthly cap',
+  kind: 'change',
+  input: s.object({
+    bot: id,
+    mode: s.nullable(s.oneOf(['ask_first', 'on_their_own', 'never'] as const)),
+    monthly_cap_micros: s.nullable(s.number({ int: true, min: 0, max: 1_000_000_000_000 })),
+  }),
+  // Tico may only tighten: a stricter rule, a lower cap; never the company's rule back, never no cap.
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    const g = ctx.queryClient.getQueryData(letterSendersQuery.queryKey)?.find((x) => x.grantee_type === 'bot' && x.grantee_id === i.bot);
+    const company = ctx.queryClient.getQueryData(lettersSettingsQuery.queryKey)?.mode;
+    if (!g || !company) return false;
+    const cap = i.monthly_cap_micros;
+    return !up(i.mode, g.mode ?? company) && cap !== null && (g.monthly_cap_micros == null || cap <= g.monthly_cap_micros);
+  },
+  run: (_ctx, { bot, ...change }) => setAgentLetters(bot, change),
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'tool-set', id: `letter-senders:${i.bot}` }),
+});
+
+/* A message that came in to a Tico address or number. */
+
+/** The code a message carries. The value is the result's `out` only, shown in the reader that asked. */
+export const toolsRevealCode = defineAction({
+  id: 'tools.revealCode',
+  title: 'Show the code in a message',
+  kind: 'change',
+  // A code is a secret: the person's own.
+  tico: false,
+  input: s.object({ message: id }),
+  run: (_ctx, i) => readCode(i.message),
+  did: () => 'Shown',
+  target: () => null,
 });

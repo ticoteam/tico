@@ -45,7 +45,7 @@ import { MayDo, SendingSection } from './ToolSettings';
    tool (s926) and Tools' Who has access filter (s908). A secret is typed into a dialog's state and only sent. */
 
 /** "Are you sure": for what cannot be undone. */
-function Confirm({ title, description, label, onGo, onClose }: { title: string; description?: string; label: string; onGo: () => Promise<boolean>; onClose: () => void }) {
+export function Confirm({ title, description, label, onGo, onClose }: { title: string; description?: string; label: string; onGo: () => Promise<boolean>; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const go = async () => {
     setBusy(true);
@@ -595,13 +595,14 @@ function MailboxSends({ address }: { address: string }) {
 
 /* ---------------------------------------------------------------- a Tico address or number */
 
-/** Who reads it: everyone, or one team (and the teams under it). */
-export function InboxReaders({ box }: { box: Inbox }) {
+/** Who reads it: everyone, or one team (and the teams under it). Only an admin changes it (`can`); others read it. */
+export function InboxReaders({ box, can = true }: { box: Inbox; can?: boolean }) {
   const teams = useQuery(teamsQuery).data ?? [];
   const group = (box as Inbox & { group_id?: string | null }).group_id ?? null;
   const team = box.audience === 'team' ? teams.find((t) => t.id === group) : undefined;
   const word = box.audience === 'team' ? (team?.name ?? 'One team') : 'Everyone';
   const pick = (audience: 'company' | 'team', g?: string) => void press('tools.setInboxReaders', { inbox: box.inbox_id, audience, group: g }, 'Not saved');
+  if (!can) return <LabelValue label="Reads it">{word}</LabelValue>;
   return (
     <LabelValue label="Reads it">
       <Menu

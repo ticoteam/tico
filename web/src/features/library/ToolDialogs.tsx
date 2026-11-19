@@ -153,7 +153,7 @@ async function copy(text: string) {
 }
 
 /** A secret in this dialog's state for a minute, with Copy. Nothing is read until Show is pressed. */
-function Secret({ label, value, onHide }: { label: string; value: string; onHide: () => void }) {
+export function Secret({ label, value, onHide }: { label: string; value: string; onHide: () => void }) {
   useEffect(() => {
     const t = setTimeout(onHide, SHOWN_MS);
     return () => clearTimeout(t);
@@ -297,8 +297,18 @@ export function CodeDialog({ tool, account, onClose }: { tool: string; account: 
 
 /* ---------------------------------------------------------------- a Tico address or number */
 
-/** One message that came in, as plain text (it is untrusted), a page at a time. Read fresh each time it opens. */
-export function MessageDialog({ message, title, onClose }: { message: string; title: string; onClose: () => void }) {
+/** One message that came in, as plain text (it is untrusted), a page at a time. Read fresh each time it opens. One that
+    carries a code offers Reveal code: the code is read on that press into this dialog's state only (code mode). */
+export function MessageDialog({ message, title, hasCode = false, onClose }: { message: string; title: string; hasCode?: boolean; onClose: () => void }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
+  const reveal = async () => {
+    setRevealing(true);
+    const r = await run('tools.revealCode', { message }, { via: 'click' });
+    setRevealing(false);
+    if (r.ok && typeof r.out === 'string') setCode(r.out);
+    else toast(refusal(r, 'Not shown', 'You cannot see this'));
+  };
   const [pages, setPages] = useState<string[]>([]);
   const [next, setNext] = useState<number | null>(0);
   const [failed, setFailed] = useState(false);
@@ -322,7 +332,23 @@ export function MessageDialog({ message, title, onClose }: { message: string; ti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={title} className="lib fv-dialog" actions={<Button onClick={onClose}>Close</Button>}>
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={title}
+      className="lib fv-dialog"
+      actions={
+        <>
+          {hasCode && code === null && (
+            <Button busy={revealing} disabled={revealing} onClick={() => void reveal()}>
+              Reveal code
+            </Button>
+          )}
+          <Button onClick={onClose}>Close</Button>
+        </>
+      }
+    >
+      {code !== null && (code ? <Secret label="Code" value={code} onHide={() => setCode(null)} /> : <Empty title="No code found" />)}
       <div className="fv-view">
         {failed ? (
           <Empty title="This message did not load" icon="alert" />

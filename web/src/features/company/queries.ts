@@ -36,6 +36,22 @@ import type {
   Usage,
 } from '@/api/schema';
 import { keys, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import type {
+  FileSearch,
+  GetGoalsNeedsYouResponse,
+  LibrarianResearchFiled,
+  Matter,
+  MatterResult,
+  MatterWrite,
+  NeedsYou,
+  RepositoryList,
+  RiskObligation,
+  TaskFileList,
+  TaskFileResult,
+  TaskFileView,
+  TaskResult,
+} from '@/api/schema';
+import { newId } from '@/lib';
 
 /* Company, Strategy, Products and Risk. None of these has a live topic: each root is read again after the person's
    own writes, on reconnect and on open when older than 60 s. Three widgets on Company read other areas' endpoints
@@ -772,5 +788,269 @@ export function createRisk(label: string) {
     optimistic: (l: RiskList | undefined) => l,
     send: (idempotencyKey) => api.post<RiskResult>('/api/v2/risks', { label }, { idempotencyKey }),
     settle: (l: RiskList | undefined, r) => l && { ...l, risks: [...l.risks, r.risk] },
+  });
+}
+
+// ---------------------------------------------------------------- tier 2 gaps: what waits on you in Goals, records' lists
+
+/** One item of GET /api/v2/goals/needs-you (backend/goal_routes.py goals_needs_you, goal_asks.py for_person). */
+export type GoalNeed = GetGoalsNeedsYouResponse['items'][number];
+/** A recovery's option: what it would do, the Strategy Owner's pick marked. */
+export interface RecoveryOption {
+  label: string;
+  pick?: boolean;
+  actions?: { text: string; note?: string | null }[];
+}
+
+export const goalNeedsQuery = queryOptions({
+  queryKey: ['goals', 'needs'],
+  queryFn: async ({ signal }) => (await api.get<GetGoalsNeedsYouResponse>('/api/v2/goals/needs-you', { signal })).items,
+  ...quiet,
+});
+
+/** Yes or no on a suggestion that waits on you (a recovery's chosen `option`): it leaves the list at once and comes
+    back if refused. A yes may change goals, KPIs, the strategy or the brand draft, so those are read again. */
+export function decideNeed(proposal: string, decision: 'confirm' | 'reject', option?: number) {
+  return write<{ proposal: Proposal }>({
+    key: goalNeedsQuery.queryKey,
+    optimistic: (items: GoalNeed[] | undefined) => items?.filter((i) => (i.proposal as { id?: string } | undefined)?.id !== proposal),
+    send: async (idempotencyKey) => {
+      const out = await api.post<{ proposal: Proposal }>(`/api/v2/proposals/${enc(proposal)}/decide`, { decision, ...(option != null && { option }) }, { idempotencyKey });
+      for (const root of ['strategy', 'brand', 'kpis']) void queryClient.invalidateQueries({ queryKey: [root] });
+      void queryClient.invalidateQueries({ queryKey: treeKey });
+      return out;
+    },
+  });
+}
+
+/** The tasks that wait on the person (GET /api/v2/needs-you): a matter among them gets the waits-on-you mark. */
+export const waitingTasksQuery = queryOptions({
+  queryKey: ['needs', 'tasks'],
+  queryFn: async ({ signal }) => {
+    try {
+      const r = await api.get<NeedsYou>('/api/v2/needs-you?limit=200', { signal });
+      return 'items' in r ? r.items.map((i) => i.task_id ?? i.task?.id).filter((x): x is string => !!x) : [];
+    } catch {
+      return [];
+    }
+  },
+  ...quiet,
+});
+
+/** A risk's name and page text (the old Edit dialog). */
+export function editRisk(id: string, label: string, markdown: string, version: number) {
+  return updateRisk(id, { label, markdown }, version);
+}
+
+/** A new matter under a risk: a task carrying the risk's tag, then its kind (backend/risk.py: a matter is a task tagged
+    with a risk). The risk's page is read again when the server has both. */
+export function addMatter(risk: { id: string; key: string }, title: string, kind: Matter['kind']) {
+  return write<TaskResult>({
+    key: riskQuery(risk.id).queryKey,
+    optimistic: (d: RiskDetail | undefined) => d,
+    send: async (idempotencyKey) => {
+      const made = await api.post<TaskResult>('/api/v2/tasks', { title, labels: [risk.key] }, { idempotencyKey });
+      await api.post<unknown>(`/api/v2/tasks/${enc(made.task.id)}/matter`, { kind }, { idempotencyKey: `${idempotencyKey}:matter` });
+      return made;
+    },
+  });
+}
+
+export type RiskDate = RiskObligation;
+/** How a date is marked: met with proof (a link or a file), waived (with why) or missed. */
+export type DateMark = { proof: { kind: 'link' | 'file'; ref: string } } | { outcome: 'waived' | 'missed'; note?: string };
+
+/** One occurrence of a date marked (POST /api/v2/rule-due/{id}/satisfied), shown at once on the risk's page. */
+export function markDate(risk: string, due: string, on: string, mark: DateMark) {
+  const state = 'proof' in mark ? 'met' : mark.outcome;
+  return write<unknown>({
+    key: riskQuery(risk).queryKey,
+    optimistic: (d: RiskDetail | undefined) =>
+      d && { ...d, obligations: d.obligations.map((o) => (o.id === due && o.due_on === on ? { ...o, state, mark: o.mark ?? ({ outcome: state, proof: null, note: '', satisfied_at: new Date().toISOString(), satisfied_by: '' } as unknown as RiskDate['mark']) } : o)) },
+    send: (idempotencyKey) => api.post<unknown>(`/api/v2/rule-due/${enc(due)}/satisfied`, { due_on: on, ...mark }, { idempotencyKey }),
+  });
+}
+
+/** Files the person may read, by title: the proof for a date. */
+export const fileSearchQuery = (text: string) =>
+  queryOptions({
+    queryKey: ['risks', 'file-search', text],
+    queryFn: async ({ signal }) => (await api.get<FileSearch>(`/api/v2/files/search?q=${enc(text)}&limit=6`, { signal })).results.map((r) => ({ id: r.id, title: r.title })),
+    enabled: !!text.trim(),
+    staleTime: 30_000,
+  });
+
+/** One matter's dates: its risk's dates that belong to its task (GET /api/v2/risk/obligations). */
+export const matterDatesQuery = (risk: string) =>
+  queryOptions({
+    queryKey: ['risks', 'dates', risk],
+    queryFn: async ({ signal }) => (await api.get<{ obligations: RiskDate[] }>(`/api/v2/risk/obligations?risk=${enc(risk)}`, { signal })).obligations,
+    ...quiet,
+  });
+
+/** The files on a matter's task. */
+export const matterFilesQuery = (task: string) =>
+  queryOptions({
+    queryKey: ['risks', 'files', task],
+    queryFn: async ({ signal }) => (await api.get<TaskFileList>(`/api/v2/tasks/${enc(task)}/files`, { signal })).files.filter((f) => !f.archived),
+    ...quiet,
+  });
+
+/** A file from the person's disk onto the matter's task (POST /api/v2/tasks/{tid}/files). */
+export function addMatterFile(task: string, file: File) {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  return write<TaskFileResult>({
+    key: matterFilesQuery(task).queryKey,
+    optimistic: (fs: TaskFileView[] | undefined) => fs,
+    send: (idempotencyKey) => api.post<TaskFileResult>(`/api/v2/tasks/${enc(task)}/files`, fd, { idempotencyKey }),
+  });
+}
+
+/** A product's matters (GET /api/v2/matters?product=<key>). */
+export const productMattersQuery = (key: string) =>
+  queryOptions({
+    queryKey: ['risks', 'matters', 'product', key],
+    queryFn: async ({ signal }) => (await api.get<MatterList>(`/api/v2/matters?product=${enc(key)}&limit=200`, { signal })).matters,
+    ...quiet,
+  });
+
+/** The team's repositories, for a product's Code (null when they cannot be read: a name is typed instead). */
+export const repositoriesQuery = queryOptions({
+  queryKey: ['products', 'repositories'],
+  queryFn: async ({ signal }) => {
+    try {
+      return (await api.get<RepositoryList>('/api/v2/repositories', { signal })).repositories.map((r) => r.full_name);
+    } catch {
+      return null;
+    }
+  },
+  ...quiet,
+});
+
+export type ProductListField = 'agreements' | 'repositories' | 'depends_on';
+/** The values a list holds as the server takes them: a repository's name, an agreement's or a vendor's id. */
+export const listValues = (p: Product, field: ProductListField): string[] => (field === 'repositories' ? [...p.repositories] : p[field].map((x) => x.id));
+
+/** A product's Agreement, Code or Depends on, the whole set sent (one added by name, made if new; one removed). */
+export function setProductList(key: string, field: ProductListField, values: string[]) {
+  const shown = (p: Product): Product => {
+    if (field === 'repositories') return { ...p, repositories: values };
+    const have = p[field];
+    return { ...p, [field]: values.map((v) => have.find((x) => x.id === v) ?? { id: v, name: v, link_id: tmpId() }) };
+  };
+  return write<ProductResult>({
+    key: productsKey,
+    optimistic: (l: ProductList | undefined) => mapProducts(l, (p) => (p.key === key ? shown(p) : p)),
+    send: (idempotencyKey) => api.post<ProductResult>(`/api/v2/products/${enc(key)}`, { [field]: values }, { idempotencyKey }),
+    settle: (l: ProductList | undefined, r) => mapProducts(l, (p) => (p.key === key ? r.product : p)),
+  });
+}
+
+// Brand: the suggested changes to the book that wait on an editor, and checking copy against the published book.
+export interface BrandProposal {
+  id: string;
+  kind: string;
+  reason?: string;
+  proposed_by: string;
+  proposed_at: string;
+  may_decide?: boolean;
+  payload?: { sections?: Record<string, unknown> };
+  card?: { title?: string };
+}
+export const brandProposalsQuery = queryOptions({
+  queryKey: ['brand', 'proposals'],
+  queryFn: async ({ signal }) => (await api.get<{ proposals?: BrandProposal[] }>('/api/v2/proposals', { signal })).proposals?.filter((p) => p.kind === 'brand_draft' && p.may_decide !== false) ?? [],
+  ...quiet,
+});
+
+/** Add a suggested change to the draft, or decline it; the draft is read again. */
+export function decideBrandProposal(id: string, decision: 'confirm' | 'reject') {
+  return write<unknown>({
+    key: brandProposalsQuery.queryKey,
+    optimistic: (ps: BrandProposal[] | undefined) => ps?.filter((p) => p.id !== id),
+    send: async (idempotencyKey) => {
+      const out = await api.post<unknown>(`/api/v2/proposals/${enc(id)}/decide`, { decision }, { idempotencyKey });
+      void queryClient.invalidateQueries({ queryKey: brandQuery.queryKey, exact: true });
+      return out;
+    },
+  });
+}
+
+/** Every rule of the published book some copy breaks (POST /api/v2/brand/check). */
+export interface BrandHit {
+  kind: string;
+  match: string;
+  rule?: string;
+  level?: 'warn' | 'block';
+}
+export const checkCopy = (text: string) => api.post<{ hits?: BrandHit[] }>('/api/v2/brand/check', { text }).then((r) => r.hits ?? []);
+
+// Market: the owner asks the Librarian to research a segment, or cites it in a bet.
+export type CitableBet = Bet & { cites?: string[] };
+export type CitableStrategy = Omit<Strategy, 'bets'> & { bets: CitableBet[]; draft?: { revision?: number | null } | null };
+
+export const researchSegment = (target: string, instructions: string) =>
+  api.post<LibrarianResearchFiled>('/api/v2/librarian/research', { target, section: '', instructions }, { idempotencyKey: newId() });
+
+/** A segment into a bet's cites, shown at once. */
+export function citeInBet(bet: string, segment: string) {
+  const s = queryClient.getQueryData<CitableStrategy>(strategyQuery.queryKey);
+  const cites = [...(s?.bets.find((b) => b.id === bet)?.cites ?? []), segment];
+  const revision = s?.draft?.revision;
+  return write<unknown>({
+    key: strategyQuery.queryKey,
+    optimistic: (cur: CitableStrategy | undefined) => cur && { ...cur, bets: cur.bets.map((b) => (b.id === bet ? { ...b, cites } : b)) },
+    send: (idempotencyKey) => api.post<unknown>(`/api/v2/strategy/bets/${enc(bet)}`, { cites, ...(revision != null && { revision }) }, { idempotencyKey }),
+  });
+}
+
+// ---------------------------------------------------------------- a matter's own facts, edited in place
+
+/** The facts a change sets (null clears one), as POST /api/v2/tasks/{tid}/matter takes them. */
+export type MatterFacts = Pick<MatterWrite, 'kind' | 'side' | 'party_entity_id' | 'amount' | 'currency' | 'claim' | 'forum' | 'product_id'>;
+
+/** Contacts a matter's party may be: people, then organizations, by name (GET /api/v2/entities/find/{type}). */
+export const partySearchQuery = (text: string) =>
+  queryOptions({
+    queryKey: ['risks', 'party-search', text],
+    queryFn: async ({ signal }) => {
+      const one = (type: string) =>
+        api
+          .get<{ rows?: { id: string; name: string }[] }>(`/api/v2/entities/find/${type}?name=${enc(text)}&limit=5`, { signal })
+          .then((r) => r.rows ?? [])
+          .catch(() => []);
+      return [...(await one('person')), ...(await one('organization'))];
+    },
+    enabled: !!text.trim(),
+    staleTime: 30_000,
+  });
+
+/** One matter's facts, shown at once wherever the matter is listed (the open list, Disputes, its risk's page, a
+    product's matters) and taken back if refused. `names` carries the party's or product's name for the first paint. */
+export function setMatter(task: string, facts: MatterFacts, version: number | undefined, names: { party?: string; product?: string } = {}) {
+  const patch = (m: Matter | null): Matter | null => {
+    if (!m) return m;
+    const next = { ...m, ...facts } as Matter;
+    if ('party_entity_id' in facts) next.party = facts.party_entity_id ? { id: facts.party_entity_id, name: names.party ?? m.party?.name ?? '' } : null;
+    if ('product_id' in facts) next.product = facts.product_id ? { id: facts.product_id, name: names.product ?? m.product?.name ?? '' } : null;
+    return next;
+  };
+  const row = (r: MatterRow, m: (x: Matter | null) => Matter | null): MatterRow => (r.task.id === task ? { ...r, matter: m(r.matter) } : r);
+  const each = (cur: unknown, m: (x: Matter | null) => Matter | null): unknown => {
+    if (Array.isArray(cur)) return (cur as MatterRow[]).map((r) => (r && typeof r === 'object' && 'task' in r ? row(r, m) : r));
+    if (cur && typeof cur === 'object' && Array.isArray((cur as { matters?: unknown }).matters)) return { ...cur, matters: (cur as { matters: MatterRow[] }).matters.map((r) => row(r, m)) };
+    return cur;
+  };
+  const keys = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: ['risks'] })
+    .map((q) => q.queryKey)
+    .filter((k) => k[1] === 'matters' || k[1] === 'detail');
+  return write<MatterResult>({
+    key: keys.length ? keys : [['risks', 'matters', 'open']],
+    optimistic: (cur: unknown) => each(cur, patch),
+    send: (idempotencyKey) => api.post<MatterResult>(`/api/v2/tasks/${enc(task)}/matter`, { ...facts, ...(version != null && { version }) }, { idempotencyKey }),
+    settle: (cur: unknown, r) => (r.matter ? each(cur, () => r.matter) : cur),
   });
 }

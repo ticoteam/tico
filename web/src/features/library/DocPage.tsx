@@ -3,6 +3,7 @@ import { useBlocker, useNavigate } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery } from '@/data';
+import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
@@ -14,7 +15,7 @@ import { toast } from '@/kit/Toast';
 import { Document, PageMore, type PageState } from '@/pagekinds';
 import { headings, Markdown } from '@/kit/Markdown';
 import { Face, OwnerButton, press, when } from './parts';
-import { docQuery, docVersionQuery, docVersionsQuery, externalDocQuery, type Doc } from './queries';
+import { docQuery, docVersionQuery, docVersionsQuery, externalDocAtQuery, externalDocQuery, type Doc } from './queries';
 import type { DocSearch } from './search';
 import './library.css';
 
@@ -26,7 +27,7 @@ const CRUMB = [{ label: 'Docs', to: '/library/docs' }];
 
 export function DocPage({ doc, search }: { doc: string; search: DocSearch }) {
   if (doc === 'new') return <NewDoc />;
-  if (doc.startsWith('ext:')) return <OutsideDoc id={doc.slice(4)} />;
+  if (doc.startsWith('ext:')) return <OutsideDoc id={doc.slice(4)} revision={search.revision} />;
   return <OneDoc id={doc} search={search} />;
 }
 
@@ -330,9 +331,24 @@ function ResearchDialog({ doc, onClose }: { doc: Doc; onClose: () => void }) {
   );
 }
 
-/** A doc read from an outside source: shown as it was read, never edited here. */
-function OutsideDoc({ id }: { id: string }) {
-  const d = useQuery(externalDocQuery(id));
+/** A link in an outside doc's text, made whole against where the doc lives (old docs-page.ts): `guide.md`, `../x`
+    and `/x` resolve against `base` (its citation, without query or fragment); an address, `#part` or `//host` stays. */
+export function wholeLinks(text: string, base: string): string {
+  const root = base.split('?')[0]?.split('#')[0] ?? base;
+  return text.replace(/(!?\[[^\]]*\]\()([^()\s]+)(\))/g, (all, open: string, href: string, close: string) => {
+    if (/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(href)) return all;
+    try {
+      return open + new URL(href, root).href + close;
+    } catch {
+      return all;
+    }
+  });
+}
+
+/** A doc read from an outside source: shown as it was read (at `revision`, the commit a link saw, when one is given),
+    never edited here. Its relative links lead to where it lives. */
+function OutsideDoc({ id, revision }: { id: string; revision: string | undefined }) {
+  const d = useQuery(revision ? externalDocAtQuery(id, revision) : externalDocQuery(id));
   const doc = d.data;
   return (
     <Document
@@ -355,9 +371,11 @@ function OutsideDoc({ id }: { id: string }) {
             <p className="read-by">
               <b>{doc.source_title}</b>
               <span>{doc.path}</span>
+              {doc.commit && <span title={doc.commit}>{doc.commit.slice(0, 7)}</span>}
+              {doc.last_checked_at && <Ago at={doc.last_checked_at} />}
             </p>
             {doc.reference_notice && <p className="read-note t-small">{doc.reference_notice}</p>}
-            <Markdown text={doc.content} />
+            <Markdown text={doc.citation_url ? wholeLinks(doc.content, doc.citation_url) : doc.content} />
           </>
         )
       }

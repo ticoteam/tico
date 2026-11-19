@@ -1,10 +1,13 @@
+import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { meQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Pill } from '@/kit/Pill';
 import { ItemHead } from '@/pagekinds';
 import { Face, Held, KindTile, OwnerButton } from './parts';
+import { googleQuery } from './queries';
 import type { ToolsSearch } from './search';
 
 /* What every open tool is drawn with (ToolsPage.tsx, ToolMore.tsx): its head and body, a teammate's row, the kinds. */
@@ -37,7 +40,14 @@ export const toolHref = (id: string, s: ToolsSearch = {}) => {
   return `/library/tools?${p.toString()}`;
 };
 
-export const bad = (r: { needs_you: boolean; status: { tone: string; text: string } }) => (r.needs_you || r.status.tone === 'fail' ? r.status.text : null);
+/** An admin: the owner, or whoever the server lets change company credentials. The server still decides. */
+export function useAdmin() {
+  const owner = useQuery(meQuery).data?.role === 'owner';
+  const google = useQuery(googleQuery).data?.can_admin;
+  return owner || !!google;
+}
+
+export const bad = (r:{ needs_you: boolean; status: { tone: string; text: string } }) => (r.needs_you || r.status.tone === 'fail' ? r.status.text : null);
 
 export interface ShellProps {
   name: string;

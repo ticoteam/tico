@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import type { MailboxDetail } from '@/api/schema';
-import { meQuery, useActors } from '@/data';
+import { useActors } from '@/data';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
@@ -11,13 +11,14 @@ import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
 import { Face, press, when } from './parts';
-import { SectionFault } from './ToolShell';
+import { SectionFault, toolHref, useAdmin } from './ToolShell';
 import {
   agentSendingQuery,
   googleQuery,
@@ -42,15 +43,8 @@ import {
    letters' rules on the mailing address. A secret typed here (a Workspace key, a connection code) or shown here (a
    setup command) lives in this file's component state only. */
 
-const words = (list: readonly (readonly [string, string])[]) => list.map(([value, label]) => ({ value, label }));
+export const words = (list: readonly (readonly [string, string])[]) => list.map(([value, label]) => ({ value, label }));
 const wordOf = (list: readonly (readonly [string, string])[], v: string | null | undefined) => list.find(([k]) => k === v)?.[1] ?? '';
-
-/** An admin: the owner, or whoever the server lets change company credentials. */
-function useAdmin() {
-  const owner = useQuery(meQuery).data?.role === 'owner';
-  const google = useQuery(googleQuery).data?.can_admin;
-  return owner || !!google;
-}
 
 /* ---------------------------------------------------------------- Email: what agents may do in Google */
 
@@ -220,7 +214,7 @@ function DisconnectDialog({ domain, onClose }: { domain: string; onClose: () => 
 
 /* ---------------------------------------------------------------- Email: what agents may send */
 
-const MODES = [
+export const MODES = [
   ['ask_first', 'Ask first'],
   ['on_their_own', 'On their own'],
   ['never', 'Never'],
@@ -405,7 +399,7 @@ export function SharedInboxDialog({ onClose }: { onClose: () => void }) {
 /* ---------------------------------------------------------------- phone numbers: requests and quotes */
 
 const LIVE = ['requested', 'quoted', 'accepted', 'approved'];
-const usd = (micros: number) => `$${(micros / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export const usd = (micros: number) => `$${(micros / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function requestWord(r: NumberRequest, now: number): { text: string; quote: number | null } {
   if (r.state === 'quoted') {
@@ -450,22 +444,31 @@ export function NumberRequests({ always = false }: { always?: boolean }) {
 
 /* ---------------------------------------------------------------- the mailing address: letters in and out */
 
-const ADDRESS_STATE: Record<string, string> = { pending_1583: 'Waiting for Form 1583', active: 'Connected', closed: 'Closed' };
-const KINDS: Record<string, string> = { shared: 'Shared', private: 'Private' };
+export const ADDRESS_STATE: Record<string, string> = { pending_1583: 'Waiting for Form 1583', active: 'Connected', closed: 'Closed' };
+export const KINDS: Record<string, string> = { shared: 'Shared', private: 'Private' };
+/** What a Read grant on an address names: its Gateway assignment, or an older active address by its exact text. */
+export const scopeOf = (a: { assignment_id?: string | null; id?: string | null; address?: string | null; status: string }) =>
+  String(a.assignment_id || a.id || '') || (a.status === 'active' && a.address) || '';
 
-/** Every address and open order, by its words or its state and kind. Nothing when there are none; a failed read (the
-    Gateway off or not connected) says so. */
+/** Every address and open order, by its words or its state and kind; each opens its own page (`address:<id>`).
+    Nothing when there are none; a failed read (the Gateway off or not connected) says so. */
 export function PostalAddresses() {
   const q = useQuery({ ...postalAddressesQuery, retry: false });
   const rows = [
     ...(q.data?.addresses ?? []).map((a) => ({
       id: String(a.assignment_id || a.id || a.address || `${a.state}-${a.kind}`),
+      open: scopeOf(a),
       title: a.status === 'active' && a.address ? a.address : `${a.state}, ${KINDS[a.kind] ?? a.kind}`,
       word: ADDRESS_STATE[a.status] ?? a.status,
     })),
     ...(q.data?.orders ?? [])
       .filter((o) => o.status === 'open')
-      .map((o) => ({ id: `order:${o.order_id ?? `${o.state}-${o.kind}`}`, title: `${o.state}, ${KINDS[o.kind] ?? o.kind}`, word: 'Ordered' })),
+      .map((o) => ({
+        id: `order:${o.order_id ?? `${o.state}-${o.kind}`}`,
+        open: o.order_id ? `order-${o.order_id}` : '',
+        title: `${o.state}, ${KINDS[o.kind] ?? o.kind}`,
+        word: 'Ordered',
+      })),
   ];
   if (q.isError && !q.data)
     return (
@@ -477,10 +480,10 @@ export function PostalAddresses() {
   return (
     <Section name="Addresses" count={rows.length} target="tool-set:addresses">
       {rows.map((r) => (
-        <div key={r.id} className="row urow" title={r.title}>
+        <Row key={r.id} className="urow" title={r.title} href={r.open ? toolHref(`address:${r.open}`) : undefined} target={`tool:address:${r.open || r.id}`}>
           <span className="row-title">{r.title}</span>
           <span className="row-ctx">{r.word}</span>
-        </div>
+        </Row>
       ))}
     </Section>
   );
@@ -498,7 +501,7 @@ const lettersState = (l: { mode: string; availability: string; return_address: u
           ? 'Return address needed'
           : 'Ready';
 
-interface Postal {
+export interface Postal {
   name?: string;
   line1?: string;
   line2?: string;
@@ -506,7 +509,7 @@ interface Postal {
   state?: string;
   postal_code?: string;
 }
-const addressLine = (a: Postal | null) =>
+export const addressLine = (a: Postal | null) =>
   a ? [a.name, a.line1, a.line2, [a.city, a.state, a.postal_code].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 
 /** Letters out: whether agents may send (each letter is paid), the month's cap and the return address. */

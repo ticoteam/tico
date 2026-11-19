@@ -365,3 +365,31 @@
 .pnl .kp-why b{font-weight:var(--w-strong);color:var(--ink)}
 .pnl .kr-name .dot{margin-right:var(--s-1h);vertical-align:-1px}
 .co .gt-title .dot{margin-left:var(--s-1h);vertical-align:-1px}
+
+/* ---------- tier 2: Needs you over the goal tree, a record's dates and files, the brand rail, a segment's asks ---------- */
+.co .gt-needs{height:var(--row);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-2);border-radius:var(--r-row);font-size:var(--t-sm);color:var(--ink-2)}
+.co .gt-needs:hover,.co .gt-needs.is-selected{background:var(--hover)}
+.pnl .need-row{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);column-gap:var(--s-2)}
+.pnl .need-row .row-age{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right}
+.pnl .rec-opt{margin-top:var(--s-2);font-size:var(--t-sm);color:var(--ink-2)}
+.pnl .rec-opt ul{margin:var(--s-1) 0 var(--s-2);padding-left:var(--s-4)}
+.pnl .dt{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:var(--s-2h);min-height:var(--row)}
+.pnl .dt-mark,.co .rk-d .row-mark{display:flex;align-items:center;justify-content:center}
+.pnl .dt.is-done .row-title{color:var(--ink-2)}
+.pnl .dt-proof{grid-column:2/-1;display:flex;align-items:center;gap:var(--s-2);min-width:0;margin:0 0 var(--s-2)}
+.pnl .chip-file a{display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;color:inherit}
+.pnl .chip-file .ib{margin-right:calc(-1 * var(--s-1h))}
+.pnl .lk-meta{flex:none;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.pnl .lk.is-quiet .row-title{color:var(--muted)}
+.co .row-check,.pnl .row-check{display:inline-grid;place-items:center;color:var(--muted)}
+.co .is-due-soon,.pnl .is-due-soon{color:var(--ink);font-weight:var(--w-strong)}
+.co .br-prop{padding:var(--s-2) 0;border-top:1px solid var(--line);font-size:var(--t-sm);color:var(--ink-2)}
+.co .br-prop:first-of-type{border-top:0}
+.co .br-hits{list-style:none;margin:var(--s-2) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s-1h);font-size:var(--t-sm)}
+.co .br-hits li{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1h)}
+.pnl .mkt-ask{display:flex;flex-direction:column;gap:var(--s-2);width:100%}
+.pnl .fld-v{height:var(--ctl-sm);margin-right:calc(-1 * var(--s-2));padding:0 var(--s-1h) 0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;transition:background var(--dur-fast) var(--ease)}
+.pnl .fld-v:hover{background:var(--hover)}
+.pnl .fld-v>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pnl .fld-link{color:var(--ink)}
+.pnl .fld-link:hover{text-decoration:underline;text-underline-offset:3px}

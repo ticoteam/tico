@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { useActor, useActors } from '@/data';
 import { Button } from '@/kit/Button';
@@ -13,8 +14,21 @@ import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
 import { List, SidePanel, type PageTab } from '@/pagekinds';
-import { amount, Face, NameOf, PanelLink, Trend, useDo } from './parts';
-import { goalQuery, goalsTreeQuery, kpiQuery, placedKpisQuery, type GrowthRole, type PlacedKpi, type Proposal, type ProposalCard, type TreeGoal } from './queries';
+import { amount, Face, Go, NameOf, PanelLink, Trend, useDo } from './parts';
+import {
+  goalNeedsQuery,
+  goalQuery,
+  goalsTreeQuery,
+  kpiQuery,
+  placedKpisQuery,
+  type GoalNeed,
+  type GrowthRole,
+  type PlacedKpi,
+  type Proposal,
+  type ProposalCard,
+  type RecoveryOption,
+  type TreeGoal,
+} from './queries';
 import type { Kpi, KpiDetail, KpiReadingView } from '@/api/schema';
 
 /* Goals (pages/3-company/company.js goalsBody): a List of the goal tree, a goal sits under the goal it feeds and each
@@ -32,13 +46,14 @@ const KPIS_SHOWN = 3;
 
 export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch }) {
   const q = useQuery(goalsTreeQuery);
+  const needs = useQuery(goalNeedsQuery).data ?? [];
   const open = useDo('company.openPanel');
   const goals = q.data?.goals ?? [];
   const panel = search.panel ?? '';
   const at = panel.indexOf(':');
   const kind = at < 0 ? panel : panel.slice(0, at);
   const ref = panel.slice(at + 1);
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : goals.length ? 'ready' : 'empty';
+  const state = q.isPending ? 'loading' : q.isError ? 'fault' : goals.length || needs.length ? 'ready' : 'empty';
   const add = (
     <Button variant={panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'goal-new' })}>
       Add goal
@@ -51,9 +66,16 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
       state={state}
       onRetry={() => void q.refetch()}
       empty={{ title: 'No goals yet', action: add }}
-      sections={<GoalTreeView goals={goals} waiting={waiting(q.data?.proposals)} selected={kind === 'goal' ? ref : null} />}
+      sections={
+        <>
+          <NeedsLine open={panel === 'needs'} />
+          <GoalTreeView goals={goals} waiting={waiting(q.data?.proposals)} selected={kind === 'goal' ? ref : null} />
+        </>
+      }
       panel={
-        panel === 'goal-new' ? (
+        panel === 'needs' ? (
+          <NeedsPanel />
+        ) : panel === 'goal-new' ? (
           <GoalForm goals={goals} />
         ) : kind === 'goal' ? (
           <GoalPanel gid={ref} />
@@ -799,3 +821,166 @@ function GoalForm({ goals }: { goals: readonly TreeGoal[] }) {
   );
 }
 
+
+// ---------------------------------------------------------------- Needs you: what waits on the reader in Goals
+
+/** What a need says on its own: the server's line, or for a suggestion, what it suggests. */
+function needSays(n: GoalNeed): string {
+  const p = (n.proposal ?? {}) as { kind?: string; payload?: { bets?: { id?: string }[] } };
+  if (n.kind === 'recovery') return `A recovery for ${n.goal_title || 'a goal'}`;
+  if (n.kind !== 'proposal') return n.title;
+  const bets = p.payload?.bets ?? [];
+  if (p.kind === 'strategy_draft') return bets.length === 1 && !bets[0]?.id ? 'A new bet for the strategy' : 'A change to the strategy';
+  if (p.kind === 'strategy_realign') return 'Goals moved to new bets';
+  if (p.kind === 'brand_draft') return 'A change to the brand book';
+  if (p.kind === 'goal_kpi') return `A KPI for ${n.goal_title || 'a goal'}`;
+  if (p.kind === 'kpi_target') return `A target for ${n.kpi_name || 'a KPI'}`;
+  if (p.kind === 'kpi_definition') return `A change to ${n.kpi_name || 'a KPI'}`;
+  return n.title;
+}
+
+/** One quiet line over the tree when something waits on the reader (goals.ts goalNeedsLineHtml); it opens the list. */
+function NeedsLine({ open }: { open: boolean }) {
+  const items = useQuery(goalNeedsQuery).data ?? [];
+  if (!items.length) return null;
+  const asks = items.every((n) => n.kind === 'proposal' || n.kind === 'recovery');
+  const n = items.length;
+  const first = items[0];
+  const says = n === 1 && first ? needSays(first) : asks ? `${n} suggestions` : `${n} waiting on you`;
+  return (
+    <PanelLink panel="needs" className={open ? 'gt-needs is-selected' : 'gt-needs'} data-target="panel:needs">
+      <FlowMark size={10} />
+      <span>{says}</span>
+    </PanelLink>
+  );
+}
+
+/** Everything that waits on the reader in Goals, each answered in place: suggestions and recoveries get their answer,
+    the rest open where they are done (goals-kpis.ts goalNeedsHtml). */
+function NeedsPanel() {
+  const q = useQuery(goalNeedsQuery);
+  const close = useDo('company.closePanel');
+  const items = q.data ?? [];
+  return (
+    <SidePanel title="Needs you" target="panel:needs" onClose={() => void close.run({})}>
+      {q.isSuccess && !items.length && <p className="rail-sec pt-none">Nothing waits on you</p>}
+      {items.map((n) => (
+        <NeedItem key={n.id} n={n} />
+      ))}
+    </SidePanel>
+  );
+}
+
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
+
+function NeedItem({ n }: { n: GoalNeed }) {
+  const answer = useDo('goals.answer');
+  const p = (n.proposal ?? {}) as { id?: string; reason?: string; proposed_by?: string; payload?: Record<string, unknown> };
+  const say = (decision: 'confirm' | 'reject', option?: number) => p.id && void answer.run({ proposal: p.id, decision, ...(option != null && { option }) });
+  if (n.kind === 'recovery') {
+    const options = (n.options ?? []) as unknown as RecoveryOption[];
+    return (
+      <section className="answer is-ask kp-ask" aria-label={needSays(n)} data-target={`proposal:${p.id}`}>
+        <p className="an-q">
+          <FlowMark />
+          <span>{needSays(n)}</span>
+        </p>
+        {str(p.payload?.evidence) && <p className="kp-why">{str(p.payload?.evidence)}</p>}
+        {p.reason && <p className="kp-why">{p.reason}</p>}
+        {options.map((o, i) => (
+          <div key={i} className="rec-opt">
+            <p>
+              <b>{o.label}</b>
+              {o.pick && <span className="none"> Recommended</span>}
+            </p>
+            {(o.actions ?? []).length > 0 && (
+              <ul>
+                {(o.actions ?? []).map((a, j) => (
+                  <li key={j}>{a.note ? `${a.text}: ${a.note}` : a.text}</li>
+                ))}
+              </ul>
+            )}
+            <Button variant={o.pick ? 'primary' : 'plain'} disabled={answer.pending} onClick={() => say('confirm', i)}>
+              {options.length > 1 ? `Approve ${i + 1}` : 'Approve'}
+            </Button>
+          </div>
+        ))}
+        <div className="an-row">
+          <Button variant="quiet" disabled={answer.pending} onClick={() => say('reject')}>
+            Reject
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (n.kind === 'proposal') {
+    const kind = str((n.proposal as { kind?: unknown } | undefined)?.kind);
+    const open = kind === 'brand_draft' ? { to: '/company/strategy/brand', search: { edit: true } } : kind.startsWith('strategy') ? { to: '/company/strategy', search: {} } : null;
+    return (
+      <section className="answer is-ask kp-ask" aria-label={needSays(n)} data-target={`proposal:${p.id}`}>
+        <p className="an-q">
+          <FlowMark />
+          <span>{needSays(n)}</span>
+        </p>
+        {p.reason && (
+          <p className="kp-why">
+            <Face id={p.proposed_by} size={16} />
+            <span>
+              <b>
+                <NameOf id={p.proposed_by} />
+              </b>{' '}
+              {p.reason}
+            </span>
+          </p>
+        )}
+        <div className="an-row">
+          {open && (
+            <Link to={open.to as never} search={open.search as never} className="btn btn-quiet">
+              Open
+            </Link>
+          )}
+          <Button disabled={answer.pending} onClick={() => say('reject')}>
+            Reject
+          </Button>
+          <Button variant="primary" disabled={answer.pending} onClick={() => say('confirm')}>
+            Accept
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (n.kind === 'vision')
+    return (
+      <Go to="/company/strategy" className="row need-row">
+        <span className="row-title">{n.title}</span>
+      </Go>
+    );
+  if (n.kind === 'why') {
+    const goals = (n.goals ?? []) as { goal_id: string; goal_title: string }[];
+    return (
+      <section className="rail-sec" aria-label={n.title}>
+        <h3>{n.title}</h3>
+        {goals.map((g) => (
+          <PanelLink key={g.goal_id} panel={`goal:${g.goal_id}`} className="row need-row">
+            <span className="row-title">{g.goal_title}</span>
+          </PanelLink>
+        ))}
+      </section>
+    );
+  }
+  const kpis = n.kind === 'kpi_stale' ? ((n.kpis ?? []) as { kpi_id: string; kpi_name: string; reason?: string }[]) : n.kpi_id ? [{ kpi_id: n.kpi_id, kpi_name: n.kpi_name ?? '', reason: n.reason }] : [];
+  return (
+    <>
+      {kpis.map((k) => (
+        <PanelLink key={k.kpi_id} panel={`kpi:${k.kpi_id}`} className="row need-row" data-target={`kpi:${k.kpi_id}`}>
+          <span className="row-title">
+            {k.kpi_name}
+            {n.kind === 'kpi_red' && n.goal_title ? ` on ${n.goal_title}` : ''}
+          </span>
+          {n.kind === 'kpi_red' && <Pill flag>Behind</Pill>}
+          {k.reason && <span className="row-age">{k.reason}</span>}
+        </PanelLink>
+      ))}
+    </>
+  );
+}

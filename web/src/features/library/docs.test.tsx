@@ -83,7 +83,7 @@ const writes = (sent: Sent[]) => sent.filter((x) => x.method !== 'GET');
 const doc = (id: string, title: string) => ({ id, title, locked: false, path: 'company/notes.md', updated_at: '2026-11-01T00:00:00Z', updated_by_id: '', updated_by_name: 'Sam', version: 3 });
 
 describe('archived docs', () => {
-  it('lists archived docs from their own read, each with Restore', async () => {
+  it('lists archived docs from their own read, each with Restore @s791', async () => {
     const sent = serve();
     queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Live doc')], next_cursor: null });
     queryClient.setQueryData(archivedDocsQuery.queryKey, { docs: [doc('d2', 'Old plan')], next_cursor: null });
@@ -98,7 +98,7 @@ describe('archived docs', () => {
     await waitFor(() => expect(screen.queryByText('Old plan')).toBeNull());
   });
 
-  it('archives a doc: off the list at once, and sent with its version', async () => {
+  it('archives a doc: off the list at once, and sent with its version @s791', async () => {
     const sent = serve();
     queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Live doc')], next_cursor: null });
     at('/library/d1');
@@ -108,7 +108,7 @@ describe('archived docs', () => {
     expect(writes(sent)).toEqual([{ url: '/api/v2/docs/d1', method: 'PATCH', body: { version: 3, archived: true } }]);
   });
 
-  it('turns the archived view on from the head’s ⋯', async () => {
+  it('turns the archived view on from the head’s ⋯ @s791', async () => {
     serve(() => ({ docs: [], next_cursor: null }));
     queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Live doc')], next_cursor: null });
     const router = at('/library/docs', <DocsPage search={{}} />);
@@ -202,7 +202,7 @@ describe('docs list', () => {
 });
 
 describe('import a file', () => {
-  it('sends the file to the import and opens the new doc', async () => {
+  it('sends the file to the import and opens the new doc @s819', async () => {
     const sent = serve((url) => (url.includes('/docs/import') ? { doc: { ...doc('d9', 'Handbook'), body: '', archived: false } } : {}));
     const router = at('/library/docs');
     const file = new File(['# Handbook'], 'handbook.md', { type: 'text/markdown' });
@@ -213,7 +213,7 @@ describe('import a file', () => {
     expect(router.state.location.pathname).toBe('/library/d9');
   });
 
-  it('is never Tico’s: there is no file to hand over', async () => {
+  it('is never Tico’s: there is no file to hand over @s819', async () => {
     serve();
     at('/library/docs');
     expect(await run('docs.import', {}, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
@@ -235,7 +235,7 @@ describe('a field’s history', () => {
     notes: [],
   };
 
-  it('shows past values in the panel from the field’s ⋯', async () => {
+  it('shows past values in the panel from the field’s ⋯ @s835', async () => {
     const sent = serve((url) =>
       url.includes('/entities/history')
         ? { rows: [{ id: 'h1', value: 'Intern', source_type: 'email', source_id: null, confidence: null, active_from: null, active_until: '2026-10-01T00:00:00Z' }], next: null }
@@ -256,7 +256,7 @@ describe('a field’s history', () => {
 });
 
 describe('install a skill', () => {
-  it('installs for one agent, or for a team’s members at once', async () => {
+  it('installs for one agent, or for a team’s members at once @s831', async () => {
     const sent = serve();
     at('/library/skills');
     await run('skills.install', { skill: 'triage', targets: [{ target_type: 'Bot', target_id: 'b1' }] }, { via: 'click' });
@@ -271,7 +271,7 @@ describe('install a skill', () => {
     ]);
   });
 
-  it('offers Install first on a skill nobody has', async () => {
+  it('offers Install first on a skill nobody has @s831', async () => {
     serve(() => ({ files: [] }));
     const v = { number: 1, approved_at: '2026-11-01T00:00:00Z', approved_by_id: 'human:me' };
     queryClient.setQueryData(skillQuery('triage').queryKey, { skill: { id: 's1', name: 'triage', description: '', latest: v }, versions: [v], installs: [] } as never);

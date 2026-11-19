@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
-import type { ApiTool, LetterOut, ToolIndexRow, WebsiteTool } from '@/api/schema';
+import type { ApiTool, ToolIndexRow, WebsiteTool } from '@/api/schema';
 import { directoryQuery, meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
@@ -42,8 +42,6 @@ import {
   mailQuery,
   toolsQuery,
   vendorQuery,
-  webhookQuery,
-  webhookSendsQuery,
   websiteToolQuery,
 } from './queries';
 import { GoogleSection, LettersInSettings, LettersOutSection, MayDo, NumberRequests, PostalAddresses, SendingSection, SharedInboxDialog } from './ToolSettings';
@@ -67,7 +65,11 @@ import {
 } from './ToolMore';
 import { teamsQuery, vaultQuery, type StoredKey } from './toolKeys';
 import type { ToolsSearch } from './search';
-import { bad, Code, Dim, KIND, LEVEL, Shell, stateOf, toolHref, Who } from './ToolShell';
+import { bad, Code, Dim, KIND, LEVEL, Shell, stateOf, toolHref, useAdmin, Who } from './ToolShell';
+import { AddressOne, Automations, LetterSenders, LettersIn, LettersOut } from './ToolLetters';
+import { MessagesView } from './ToolMessages';
+import type { LetterIn } from './toolMail';
+import { WebhookView } from './ToolWebhook';
 import './library.css';
 
 export { KIND } from './ToolShell';
@@ -236,6 +238,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
                 <AddItems onPick={setAdding} />
               </MenuSub>
             )}
+            <MenuItem label="Messages" onSelect={() => void press('tools.open', { tool: 'messages' })} />
             {SETTINGS.map(([tool, label]) => (
               <MenuItem key={tool} label={label} onSelect={() => void press('tools.open', { tool })} />
             ))}
@@ -315,7 +318,8 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   if (kind === 'mailbox' && !key) return <EmailView />;
   if (kind === 'number' && !key) return <NumbersView />;
   if (kind === 'tico' || kind === 'number') return <InboxView inbox={key} row={row} number={kind === 'number'} />;
-  if (kind === 'address') return <AddressView row={row} />;
+  if (kind === 'address') return key ? <AddressOne id={key} /> : <AddressView row={row} />;
+  if (kind === 'messages') return <MessagesView />;
   if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
   return <PlainView row={row} kind={kind} problem={problem} />;
 }
@@ -426,21 +430,18 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
                 </span>
                 {t.tool.delivery === 'proxy' && <Held />}
                 {k.expires_on && <span className="arow-w">Expires {k.expires_on}</span>}
-                {t.can_manage && (
-                  <>
-                    <IconButton icon="edit" label="Replace key" size="sm" onClick={() => setKeyFor(k)} />
-                    <Menu trigger={<IconButton icon="more" label={`${k.name} options`} size="sm" />}>
-                      <MenuItem label="Show key" onSelect={() => setDialog({ is: 'reveal', key: k })} />
-                      {k.expires_source !== 'vendor' && <MenuItem label="Set end date" onSelect={() => setDialog({ is: 'expiry', key: k })} />}
-                      {k.can_remove !== false && (
-                        <>
-                          <MenuRule />
-                          <MenuItem label="Remove key" onSelect={() => void press('tools.removeKey', { tool: id, key: k.id }, 'Not removed')} />
-                        </>
-                      )}
-                    </Menu>
-                  </>
-                )}
+                {t.can_manage && <IconButton icon="edit" label="Replace key" size="sm" onClick={() => setKeyFor(k)} />}
+                {/* Show key is offered to anyone who sees the key: the server lets whoever it is given to read it. */}
+                <Menu trigger={<IconButton icon="more" label={`${k.name} options`} size="sm" />}>
+                  <MenuItem label="Show key" onSelect={() => setDialog({ is: 'reveal', key: k })} />
+                  {t.can_manage && k.expires_source !== 'vendor' && <MenuItem label="Set end date" onSelect={() => setDialog({ is: 'expiry', key: k })} />}
+                  {(k.can_remove ?? t.can_manage) && (
+                    <>
+                      <MenuRule />
+                      <MenuItem label="Remove key" onSelect={() => void press('tools.removeKey', { tool: id, key: k.id }, 'Not removed')} />
+                    </>
+                  )}
+                </Menu>
               </div>
             ))}
             {t.can_manage && t.keys.length > 0 && <More onClick={() => void press('tools.check', { tool: id }, 'Not checked')}>Check now</More>}
@@ -767,16 +768,23 @@ function NumbersView() {
 function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | undefined; number: boolean }) {
   const boxes = useQuery(inboxesQuery);
   const messages = useQuery(inboxMessagesQuery(inbox));
+  const admin = useAdmin();
   const box = boxes.data?.find((b) => b.inbox_id === inbox);
   const name = box?.name ?? row?.name ?? (number ? 'Phone number' : 'Tico address');
   const [dialog, setDialog] = useState<'edit' | 'release' | 'join' | null>(null);
-  const [reading, setReading] = useState<{ id: string; title: string } | null>(null);
-  const more = box && (
+  const [reading, setReading] = useState<{ id: string; title: string; code: boolean } | null>(null);
+  // As the old page: anyone renames an address; a number, joining the shared Inbox and stopping are an admin's.
+  const editable = !number || admin;
+  const more = box && (editable || admin) && (
     <PageMore>
-      <MenuItem label="Edit" onSelect={() => setDialog('edit')} />
-      {!number && <MenuItem label="Join shared Inbox" onSelect={() => setDialog('join')} />}
-      <MenuRule />
-      <MenuItem label="Stop using" onSelect={() => setDialog('release')} />
+      {editable && <MenuItem label="Edit" onSelect={() => setDialog('edit')} />}
+      {!number && admin && <MenuItem label="Join shared Inbox" onSelect={() => setDialog('join')} />}
+      {admin && (
+        <>
+          <MenuRule />
+          <MenuItem label="Stop using" onSelect={() => setDialog('release')} />
+        </>
+      )}
     </PageMore>
   );
   return (
@@ -795,7 +803,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
           <LabelValue label={number ? 'Number' : 'Address'}>
             <Code>{box?.address ?? row?.detail ?? ''}</Code>
           </LabelValue>
-          {box && <InboxReaders box={box} />}
+          {box && <InboxReaders box={box} can={admin} />}
           {box?.used_for && <LabelValue label="Used for">{box.used_for}</LabelValue>}
         </Facts>
       </Section>
@@ -806,6 +814,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
         </Facts>
         <CheckInbox />
       </Section>
+      {box?.address && <Automations address={box.address} />}
       {(messages.data?.length ?? 0) > 0 && (
         <Section name="Recent use">
           {messages.data?.map((m) => {
@@ -820,7 +829,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
                 className="row urow"
                 title={what}
                 disabled={!id}
-                onClick={() => id && setReading({ id, title: what || 'Message' })}
+                onClick={() => id && setReading({ id, title: what || 'Message', code: m.has_code === true })}
               >
                 <span className="urow-lead" title="Came in">
                   <Icon name="download" />
@@ -831,10 +840,11 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
               </button>
             );
           })}
+          <More onClick={() => void press('tools.open', { tool: 'messages' })}>All messages</More>
         </Section>
       )}
       {number && <NumberRequests />}
-      {reading && <MessageDialog message={reading.id} title={reading.title} onClose={() => setReading(null)} />}
+      {reading && <MessageDialog message={reading.id} title={reading.title} hasCode={reading.code} onClose={() => setReading(null)} />}
       {dialog === 'join' && <SharedInboxDialog onClose={() => setDialog(null)} />}
       {box && dialog === 'edit' && <EditInboxDialog box={box} onClose={() => setDialog(null)} />}
       {box && dialog === 'release' && <ReleaseDialog box={box} number={number} onClose={() => setDialog(null)} />}
@@ -842,36 +852,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
   );
 }
 
-/* ---------------------------------------------------------------- a mailing address */
-
-const STATUS_WORD: Record<string, string> = {
-  queued: 'Waiting',
-  pending: 'Waiting',
-  waiting_approval: 'Waits on approval',
-  approved: 'Approved',
-  submitted: 'Sent to print',
-  mailed: 'Mailed',
-  in_transit: 'On its way',
-  delivered: 'Delivered',
-  returned: 'Returned',
-  canceled: 'Stopped',
-  cancelled: 'Stopped',
-  failed: 'Failed',
-  filed: 'Filed',
-  archived: 'Archived',
-  new: 'New',
-};
-const word = (s: string) => STATUS_WORD[s] ?? s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
-
-/** Who a letter went to, when the server shows it (a redacted letter shows only its pages). */
-function letterTitle(l: LetterOut): string {
-  if (!l.redacted) {
-    const r = l.recipient as { name?: unknown; company?: unknown; city?: unknown };
-    const who = [r.name, r.company].find((v) => typeof v === 'string' && v) as string | undefined;
-    if (who) return typeof r.city === 'string' && r.city ? `${who}, ${r.city}` : who;
-  }
-  return l.page_count ? `A letter, ${l.page_count} page${l.page_count === 1 ? '' : 's'}` : 'A letter';
-}
+/* ---------------------------------------------------------------- the mailing address (one address: ToolLetters.tsx) */
 
 function AddressView({ row }: { row: ToolIndexRow | undefined }) {
   useFollow({ topic: 'letters' });
@@ -894,99 +875,10 @@ function AddressView({ row }: { row: ToolIndexRow | undefined }) {
       </Section>
       <PostalAddresses />
       <LettersOutSection />
+      <LetterSenders />
       <LettersInSettings />
-      <Section name="Letters out" count={letters.data?.length}>
-        {letters.data?.length === 0 && <Empty title="No letters sent yet" />}
-        {letters.data?.map((l) => (
-          <div key={l.id} className="row urow" title={letterTitle(l)} data-target={`letter:${l.id}`}>
-            <span className="urow-lead" title="Sent">
-              <Icon name="send" />
-            </span>
-            <span className="row-title">{letterTitle(l)}</span>
-            <span className="row-ctx">{word(l.status)}</span>
-            {l.can_cancel && (
-              <IconButton icon="close" label="Stop this letter" size="sm" onClick={() => void press('tools.cancelLetter', { letter: l.id }, 'Not stopped')} />
-            )}
-            <Ago at={l.created_at} className="row-age" />
-          </div>
-        ))}
-      </Section>
-      {(inbound.data?.length ?? 0) > 0 && (
-        <Section name="Letters in" count={inbound.data?.length}>
-          {inbound.data?.map((m) => (
-            <div key={m.id} className="row urow" title={m.sender || m.summary}>
-              <span className="urow-lead" title="Came in">
-                <Icon name="download" />
-              </span>
-              <span className="row-title">{m.sender || m.summary || 'A letter'}</span>
-              <span className="row-ctx">{word(m.status)}</span>
-              <Ago at={m.received_at} className="row-age" />
-            </div>
-          ))}
-        </Section>
-      )}
-    </Shell>
-  );
-}
-
-/* ---------------------------------------------------------------- Outgoing webhooks */
-
-const SENT: Record<string, string> = {
-  ready: 'Waiting',
-  sending: 'Sending',
-  delivered: 'Delivered',
-  failed: 'Failed',
-  canceled: 'Canceled',
-  withheld: 'Held back',
-};
-
-function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
-  const hook = useQuery(webhookQuery(id));
-  const sends = useQuery(webhookSendsQuery(id));
-  const w = hook.data?.webhook;
-  const paused = !!w?.paused_reason;
-  const more = w?.can_change && (
-    <PageMore>
-      <MenuItem label="Send test" onSelect={() => void press('tools.testWebhook', { webhook: id }, 'The test did not send')} />
-      <MenuItem
-        label={paused ? 'Send again' : 'Pause'}
-        onSelect={() => void press('tools.pauseWebhook', { webhook: id, on: paused }, paused ? 'It did not restart' : 'It did not pause')}
-      />
-    </PageMore>
-  );
-  return (
-    <Shell
-      name={w?.name ?? row?.name ?? 'Outgoing webhook'}
-      kind="webhook"
-      problem={(row && bad(row)) || w?.disabled_reason || null}
-      more={more}
-      state={stateOf(hook)}
-      onRetry={() => void hook.refetch()}
-      target={`tool:webhook:${id}`}
-    >
-      {w && (
-        <Section name="What it is">
-          <Facts>
-            <LabelValue label="Sends to">{w.url || w.host}</LabelValue>
-            <LabelValue label="Events">{w.events.length ? w.events.join(', ') : 'All'}</LabelValue>
-            <LabelValue label="State">{paused ? w.paused_reason : w.enabled ? 'On' : 'Off'}</LabelValue>
-            <LabelValue label="Last 7 days">
-              {`${w.last_7_days.delivered} delivered, ${w.last_7_days.failed} failed, ${w.last_7_days.pending} waiting`}
-            </LabelValue>
-          </Facts>
-        </Section>
-      )}
-      {sends.data && sends.data.length > 0 && (
-        <Section name="Recent sends" count={sends.data.length}>
-          {sends.data.map((x) => (
-            <div key={x.id} className="row urow" title={x.last_error || undefined}>
-              <span className="row-title">{x.subject || x.type}</span>
-              <span className="row-ctx">{x.last_status ? `${SENT[x.state] ?? x.state} (${x.last_status})` : (SENT[x.state] ?? x.state)}</span>
-              <Ago at={x.delivered_at ?? x.created_at} className="row-age" />
-            </div>
-          ))}
-        </Section>
-      )}
+      <LettersOut letters={letters.data ?? []} />
+      {(inbound.data?.length ?? 0) > 0 && <LettersIn items={(inbound.data ?? []) as LetterIn[]} />}
     </Shell>
   );
 }
