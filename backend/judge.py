@@ -126,7 +126,7 @@ def cache_write_split(usage):
     writes = cache_writes(usage)
     split = usage.get("cache_creation") if isinstance(usage, dict) else None
     hour = split.get("ephemeral_1h_input_tokens") if isinstance(split, dict) else None
-    hour = min(int(hour), writes) if _count(hour) else 0
+    hour = min(int(hour), writes) if isinstance(hour, int | float) and _count(hour) else 0
     return writes - hour, hour
 
 
