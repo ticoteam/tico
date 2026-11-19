@@ -107,3 +107,34 @@ def test_a_person_whose_plans_are_all_held_names_the_first_reset_and_another_pla
     line = found["computer_plan_held"]["summary"]
     assert "each is at its usage limit; the first to reset is Plan A until Nov 21 09:00 UTC" in line
     assert "Add a Claude plan with usage left" in line
+
+
+def test_the_models_check_says_the_plans_are_at_their_limit_not_that_nothing_is_signed_in(api):
+    pinned(api)
+    line = checks(api)["models"]["summary"]
+    assert "usage limit" in line and "signed in" not in line
+
+
+def test_a_person_with_a_held_plan_and_one_to_reconnect_is_told_to_reconnect_it(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    first, second = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api)
+    with api.app.state.store.transaction() as c:
+        owner = MS.row(c, first)["owner_id"]
+        c.execute("UPDATE model_subscriptions SET status='needs_reconnect' WHERE id=?", (second,))
+    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": owner})
+    hold(api, first)
+    found = checks(api)["computer_plan_held"]
+    assert "each is at its usage limit" not in found["summary"]
+    assert "Plan B needs reconnecting. Reconnect Plan B in Settings > Models" in found["summary"]
+    assert [f["tab"] for f in found["fixes"]] == ["models"]
+
+
+def test_a_member_reads_how_many_computers_wait_never_the_plan_or_its_owner(api):
+    _, plan, _ = pinned(api)
+    found = {row["id"]: row for row in get(api, "health", "cara-test")["checks"]}
+    line = found["computer_plan_held"]["summary"]
+    assert line.startswith("1 computer(s) wait") and "Matheus" not in line and "Test Mac" not in line
+    assert not found["computer_plan_held"]["fixes"]

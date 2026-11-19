@@ -627,12 +627,15 @@ OTHER_PLANS_SQL = (
 
 def plan_hold(c, runner_id, runtime, loads=None):
     """Why this computer's turns on `runtime` wait for a plan, not a sign-in: every plan it is given for the runtime is
-    held at its usage limit (the one plan given to it, or each of a person's plans), or None. One that needs
-    reconnecting is not this: Reconnect is its fix. {plan (the name of the plan whose hold ends first), until, limit
-    ("weekly", "5-hour" or ""), owner, owner_name, fix}. `fix` is the one change that runs its turns now:
+    held at its usage limit (the one plan given to it, or a person's plans, some of which may need reconnecting
+    instead), or None. A plan that only needs reconnecting is not this: Reconnect is its fix. {plan (the name of the
+    plan whose hold ends first), until, limit ("weekly", "5-hour" or ""), owner, owner_name, reconnect (the names of
+    the given plans that need reconnecting too), fix}. `fix` is the one change that runs its turns now:
+    {"reconnect", "name"} for a given plan that needs reconnecting (it has no hold, so it signs in once reconnected),
     {"person", "name"} for the plan owner's plans in turn when the owner has another plan for the runtime with usage
     left (the computer moves between them by itself, `settle`), {"plan", "name"} for another plan with usage left, or
     None when no plan has any."""
+    from . import claude_login
     from . import login_holds
 
     given = loads.given if loads is not None else _given(c)
@@ -646,10 +649,12 @@ def plan_hold(c, runner_id, runtime, loads=None):
             return None
         first = min(held, key=lambda m: (_hold_end(c, m["id"], runtime, loads), m["id"]))
         owner, mine = sub["person"], {m["id"] for m in members}
+        stuck = [m for m in members if m.get("id") and m not in held]
     else:
         if not sub.get("id") or sub.get("status") == "needs_reconnect" or not _held(c, sub["id"], runtime, loads):
             return None
         first, owner, mine = sub, (row(c, sub["id"]) or {}).get("owner_id") or "", {sub["id"]}
+        stuck = [sub] if claude_login.expired(sub) else []
     hold = login_holds.get(c, "", login_holds.subscription_login(first["id"]), runtime, loads)
     kind = login_holds.window(hold.get("error") or "")
     others = [
@@ -659,7 +664,12 @@ def plan_hold(c, runner_id, runtime, loads=None):
     ]
     own = [r for r in others if owner and r["owner_id"] == owner]
     fix = None
-    if own and not sub.get("person"):
+    # A given plan that is not held is passed over only for its sign-in (it needs reconnecting, or its login ran out):
+    # reconnecting it runs the turns now, with no reset to wait for.
+    unheld = [m for m in stuck if not _held(c, m["id"], runtime, loads)]
+    if unheld:
+        fix = {"reconnect": unheld[0]["id"], "name": unheld[0].get("name") or ""}
+    elif own and not sub.get("person"):
         fix = {"person": owner, "name": _name_of(c, owner)}
     elif others:
         best = _ordered(c, others, runtime)[0]
@@ -671,6 +681,7 @@ def plan_hold(c, runner_id, runtime, loads=None):
         "owner": owner,
         "owner_name": _name_of(c, owner) if owner else "",
         "pinned": not sub.get("person"),
+        "reconnect": [m.get("name") or "" for m in stuck],
         "fix": fix,
     }
 
@@ -690,8 +701,9 @@ def _when(ts):
 
 
 def hold_words(held, label, runtime):
-    """(problem, fix) for a computer whose plans for `runtime` are all held (`plan_hold`), never "sign in": the plan, its
-    limit and its reset, and the one change that runs its turns now."""
+    """(problem, fix, settings tab) for a computer whose plans for `runtime` are all passed over, at least one held at
+    its usage limit (`plan_hold`), never "sign in": the plan, its limit and its reset, any given plan that needs
+    reconnecting, and the one change that runs its turns now."""
     tool = next(
         (
             spec["name"]
@@ -706,17 +718,27 @@ def hold_words(held, label, runtime):
         problem = f"{label}'s only {tool} plan, {held['plan']}, is at {limit}{until}"
     else:
         problem = (
-            f"{label} is given {held['owner_name']}'s {tool} plans and each is at its usage limit; "
-            f"the first to reset is {held['plan']}{until}"
+            f"{label} is given {held['owner_name']}'s {tool} plans and "
+            + ("none can sign in" if held["reconnect"] else "each is at its usage limit")
+            + f"; the first to reset is {held['plan']}{until}"
         )
+    if held["reconnect"]:
+        names = ", ".join(held["reconnect"])
+        problem += f"; {names} {'needs' if len(held['reconnect']) == 1 else 'need'} reconnecting"
     fix = held["fix"]
+    if fix and fix.get("reconnect"):
+        return problem, f"Reconnect {fix['name']} in Settings > Models", "models"
     if fix and fix.get("person"):
         words = f"Give {label} {fix['name']}'s plans, in turn, in Settings > Computers: it moves to one with usage left"
     elif fix:
         words = f"Give {label} {fix['name']}, which has usage left, in Settings > Computers"
     else:
-        words = f"Add a {tool} plan with usage left in Settings > Models, or its turns wait for the reset"
-    return problem, words
+        return (
+            problem,
+            f"Add a {tool} plan with usage left in Settings > Models, or its turns wait for the reset",
+            "models",
+        )
+    return problem, words, "devices"
 
 
 def turn_runtimes(config, record=None):

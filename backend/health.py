@@ -762,8 +762,8 @@ def _plans_held(computers):
     for x in computers:
         for r in x["runtimes"] if x["online"] else ():
             if held := r.get("plan_held"):
-                problem, fix = hold_words(held, x["label"], r["name"])
-                out.append((problem[0].upper() + problem[1:], fix, "devices" if held["fix"] else "models"))
+                problem, fix, tab = hold_words(held, x["label"], r["name"])
+                out.append((problem[0].upper() + problem[1:], fix, tab))
     return out
 
 
@@ -3660,6 +3660,7 @@ def view(c, who, settings, auth, github, config, filing=False):
                     )
                 )
         wanted = _wanted_runtimes(providers.load(c, settings))
+        held_plans = _plans_held(computers)
         # Signed in by the computer's own login or by the company's plan given to it (`ready` on each runtime row).
         signed = next(
             (r["name"] for x in computers if x["online"] for r in x["runtimes"] if r["name"] in wanted and r["ready"]),
@@ -3691,6 +3692,17 @@ def view(c, who, settings, auth, github, config, filing=False):
                         _fix("Open Keys", "#/tools/keys?show=credentials"),
                         _fix("Open Computers", "#/settings", "devices"),
                     ],
+                )
+            )
+        elif online and not signed and held_plans:
+            # Its plans are there but at their limit: Computer plans at their limit says which and what to give it.
+            checks.append(
+                _check(
+                    "models",
+                    "Models",
+                    "bad",
+                    "No online computer can run your model now: the plans it is given are at their usage limit.",
+                    [_fix("Open Computers", "#/settings", "devices")],
                 )
             )
         elif online and not signed and gateway_runs:
@@ -3731,7 +3743,19 @@ def view(c, who, settings, auth, github, config, filing=False):
         else:
             checks.append(_check("models", "Models", "unknown", "Nothing to check until a computer is online."))
 
-    if held := _plans_held(computers):
+    if (held := _plans_held(computers)) and not full:
+        # Plan names, owners and resets are Settings > Models' to show: other readers get the count, as Computer
+        # logins below gives them.
+        checks.append(
+            _check(
+                "computer_plan_held",
+                "Computer plans at their limit",
+                "bad",
+                f"{len(held)} computer(s) wait for a model plan at its usage limit. "
+                "Ask an owner or admin to check Settings > Computers.",
+            )
+        )
+    elif held:
         # Every plan a computer is given is at its usage limit: name the plan, the limit and its reset, and the one
         # change that runs its turns now. It needs no sign-in, so it is not in Computer sign-in below.
         fixes = {
