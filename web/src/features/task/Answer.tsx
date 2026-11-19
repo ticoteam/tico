@@ -10,7 +10,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { toast } from '@/kit/Toast';
 import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
 import { Face } from './parts';
-import { decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
+import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -57,7 +57,7 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
 function useNamed(t: TaskData, r: TaskRequirement) {
   const send = emailOf(r);
   const mail = useQuery({ ...emailSendQuery(t.id, send ?? ''), enabled: !!send });
-  const to = mail.data?.send.recipients[0] ?? sendTitle(t.title)?.to;
+  const to = (mail.data && addressesOf(mail.data).to[0]) ?? sendTitle(t.title)?.to;
   return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r) };
 }
 

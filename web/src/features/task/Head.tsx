@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useState, type ReactElement } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 import { run, type Result } from '@/actions';
 import { meQuery, useActor, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
@@ -47,7 +47,7 @@ export function WhereLine({ t }: { t: TaskData }) {
 
 /** An approval's one quiet line (plan/approvals.html): pipeline · stage · how long, and Late. The stage and owner
     picks are in Details, under ⋯. */
-export function QuietLine({ t }: { t: TaskData }) {
+export function QuietLine({ t, children }: { t: TaskData; children?: ReactNode }) {
   return (
     <span className="tv-quiet">
       {[t.pipeline?.name, t.status === 'open' ? t.stage?.name : t.status === 'done' ? 'Done' : 'Closed'].filter(Boolean).join(' · ')}
@@ -57,6 +57,7 @@ export function QuietLine({ t }: { t: TaskData }) {
           <Ago at={t.stage_since} />
         </>
       )}
+      {children}
       {t.late && <LatePill />}
     </span>
   );

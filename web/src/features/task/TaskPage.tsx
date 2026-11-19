@@ -15,10 +15,10 @@ import { whoHref } from '@/features/team/routing';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
-import { Email as EmailView } from './Email';
+import { EmailSource, Email as EmailView } from './Email';
 import { FileTab, FileView } from './FileView';
 import { FlowSteps, FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { changesAskedOf, decisionOf, defaultTab, DETAILS, failedToast, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
+import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
@@ -118,7 +118,9 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const address = tabAddress(t, on, flow);
   const details = on === DETAILS;
   // An approval's view (plan/approvals.html): the title, one quiet line and the thing's tabs; its facts are under ⋯.
-  const quiet = !details && !!(decisionOf(t) ?? changesAskedOf(t, me));
+  const asked = decisionOf(t) ?? changesAskedOf(t, me);
+  const quiet = !details && !!asked;
+  const send = emailOf(asked);
   // The page alone: the sheets beside it fold (the shell's own keys unfold them).
   const expand = () => {
     for (const sheet of ['tico', 'menu', 'list'] as const) void run('shell.fold', { sheet, folded: true }, { via: 'click' });
@@ -164,7 +166,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       title={quiet ? (sendTitle(t.title)?.subject ?? t.title) : t.title}
       path={address.to}
       crumb={flow ? [{ label: 'Flow', to: '/flow' }] : [{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
-      sub={quiet ? <QuietLine t={t} /> : <WhereLine t={t} />}
+      sub={quiet ? <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine> : <WhereLine t={t} />}
       // An approval's title is read, not renamed (the mock draws it plain): Details, under ⋯, renames it.
       onRename={quiet ? undefined : (title) => void rename(title)}
       actions={flow ? <FlowSteps t={t} /> : undefined}
