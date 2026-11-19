@@ -47,6 +47,7 @@ from fastapi import Request
 
 from . import growth as _growth_untyped
 from . import growth_computed as GX
+from . import growth_customers as GC
 from . import growth_setup as _setup_untyped
 from . import hubdb as _hubdb_untyped
 from . import models as M
@@ -511,6 +512,7 @@ class Data:
     on: date
     slugs: set[str]  # the channels' slugs
     lines: dict[str, Row]  # channel slug -> its name, owner_ref, budget_month and retired_at
+    names: dict[str, str]  # source label -> its Growth source's name, where it has one
 
 
 def load(c: sqlite3.Connection) -> Data:
@@ -522,13 +524,18 @@ def load(c: sqlite3.Connection) -> Data:
         for r in H._rows(c.execute("SELECT slug, name, owner_ref, budget_month, retired_at FROM growth_channels"))
     }
     slugs = set(lines)
+    names = {GC.source_key(str(sid)): str(system) for sid, system in c.execute("SELECT id, system FROM gtm_sources")}
+    names[GC.UPLOAD] = G.UPLOAD_NAME
     rows: list[Row] = H._rows(c.execute("SELECT * FROM growth_cohort_rows"))
     if GX.has_facts(c):
         loaded = {
-            str(s): str(at)[:10]
+            str(s): str(at)
             for s, at in c.execute("SELECT source, max(loaded_at) FROM growth_customer_loads GROUP BY source")
         }
-        rows += fold(GX.facts(c), segs, slugs, on, loaded)
+        folded = fold(GX.facts(c), segs, slugs, on, {s: at[:10] for s, at in loaded.items()})
+        for r in folded:
+            r["pushed_at"] = loaded.get(r["source"])
+        rows += folded
     costs: list[Row] = H._rows(c.execute("SELECT * FROM growth_costs"))
     typed_months = GX.typed_cohorts(c)
     covered = {(r["channel"], r["period"]) for r in rows if r["anchor"] == "customer"}
@@ -567,7 +574,7 @@ def load(c: sqlite3.Connection) -> Data:
                         "quality": typed.get("quality") or "actual",
                     }
                 )
-    return Data(rows, costs, segs, conf, on, slugs, lines)
+    return Data(rows, costs, segs, conf, on, slugs, lines, names)
 
 
 def verdict(value: float | None, average: float | None, n: int, least: int) -> str | None:
@@ -937,11 +944,23 @@ def health(scope: Scope, month: str) -> Row:
                 mismatch += int(r["entered"])
         out.update(no_segment=no_segment, mismatch=mismatch)
     newest: dict[str, str] = {}
+    pushed: dict[str, str] = {}
     for r in data.rows:
         if r["source"] != TYPED:  # typed by hand: no source to go stale
             newest[r["source"]] = max(newest.get(r["source"], ""), str(r["as_of"]))
+            pushed[r["source"]] = max(pushed.get(r["source"], ""), str(r.get("pushed_at") or ""))
     line = (data.on - timedelta(days=STALE_DAYS)).isoformat()
     out.update(stale_sources=sorted(s for s, at in newest.items() if at < line))
+    out["sources"] = [
+        {
+            "source": s,
+            "name": data.names.get(s) or s,
+            "as_of": newest[s],
+            "pushed_at": pushed[s] or None,
+            "stale": newest[s] < line,
+        }
+        for s in sorted(newest)
+    ]
     return out
 
 
