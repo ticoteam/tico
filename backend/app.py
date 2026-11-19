@@ -88,6 +88,7 @@ from . import (
     bot_seats_routes,
     fleet_runner_routes,
     ui_bundle_routes,
+    web_routes,
 )
 from .api_contract import api_v2
 from . import timing
@@ -1548,11 +1549,11 @@ def _install_request_guard(
             if route_keeps or file_bytes:
                 pass  # the route's own "private, max-age=…" stands
             elif (
-                request.url.path.startswith(ui_build.BUNDLE_PREFIX)
+                request.url.path.startswith((ui_build.BUNDLE_PREFIX, web_routes.ASSETS_PREFIX))
                 and response.status_code in (200, 304)
                 and response.headers.get("cache-control") == ui_build.IMMUTABLE
             ):
-                pass  # a bundle file is named by its content (scripts/build-ui.cjs): kept for a year
+                pass  # a bundle file is named by its content (scripts/build-ui.cjs, the web app's build): kept for a year
             elif (
                 request.query_params.get("v")
                 and response.status_code in (200, 304)
@@ -2685,6 +2686,7 @@ def _install_features(
 
     install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
 
+    web_routes.register(app, settings)  # before the UI's mount at /, which would answer /next (backend/web_routes.py)
     ui_bundle_routes.register(app, auth, settings)
     from . import cors
 
