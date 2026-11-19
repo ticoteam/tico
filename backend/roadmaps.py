@@ -15,7 +15,7 @@ from . import hubdb as H
 from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
-from .api_contract import api_v2
+from .api_contract import api_v2, error
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
@@ -257,13 +257,19 @@ def withdraw(c, task_id, token):
     return {'removed': True}
 
 
+# A task's requester tallies over its task_requesters rows: one aggregate for a task's requester list and the ranking.
+STATS_COLUMNS = (
+    'count(*) requester_count,sum(actor IS NULL) external_requesters,'
+    'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
+    "min(nullif(organization,'')) organization"
+)
+
+
 def stats(c, ids):
     if not ids:
         return {}
     rows = c.execute(
-        'SELECT task_id,count(*) requester_count,sum(actor IS NULL) external_requesters,'
-        'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
-        "min(nullif(organization,'')) organization FROM task_requesters "
+        'SELECT task_id,' + STATS_COLUMNS + ' FROM task_requesters '
         'WHERE task_id IN (SELECT value FROM json_each(?)) GROUP BY task_id',
         (json.dumps(ids),),
     )
@@ -295,6 +301,49 @@ def page(rows, limit=100, offset=0, max_bytes=262144):
     return result, offset + len(result) if more else None
 
 
+# The Roadmap ranks the Product pipeline's tasks (pipeline_settings: the `product` preset, its pair's `product`
+# Product, or the `features` preset that replaced it): each one the company has not retired.
+PRODUCT_PIPELINES = (
+    "SELECT id FROM pipelines WHERE retired_at IS NULL AND (preset IN ('product','features') OR id='product')"
+)
+NO_PRODUCT = 'The roadmap ranks the Product pipeline, and this company has none.'
+# Each an expression, not an answer's alias: in an ORDER BY expression SQLite reads a bare name as r's column, which is
+# null for a task nobody asked for.
+RANK_SORTS = {
+    'requester_count': 'coalesce(r.requester_count,0)',
+    'external_requesters': 'coalesce(r.external_requesters,0)',
+    'important': 'coalesce(r.important_requesters,0)',
+    'organization': 'r.organization',
+    'size': 't.size',
+}
+
+
+def ranking(c, visible, sort='requester_count', direction='desc', limit=100, offset=0):
+    """A page of the Product pipeline's tasks that `visible` (Auth.task_sql, over the task's own columns) admits,
+    with their requester tallies, by `sort` (RANK_SORTS) in `direction`; a task with no organization or size comes
+    last either way. Returns (rows, next offset or None), or None when no Product pipeline is in use."""
+    pipelines = [r[0] for r in c.execute(PRODUCT_PIPELINES)]
+    if not pipelines:
+        return None
+    column = RANK_SORTS[sort]
+    within = json.dumps(pipelines)
+    rows = c.execute(
+        'SELECT t.id,t.number,t.title,t.status,t.visibility,t.public_title,t.size,t.version,t.pipeline_id,t.stage_id,'
+        's.name stage_name,coalesce(r.requester_count,0) requester_count,'
+        'coalesce(r.external_requesters,0) external_requesters,coalesce(r.internal_requesters,0) internal_requesters,'
+        'coalesce(r.important_requesters,0) important_requesters,r.organization '
+        # The reader's rule reads the task's own columns, so it is applied where they are the only ones.
+        'FROM (SELECT * FROM tasks WHERE pipeline_id IN (SELECT value FROM json_each(?)) AND (' + visible + ')) t '
+        'LEFT JOIN stages s ON s.id=t.stage_id '
+        'LEFT JOIN (SELECT task_id,' + STATS_COLUMNS + ' FROM task_requesters WHERE task_id IN '
+        '(SELECT id FROM tasks WHERE pipeline_id IN (SELECT value FROM json_each(?))) GROUP BY task_id) r '
+        'ON r.task_id=t.id '
+        f'ORDER BY {column} IS NULL,{column} {direction},t.id LIMIT ? OFFSET ?',
+        (within, within, limit + 1, offset),
+    )
+    return page((dict(r) for r in rows), limit, offset)
+
+
 class PublicationInput(Contract):
     visibility: str | None = Field(default=None, pattern='^(public|private)$')
     public_title: str | None = Field(default=None, min_length=1, max_length=300)
@@ -320,7 +369,9 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.get(
         '/api/v2/tasks/{tid}/requesters',
-        **api_v2("Roadmaps", "listTaskRequesters", "Internal requester contacts, paged and byte-capped"),
+        **api_v2(
+            "Roadmaps", "listTaskRequesters", "Internal requester contacts, paged and byte-capped", "TaskRequesterList"
+        ),
     )
     def requesters(request: Request, tid: str, limit: int = 100, offset: int = 0):
         with store.read() as c:
@@ -351,7 +402,9 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post(
         '/api/v2/tasks/{tid}/requesters',
-        **api_v2("Roadmaps", "addTaskRequester", "Record a requester; returns a removal token once"),
+        **api_v2(
+            "Roadmaps", "addTaskRequester", "Record a requester; returns a removal token once", "TaskRequesterAdded"
+        ),
     )
     def create_requester(request: Request, tid: str, body: RequesterInput):
         def work(c):
@@ -383,7 +436,8 @@ def install_internal(app, store, auth, mutate, mover):
         return mutate(request, body, work)
 
     @app.post(
-        '/api/v2/tasks/{tid}/requesters/{rid}/delete', **api_v2("Roadmaps", "deleteTaskRequester", "Remove a requester")
+        '/api/v2/tasks/{tid}/requesters/{rid}/delete',
+        **api_v2("Roadmaps", "deleteTaskRequester", "Remove a requester", "TaskRequesterRemoved"),
     )
     def delete_requester(request: Request, tid: str, rid: str, body: Contract):
         def work(c):
@@ -409,7 +463,7 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post(
         '/api/v2/tasks/{tid}/requesters/{rid}',
-        **api_v2("Roadmaps", "updateTaskRequester", "Replace internal requester details"),
+        **api_v2("Roadmaps", "updateTaskRequester", "Replace internal requester details", "TaskRequesterUpdated"),
     )
     def update_requester(request: Request, tid: str, rid: str, body: RequesterInput):
         def work(c):
@@ -450,7 +504,7 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post(
         '/api/v2/tasks/{tid}/comments/{mid}/moderate',
-        **api_v2("Roadmaps", "moderateTaskComment", "Hide, restore or delete a public comment"),
+        **api_v2("Roadmaps", "moderateTaskComment", "Hide, restore or delete a public comment", "TaskCommentModerated"),
     )
     def moderate(request: Request, tid: str, mid: str, body: Moderate):
         def work(c):
@@ -474,6 +528,33 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.get('/api/v2/roadmap-tasks')
-    def ranked():
-        raise Problem('not_found', NOT_YET, 404)
+    @app.get(
+        '/api/v2/roadmap-tasks',
+        **api_v2(
+            "Roadmaps",
+            "listRoadmapTasks",
+            "The Product pipeline's tasks the caller can read, ranked by who asked for them",
+            "RoadmapTaskList",
+            description="Every task of the company's Product pipeline the caller may read, in any stage and status, "
+            "with its requester tallies, paged and byte-capped. sort is requester_count (the default), "
+            "external_requesters, important, organization or size; direction is desc (the default) or asc. A task "
+            "with no organization or size sorts last either way. 404 not_found when the company has no Product "
+            "pipeline. Set a task's public text with updateTask (visibility, public_title, public_summary) and its "
+            "stage with moveTask",
+            parameters={"limit": "1 to 100 (100)", "offset": "From next_offset"},
+            responses={"404": error("not_found: the company has no Product pipeline")},
+        ),
+    )
+    def ranked(
+        request: Request, sort: str = 'requester_count', direction: str = 'desc', limit: int = 100, offset: int = 0
+    ):
+        if sort not in RANK_SORTS or direction not in ('asc', 'desc'):
+            raise Problem('sort', 'sort is ' + ', '.join(RANK_SORTS) + '; direction is asc or desc', 422)
+        with store.read() as c:
+            who = request.state.identity
+            auth.domain(who)
+            found = ranking(c, auth.task_sql(c, who), sort, direction, max(1, min(limit, 100)), max(0, offset))
+            if found is None:
+                raise Problem('not_found', NO_PRODUCT, 404)
+            items, after = found
+            return {'tasks': items, 'next_offset': after}
