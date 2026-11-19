@@ -1,6 +1,6 @@
-"""Measures Needs you and Health for each kind of reader on a fictional company shaped like the hosted TIDY one (Nov 19:
-1,155 open pipeline tasks in 19 pipelines, the biggest 491, 375 and 225; 77 of them private, 38 with a reader list;
-722 finished turns in the last day across 63 bots, their results about 2.4 KB each).
+"""Measures Needs you and Health for each kind of reader on a fictional company the size of a large hosted one: 1,155
+open pipeline tasks in 19 pipelines, the biggest 491, 375 and 225; 77 of them private, 38 with a reader list; 722
+finished turns in the last day across 63 bots, their results about 2.4 KB each.
 
     nice -n 10 .venv/bin/python bench/perf-needs-health-scope.py
 
@@ -9,7 +9,7 @@ Eve, who asked for private tasks and is on reader lists; Fay, who reads private 
 
 Per route and reader it prints the statements one call takes and the median wall time of RUNS calls. Env: RUNS (7),
 DB=<file> (keep the seeded database and reuse it: seed once, then run two checkouts on the same rows), ANSWERS=<file>
-(each answer as JSON, the clock's own fields blanked, to compare two checkouts).
+(each answer as JSON, only the fields read from the request's own clock blanked, to compare two checkouts).
 
 Only fictional data, in a temporary folder removed afterwards (unless DB is given). Never point it at a real hub.
 """
@@ -121,6 +121,16 @@ def seed(api):
     health.record_never_stuck(store)
 
 
+def blank_clock(value):
+    """The answer with only the request clock's own fields blanked: a stored time (an ask's `since`, a fallback's
+    `changed_at`) is compared as it is."""
+    if isinstance(value, dict):
+        return {k: (None if k in status_health.CLOCK else blank_clock(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [blank_clock(v) for v in value]
+    return value
+
+
 def measure(api, path, token):
     store, seen, times = api.app.state.store, [], []
     first = api.get(path, headers=headers(token))
@@ -151,7 +161,7 @@ def report(api):
             items = answer.get("items") if isinstance(answer, dict) else None
             size = len(items) if isinstance(items, list) else len(answer.get("checks") or [])
             print(f"{path:22s} {token:9s} {len(seen):5d} statements {ms:8.1f} ms  {size:4d} items")
-            answers[f"{path} {token}"] = status_health.blank_clock(answer)
+            answers[f"{path} {token}"] = blank_clock(answer)
     if os.environ.get("ANSWERS"):
         Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
 

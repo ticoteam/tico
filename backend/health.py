@@ -2370,13 +2370,14 @@ def _fallbacks(c, settings, loads=None):
 
     since, latest, carrying = H.shift(H.now(), hours=-RECENT_HOURS), {}, set()
     for r in c.execute(
-        "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS hop,"
-        "json_extract(result,'$.waiting_for_sign_in') AS unsigned,usage_model "
         # Read from the index of exactly these fields (migration 20261119231532_recent_runs_fallbacks), never the
-        # turns' result documents.
+        # turns' result documents; a result that is not JSON has neither field. Two turns that finished at the same
+        # moment are taken newest-written first.
+        "SELECT bot_id,coalesce(started_at,created_at) AS began,"
+        "CASE WHEN json_valid(result) THEN json_extract(result,'$.fallback') END AS hop,"
+        "CASE WHEN json_valid(result) THEN json_extract(result,'$.waiting_for_sign_in') END AS unsigned,usage_model "
         "FROM attempts INDEXED BY attempts_recent_runs WHERE state IN ('completed','failed','interrupted') "
-        "AND finished_at>? "
-        "ORDER BY bot_id,finished_at DESC",
+        "AND finished_at>? ORDER BY bot_id,finished_at DESC,rowid DESC",
         (since,),
     ):
         if r["unsigned"]:
