@@ -1,0 +1,27 @@
+/* stylelint-disable declaration-property-value-allowed-list -- copied from the mock (tico/dot-states.css), not redrawn */
+/* What lands and where it is drawn: the flight layer, the wash, the edge chip, and the freeze rule for pictures.
+   The wash, the chip and the freeze rule are tico/dot-states.css L175-177, L191-192 and L291, numbers unchanged. */
+
+/* motion.md 7 proposes the flight layer at 35: above sheets and phone cards, below the scrim. Belongs in tokens.css. */
+:root{--z-fx:35}
+.fx-layer{position:fixed;inset:0;z-index:var(--z-fx);pointer-events:none;overflow:hidden}
+
+/* the short gray wash on the thing that changed (B5). Its opacity is driven by wash(). */
+.wash{position:absolute;inset:0;border-radius:inherit;background:color-mix(in srgb,var(--ink) 15%,transparent);opacity:0;pointer-events:none}
+.is-washing{isolation:isolate}
+.is-washing-rel{position:relative}
+.is-washing>.wash{z-index:-1}
+[data-wash="value"]>.wash{inset:-3px -7px;border-radius:5px}
+[data-wash="title"]>.wash{inset:-2px -8px;border-radius:6px}
+
+/* the change is off screen: a chip at the edge of its scroller nearest the change (B18) */
+.fx-edge{position:absolute;pointer-events:none}
+.fx-edge>.edge{pointer-events:auto;border:0;font:inherit;cursor:pointer}
+.edge{position:absolute;left:0;right:0;margin:0 auto;width:max-content;bottom:8px;height:24px;padding:0 10px 0 7px;border-radius:12px;background:var(--raised);box-shadow:var(--lift-3);color:var(--ink);font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;opacity:0;transform:translateY(6px)}
+.edge.up{bottom:auto;top:8px;transform:translateY(-6px)}
+.edge.in{opacity:1;transform:none;transition:opacity .2s var(--ease),transform .32s var(--spring)}
+.edge .ico{width:14px;height:14px;display:block}
+[data-motion="off"] .edge{transform:none}
+
+/* a picture at a moment: ?freeze=<ms> (clock.ts sets --ft and the class on the root) */
+.is-frozen *,.is-frozen *::before,.is-frozen *::after{animation-play-state:paused!important;animation-delay:calc(var(--ft,0)*-1ms)!important;transition:none!important}
