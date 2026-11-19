@@ -467,7 +467,8 @@ function ProposalCardView({ p }: { p: Proposal }) {
         <Button disabled={decide.pending} onClick={() => answer('reject')}>
           {a.no}
         </Button>
-        <Button variant="primary" disabled={decide.pending} onClick={() => answer('confirm')}>
+        {/* plain: a goal can hold several proposals, and a sheet has one filled button */}
+        <Button disabled={decide.pending} onClick={() => answer('confirm')}>
           {a.yes}
         </Button>
       </div>

@@ -589,7 +589,8 @@ export function MessagesView() {
     </Menu>
   );
   return (
-    <ToolPage name="Messages" kind="mailbox" fill={filter} q={list} target="tool:messages" bare>
+    // The inboxes feed the filter: when they fail, the page shows its fault rather than "No messages yet".
+    <ToolPage name="Messages" kind="mailbox" fill={filter} q={boxes.isError ? boxes : list} target="tool:messages" bare>
       <div className="msg-find">
         <Search label="Find messages" value={words} onValueChange={setWords} placeholder="Words" />
       </div>

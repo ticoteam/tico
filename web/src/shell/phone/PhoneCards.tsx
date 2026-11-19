@@ -196,7 +196,8 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
       const dy = y - (last.get(t) ?? y);
       last.set(t, y);
       clearTimeout(idle);
-      if (y < SCROLL.start || dy < -SCROLL.dead) {
+      // at its end a page has nothing more to read (a timeline opens there and follows what arrives): the lips are back
+      if (y < SCROLL.start || dy < -SCROLL.dead || t.scrollHeight - y - t.clientHeight < 1) {
         if (c.current > 0) put(0, false);
         return;
       }
@@ -207,12 +208,17 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
       }, SCROLL.idle);
     };
     pg.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    // another page starts with the lips up: one too short to scroll could never bring them back
+    const off = router?.subscribe('onResolved', (ev) => {
+      if (ev.pathChanged && c.current > 0) put(0, false);
+    });
     return () => {
+      off?.();
       pg.removeEventListener('scroll', onScroll, { capture: true });
       clearTimeout(idle);
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [router]);
 
   // ---------- the keyboard: the card being typed in rides it and keeps its last line in view ----------
   useEffect(() => {
@@ -398,7 +404,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     tuck();
   };
 
-  const cls = ['ph', second && 'has-chat', peeking && 'is-peek', handleMode && 'is-handle', back && 'is-back', second === 'call' && 'is-call'].filter(Boolean).join(' ');
+  const cls = ['phone', second && 'has-chat', peeking && 'is-peek', handleMode && 'is-handle', back && 'is-back', second === 'call' && 'is-call'].filter(Boolean).join(' ');
   const nubOn = handleMode && slotOf(card) !== 'tico';
   // a card that cannot be seen takes no focus: focusing it would scroll the stack and strand the cards mid-screen.
   // Out of view: below the screen (no chat open, or the page holds the bottom), or under a raised card in front.

@@ -74,8 +74,7 @@
 .lib .doc-text{display:block;width:100%;min-height:60vh;padding:0;border:0;background:none;color:var(--ink-2);font-size:var(--t-base);line-height:var(--lh-read);resize:none;outline:none}
 
 /* ---------- files: drop anywhere on the page; a file large with its facts beside it ---------- */
-.lib-drop{display:contents}
-.lib-drop.is-over>.page{box-shadow:inset 0 0 0 2px var(--focus)}
+.lib.is-drop{box-shadow:inset 0 0 0 2px var(--focus)}
 .lib .fv-main{flex:1;min-width:0;min-height:0;overflow:auto;scrollbar-width:none;padding:0 var(--s-3) var(--s-6) var(--pad-pane)}
 .lib .fv-desk{flex:1;min-height:0;display:grid;place-items:center;overflow:auto;scrollbar-width:none;margin:0 var(--s-3) var(--s-3);padding:var(--s-5);border-radius:var(--r-card);background:var(--desk);box-shadow:var(--lift-desk)}
 .lib .fv-img{max-width:min(100%,560px);border-radius:var(--r-paper);overflow:hidden;box-shadow:var(--lift-paper);display:block}

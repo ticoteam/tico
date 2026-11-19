@@ -242,7 +242,8 @@ function Guest({ actor }: { actor: string }) {
 export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void }) {
   useFollow({ meeting: id });
   const m = useQuery(meetingQuery(id));
-  const items = useQuery(itemsQuery(id));
+  // a meeting still to be shared has no tasks yet; the server refuses to list them
+  const items = useQuery({ ...itemsQuery(id), enabled: m.data?.review_state === 'live' });
   const liveId = m.data?.live_meeting_id ?? '';
   const chat = useQuery({ ...transcriptQuery(liveId), enabled: !!liveId, select: (d: LiveTranscript) => (d as LiveTranscript & { chat?: MeetChat[] }).chat ?? [] });
   const [tab, setTab] = useState<'summary' | 'transcript' | 'chat'>('summary');

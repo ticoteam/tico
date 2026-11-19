@@ -1,6 +1,6 @@
 // Every server call the calendar, meetings and calls make, and every query they read.
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
-import { api } from '@/api/client';
+import { api, ApiError } from '@/api/client';
 import type {
   Assistant,
   CalendarEvents,
@@ -270,8 +270,14 @@ export async function reviewMeeting(
 export const meetingQuery = (id: string) =>
   queryOptions({ queryKey: meetKeys.one(id), queryFn: ({ signal }) => api.get<Meeting>(`/api/v2/meetings/${enc(id)}`, { signal }) });
 
+/** A meeting's tasks and what came of it. Only a shared meeting has them: asked of one still pending, the server
+    answers 409 ("Share this meeting first"), and an answer like that is not asked again. */
 export const itemsQuery = (id: string) =>
-  queryOptions({ queryKey: meetKeys.items(id), queryFn: ({ signal }) => api.get<MeetingItems>(`/api/v2/meetings/${enc(id)}/items`, { signal }) });
+  queryOptions({
+    queryKey: meetKeys.items(id),
+    queryFn: ({ signal }) => api.get<MeetingItems>(`/api/v2/meetings/${enc(id)}/items`, { signal }),
+    retry: (n, e) => n < 1 && !(e instanceof ApiError && e.status === 409),
+  });
 
 export const transcriptQuery = (meetingId: string) =>
   queryOptions({

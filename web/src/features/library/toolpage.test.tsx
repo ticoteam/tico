@@ -739,6 +739,15 @@ describe('Messages', () => {
     await waitFor(() => expect(reads(sent)().some((u) => u.includes('before=77'))).toBe(true));
   });
 
+  it('shows the fault with Try again when the inboxes fail, not "No messages yet" @s870', async () => {
+    serve((url) => (url === '/api/v2/inbound/inboxes' ? refused(500, 'internal') : url.startsWith('/api/v2/inbound/messages?') ? { messages: [], next: null } : undefined));
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    expect(await within(page).findByText('Messages did not load')).toBeTruthy();
+    expect(within(page).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(within(page).queryByText('No messages yet')).toBeNull();
+  });
+
   it('a message with a code reveals it in the reader only, on its own press; never Tico’s @s932', async () => {
     const CODE = '482913';
     const sent = serve((url) =>

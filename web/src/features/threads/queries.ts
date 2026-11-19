@@ -227,6 +227,8 @@ export interface Mailbox {
   agent_instructions?: string | boolean | null;
   /** What the person may do here (backend mailbox_access.may). */
   may?: { send?: boolean; organize?: boolean; draft?: boolean };
+  /** Which Google credential the server reads this mailbox with; 'none': nothing can until someone connects it. */
+  connection?: 'workspace' | 'personal' | 'none';
 }
 
 export const mailboxesQuery = queryOptions({

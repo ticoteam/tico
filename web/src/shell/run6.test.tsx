@@ -115,7 +115,7 @@ describe('phone: a task’s chat and an agent’s chat belong to the page', () =
     inRouter(PhoneShell, '/tasks/eng/t1');
     expect(await screen.findByRole('heading', { name: 'Fix the export' })).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(document.querySelector('.ph')?.getAttribute('data-card')).toBe('none');
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
     const lip = screen.getByRole('button', { name: 'Open Chat' });
     expect(lip.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(lip);

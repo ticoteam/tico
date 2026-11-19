@@ -2,6 +2,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Select } from './Select';
 
+// Read with node's fs (tests load no CSS, not even ?raw), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+const popoverCss = fs.readFileSync(new URL('../Popover/Popover.css', here), 'utf8');
+
 const TEAMS = [
   { value: 'product', label: 'Product' },
   { value: 'engineering', label: 'Engineering' },
@@ -55,5 +60,24 @@ describe('Select on a phone', () => {
     fireEvent.mouseDown(scrim!);
     fireEvent.click(scrim!);
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+  });
+
+  it("keeps its scrim hidden while closed, so a dialog's buttons stay pressable", async () => {
+    document.documentElement.dataset.layout = 'cards';
+    // parts.css gives every .scrim a display; Popover.css must let [hidden] win over it
+    const style = document.createElement('style');
+    style.textContent = `.scrim{position:fixed;inset:0;display:grid}${popoverCss}`;
+    document.head.append(style);
+    render(<Select label="Hand its work to" options={TEAMS} value="product" onValueChange={() => {}} />);
+    // a dialog focuses its first field: the select mounts its closed list and scrim
+    fireEvent.focus(screen.getByRole('combobox', { name: /Hand its work to/ }));
+    const scrim = await waitFor(() => {
+      const s = document.querySelector<HTMLElement>('.kit-dim');
+      expect(s).not.toBeNull();
+      return s!;
+    });
+    expect(scrim.hidden).toBe(true);
+    expect(getComputedStyle(scrim).display).toBe('none');
+    style.remove();
   });
 });

@@ -160,6 +160,16 @@ describe('Files', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Images' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ kind: 'image' }));
   });
+
+  it('takes files dropped on the page sheet itself, with no wrapper around the sheet', async () => {
+    serve();
+    queryClient.setQueryData(filesQuery('').queryKey, { pages: [{ files: [file()], has_more: false, next_cursor: null }], pageParams: [''] } as never);
+    at('/library/files', <FilesPage search={{}} />);
+    const page = await screen.findByRole('main', { name: 'Files' });
+    expect(page.parentElement?.classList.contains('lib-drop')).toBe(false);
+    fireEvent.drop(page, { dataTransfer: { files: [new File(['x'], 'a.txt')], types: ['Files'] } });
+    expect(await screen.findByRole('dialog', { name: 'Add a.txt' })).toBeTruthy();
+  });
 });
 
 const doc = { id: 'd1', title: 'Plan', locked: false, path: 'company/plan.md', updated_at: '2026-11-01T00:00:00Z', updated_by_id: '', updated_by_name: 'Sam', version: 3 };

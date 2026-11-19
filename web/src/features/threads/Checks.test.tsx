@@ -251,6 +251,23 @@ describe('Mailboxes @s1203', () => {
     expect(await screen.findByRole('heading', { name: 'No mail yet' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Connect mail' })).toBeTruthy();
   });
+
+  it('a mailbox nothing can read yet says so and offers Connect mail, asking for no mail @s159', async () => {
+    serve();
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test', connection: 'none' }]);
+    show(<MailPage />, '/threads/mail');
+    expect(await screen.findByRole('heading', { name: 'Mail is not connected' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Connect mail' })).toBeTruthy();
+    expect(all('GET', '/mail/messages')).toEqual([]);
+  });
+
+  it('a not_connected refusal from the server is the same state, not a fault @s159', async () => {
+    serve((url) => (url.includes('/mail/messages') ? { status: 403, body: { error: { code: 'not_connected', detail: 'No grant' } } } : undefined));
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
+    show(<MailPage />, '/threads/mail');
+    expect(await screen.findByRole('heading', { name: 'Mail is not connected' })).toBeTruthy();
+    expect(screen.queryByText('Threads did not load')).toBeNull();
+  });
 });
 
 const box = { address: 'help@example.test', agent_bot: 'qa', may: { send: true, organize: true } };

@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -60,7 +60,6 @@ function FilesList({ search }: { search: FilesSearch }) {
   const files = useInfiniteQuery(filesQuery(kind));
   const found = useQuery(fileSearchQuery(search.q ?? ''));
   const [chosen, setChosen] = useState<File[] | null>(null);
-  const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   const rows = files.data?.pages.flatMap((p) => p.files) ?? [];
@@ -90,24 +89,35 @@ function FilesList({ search }: { search: FilesSearch }) {
     if (search.task) void upload(search.task, picked);
     else setChosen(picked);
   };
-  const drop = (e: DragEvent) => {
-    e.preventDefault();
-    setOver(false);
-    take(e.dataTransfer.files);
-  };
+  // The page sheet itself takes dropped files: the kinds take no DOM props, and a wrapper around the sheet would break
+  // the shell's `.shell-place>.pane` layout (the page drew 0 wide).
+  useEffect(() => {
+    const pane = input.current?.closest('.pane');
+    if (!pane) return;
+    const over = (e: Event) => {
+      if (!(e as DragEvent).dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      pane.classList.add('is-drop');
+    };
+    const leave = () => pane.classList.remove('is-drop');
+    const drop = (e: Event) => {
+      e.preventDefault();
+      leave();
+      take((e as DragEvent).dataTransfer?.files);
+    };
+    pane.addEventListener('dragover', over);
+    pane.addEventListener('dragleave', leave);
+    pane.addEventListener('drop', drop);
+    return () => {
+      pane.removeEventListener('dragover', over);
+      pane.removeEventListener('dragleave', leave);
+      pane.removeEventListener('drop', drop);
+    };
+  });
   const kindName = KINDS.find(([k]) => k === kind)?.[1];
 
   return (
-    <div
-      className={over ? 'lib-drop is-over' : 'lib-drop'}
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return;
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={drop}
-    >
+    <>
       <List
         title="Files"
         path="/library/files"
@@ -171,7 +181,7 @@ function FilesList({ search }: { search: FilesSearch }) {
         }
       />
       {chosen && <UploadDialog files={chosen} onClose={() => setChosen(null)} />}
-    </div>
+    </>
   );
 }
 

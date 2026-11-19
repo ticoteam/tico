@@ -162,12 +162,18 @@
 .money .gr-why{color:var(--faint);font-weight:var(--w-text)}
 .money .gr-partial{margin-left:var(--s-2);font-size:var(--t-xs);color:var(--muted)}
 .money .month-pick{display:inline-flex;align-items:center}
-.money .gr-chan{display:inline-flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .gr-chan{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .gr-chan .t-link{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .money .gr-over{display:block;font-size:var(--t-xs);color:var(--ink);font-weight:var(--w-strong)}
 .money .gr-n,.money .gr-est{margin-left:var(--s-1h);font-size:var(--t-xs);color:var(--faint);font-weight:var(--w-text)}
 .money .gr-health{display:grid;gap:var(--s-1);padding:var(--s-3) var(--page-x);font-size:var(--t-sm);color:var(--muted)}
 .money .gr-health p{margin:0}
 .money .gr-health .gr-match{display:inline-flex;align-items:center;gap:var(--s-1h)}
+/* a tile's lines end in "…" in their own tile, clear of the sparkline */
+/* Retention: the month column shares the room with the day columns (fixed day widths left it 0 wide on a phone); a
+   cohort not old enough yet says so on two lines inside its cell */
+.money .gr-ret col.t-col{width:auto}
+.money .gr-ret td .zero{white-space:normal}
 @container page (min-width:481px){
   .money .gr-tiles .widgets{grid-template-columns:repeat(var(--gr-n,4),minmax(0,1fr))}
 }

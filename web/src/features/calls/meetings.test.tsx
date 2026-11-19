@@ -192,6 +192,16 @@ describe('Meetings in List', () => {
     await waitFor(() => expect(writes()).toEqual([expect.objectContaining({ method: 'POST', body: { action: 'approve', private: false, send_to: 'auto' } })]));
   });
 
+  it('a pending meeting asks for no tasks: the server lists them only once it is shared @s994', async () => {
+    const m = meeting({ review_state: 'pending' });
+    seedList('pending', m);
+    queryClient.removeQueries({ queryKey: itemsQuery('mt1').queryKey });
+    show('/calendar?view=list&review=pending&panel=meeting%3Amt1');
+    const panel = await screen.findByRole('complementary', { name: 'Weekly sync' });
+    expect(within(panel).getByRole('button', { name: 'Share' })).toBeTruthy();
+    expect(sent.filter((r) => r.url.includes('/meetings/mt1/items'))).toEqual([]);
+  });
+
   it('Dismissed: lists what was put away, and Restore brings it back to Pending @s995', async () => {
     const m = meeting({ review_state: 'dismissed' });
     seedList('dismissed', m);

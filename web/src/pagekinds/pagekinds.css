@@ -79,9 +79,9 @@
 .widget:first-child{padding-left:0;border-left:0}
 .widget:last-child{padding-right:0}
 .widget-main{display:grid;gap:calc(var(--s-0) + 1px);min-width:0}
-.widget-title{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-.widget b{font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title);font-variant-numeric:tabular-nums;white-space:nowrap}
-.widget-sub{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.widget-title{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.widget b{font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.widget-sub{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .widget>:not(.widget-main){align-self:flex-end}
 .widget b:empty::before,.widget-title:empty::before,.widget-sub:empty::before{content:"\a0"}
 .pk-sk-fig{gap:var(--s-2)}

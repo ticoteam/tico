@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { ApiError } from '@/api/client';
 import { clock, Composer, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -44,21 +45,28 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
   const agent = !!mailbox?.agent_instructions;
   const reading = view === 'instructions' && agent;
   const narrowed = !!words;
-  const list = useInfiniteQuery(mailFindQuery(current, words));
+  // Nothing can read a mailbox until someone connects Google for it: ask for nothing, show the way there.
+  const cut = mailbox?.connection === 'none';
+  const list = useInfiniteQuery(mailFindQuery(cut ? '' : current, words));
   const rows = letterRows(list.data?.pages.flatMap((p) => p.messages) ?? []);
   // An opened mail keeps the words it was found by.
   const keep: Record<string, string> = words ? { q: words } : {};
   // With more than one mailbox an empty one stays a list: the filter in the head leads to the others.
   const pick = (boxes.data?.length ?? 0) > 1;
   const none = boxes.data?.length === 0;
+  const unconnected = cut || (list.error instanceof ApiError && list.error.code === 'not_connected');
   const state =
-    boxes.isPending || (!!current && list.isPending)
+    boxes.isPending || (!!current && list.isPending && !unconnected)
       ? 'loading'
-      : boxes.isError || list.isError
+      : boxes.isError
         ? 'fault'
-        : rows.length === 0 && !open && !agent && !pick && !narrowed
+        : none || unconnected
           ? 'empty'
-          : 'ready';
+          : list.isError
+            ? 'fault'
+            : rows.length === 0 && !open && !agent && !pick && !narrowed
+              ? 'empty'
+              : 'ready';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -116,8 +124,11 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
       open={!!open || !!reading}
       state={state}
       empty={
-        none
-          ? { title: 'No mail yet', action: <Button onClick={() => void press('tools.open', {})}>Connect mail</Button> }
+        none || unconnected
+          ? {
+              title: unconnected ? 'Mail is not connected' : 'No mail yet',
+              action: <Button onClick={() => void press('tools.open', { tool: 'mailbox' })}>Connect mail</Button>,
+            }
           : { title: 'No mail' }
       }
       onRetry={() => void (boxes.isError ? boxes.refetch() : list.refetch())}

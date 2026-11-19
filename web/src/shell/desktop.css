@@ -17,8 +17,8 @@
 :root[data-desktop="mac"] .shell-col>.cb{margin-left:calc(var(--desktop-inset-left))}
 
 /* the phone's cards in a narrow window, and the small call window: the head at the top moves right past them */
-:root[data-desktop="mac"] .ph>.pg>.pane>header:first-child,
-:root[data-desktop="mac"] .ph>.pg>.pane>:first-child>header:first-child,
+:root[data-desktop="mac"] .phone>.pg>.pane>header:first-child,
+:root[data-desktop="mac"] .phone>.pg>.pane>:first-child>header:first-child,
 :root[data-desktop="mac"] .shell-callwin>.pane>header:first-child{border-left:var(--desktop-inset-left) solid transparent}
 
 /* the small call window (/call/<id>?window=1): the call page alone, the whole window */
