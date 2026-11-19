@@ -20,7 +20,6 @@ const broken: Reply = { status: 500, body: {} };
 function serve(over: Record<string, Reply> = {}) {
   const base: Record<string, Reply> = {
     '/growth/segments': ok({ segments: [] }),
-    '/growth/sources': ok({ sources: [{ id: 'src1', name: 'Ledger', system: 'ledger', health: 'fresh', fills: ['spend'], truth_for: ['spend'] }] }),
     '/growth/read': ok(READ),
     '/page-owners': ok({ pages: {} }),
     ...over,
@@ -100,7 +99,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('Growth panels @s480 @s484 @s486', () => {
+describe('Growth panels @s480', () => {
   it('a channel opens beside: its budget and spend, its months newest first, its campaigns by name', async () => {
     serve({ '/growth/read?scope=channel:search': ok(CHANNEL) });
     const router = show('/company/growth?month=2026-10');
@@ -129,85 +128,16 @@ describe('Growth panels @s480 @s484 @s486', () => {
     expect(await screen.findByRole('heading', { name: 'This channel did not load' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
-
-  it('a source opens beside Sources: what it is the truth for, how agents reach it, its last sync', async () => {
-    serve({
-      '/growth/sources': ok({
-        sources: [
-          {
-            id: 'src1',
-            name: 'Ledger',
-            health: 'failing',
-            health_since: '2026-10-01',
-            last_run_at: '2026-10-03T10:00:00Z',
-            last_error: 'Sign-in expired',
-            fills: ['spend'],
-            truth_for: ['spend', 'new_customers'],
-            reach_kind: 'url',
-            reach_ref: 'https://ledger.example.com/api',
-            may: 'read,write',
-          },
-          { id: 'src2', name: 'Sheet', health: 'not_synced', truth_for: 'revenue' },
-        ],
-      }),
-    });
-    const router = show('/company/growth?tab=sources');
-    const link = await screen.findByRole('link', { name: 'Ledger' });
-    expect(searchOf(link.getAttribute('href'))).toEqual({ tab: 'sources', panel: 'source:src1' });
-    fireEvent.click(link);
-    await waitFor(() => expect(router.state.location.search).toEqual({ tab: 'sources', panel: 'source:src1' }));
-    const panel = await screen.findByRole('complementary', { name: 'Ledger' });
-    expect(within(panel).getByText('Spend, new customers')).toBeTruthy();
-    expect(within(panel).getByText('Address, ledger.example.com')).toBeTruthy();
-    expect(within(panel).getByText('Read, Write notes')).toBeTruthy();
-    expect(within(panel).getByText('Failing')).toBeTruthy();
-    expect(within(panel).getByText('Sign-in expired')).toBeTruthy();
-  });
-
-  it('a source says which other source claims the same number, and only then', async () => {
-    serve({
-      '/growth/sources': ok({
-        sources: [
-          { id: 'src1', name: 'Ledger', health: 'fresh', truth_for: ['spend'] },
-          { id: 'src2', name: 'Books', health: 'fresh', truth_for: 'Spend' },
-          { id: 'src3', name: 'Sheet', health: 'fresh', truth_for: 'revenue' },
-        ],
-        conflicts: ['spend'],
-      }),
-    });
-    show('/company/growth?tab=sources&panel=source:src1');
-    const panel = await screen.findByRole('complementary', { name: 'Ledger' });
-    expect(within(panel).getByText('Also claimed by')).toBeTruthy();
-    expect(within(panel).getByText('Books')).toBeTruthy();
-    fireEvent.click(screen.getByRole('link', { name: 'Sheet' }));
-    const sheet = await screen.findByRole('complementary', { name: 'Sheet' });
-    expect(within(sheet).queryByText('Also claimed by')).toBeNull();
-  });
-
-  it('a source never synced has no last sync', async () => {
-    serve({ '/growth/sources': ok({ sources: [{ id: 'src2', name: 'Sheet', health: 'not_synced', truth_for: 'revenue' }] }) });
-    show('/company/growth?tab=sources&panel=source:src2');
-    const panel = await screen.findByRole('complementary', { name: 'Sheet' });
-    expect(within(panel).getByText('Revenue')).toBeTruthy();
-    expect(within(panel).queryByText('Last sync')).toBeNull();
-  });
 });
 
-describe('Growth Manager entry @s479 @s483 @s485', () => {
-  it('its face is in the head of the board and of Sources, and opens its chat beside the page', async () => {
+describe('Growth Manager entry @s479 @s483', () => {
+  it('its face is in the head of the board, and opens its chat beside the page', async () => {
     directory(agent('bot:gm1', 'growth-manager', 'Growth Manager'), agent('bot:gm0', 'general-manager', 'General Manager'));
     serve({ '/page-owners': ok({ pages: { growth: { bot: 'growth-manager', choice: 'default' } } }) });
     const router = show('/company/growth?month=2026-10');
     fireEvent.click(await screen.findByRole('button', { name: 'Chat with Growth Manager' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'agent:gm1' }));
     expect(screen.getByRole('button', { name: 'Chat with Growth Manager' }).getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('is on Sources too', async () => {
-    directory(agent('bot:gm1', 'growth-manager', 'Growth Manager'));
-    serve({ '/page-owners': ok({ pages: { growth: { bot: 'bot:gm1', choice: 'bot:gm1' } } }) });
-    show('/company/growth?tab=sources');
-    expect(await screen.findByRole('button', { name: 'Chat with Growth Manager' })).toBeTruthy();
   });
 
   it('is absent when only the General Manager stands in', async () => {
@@ -221,18 +151,18 @@ describe('Growth Manager entry @s479 @s483 @s485', () => {
 
   it('is absent when the Growth page has no owner', async () => {
     serve({ '/page-owners': ok({ pages: { growth: { bot: null, choice: 'none' } } }) });
-    show('/company/growth?tab=sources');
-    await screen.findByRole('link', { name: 'Ledger' });
+    show('/company/growth');
+    await screen.findByRole('link', { name: 'Search ads' });
     await waitFor(() => expect(queryClient.getQueryData(['settings', 'page-owners'])).toBeTruthy());
     expect(screen.queryByRole('button', { name: /^Chat with/ })).toBeNull();
   });
 });
 
 describe('Growth panel addresses', () => {
-  it('a source opens on Sources only, a channel on the board; anything else is dropped', () => {
-    expect(validateGrowthSearch({ tab: 'sources', panel: 'source:src1' })).toEqual({ tab: 'sources', panel: 'source:src1' });
+  it('a channel opens on the board; an old Sources address lands on the board; anything else is dropped', () => {
+    expect(validateGrowthSearch({ tab: 'sources', panel: 'source:src1' })).toEqual({});
     expect(validateGrowthSearch({ panel: 'source:src1' })).toEqual({});
-    expect(validateGrowthSearch({ tab: 'sources', panel: 'channel:search' })).toEqual({ tab: 'sources' });
+    expect(validateGrowthSearch({ tab: 'sources', panel: 'channel:search' })).toEqual({ panel: 'channel:search' });
     expect(validateGrowthSearch({ panel: 'channel:search' })).toEqual({ panel: 'channel:search' });
     expect(validateGrowthSearch({ panel: 'month:search:2026-09' })).toEqual({});
     expect(validateGrowthSearch({ panel: 'customers:2026-06:90' })).toEqual({});

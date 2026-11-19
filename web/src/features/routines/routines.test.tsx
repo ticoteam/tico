@@ -285,6 +285,9 @@ describe('A webhook: the address shown once', () => {
 
     fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'New secret' }));
+    // the current address stops working: asked first
+    const ask = await screen.findByRole('alertdialog', { name: 'Make a new address?' });
+    fireEvent.click(within(ask).getByRole('button', { name: 'New secret' }));
     expect(await within(panel).findByText(rotated)).toBeTruthy();
     expect(inCache(rotated)).toBe(false);
     expect(inCache('made_up_secret')).toBe(false);

@@ -9,10 +9,11 @@ import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
+import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { FIELD_NAME, LIST_FIELDS, isListField, lineOf, type ListLine } from './model';
-import { Fold, OwnRow } from './parts';
-import { listKey, listTasksQuery, taskTabsQuery, type TaskTab } from './queries';
+import { OwnRow } from './parts';
+import { listKey, listTasksAfter, listTasksQuery, taskTabsQuery, type OwnTask, type TaskTab } from './queries';
 
 /** Its own lists (the layout's tabs that are not a default), each with its key, and whether the viewer may change them. */
 export function useLists(slug: string) {
@@ -32,8 +33,26 @@ function ListSection({ slug, list, tab, me, canEdit }: { slug: string; list: str
   const q = useQuery(listTasksQuery(slug, list));
   const remove = useAction('agents.removeList');
   const [editing, setEditing] = useState(false);
-  const rows = q.data?.tasks ?? [];
+  // Pages past the first 200, read on "N more" from the page before's `next` (ui bot-tasks Show more).
+  const [later, setLater] = useState<{ rows: OwnTask[]; next: string | null } | null>(null);
+  const [reading, setReading] = useState(false);
+  const first = q.data?.tasks ?? [];
+  const seen = new Set(first.map((t) => t.id));
+  const rows = [...first, ...(later?.rows ?? []).filter((t) => !seen.has(t.id))];
+  const next = later ? later.next : (q.data?.next ?? null);
   const more = (q.data?.count ?? 0) - rows.length;
+  const readMore = async () => {
+    if (!next) return;
+    setReading(true);
+    try {
+      const page = await listTasksAfter(slug, list, next);
+      setLater((cur) => ({ rows: [...(cur?.rows ?? []), ...page.tasks], next: page.next ?? null }));
+    } catch {
+      toast({ text: "Couldn't read more", kind: 'failed' });
+    } finally {
+      setReading(false);
+    }
+  };
   return (
     <Section
       name={tab.name}
@@ -54,7 +73,18 @@ function ListSection({ slug, list, tab, me, canEdit }: { slug: string; list: str
       {rows.map((t) => (
         <OwnRow key={t.id} task={t} me={me} />
       ))}
-      {more > 0 && <Fold label="Earlier" text={`${more} more`} />}
+      {more > 0 && (
+        <div className="stage-fold">
+          <span className="fold-label">Earlier</span>
+          {next ? (
+            <button type="button" disabled={reading} onClick={() => void readMore()}>
+              {more} more
+            </button>
+          ) : (
+            <span>{more} more</span>
+          )}
+        </div>
+      )}
     </Section>
   );
 }

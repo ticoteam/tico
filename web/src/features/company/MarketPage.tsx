@@ -4,10 +4,13 @@ import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { BarChart } from '@/kit/Chart';
 import { Field } from '@/kit/Field';
+import { IconButton } from '@/kit/IconButton';
 import { Markdown } from '@/kit/Markdown';
-import { MenuItem } from '@/kit/Menu';
+import { Menu, MenuItem } from '@/kit/Menu';
+import { Select } from '@/kit/Select';
 import { Pill } from '@/kit/Pill';
 import { Table, Td, Th, Tr } from '@/kit/Table';
+import { toast } from '@/kit/Toast';
 import { fmtAge, fmtDate } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
 import { Go, PanelLink, useDo, usdShort } from './parts';
@@ -18,7 +21,9 @@ import {
   marketNoteQuery,
   marketSetupQuery,
   marketSpendQuery,
+  strategyQuery,
   valueChainQuery,
+  type CitableStrategy,
   type ListeningStats,
   type MarketAnswer,
   type MarketBriefing,
@@ -217,8 +222,23 @@ function SegmentPanel({ seg, parent, year, owner, onClose }: { seg: MarketSegmen
   const overlaps = estimates.map((e) => e.overlaps).find(Boolean) ?? z?.overlaps;
   const spread = estimates.map((e) => e.spread).find(Boolean) ?? z?.spread;
   const growth = z?.growth_pct;
+  const [doing, setDoing] = useState<'research' | 'cite' | null>(null);
   return (
-    <SidePanel title={seg.name} target={`segment:${seg.id}`} onClose={onClose} className="mkt-pnl">
+    <SidePanel
+      title={seg.name}
+      target={`segment:${seg.id}`}
+      onClose={onClose}
+      className="mkt-pnl"
+      actions={
+        owner && (
+          <Menu trigger={<IconButton icon="more" label="More" quiet />}>
+            <MenuItem label="Research this segment" onSelect={() => setDoing('research')} />
+            <MenuItem label="Cite in a bet" onSelect={() => setDoing('cite')} />
+          </Menu>
+        )
+      }
+      foot={doing && <SegmentAsk key={doing} seg={seg.id} what={doing} onDone={() => setDoing(null)} />}
+    >
       <section className="rail-sec">
         <div className="mkt-pills">
           {z ? <Pill>{CONFIDENCE[z.confidence ?? ''] ?? 'Sized'}</Pill> : <Pill>Not sized yet</Pill>}
@@ -260,6 +280,47 @@ function SegmentPanel({ seg, parent, year, owner, onClose }: { seg: MarketSegmen
         </section>
       )}
     </SidePanel>
+  );
+}
+
+/** The owner's two asks on a segment (market-spend.ts): the Librarian researches it, or a bet cites it. */
+function SegmentAsk({ seg, what, onDone }: { seg: string; what: 'research' | 'cite'; onDone: () => void }) {
+  const research = useDo('market.research');
+  const cite = useDo('market.cite');
+  const strategy = useQuery({ ...strategyQuery, enabled: what === 'cite' });
+  const [text, setText] = useState('');
+  const [bet, setBet] = useState<string | null>(null);
+  const bets = ((strategy.data as CitableStrategy | undefined)?.bets ?? []).filter((b) => b.status === 'active' && !(b.cites ?? []).includes(seg));
+  const go = async () => {
+    const ok = what === 'research' ? !!text.trim() && (await research.run({ segment: seg, instructions: text.trim() })) : !!bet && (await cite.run({ bet, segment: seg }));
+    if (!ok) return;
+    toast({ text: what === 'research' ? 'Asked the Librarian' : 'Cited it' });
+    onDone();
+  };
+  return (
+    <form
+      className="mkt-ask"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void go();
+      }}
+    >
+      {what === 'research' ? (
+        <Field label="What to find" area value={text} onValueChange={setText} autoFocus placeholder="Each competitor's public pricing, with sources" />
+      ) : strategy.isSuccess && !bets.length ? (
+        <p className="mkt-p">No active bets</p>
+      ) : (
+        <Select label="Bet" options={bets.map((b) => ({ value: b.id, label: b.statement }))} value={bet} onValueChange={setBet} placeholder="Bet" />
+      )}
+      <span className="an-row">
+        <Button type="submit" variant="primary" busy={research.pending || cite.pending}>
+          {what === 'research' ? 'Start' : 'Cite'}
+        </Button>
+        <Button variant="quiet" onClick={onDone}>
+          Cancel
+        </Button>
+      </span>
+    </form>
   );
 }
 

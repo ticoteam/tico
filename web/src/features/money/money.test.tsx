@@ -289,7 +289,8 @@ describe('Growth @s400 @s444', () => {
     serve((url) => (url.endsWith('/growth/segments') ? ok({ segments: [] }) : ok(none)));
     show('growth', '/company/growth');
     expect(await screen.findByText('No numbers yet')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Set up' })).toBeTruthy();
+    // Sources are set up through the Growth Manager (the Sources tab is gone): with none, nothing to press.
+    expect(screen.queryByRole('button', { name: 'Set up' })).toBeNull();
   });
 });
 

@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { CalendarOccurrence, Call } from '@/api/schema';
 import { Button } from '@/kit/Button';
+import { Checkbox } from '@/kit/Checkbox';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -592,6 +593,8 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
   const past = useQuery(meetingsQuery(search.review ?? 'live', q));
   const found = useQuery({ ...findEventsQuery(q), enabled: !!q });
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  // Pending rows ticked for Share N / Dismiss N; only rows still shown count.
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const fold = (k: string) => {
     const next = new Set(folded);
     if (!next.delete(k)) next.add(k);
@@ -606,6 +609,17 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
     ? []
     : (live.data?.calls ?? []).filter((c) => c.state === 'live' && !booked.has(c.id) && (c.title || 'Call').toLowerCase().includes(words));
   const done = (past.data?.meetings ?? []).filter((m) => has.every((h) => kept(m, h)));
+  const pending = search.review === 'pending';
+  const picked = pending ? done.filter((m) => ticked.has(m.id)).map((m) => m.id) : [];
+  const tick = (id: string, on: boolean) => {
+    const next = new Set(ticked);
+    if (on) next.add(id);
+    else next.delete(id);
+    setTicked(next);
+  };
+  const bulk = async (action: 'approve' | 'dismiss') => {
+    if (await press('calls.reviewMany', { meetings: picked, action })) setTicked(new Set());
+  };
   const comingDays = groupBy(coming, (o) => dayKey(new Date(o.start)));
   const pastDays = groupBy(done, (m) => dayKey(new Date(m.started ?? m.created ?? 0)));
 
@@ -649,12 +663,24 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
           count={done.length}
           open={!folded.has('past')}
           onToggle={() => fold('past')}
+          bulk={
+            picked.length > 0 && (
+              <span className="bulk">
+                <b>{`${picked.length} checked`}</b>
+                <Button onClick={() => void bulk('dismiss')}>{`Dismiss ${picked.length}`}</Button>
+                <Button onClick={() => void bulk('approve')}>{`Share ${picked.length}`}</Button>
+                <Button variant="quiet" onClick={() => setTicked(new Set())}>
+                  Clear
+                </Button>
+              </span>
+            )
+          }
         >
           {pastDays.map(([key, ms]) => (
             <div key={key}>
               <DayHead d={parseDay(key) as Date} today={today} />
               {ms.map((m) => (
-                <PastRow key={m.id} m={m} at={at} />
+                <PastRow key={m.id} m={m} at={at} pick={pending ? { on: ticked.has(m.id), set: (on) => tick(m.id, on) } : undefined} />
               ))}
             </div>
           ))}
@@ -675,13 +701,29 @@ function groupBy<T>(xs: readonly T[], key: (x: T) => string): [string, T[]][] {
   return [...m];
 }
 
-function ListSec({ name, count, open, onToggle, children }: { name: string; count: number; open: boolean; onToggle: () => void; children: ReactNode }) {
+function ListSec({
+  name,
+  count,
+  open,
+  onToggle,
+  bulk,
+  children,
+}: {
+  name: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  /** Pending's Share N / Dismiss N, while rows are ticked. */
+  bulk?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className={open ? 'cl-sec' : 'cl-sec is-folded'}>
       <header className="cl-sec-head">
         <h2 className="sec-name">
           <FoldButton name={name} count={count} open={open} onToggle={onToggle} />
         </h2>
+        {bulk}
       </header>
       {open && children}
     </section>
@@ -761,7 +803,8 @@ function LiveCallRow({ call, now }: { call: Call; now: Date }) {
   );
 }
 
-function PastRow({ m, at }: { m: Meeting; at: At }) {
+/** A meeting that is over. In Pending it has a box to tick for Share N / Dismiss N, and a ⋯ to share or dismiss it alone. */
+function PastRow({ m, at, pick }: { m: Meeting; at: At; pick?: { on: boolean; set: (on: boolean) => void } }) {
   const s = new Date(m.started ?? m.created ?? 0);
   const summary = Array.isArray(m.outcome?.summary) ? m.outcome.summary.length > 0 : !!m.outcome?.summary;
   const tasks = m.outcome?.tasks?.length ?? 0;
@@ -770,7 +813,7 @@ function PastRow({ m, at }: { m: Meeting; at: At }) {
     <div className={m.review_state === 'pending' ? 'row cl-row is-past is-unread' : 'row cl-row is-past'} title={m.title}>
       <span className="er-time">{clock(minutes(s))}</span>
       <span className="cl-mark">
-        <Icon name="call" />
+        {pick ? <Checkbox label={<span className="cl-hide">{`Check ${m.title}`}</span>} checked={pick.on} onCheckedChange={pick.set} /> : <Icon name="call" />}
       </span>
       <Link to="/calendar" search={at({ view: 'list', panel: `meeting:${m.id}` })} className="row-title" data-target={`meeting:${m.id}`}>
         {m.title}
@@ -792,7 +835,14 @@ function PastRow({ m, at }: { m: Meeting; at: At }) {
       <span className="er-who">
         <Who refs={who} />
       </span>
-      <span className="cl-act" />
+      <span className="cl-act">
+        {pick && (
+          <Menu trigger={<IconButton icon="more" label={`More for ${m.title}`} size="sm" quiet />}>
+            <MenuItem label="Share & send" onSelect={() => void press('calls.review', { meeting: m.id, action: 'approve', send: 'auto' })} />
+            <MenuItem label="Dismiss" onSelect={() => void press('calls.review', { meeting: m.id, action: 'dismiss' })} />
+          </Menu>
+        )}
+      </span>
     </div>
   );
 }

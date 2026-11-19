@@ -13,7 +13,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/strategy/market/listening', '/company/listening'],
   ['#/library', '/library/docs'],
   ['#/strategy/growth?segment=rental', '/company/growth'],
-  ['#/strategy/gtm/sources', '/company/growth?tab=sources'],
+  ['#/strategy/gtm/sources', '/company/growth'],
   ['#/strategy/gtm', '/company/strategy'],
   ['#/recurring', '/company/routines'],
   ['#/tasks/routines', '/company/routines'],

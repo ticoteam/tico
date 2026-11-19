@@ -10,14 +10,16 @@ import { Link } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
+import { Select } from '@/kit/Select';
+import { MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
-import { Face, HeadSwitch, press, RemoveItem, RuleRow, useConfirmRemove, Word } from './parts';
+import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, RuleRow, useConfirmRemove, Verb, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
 import { runLink } from './RoutinePanel';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
-import { agentWords, cap, limitsWords } from './words';
+import { agentWords, cap, limitsWords, timeChoices } from './words';
 import './routines.css';
 
 /* Listening (rules.js listeningScreen, watchScreen): the watches as a List; one watch as a Record with two tabs, its
@@ -27,6 +29,8 @@ export interface ListeningSearch {
   watch?: string;
   tab?: 'sources';
   match?: string;
+  /** The watches: the words searched for. */
+  q?: string;
 }
 
 const q = (search: Record<string, string | undefined>) => {
@@ -37,7 +41,7 @@ const q = (search: Record<string, string | undefined>) => {
 export const listeningHref = (search: ListeningSearch) => q({ ...search });
 
 export function ListeningPage({ search }: { search: ListeningSearch }) {
-  return search.watch ? <WatchPage key={search.watch} id={search.watch} tab={search.tab} match={search.match} /> : <Watches />;
+  return search.watch ? <WatchPage key={search.watch} id={search.watch} tab={search.tab} match={search.match} /> : <Watches q={search.q} />;
 }
 
 const isOn = (w: Routine) => w.enabled !== false && !w.paused;
@@ -45,10 +49,14 @@ const sourceCount = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
 
 // ---------------------------------------------------------------- the watches
 
-function Watches() {
+/** What a watch is found by: its name, its limits, and each source's site and words (listening.ts lstListHTML). */
+const watchWords = (w: Routine) => [w.name, limitsWords(w.trigger.limits), ...(w.trigger.sources ?? []).flatMap((x) => [x.site, x.target])].join(' ').toLowerCase();
+
+function Watches({ q }: { q?: string }) {
   const list = useQuery(watchesQuery);
   const [adding, setAdding] = useState(false);
-  const watches = list.data ?? [];
+  const all = list.data ?? [];
+  const watches = q ? all.filter((w) => watchWords(w).includes(q.toLowerCase())) : all;
   const add = (
     <Button variant="primary" onClick={() => setAdding(true)}>
       Add watch
@@ -59,9 +67,10 @@ function Watches() {
       title="Listening"
       path={LISTENING}
       className="rr"
-      state={list.isPending ? 'loading' : list.isError ? 'fault' : watches.length ? 'ready' : 'empty'}
+      state={list.isPending ? 'loading' : list.isError ? 'fault' : all.length ? 'ready' : 'empty'}
       onRetry={() => void list.refetch()}
       empty={{ title: 'No watches yet', action: add }}
+      search={<Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
       actions={
         <>
           {add}
@@ -70,9 +79,7 @@ function Watches() {
       }
       sections={
         <Section name="Watches" count={watches.length} target="section:watches">
-          {watches.map((w) => (
-            <WatchRow key={w.id} w={w} />
-          ))}
+          {watches.length ? watches.map((w) => <WatchRow key={w.id} w={w} />) : <p className="row-sub rr-none">No matches</p>}
         </Section>
       }
     />
@@ -86,7 +93,8 @@ function WatchRow({ w }: { w: Routine }) {
   return (
     <Row className={on ? 'watch' : 'watch is-off'} title={name} href={listeningHref({ watch: w.id })} target={`watch:${w.id}`}>
       <span className="row-title">{name}</span>
-      <span className="row-sub">{sourceCount(w.trigger.sources?.length ?? w.listening?.sources?.length ?? 0)}</span>
+      {/* the server's one dot: hollow when a source did not read well, posts wait unscored, or there is no source */}
+      <span className="row-sub">{on && w.listening && w.listening.dot !== 'filled' ? <Word>Not reading</Word> : sourceCount(w.trigger.sources?.length ?? w.listening?.sources?.length ?? 0)}</span>
       <span className="row-fig">
         {on ? (
           limitsWords(w.trigger.limits)
@@ -143,6 +151,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   const listed = useQuery(watchesQuery).data?.find((w) => w.id === id);
   const w = one.data ?? listed;
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(false);
   const remove = useConfirmRemove();
   const tabs: readonly PageTab[] = [
     { label: 'Matches', to: LISTENING, search: { watch: id, tab: '' }, target: `tab:matches:${id}` },
@@ -170,11 +179,13 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
             Add source
           </Button>
           <AddSource watch={id} open={adding} onOpenChange={setAdding} />
+          {editing && <WatchSettings w={w} onClose={() => setEditing(false)} />}
           {remove.node}
         </>
       }
       more={
         <PageMore>
+          <MenuItem label="Edit" icon="edit" disabled={tmp} onSelect={() => setEditing(true)} />
           <RemoveItem disabled={tmp} onSelect={() => remove.confirm(w.name || 'this watch', () => void press('listening.remove', { watch: id }))} />
         </PageMore>
       }
@@ -260,7 +271,7 @@ function MatchOpen({ watch, m }: { watch: string; m: Match }) {
   );
 }
 
-const KINDS: Record<string, string> = { search: 'Search', page: 'Page', github: 'GitHub', push: 'Sent in' };
+const KINDS: Record<string, string> = { search: 'Search', page: 'Page', github: 'GitHub', push: 'Push' };
 
 function Sources({ w }: { w: Routine }) {
   const read = useQuery(sourcesQuery(w.id));
@@ -303,50 +314,202 @@ function Sources({ w }: { w: Routine }) {
   );
 }
 
+type SourceKind = 'search' | 'page' | 'github' | 'push';
+
 function AddSource({ watch, open, onOpenChange }: { watch: string; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const [kind, setKind] = useState<'search' | 'page'>('search');
+  const [kind, setKind] = useState<SourceKind>('search');
   const [target, setTarget] = useState('');
   const [site, setSite] = useState('');
+  const [follow, setFollow] = useState<'prs' | 'releases'>('prs');
   const [busy, setBusy] = useState(false);
+  // a push source's address, shown once: this state only, never the cache, a toast or the address bar
+  const [address, setAddress] = useState<string | null>(null);
+  const push = kind === 'push';
+  const ready = push ? !!site.trim() : !!target.trim();
   const save = async () => {
-    if (!target.trim()) return;
+    if (!ready) return;
     setBusy(true);
-    const ok = await press('listening.addSource', { watch, kind, target: target.trim(), ...(kind === 'search' && site.trim() ? { site: site.trim() } : {}) });
+    const r = await pressOut<{ address?: string }>('listening.addSource', {
+      watch,
+      kind,
+      ...(push ? { site: site.trim() } : { target: target.trim() }),
+      ...(kind === 'search' && site.trim() ? { site: site.trim() } : {}),
+      ...(kind === 'github' ? { follow } : {}),
+    });
     setBusy(false);
-    if (ok) {
+    if (r) {
       setTarget('');
       setSite('');
       onOpenChange(false);
+      if (r.out?.address) setAddress(r.out.address);
     }
+  };
+  const label = kind === 'search' ? 'Words' : kind === 'page' ? 'Address' : 'Repository';
+  return (
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Add source"
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+              Add
+            </Button>
+          </>
+        }
+      >
+        <div className="rr-form">
+          <Segmented
+            label="Kind"
+            options={[
+              { value: 'search', label: 'Search' },
+              { value: 'page', label: 'Page' },
+              { value: 'github', label: 'GitHub' },
+              { value: 'push', label: 'Push' },
+            ]}
+            value={kind}
+            onValueChange={setKind}
+          />
+          {!push && (
+            <Field label={label} value={target} onValueChange={setTarget} placeholder={kind === 'search' ? 'raised bed kit' : kind === 'page' ? 'https://' : 'owner/repo'} autoFocus />
+          )}
+          {kind === 'search' && <Field label="Site" value={site} onValueChange={setSite} placeholder="reddit.com" />}
+          {kind === 'github' && (
+            <Select
+              label="Follow"
+              options={[
+                { value: 'prs', label: 'Merged PRs' },
+                { value: 'releases', label: 'Releases' },
+              ]}
+              value={follow}
+              onValueChange={setFollow}
+            />
+          )}
+          {push && <Field label="Name" value={site} onValueChange={setSite} placeholder="Support form" autoFocus />}
+        </div>
+      </Dialog>
+      {address && (
+        <Dialog
+          open
+          onOpenChange={(o) => !o && setAddress(null)}
+          title="Push address"
+          description="Copy it now. It is not shown again."
+          actions={
+            <Button variant="primary" onClick={() => setAddress(null)}>
+              Done
+            </Button>
+          }
+        >
+          <p className="rr-secret">{address}</p>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
+const UNITS = [
+  { value: 'hour', label: 'Hour' },
+  { value: 'day', label: 'Day' },
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+] as const;
+type Unit = (typeof UNITS)[number]['value'];
+type KeepRule = { do: 'keep' | 'drop'; tag: string; text: string };
+
+/** A watch's name and what it keeps: its keep and drop sentences, how many it sends each hour, day, week or month,
+   and when a day's batch goes (listening.ts lstFields). Duplicates are always removed. */
+function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
+  const t = w.trigger;
+  const [name, setName] = useState(w.name ?? '');
+  const [rules, setRules] = useState<KeepRule[]>((t.rules ?? []).map((r) => ({ do: r.do === 'drop' ? 'drop' : 'keep', tag: r.tag ?? '', text: r.text })));
+  const [limits, setLimits] = useState<{ count: string; per: Unit }[]>((t.limits ?? [{ count: 10, per: 'day' }]).map((l) => ({ count: String(l.count), per: (UNITS.find((u) => u.value === l.per)?.value ?? 'day') as Unit })));
+  const [at, setAt] = useState(t.at ?? '08:00');
+  const [busy, setBusy] = useState(false);
+  const hourly = limits.some((l) => l.per === 'hour');
+  const badLimit = limits.some((l) => !(Number.isInteger(Number(l.count)) && Number(l.count) >= 1 && Number(l.count) <= 100));
+  const ready = !!name.trim() && !!limits.length && !badLimit && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
+  const setRule = (i: number, patch: Partial<KeepRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const setLimit = (i: number, patch: Partial<{ count: string; per: Unit }>) => setLimits(limits.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const save = async () => {
+    if (!ready) return;
+    setBusy(true);
+    const ok = await press('listening.update', {
+      watch: w.id,
+      name: name.trim(),
+      rules: rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag.trim(), text: r.text.trim() })),
+      limits: limits.map((l) => ({ count: Number(l.count), per: l.per })),
+      ...(hourly ? {} : { at }),
+    });
+    setBusy(false);
+    if (ok) onClose();
   };
   return (
     <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Add source"
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Edit watch"
       actions={
         <>
-          <Button variant="quiet" onClick={() => onOpenChange(false)}>
+          <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!target.trim()} onClick={() => void save()}>
-            Add
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+            Save
           </Button>
         </>
       }
     >
       <div className="rr-form">
-        <Segmented
-          label="Kind"
-          options={[
-            { value: 'search', label: 'Search' },
-            { value: 'page', label: 'Page' },
-          ]}
-          value={kind}
-          onValueChange={setKind}
-        />
-        <Field label={kind === 'search' ? 'Words' : 'Address'} value={target} onValueChange={setTarget} placeholder={kind === 'search' ? 'raised bed kit' : 'https://'} autoFocus />
-        {kind === 'search' && <Field label="Site" value={site} onValueChange={setSite} placeholder="reddit.com" />}
+        <Field label="Name" value={name} onValueChange={setName} />
+        <fieldset className="rr-list">
+          <legend>
+            Rules
+            {rules.length < 20 && <Verb onClick={() => setRules([...rules, { do: 'keep', tag: '', text: '' }])}>Add rule</Verb>}
+          </legend>
+          {rules.map((r, i) => (
+            <div key={i} className="rr-line" role="group" aria-label={`Rule ${i + 1}`}>
+              <Select
+                label="Keep or drop"
+                labelHidden
+                options={[
+                  { value: 'keep', label: 'Keep' },
+                  { value: 'drop', label: 'Drop' },
+                ]}
+                value={r.do}
+                onValueChange={(v: 'keep' | 'drop') => setRule(i, { do: v })}
+              />
+              {r.do === 'keep' && <Field label="Tag" labelHidden value={r.tag} onValueChange={(v) => setRule(i, { tag: v })} placeholder="tag" />}
+              <Field label="Sentence" labelHidden value={r.text} onValueChange={(v) => setRule(i, { text: v })} placeholder="Posts asking for a recommendation" />
+              <IconButton icon="close" label="Remove rule" size="sm" quiet onClick={() => setRules(rules.filter((_, j) => j !== i))} />
+            </div>
+          ))}
+        </fieldset>
+        <fieldset className="rr-list">
+          <legend>
+            Rate limits
+            {limits.length < UNITS.length && (
+              <Verb onClick={() => setLimits([...limits, { count: '10', per: UNITS.find((u) => !limits.some((l) => l.per === u.value))?.value ?? 'day' }])}>Add limit</Verb>
+            )}
+          </legend>
+          {limits.map((l, i) => (
+            <div key={i} className="rr-line" role="group" aria-label={`Limit ${i + 1}`}>
+              <Field label="How many" labelHidden type="number" value={l.count} onValueChange={(v) => setLimit(i, { count: v })} />
+              <Select
+                label="Each"
+                labelHidden
+                options={UNITS.filter((u) => u.value === l.per || !limits.some((x) => x.per === u.value))}
+                value={l.per}
+                onValueChange={(v: Unit) => setLimit(i, { per: v })}
+              />
+              {limits.length > 1 && <IconButton icon="close" label="Remove limit" size="sm" quiet onClick={() => setLimits(limits.filter((_, j) => j !== i))} />}
+            </div>
+          ))}
+        </fieldset>
+        {!hourly && <Select label="At" options={timeChoices(at)} value={at} onValueChange={setAt} />}
       </div>
     </Dialog>
   );

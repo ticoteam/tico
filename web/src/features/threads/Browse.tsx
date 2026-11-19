@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { useDeferredValue, useState } from 'react';
+import { useDeferredValue, useState, type MouseEvent } from 'react';
 import { Button } from '@/kit/Button';
 import { Count } from '@/kit/Count';
 import { Dialog } from '@/kit/Dialog';
@@ -31,6 +31,13 @@ export function Browse({ onClose }: { onClose: () => void }) {
     await press('threads.open', { thread: t.id });
   };
   const back = (t: BrowseRow) => void press('threads.unarchive', { thread: t.id });
+  // Its name opens it to read before joining (ui thread-rail browse); the link stays real for a new tab.
+  const read = (e: MouseEvent, t: BrowseRow) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    onClose();
+    void press('threads.open', { thread: t.id });
+  };
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()} title="Browse threads">
@@ -65,7 +72,9 @@ export function Browse({ onClose }: { onClose: () => void }) {
               <span className="tl-kind">
                 <Icon name="threads" />
               </span>
-              <span className="row-title">{t.title || 'Thread'}</span>
+              <a className="row-title" href={`/threads/${encodeURIComponent(t.id)}`} onClick={(e) => read(e, t)}>
+                {t.title || 'Thread'}
+              </a>
               {t.member_count ? <Count n={t.member_count} label={`${t.member_count} in it`} /> : <span />}
               {view === 'open' ? (
                 <Button onClick={() => void join(t)}>Join</Button>

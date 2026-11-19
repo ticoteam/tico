@@ -251,15 +251,37 @@ export const findEventsQuery = (q: string) =>
   });
 
 /** Share a meeting the person kept back, put it away, or bring it back. */
-export async function reviewMeeting(id: string, action: 'approve' | 'dismiss' | 'restore'): Promise<Meeting> {
+export async function reviewMeeting(
+  id: string,
+  action: 'approve' | 'dismiss' | 'restore',
+  share: { private?: boolean; send_to?: string } = {},
+): Promise<Meeting> {
+  const body = { action, ...(share.private !== undefined ? { private: share.private } : {}), ...(share.send_to ? { send_to: share.send_to } : {}) };
   const m = await write({
     key: meetKeys.one(id),
     optimistic: (d: Meeting | undefined) => d && { ...d, review_state: action === 'dismiss' ? 'dismissed' : action === 'approve' ? 'live' : 'pending' },
-    send: (idempotencyKey) => api.post<Meeting>(`/api/v2/meetings/${enc(id)}/review`, { action }, { idempotencyKey }),
+    send: (idempotencyKey) => api.post<Meeting>(`/api/v2/meetings/${enc(id)}/review`, body, { idempotencyKey }),
     settle: (_d: Meeting | undefined, m: Meeting) => m,
   });
   void queryClient.invalidateQueries({ queryKey: meetKeys.list });
   return m;
+}
+
+/** Share or dismiss several of the person's Pending meetings in one call; they leave Pending at once. */
+export async function reviewMeetings(ids: readonly string[], action: 'approve' | 'dismiss'): Promise<MeetingList> {
+  const gone = new Set(ids);
+  const shown = queryClient.getQueriesData({ queryKey: [...meetKeys.list, 'pending'] }).map(([k]) => k);
+  const r = await write({
+    key: shown.length ? shown : [meetKeys.shown('pending', '')],
+    optimistic: (d: MeetingList | undefined) => {
+      if (!d) return d;
+      const meetings = d.meetings.filter((m) => !gone.has(m.id));
+      return { ...d, meetings, count: Math.max(0, d.count - (d.meetings.length - meetings.length)) };
+    },
+    send: (idempotencyKey) => api.post<MeetingList>('/api/v2/meetings/review', { action: `${action}_all`, ids: [...gone] }, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: meetKeys.list });
+  return r;
 }
 
 export const meetingQuery = (id: string) =>
@@ -545,10 +567,15 @@ export interface LoggedMeeting {
   participants?: string[];
   notes?: string;
   transcript?: string;
+  /** The transcript's source; upload when left out. */
+  source?: string;
+  media_url?: string;
   private?: boolean;
+  /** An agent's id or slug, or 'auto'. */
+  send_to?: string;
 }
 export async function logMeeting(m: LoggedMeeting): Promise<{ id: string }> {
-  const body: ImportMeetingBody = { ...m, source: m.transcript ? 'upload' : 'manual', review: 'live' };
+  const body: ImportMeetingBody = { ...m, source: m.transcript ? (m.source ?? 'upload') : 'manual', review: 'live' };
   const r = await api.post<{ id: string }>('/api/v2/meetings/import', body);
   void queryClient.invalidateQueries({ queryKey: meetKeys.list });
   void queryClient.invalidateQueries({ queryKey: calKeys.all });

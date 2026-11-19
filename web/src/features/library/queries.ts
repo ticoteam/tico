@@ -1401,3 +1401,116 @@ export interface PlaceInfo {
   shared: boolean;
 }
 export type CardLink = Card['links'][number] & { link_key?: string; from_entity_id?: string; inverse_name?: string | null };
+
+// ---------------------------------------------------------------- tier-2 gaps: skills (s781 s782 s783 s804), an outside doc (s778)
+
+/** The job functions a skill's SKILL.md may name (clients/skills.py FUNCTIONS); any other value, or none, is `other`. */
+export const SKILL_FUNCTIONS = ['tico', 'legal', 'marketing', 'growth', 'sales', 'customers', 'finance', 'product', 'engineering', 'people', 'operations', 'hardware', 'data', 'security'] as const;
+export const functionGroup = (f: string | null | undefined) => {
+  const w = (f ?? '').trim().toLowerCase();
+  return (SKILL_FUNCTIONS as readonly string[]).includes(w) ? w : 'other';
+};
+
+/** An install as one skill's usage reads it (backend/skill_usage.py coverage): its uses in 30 days, and whether the
+    reader may take it off (`removable`: the rights of installing it). */
+export interface SkillCoverage {
+  id: string;
+  target: SkillActor;
+  uses_30d: number;
+  coverage: string;
+  pinned_version: number | null;
+  removable: boolean;
+}
+/** One skill's last 30 days: its recent runs and its installs' coverage, in one read. */
+export const skillDetailUsageQuery = (name: string) =>
+  queryOptions({
+    queryKey: ['skills', 'skill-usage', name],
+    queryFn: () =>
+      api
+        .get<{ recent?: SkillRecent[]; installs?: SkillCoverage[] }>(`/api/v2/skills/${enc(name)}/usage?days=30`)
+        .then((r) => ({ recent: r.recent ?? [], installs: r.installs ?? [] })),
+    ...quiet,
+  });
+
+/** Take a skill off a teammate: the same rights as installing it (DELETE /api/v2/skills/installs/<id>). */
+export function removeInstall(name: string, install: string) {
+  return write<unknown>({
+    key: [skillQuery(name).queryKey, skillDetailUsageQuery(name).queryKey],
+    optimistic: (cur: { installs?: Array<{ id: string }> } | undefined) => cur && { ...cur, installs: cur.installs?.filter((i) => i.id !== install) },
+    send: (idempotencyKey) => api.delete(`/api/v2/skills/installs/${enc(install)}`, { idempotencyKey }),
+  });
+}
+
+/** A proposal's own end: the proposer withdraws it, or it goes back to screening (an admin or the proposer). */
+export function withdrawProposal(id: string) {
+  return write<unknown>({
+    key: proposalsQuery.queryKey,
+    optimistic: dropProposal(id),
+    send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/withdraw`, {}, { idempotencyKey }),
+  });
+}
+export function rescreenProposal(id: string) {
+  return write<unknown>({
+    key: proposalQuery(id).queryKey,
+    optimistic: (cur: ProposalDetail | undefined) => cur && { ...cur, proposal: { ...cur.proposal, screen_status: 'pending' } },
+    send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/rescreen`, {}, { idempotencyKey }),
+  });
+}
+
+/** The maintenance run's suggestions for admins (backend/skill_suggestions.py): take off an install nobody uses
+    (`remove`), or ask the agent that runs a skill outside the directory to submit it (`promote`). */
+export interface SkillSuggestion {
+  id: string;
+  kind: 'remove' | 'promote';
+  name: string;
+  target: SkillActor | null;
+  uses_30d: number;
+  bots: number;
+}
+/** Skills agents ran in 30 days that the directory does not have (admins; backend/skill_usage.py popular_elsewhere). */
+export interface SkillElsewhere {
+  name: string;
+  uses: number;
+  bots: SkillActor[];
+  bots_count: number;
+}
+export const skillSuggestionsQuery = queryOptions({
+  queryKey: ['skills', 'suggestions'],
+  queryFn: () => api.get<{ suggestions?: SkillSuggestion[] }>('/api/v2/skills/suggestions').then((r) => r.suggestions ?? []),
+  ...quiet,
+});
+export const skillsElsewhereQuery = queryOptions({
+  queryKey: ['skills', 'elsewhere'],
+  queryFn: () => api.get<{ popular_elsewhere?: SkillElsewhere[] | null }>('/api/v2/skills/usage?days=30').then((r) => r.popular_elsewhere ?? []),
+  ...quiet,
+});
+
+const dropSuggestion = (id: string) => (cur: SkillSuggestion[] | undefined) => cur?.filter((x) => x.id !== id);
+
+export function closeSuggestion(id: string, verb: 'remove' | 'dismiss' | 'asked') {
+  return write<unknown>({
+    key: skillSuggestionsQuery.queryKey,
+    optimistic: dropSuggestion(id),
+    send: (idempotencyKey) => api.post(`/api/v2/skills/suggestions/${enc(id)}/${verb}`, {}, { idempotencyKey }),
+  });
+}
+
+/** Ask to submit: the person's own message asks the agent to submit the skill (an admin still approves it), then the
+    suggestion closes. */
+export async function askToSubmit(id: string, name: string, bot: string) {
+  await api.post(
+    '/api/v2/messages',
+    { to: `bot:${bot}`, text: `Please run \`tico skill submit ${name}\` to propose ${name} for the company skills directory.` },
+    { idempotencyKey: crypto.randomUUID() },
+  );
+  return closeSuggestion(id, 'asked');
+}
+
+/** An outside doc as it was read at one commit (`revision`), the one a source's list or a search hit saw. */
+export const externalDocAtQuery = (id: string, revision: string) =>
+  queryOptions({
+    queryKey: ['docs', 'external', id, revision],
+    queryFn: () => api.get<ExternalDocResult>(`/api/v2/docs/external/${enc(id)}${q({ revision })}`).then((r) => r.doc),
+    // a commit's text never changes
+    staleTime: Infinity,
+  });

@@ -237,3 +237,7 @@
 /* ---------------------------------------------------------------- gap wave: a contact's rules, a place's marks */
 .pnl .rec-none{margin:0;padding:var(--s-1) 0;color:var(--muted)}
 .rec-pills{display:inline-flex;flex-wrap:wrap;gap:var(--s-1)}
+
+/* ---------- Tools: Messages across every address (ToolMessages.tsx) ---------- */
+.lib .msg-find{display:flex;flex-wrap:wrap;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
+.tools .mrow .row-ctx{flex:0 1 auto;max-width:40%}

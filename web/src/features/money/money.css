@@ -31,7 +31,7 @@
    definitions. The panel keeps its own 12. */
 :where(html:not([data-layout="cards"])) .money .pk-body :is(.t-scroll,.two-col) .table :is(th,td):first-child{padding-left:var(--page-x)}
 :where(html:not([data-layout="cards"])) .money .pk-body .table tr.is-sub td:first-child{padding-left:calc(var(--page-x) + var(--s-4))}
-:where(html:not([data-layout="cards"])) .money .pk-body :is(.ctl-row,.rule,.fold,.def){padding-left:var(--page-x)}
+:where(html:not([data-layout="cards"])) .money .pk-body :is(.ctl-row,.rule,.fold){padding-left:var(--page-x)}
 .money .table tr.is-pct td{color:var(--muted);font-size:var(--t-sm)}
 .money .table tr.is-net td{height:40px;font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
 .money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
@@ -87,8 +87,6 @@
 .money .fold{height:var(--row);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-3);color:var(--muted);border-radius:var(--r-row)}
 
 /* a definition: a word and what it means here, one line */
-.money .def{grid-template-columns:132px minmax(0,1fr);column-gap:var(--s-3);padding:0 var(--s-3)}
-.money .def span:last-child{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* the panel: one big figure, rows of name, word and figure, where a number comes from */
 .money .pfig{display:grid;gap:var(--s-1);padding:var(--s-2h) var(--s-2) var(--s-4)}
@@ -120,6 +118,9 @@
 .money .shares{display:grid;gap:var(--s-2)}
 .money .share-row{display:grid;grid-template-columns:minmax(0,1fr) 84px auto;column-gap:var(--s-2);align-items:center}
 .money .share-foot{display:flex;align-items:center;gap:var(--s-2)}
+.money .share-hist summary{cursor:pointer;font-size:var(--t-sm);color:var(--ink-2)}
+.money .share-hist .prow{grid-template-columns:minmax(0,1fr) auto;padding:0}
+.money .share-hist .row-fig{display:none}
 .money .file-pick{display:flex;align-items:center;gap:var(--s-2);min-width:0}
 .money .file-pick .row-sub{overflow:hidden;text-overflow:ellipsis}
 .money .stmt{display:grid;gap:var(--s-2);min-width:0}
@@ -181,6 +182,4 @@
   .money .rule>.ico{display:none}
   .money .rule.has-act{grid-template-columns:minmax(0,1fr) auto auto}
   .money .fold{height:44px;padding:0 var(--s-2)}
-  .money .def{grid-template-columns:minmax(0,1fr);height:auto;min-height:44px;padding:var(--s-2) var(--s-2)}
-  .money .def span:last-child{white-space:normal;font-size:var(--t-sm)}
 }

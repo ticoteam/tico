@@ -229,7 +229,7 @@ describe('Settings › Tasks @s1077', () => {
     expect(within(road).getByRole('switch', { name: "Ask before an agent's words go public" })).toBeTruthy();
     await pick(within(road).getByRole('combobox', { name: 'Add a label' }), /^Idea$/);
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/roadmaps/settings', method: 'POST', body: { labels: ['feature', 'idea'] } }));
-    expect(await run('settings.roadmapLabels', { labels: [] }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('settings.roadmapLabels', { labels: ['feature', 'idea', 'secret'] }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 });
 

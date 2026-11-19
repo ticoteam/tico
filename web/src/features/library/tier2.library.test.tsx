@@ -543,6 +543,8 @@ describe('a Tico address’s dialogs', () => {
 
   it('Stop using asks for the address typed back when something depends on it, and is never Tico’s @s936', async () => {
     const sent = serve();
+    // Stopping is an owner's or admin's (as the old page); see tier2.tools.gap.test.tsx.
+    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
     const router = openInbox();
     await toolMore('Logins');
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Stop using' }));
@@ -570,7 +572,7 @@ describe('Add tool’s mail dialogs', () => {
     expect(writes(sent)).toEqual([{ url: '/api/v2/inbound/inboxes', method: 'POST', body: { kind: 'email', name: 'Account logins' } }]);
   });
 
-  it('asks for a US mobile number, which buys nothing, and opens the requests; never Tico’s @s934', async () => {
+  it('asks for a US mobile number, which buys nothing, and opens the requests; Tico may ask too @s934', async () => {
     const sent = serve();
     const router = add('number');
     const dialog = await screen.findByRole('dialog', { name: 'Ask for a US mobile number' });
@@ -578,7 +580,9 @@ describe('Add tool’s mail dialogs', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Ask' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ tool: 'number' }));
     expect(writes(sent)).toEqual([{ url: '/api/v2/inbound/phone-requests', method: 'POST', body: { name: 'Mobile number' } }]);
-    expect(await tico('tools.requestNumber', { name: 'Mobile number' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    // Asking buys nothing; accepting the quote stays the person's own.
+    expect((await tico('tools.requestNumber', { name: 'Mobile number' })).ok).toBe(true);
+    expect(await tico('tools.acceptQuote', { request: 'r1', price_micros: 1 })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 
   it('connects a mailbox by its address, shared or not, and opens it; never Tico’s @s938', async () => {

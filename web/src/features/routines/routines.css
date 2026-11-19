@@ -88,6 +88,11 @@
 .rr .rr-addr{font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink)}
 .rr .rr-once{display:grid;gap:var(--s-2);justify-items:start}
 .rr-form{display:grid;gap:var(--s-3)}
+.rr-chips{display:flex;flex-wrap:wrap;gap:var(--s-1)}
+.rr .rr-quote{margin:0;padding-left:var(--s-3);border-left:2px solid var(--line-strong);color:var(--ink-2)}
+.rr-diff{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
+.rr-diff ins{text-decoration:none;color:var(--ink)}
+.rr-diff del{color:var(--muted)}
 .rr-field{display:flex;align-items:center;gap:var(--s-2h)}
 /* a kept call's headers and body, as sent (Payload) */
 .rr-pre{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}

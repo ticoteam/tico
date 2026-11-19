@@ -14,6 +14,7 @@ import { toast } from '@/kit/Toast';
 import { press, ToolGlyph } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog } from './ToolDialogs';
 import { probeMcp, type LoginAdd, type McpProbe } from './queries';
+import { useAdmin } from './ToolShell';
 
 /* Add tool (tools.js addMenu; the old app's tools-api, tools-mcp and tools-website dialogs): an API, an MCP server
    or a website. Secrets typed here are only sent: nothing typed comes back to the page. */
@@ -39,9 +40,15 @@ export function AddMenu({ trigger, onPick }: { trigger: ReactElement; onPick: (a
   );
 }
 
+/** What only an owner or admin adds, as in the old app: a company mailbox, a paid number, a paid address. */
+const ADMIN_ONLY: Adding[] = ['mailbox', 'number', 'address'];
+
 /** The Add menu's rows, for a menu that holds them as a second level (a phone's ⋯). */
 export function AddItems({ onPick }: { onPick: (a: Adding) => void }) {
-  return ADD.map(([k, label, glyph]) => <MenuItem key={k} label={label} lead={<ToolGlyph kind={glyph} />} onSelect={() => onPick(k)} />);
+  const admin = useAdmin();
+  return ADD.filter(([k]) => admin || !ADMIN_ONLY.includes(k)).map(([k, label, glyph]) => (
+    <MenuItem key={k} label={label} lead={<ToolGlyph kind={glyph} />} onSelect={() => onPick(k)} />
+  ));
 }
 
 export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => void }) {

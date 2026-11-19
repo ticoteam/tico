@@ -190,7 +190,7 @@ describe('Open browser', () => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:made-up'), revokeObjectURL: vi.fn() }));
   });
 
-  it('opens the browser, takes control, types, and gives it back on Done', async () => {
+  it('opens the browser, takes control, types, and gives it back on Done @s930', async () => {
     serve(browserServer);
     const onClose = vi.fn();
     show(<BrowserDialog tool="w1" account="a1" title="Example" onClose={onClose} />, '/library/tools');
@@ -210,7 +210,7 @@ describe('Open browser', () => {
     expect(sent.filter((s) => s.url.endsWith('/control')).map((s) => s.body)).toEqual([{ take: true }, { take: false }]);
   });
 
-  it('gives control back when it closes', async () => {
+  it('gives control back when it closes @s930', async () => {
     serve(browserServer);
     show(<BrowserDialog tool="w1" account="a1" title="Example" onClose={() => {}} />, '/library/tools');
     fireEvent.click(await screen.findByRole('button', { name: 'Take control' }));

@@ -50,13 +50,6 @@ const READ: GrowthRead = {
   metrics: [],
   more: [],
 };
-const SOURCES = {
-  sources: [
-    { id: 'src1', name: 'Ledger', health: 'fresh', last_run_at: '2026-11-01T10:00:00Z', fills: ['spend'], truth_for: ['spend'] },
-    { id: 'src2', name: 'Signup sheet', health: 'stale', fills: ['signups'], truth_for: ['signups'] },
-  ],
-};
-
 const heads = (table: HTMLElement) => within(table).getAllByRole('columnheader').map((h) => h.textContent);
 
 beforeAll(() => {
@@ -77,32 +70,11 @@ describe('Growth on a phone (run 6)', () => {
     document.documentElement.dataset.layout = 'cards';
   });
 
-  it('Sources keeps the source and its last sync; the name is a link to its panel', async () => {
-    serve({ '/growth/sources': SOURCES, '/growth/segments': { segments: [] } });
-    show('/company/growth?tab=sources');
-    const link = await screen.findByRole('link', { name: 'Ledger' });
-    const table = screen.getByRole('table', { name: 'Sources' });
-    expect(heads(table)).toEqual(['Source', 'Last sync']);
-    // one column of fixed width beside the name, so it no longer starves (two of 184 did)
-    expect([...table.querySelectorAll('col')].map((c) => c.className)).toEqual(['', 't-col']);
-    expect(link.getAttribute('href')).toContain('panel=source');
-    expect(within(table).getByRole('link', { name: 'Signup sheet' })).toBeTruthy();
-  });
-
   it('Channels shows Channel, New and CAC', async () => {
     serve({ '/growth/read': READ, '/growth/segments': { segments: [] }, '/page-owners': { pages: {} } });
     show('/company/growth?month=2026-10');
     const table = await screen.findByRole('table', { name: 'Channels' });
     expect(heads(table)).toEqual(['Channel', 'New', 'CAC']);
-  });
-});
-
-describe('Growth on a desk (run 6)', () => {
-  it('Sources keeps Feeds and Holds', async () => {
-    serve({ '/growth/sources': SOURCES, '/growth/segments': { segments: [] } });
-    show('/company/growth?tab=sources');
-    await screen.findByRole('link', { name: 'Ledger' });
-    expect(heads(screen.getByRole('table', { name: 'Sources' }))).toEqual(['Source', 'Feeds', 'Holds', 'Last sync']);
   });
 });
 

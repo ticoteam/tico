@@ -806,34 +806,6 @@ export const segmentsQuery = queryOptions({
   ...quiet,
 });
 
-/** GET /api/v2/growth/sources (backend/growth.py source_view, growth_sync.py view); the schema leaves it untyped. */
-export interface GrowthSource {
-  id: string;
-  name?: string;
-  system?: string;
-  kind?: string | null;
-  truth_for?: string[] | string | null;
-  fills?: string[];
-  /** How agents reach it: mcp, credential, url or person, then which one. */
-  reach_kind?: string | null;
-  reach_ref?: string | null;
-  /** What agents may do with it: `read`, `write`, `act`, comma separated. */
-  may?: string | null;
-  owner_ref?: string | null;
-  health: 'fresh' | 'stale' | 'failing' | 'waiting' | 'not_synced';
-  health_since?: string | null;
-  last_run_at?: string | null;
-  last_good_run?: string | null;
-  last_error?: string | null;
-  has_file?: boolean;
-  retired_at?: string | null;
-}
-export const growthSourcesQuery = queryOptions({
-  queryKey: ['growth', 'sources'],
-  queryFn: ({ signal }) => api.get<{ sources: GrowthSource[]; conflicts?: string[] }>('/api/v2/growth/sources', { signal }),
-  ...quiet,
-});
-
 export interface PageOwnerRow {
   bot?: string | null;
   /** 'default', 'none' or the chosen agent ('bot:<id>'). */

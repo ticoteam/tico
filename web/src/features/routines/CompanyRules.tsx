@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Fragment, useState, type ReactNode } from 'react';
-import { directoryQuery } from '@/data';
+import { directoryQuery, useActors } from '@/data';
 import { Icon } from '@/kit/Icon';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
@@ -8,8 +8,8 @@ import { Select } from '@/kit/Select';
 import { Section } from '@/pagekinds';
 import { RULES } from './actions';
 import { actorKey, Face, press, RemoveItem, RuleRow, type How } from './parts';
-import { holdsQuery, orgRulesQuery, reachQuery, teamsQuery } from './queries';
-import type { Group, OrgRule, Reach, ReachBook, ReachMode, RuleHold, Scope } from './types';
+import { holdsQuery, orgRulesQuery, partiesOf, reachQuery, teamsQuery } from './queries';
+import type { Group, OrgRule, Reach, ReachBook, ReachMode, RuleHold } from './types';
 import { orgParts } from './words';
 
 /* Rules › Company (rules.js rulesBody): who on the left (Everyone, then each team and its members), what applies to
@@ -27,14 +27,7 @@ const BOOKS: { value: ReachBook; label: string }[] = [
 ];
 const FIELDS = { mode: 'Reach', book: 'Agents may book', chats_per_day: 'Chats a day', tasks_per_day: 'Tasks a day' } as const;
 
-const sid = (x: unknown) => (typeof x === 'string' ? x : ((x as { id?: string } | null)?.id ?? ''));
-
-/** Everyone a rule applies to, as parties: `*`, `group:<id>`, `bot:<id>`, `human:<id>`. */
-export function partiesOf(s: Scope | null | undefined): string[] {
-  if (!s || s.everyone || s.all_bots) return ['*'];
-  const out = [...(s.groups ?? []).map((g) => `group:${sid(g)}`), ...(s.bots ?? []).map((b) => `bot:${sid(b)}`), ...(s.people ?? []).map((p) => `human:${sid(p)}`)];
-  return out.length ? out : ['*'];
-}
+export { partiesOf };
 
 const members = (g: Group) => [...g.bots.map((b) => `bot:${b}`), ...g.people.map((p) => `human:${p}`)];
 
@@ -48,6 +41,36 @@ export function useNamer() {
     // Unknown only once the agent or person is gone from the company.
     return dir?.byId[actorKey(party) ?? party]?.name ?? (party.startsWith('bot:') ? 'An agent' : 'A person');
   };
+}
+
+/** Several parties picked: each a chip with its ×, then a picker for one more. Everyone stands alone: picking it
+   clears the rest, picking anyone else clears it. `everyone: false` for a With (teammates only). */
+export function PartyPick({ label, value, onChange, everyone = true, disabled }: { label: string; value: readonly string[]; onChange: (next: string[]) => void; everyone?: boolean; disabled?: boolean }) {
+  const name = useNamer();
+  const teams = useQuery(teamsQuery).data ?? [];
+  const actors = useActors();
+  const all = [...(everyone ? [{ value: '*', label: 'Everyone' }] : []), ...teams.map((g) => ({ value: `group:${g.id}`, label: g.name })), ...actors.map((a) => ({ value: a.id, label: a.name }))];
+  const add = (p: string) => onChange(p === '*' ? ['*'] : [...value.filter((x) => x !== '*' && x !== p), p]);
+  return (
+    <div className="f" role="group" aria-label={label}>
+      <span className="f-label">{label}</span>
+      {value.length > 0 && (
+        <div className="rr-chips">
+          {value.map((p) => (
+            <span key={p} className="scope">
+              {name(p)}
+              {!disabled && (
+                <button type="button" aria-label={`Remove ${name(p)}`} onClick={() => onChange(value.filter((x) => x !== p))}>
+                  <Icon name="close" />
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {!disabled && <Select label={label} labelHidden options={all.filter((o) => !value.includes(o.value))} value={null} onValueChange={add} placeholder={value.length ? 'Add' : 'Pick'} />}
+    </div>
+  );
 }
 
 /** How many tasks the rule holds now. */
@@ -96,8 +119,9 @@ export function OrgRuleRow({
   );
 }
 
-export function CompanyRules({ who, panel, confirm }: { who: string; panel?: string; confirm: (what: string, go: () => void) => void }) {
-  const rules = (useQuery(orgRulesQuery('active')).data ?? []).filter((r) => r.kind !== 'external');
+export function CompanyRules({ who, panel, confirm, q }: { who: string; panel?: string; confirm: (what: string, go: () => void) => void; q?: string }) {
+  const words = q?.toLowerCase().split(/\s+/) ?? [];
+  const rules = (useQuery(orgRulesQuery('active')).data ?? []).filter((r) => r.kind !== 'external' && words.every((w) => `${r.text} ${r.description ?? ''}`.toLowerCase().includes(w)));
   const teams = useQuery(teamsQuery).data ?? [];
   const reach = useQuery(reachQuery).data;
   const holds = useQuery(holdsQuery).data;

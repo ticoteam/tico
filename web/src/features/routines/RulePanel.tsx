@@ -8,6 +8,7 @@ import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu } from '@/kit/Menu';
@@ -16,13 +17,13 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { fmtDate } from '@/lib';
 import { SidePanel } from '@/pagekinds';
-import type { RuleTab } from './actions';
-import { partiesOf, useNamer } from './CompanyRules';
+import { RULES, type RuleTab } from './actions';
+import { PartyPick, useNamer } from './CompanyRules';
 import { DuePanel } from './DuePanel';
-import { Face, press, RemoveItem, useConfirmRemove, useName } from './parts';
-import { holdsQuery, orgRulesQuery, stageRulesQuery, teamsQuery } from './queries';
+import { Face, press, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
+import { holdsQuery, orgRulesQuery, partiesOf, ruleSourcesQuery, stageRulesQuery, teamsQuery, withOf } from './queries';
 import type { OrgRule, RuleHold, StageRule } from './types';
-import { agentWords, BROKEN, cap, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
+import { agentWords, BROKEN, cap, dayWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
 
 /* One rule, as a panel (rules.js rulePanel): When, Check and Then as facts, then the tasks it holds. Edit turns the
    panel into the rule's editor; `org:new` and `stage:new` open the editor empty. */
@@ -70,6 +71,9 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
   if (!r) return <Gone title="Rule" loading={active.isPending} onClose={onClose} />;
   if (editing) return <OrgEditor rule={r} outside={r.kind === 'external'} onDone={() => setEditing(false)} onClose={onClose} />;
   const tmp = r.id.startsWith('tmp:');
+  const withs = withOf(r.with);
+  const quote = r.cite && !r.cite.hidden && r.cite.quote ? r.cite : null;
+  const dues = r.due ?? [];
   return (
     <SidePanel
       className="rr"
@@ -80,42 +84,100 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
     >
       <section className="rail-sec">
         <p className="inst t-read">{agentWords(r.text)}</p>
+        {r.description && <p className="row-sub t-read">{r.description}</p>}
         <Facts label="About">
-          <LabelValue label="If broken">{r.if_broken === 'escalate' && r.reviewer ? `Ask ${reviewer || r.reviewer.name || 'a person'}` : brokenWords(r)}</LabelValue>
+          <LabelValue label="If broken">{r.if_broken === 'escalate' ? `Ask ${reviewer || r.reviewer?.name || 'the manager'}` : brokenWords(r)}</LabelValue>
           <LabelValue label="Who">{partiesOf(r.who).map(name).join(', ')}</LabelValue>
+          {withs.length > 0 && <LabelValue label="With">{withs.map(name).join(', ')}</LabelValue>}
           {r.source?.name && <LabelValue label="From">{r.source.name}</LabelValue>}
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
+        {quote && (
+          <blockquote className="rr-quote t-read">
+            {quote.file_id ? (
+              <Link className="verb" href={`/library/files?file=${encodeURIComponent(quote.file_id)}`}>
+                {quote.section || 'Document'}
+              </Link>
+            ) : (
+              <b>{quote.section || 'Document'}</b>
+            )}{' '}
+            “{quote.quote}”
+          </blockquote>
+        )}
       </section>
+      {(dues.length > 0 || (r.can_edit && !tmp)) && (
+        <section className="rail-sec">
+          <h3>
+            Due
+            {r.can_edit && !tmp && (
+              <Verb onClick={() => void press('rules.newDue', { rule: r.id })} target={`due-new:${r.id}`}>
+                Add date
+              </Verb>
+            )}
+          </h3>
+          {dues.map((d) => (
+            <Row key={d.id} className="prun" title={dueWords(d)} href={`${RULES}?tab=due&panel=${encodeURIComponent(`due:${d.id}`)}`} target={`due:${d.id}`}>
+              <span className="run-at">{dayWords(d.due_on)}</span>
+              <span className="row-sub">{dueWords(d)}</span>
+              {d.status === 'overdue' ? <Word>Late</Word> : <span className="row-age" />}
+            </Row>
+          ))}
+          {!!r.due_more && <p className="row-sub">{`${r.due_more} more`}</p>}
+        </section>
+      )}
       {!tmp && <Holds id={r.id} />}
       {remove.node}
     </SidePanel>
   );
 }
 
-const partyOf = (r: OrgRule | undefined) => (r ? (partiesOf(r.who)[0] ?? '*') : '*');
+const DUE_REPEATS: Record<string, string> = { weekly: 'Every week', monthly: 'Every month', quarterly: 'Every quarter', yearly: 'Every year' };
+const dueWords = (d: { repeats?: string; task_days?: number | null }) =>
+  [DUE_REPEATS[d.repeats ?? ''] ?? 'Once', d.task_days != null ? `task ${d.task_days} days before` : ''].filter(Boolean).join(', ');
+
+const MANAGER = 'manager';
+const NEW_FROM = '+new';
+const FROM_KINDS = [
+  { value: 'vendor', label: 'Vendor' },
+  { value: 'customer', label: 'Customer' },
+  { value: 'government', label: 'Government' },
+  { value: 'other', label: 'Other' },
+] as const;
+type FromKind = (typeof FROM_KINDS)[number]['value'];
 
 function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside: boolean; onDone: () => void; onClose: () => void }) {
   const actors = useActors();
-  const teams = useQuery(teamsQuery).data ?? [];
+  const sources = useQuery({ ...ruleSourcesQuery, enabled: outside }).data ?? [];
   const [text, setText] = useState(rule?.text ?? '');
+  const [description, setDescription] = useState(rule?.description ?? '');
   const [broken, setBroken] = useState<'block' | 'escalate' | 'warn'>(rule?.if_broken ?? 'block');
-  const [reviewer, setReviewer] = useState<string | null>(rule?.reviewer ? `human:${rule.reviewer.id}` : null);
-  const [who, setWho] = useState(partyOf(rule));
+  // under Ask first, nobody picked is the manager above whoever broke it
+  const [reviewer, setReviewer] = useState<string>(rule?.reviewer ? `human:${rule.reviewer.id}` : MANAGER);
+  // every team, agent and person it names, not only the first
+  const [who, setWho] = useState<string[]>(rule ? partiesOf(rule.who) : ['*']);
+  const [withs, setWiths] = useState<string[]>(withOf(rule?.with));
+  const [from, setFrom] = useState<string | null>(rule?.source?.id ?? null);
+  const [fromName, setFromName] = useState('');
+  const [fromKind, setFromKind] = useState<FromKind>('vendor');
   const [busy, setBusy] = useState(false);
-  const people = actors.filter((a) => a.kind === 'person').map((a) => ({ value: a.id, label: a.name }));
-  const whos = [
-    { value: '*', label: 'Everyone' },
-    ...teams.map((g) => ({ value: `group:${g.id}`, label: g.name })),
-    ...actors.map((a) => ({ value: a.id, label: a.name })),
-  ];
-  if (!whos.some((w) => w.value === who)) whos.push({ value: who, label: who });
-  if (reviewer && !people.some((p) => p.value === reviewer)) people.unshift({ value: reviewer, label: rule?.reviewer?.name ?? 'A person' });
-  const ready = !!text.trim() && (broken !== 'escalate' || !!reviewer);
+  const people = [{ value: MANAGER, label: 'Manager' }, ...actors.filter((a) => a.kind === 'person').map((a) => ({ value: a.id, label: a.name }))];
+  if (!people.some((p) => p.value === reviewer)) people.push({ value: reviewer, label: rule?.reviewer?.name ?? 'A person' });
+  const fromOptions = [...sources.map((x) => ({ value: x.id, label: x.name })), { value: NEW_FROM, label: 'New…' }];
+  if (from && from !== NEW_FROM && !fromOptions.some((o) => o.value === from)) fromOptions.unshift({ value: from, label: rule?.source?.name ?? 'This From' });
+  const fromReady = !outside || (from === NEW_FROM ? !!fromName.trim() : !!from);
+  const ready = !!text.trim() && who.length > 0 && fromReady;
 
   const save = async () => {
     if (!ready) return;
-    const org = { text: text.trim(), ifBroken: broken, ...(broken === 'escalate' && reviewer ? { reviewer } : {}), who, ...(outside ? { outside: true } : {}) };
+    const org = {
+      text: text.trim(),
+      ifBroken: broken,
+      ...(broken === 'escalate' && reviewer !== MANAGER ? { reviewer } : {}),
+      who,
+      ...(!outside ? { with: withs } : {}),
+      ...(description.trim() || rule?.description ? { description: description.trim() } : {}),
+      ...(outside ? { outside: true, ...(from === NEW_FROM ? { newSource: { name: fromName.trim(), kind: fromKind } } : from ? { source: from } : {}) } : {}),
+    };
     setBusy(true);
     const ok = await press(rule ? 'rules.update' : 'rules.add', rule ? { rule: rule.id, kind: 'org', org } : { kind: 'org', org });
     setBusy(false);
@@ -141,12 +203,21 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
     >
       <section className="rail-sec rr-form">
         <Field label="Rule" area value={text} onValueChange={setText} placeholder="An agent emails a customer for the first time" autoFocus={!rule} />
-        <Select label="Who" options={whos} value={who} onValueChange={setWho} />
+        <Field label="Description" area value={description} onValueChange={setDescription} placeholder="Optional" />
+        <PartyPick label="Who" value={who} onChange={setWho} />
+        {!outside && <PartyPick label="With" value={withs} onChange={setWiths} everyone={false} />}
+        {outside && <Select label="From" options={fromOptions} value={from} onValueChange={setFrom} placeholder="Pick one" />}
+        {outside && from === NEW_FROM && (
+          <>
+            <Field label="Name" value={fromName} onValueChange={setFromName} />
+            <Segmented label="Kind" options={FROM_KINDS} value={fromKind} onValueChange={setFromKind} />
+          </>
+        )}
         <div className="rr-field">
           <span className="set-name">If broken</span>
           <Segmented label="If broken" options={BROKEN} value={broken} onValueChange={setBroken} />
         </div>
-        {broken === 'escalate' && <Select label="Ask" options={people} value={reviewer} onValueChange={setReviewer} placeholder="Pick a person" />}
+        {broken === 'escalate' && <Select label="Ask" options={people} value={reviewer} onValueChange={setReviewer} />}
       </section>
     </SidePanel>
   );
@@ -157,11 +228,31 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
 function useStageRule(id: string) {
   const active = useQuery(stageRulesQuery('active'));
   const suggested = useQuery(stageRulesQuery('suggested'));
-  return { r: active.data?.items.find((x) => x.id === id) ?? suggested.data?.items.find((x) => x.id === id), loading: active.isPending };
+  const r = active.data?.items.find((x) => x.id === id) ?? suggested.data?.items.find((x) => x.id === id);
+  // a suggested change or retire names the rule in force it is about
+  const was = r?.suggests ? active.data?.items.find((x) => x.id === r.suggests) : undefined;
+  return { r, was, loading: active.isPending };
+}
+
+/** What a suggested change alters in the rule it replaces, part by part: [part, now, after]. */
+export function stageDiff(was: StageRule, r: StageRule, team: (id: string) => string | undefined): [string, string, string][] {
+  const a = stageParts(was, team);
+  const b = stageParts(r, team);
+  const ifs = (p: string[]) => (p.length > 2 ? (p[1] ?? '') : 'Always');
+  const where = (x: StageRule) => (x.scope === 'company' ? 'Every pipeline' : [x.pipeline_name, ...(x.stage_names ?? [])].filter(Boolean).join(', '));
+  const rows: [string, string, string][] = [
+    ['Name', was.name, r.name],
+    ['On', where(was), where(r)],
+    ['When', a[0] ?? '', b[0] ?? ''],
+    ['Check', ifs(a), ifs(b)],
+    ['Then', a[a.length - 1] ?? '', b[b.length - 1] ?? ''],
+    ['Why', was.reason ?? '', r.reason ?? ''],
+  ];
+  return rows.filter(([, x, y]) => x !== y);
 }
 
 function StageView({ id, onClose }: { id: string; onClose: () => void }) {
-  const { r, loading } = useStageRule(id);
+  const { r, was, loading } = useStageRule(id);
   const teams = useQuery(teamsQuery).data ?? [];
   const [editing, setEditing] = useState(false);
   const remove = useConfirmRemove();
@@ -177,7 +268,7 @@ function StageView({ id, onClose }: { id: string; onClose: () => void }) {
       onClose={onClose}
       actions={
         <Head
-          can={r.can_edit !== false}
+          can={r.can_edit !== false && r.status !== 'suggested'}
           tmp={tmp}
           onEdit={() => setEditing(true)}
           onRemove={() => remove.confirm(r.name || 'this rule', () => void press('rules.remove', { rule: r.id, kind: 'stage' }))}
@@ -204,6 +295,26 @@ function StageView({ id, onClose }: { id: string; onClose: () => void }) {
         <section className="rail-sec">
           <h3>Why</h3>
           <p className="inst t-read">{r.reason}</p>
+        </section>
+      )}
+      {r.suggests && (
+        <section className="rail-sec" aria-label={r.then_params?.retire ? 'Suggested retire' : 'Suggested change'}>
+          <h3>{r.then_params?.retire ? 'Suggested retire' : 'Suggested change'}</h3>
+          {!was ? (
+            <p className="row-sub">The rule it changes is gone</p>
+          ) : r.then_params?.retire ? (
+            <p className="row-sub">{typeof r.then_params.retire === 'string' ? r.then_params.retire : `Takes ${was.name || 'this rule'} out of force`}</p>
+          ) : (
+            <Facts label="Changes">
+              {stageDiff(was, r, (tid) => teams.find((g) => g.id === tid)?.name).map(([k, x, y]) => (
+                <LabelValue key={k} label={k}>
+                  <span className="rr-diff">
+                    <del>{x || 'None'}</del> → <ins>{y || 'None'}</ins>
+                  </span>
+                </LabelValue>
+              ))}
+            </Facts>
+          )}
         </section>
       )}
       {remove.node}

@@ -400,7 +400,7 @@ export const healthQuery = queryOptions({
   queryKey: ['settings', 'health'],
   queryFn: async ({ signal }) => {
     const h = await api.get<Health>('/api/v2/health', { signal });
-    return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[] };
+    return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[], stuck: stuckOf(h) };
   },
   ...quiet,
 });
@@ -714,6 +714,11 @@ export interface StoppedRun {
   run?: { final_text?: string | null; started_at?: string | null; created_at?: string | null } | null;
   task?: { title?: string; status?: string; owner_name?: string } | null;
   pending_decision?: { decision?: string } | null;
+  /** What the run streamed before it stopped, when it saved no final answer. */
+  output?: { text?: string }[];
+  /** The tools that may have changed something. */
+  acted?: string[];
+  tools?: { tool: string; summary?: string; status?: string; nested?: boolean }[];
 }
 
 export const stoppedRunsQuery = (bot: string) =>
@@ -1712,3 +1717,212 @@ const gatewayAnswer = async (p: Promise<GatewayView>) => {
 export const checkGateway = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/check', {}));
 export const clearGateway = () => gatewayAnswer(api.delete<GatewayView>('/api/v2/providers/gateway'));
 export const connectGatewayAutomatically = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/automatic', {}));
+
+// ---- tier 2 gaps (Tasks, Health, Changelog, Contacts, stopped runs, search): this builder's calls below ----
+
+/** One set of rules for what agents may put on a person (backend/ask_ingest.py): Off or On, the open asks before the
+    check tightens, and up to ten lines the person wants to be asked about. `own`: theirs, not the team default. */
+export interface AskRules {
+  mode: 'off' | 'on' | string;
+  budget: number;
+  criteria: string[];
+  own?: boolean;
+}
+
+/** GET /api/v2/ask-ingest/settings: the person's own rules, the team default, and whether they may change the default.
+    A person's own setting: an agent's read is refused (403). */
+export interface AskView {
+  settings: AskRules;
+  team: AskRules;
+  may_edit_team?: boolean;
+}
+
+export const askQuery = queryOptions({
+  queryKey: ['settings', 'ask'],
+  queryFn: ({ signal }) => api.get<AskView>('/api/v2/ask-ingest/settings', { signal }),
+  ...quiet,
+});
+
+/** Save the person's own rules, or the team default (`team`). The next ask uses them; nothing on a plate moves. */
+export const saveAsk = (rules: { mode: string; budget: number; criteria: string[] }, team: boolean) =>
+  write({
+    key: askQuery.queryKey,
+    optimistic: (v: AskView | undefined) => v && (team ? { ...v, team: { ...v.team, ...rules, own: true } } : { ...v, settings: { ...rules, own: true } }),
+    send: (idempotencyKey) => api.put('/api/v2/ask-ingest/settings', { ...rules, team }, { idempotencyKey }),
+  });
+
+/** Back to the team default: the person's own rules are removed. */
+export const resetAsk = () =>
+  write({
+    key: askQuery.queryKey,
+    optimistic: (v: AskView | undefined) => v && { ...v, settings: { ...v.team, own: false } },
+    send: (idempotencyKey) => api.delete('/api/v2/ask-ingest/settings', { idempotencyKey }),
+  });
+
+/** One ask a replayed day judged: who asked, what it was, why, and what On would have done with it. */
+export interface ReplayRow {
+  asker?: string;
+  asker_name?: string;
+  private?: boolean;
+  title?: string;
+  reason: string;
+  load: number;
+  would: string;
+}
+
+/** What On would have done with one past day (UTC) of agents' asks, every page of it. Nothing on any plate moves. */
+export async function replayDay(person: string, date: string): Promise<ReplayRow[]> {
+  const rows: ReplayRow[] = [];
+  let offset: number | null | undefined = 0;
+  while (offset != null && rows.length < 2000) {
+    const page: { items: ReplayRow[]; next_offset?: number | null } = await api.post<{ items: ReplayRow[]; next_offset?: number | null }>(
+      '/api/v2/ask-ingest/replay',
+      { person, date, offset },
+    );
+    rows.push(...page.items);
+    offset = page.next_offset;
+  }
+  return rows;
+}
+
+/** The rest of the public roadmap's settings: the websites that may show it, who takes visitors' suggestions, limits. */
+export type RoadmapChange = Partial<Pick<RoadmapView, 'cors_origins' | 'action_limit' | 'suggestion_limit' | 'suggestions_bot'>>;
+
+export const setRoadmapMore = (change: RoadmapChange) =>
+  write({
+    key: roadmapQuery.queryKey,
+    optimistic: (v: RoadmapView | undefined) => v && { ...v, ...change },
+    send: (idempotencyKey) => api.post<RoadmapView>('/api/v2/roadmaps/settings', change, { idempotencyKey }),
+  });
+
+/** An agent with queued work that is not starting, or left in setup (backend/health.py `_stuck`). */
+export interface StuckAgent {
+  bot: string;
+  name: string;
+  reason: string;
+  why: string;
+  oldest?: string | null;
+}
+
+/** What Check health still has open (GET /api/v2/health/findings): a setup problem BotOps fixes, or a Tico bug. */
+export interface Finding {
+  key: string;
+  kind: string;
+  title: string;
+  task_id?: string | null;
+  ticket_id?: string | null;
+  approval_id?: string | null;
+  occurrences?: number;
+  last_seen_at?: string | null;
+}
+
+export const stuckOf = (h: { stuck?: unknown } | undefined): StuckAgent[] => (Array.isArray(h?.stuck) ? (h.stuck as StuckAgent[]) : []);
+
+export const findingsQuery = queryOptions({
+  queryKey: ['settings', 'health', 'findings'],
+  queryFn: ({ signal }) =>
+    api.get<{ findings: Finding[]; botops?: boolean; reports_without_asking?: boolean }>('/api/v2/health/findings', { signal }),
+  ...quiet,
+});
+
+/** The team rule: Check health reports a Tico bug to Tico support without a person's yes first (owner). */
+export const setReportRule = (on: boolean) =>
+  write({
+    key: findingsQuery.queryKey,
+    optimistic: (v: { reports_without_asking?: boolean } | undefined) => v && { ...v, reports_without_asking: on },
+    send: (idempotencyKey) => api.put('/api/v2/access/rules', { health_monitor_reports: on }, { idempotencyKey }),
+  });
+
+export const reportFinding = async (key: string) => {
+  await api.post(`/api/v2/health/findings/${enc(key)}/report`, {});
+  await queryClient.invalidateQueries({ queryKey: findingsQuery.queryKey });
+};
+
+/** The installer's checks run by the server against its own address (POST /api/v2/support/setup-check). */
+export interface SetupCheckRow {
+  name: string;
+  status: 'ok' | 'warn' | 'bad' | 'info' | string;
+  detail: string;
+  fix?: string;
+}
+
+export const runSetupCheck = () => api.post<{ checks?: SetupCheckRow[]; doctor_only?: string }>('/api/v2/support/setup-check', {});
+
+/** The changelog a page at a time (60 entries), from `offset`. */
+export const changelogPage = (offset: number) =>
+  offset === 0
+    ? changelogQuery
+    : queryOptions({
+        queryKey: ['settings', 'changelog', 'page', offset],
+        queryFn: ({ signal }) => api.get<ChangelogList>(`/api/v2/changelog?kind=product&limit=60&offset=${offset}`, { signal }),
+        ...quiet,
+      });
+
+/** Acknowledge product entries for this person. The list is not read again: what was New stays marked for this visit. */
+export const markChangelogRead = (ids: string[]) => api.post<{ unread_count: number }>('/api/v2/changelog/read', { ids });
+
+/** Our company in Contacts and where it operates; null while it is not in Contacts (a 404). */
+export interface OurCompany {
+  id: string;
+  name: string;
+  operates_in: { id: string; name: string; link_id?: string }[];
+}
+
+export const operateQuery = queryOptions({
+  queryKey: ['settings', 'operate'],
+  queryFn: ({ signal }) =>
+    api.get<OurCompany>('/api/v2/entities/self', { signal }).catch((e: unknown) => {
+      if ((e as { status?: number } | null)?.status === 404) return null;
+      throw e;
+    }),
+  ...quiet,
+});
+
+export const findPlaces = (q: string) =>
+  queryOptions({
+    queryKey: ['settings', 'operate', 'find', q],
+    queryFn: async ({ signal }) =>
+      (await api.get<{ rows: { id: string; name: string }[] }>(`/api/v2/entities/find/place?name=${enc(q.slice(0, 200))}&limit=8`, { signal })).rows,
+    ...quiet,
+  });
+
+export const addPlace = async (us: string, place: string) => {
+  await api.post('/api/v2/entities/links', { from_ref: us, link_key: 'operates_in', to_ref: place });
+  await queryClient.invalidateQueries({ queryKey: operateQuery.queryKey });
+};
+
+export const dropPlace = (link: string) =>
+  write({
+    key: operateQuery.queryKey,
+    optimistic: (v: OurCompany | null | undefined) => v && { ...v, operates_in: v.operates_in.filter((p) => p.link_id !== link) },
+    send: (idempotencyKey) => api.post('/api/v2/entities/unlink', { link_id: link }, { idempotencyKey }),
+  });
+
+/** An inbox whose mail may add every sender to Contacts; the switch shows only where the listing says (`feeds_directory`). */
+export interface FeedBox {
+  id: string;
+  address: string;
+  kind: string;
+  person_name?: string | null;
+  feeds_directory?: boolean;
+}
+
+/** The inboxes this person may switch: their own, and for an admin every shared one. */
+export const feedsQuery = queryOptions({
+  queryKey: ['settings', 'mail-feeds'],
+  queryFn: async ({ signal }) => {
+    const m = await api.get<{ admin: boolean; mine: FeedBox | null; mailboxes?: FeedBox[] }>('/api/v2/mailboxes', { signal });
+    const rows = new Map<string, FeedBox>();
+    for (const b of [m.mine, ...(m.admin ? (m.mailboxes ?? []).filter((x) => x.kind === 'shared') : [])])
+      if (b && typeof b.feeds_directory === 'boolean') rows.set(b.id, b);
+    return [...rows.values()];
+  },
+  ...quiet,
+});
+
+export const setFeed = (box: string, on: boolean) =>
+  write({
+    key: feedsQuery.queryKey,
+    optimistic: (v: FeedBox[] | undefined) => v?.map((b) => (b.id === box ? { ...b, feeds_directory: on } : b)),
+    send: (idempotencyKey) => api.patch(`/api/v2/mailboxes/${enc(box)}/contacts`, { on }, { idempotencyKey }),
+  });

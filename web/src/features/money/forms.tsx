@@ -309,7 +309,32 @@ export function ShareDialog({ line, onOpenChange }: { line: string; onOpenChange
           )}
         </div>
       )}
+      {a && a.history.length > 0 && <ShareHistory history={a.history} />}
     </Ask>
+  );
+}
+
+type Past = { id: string; set_at: string; set_by: string; source: string; splits: { teammate?: string; team?: string; share_bps: number }[] };
+
+/** Every split the line has had, newest first as the server gives them (finance-attribution.ts finShareSection). */
+function ShareHistory({ history }: { history: readonly Past[] }) {
+  const access = useQuery(accessQuery);
+  const actors = useActors();
+  const nameOf = (id: string) => actors.find((x) => x.id === id)?.name ?? id.slice(id.indexOf(':') + 1);
+  const teamOf = (id: string) => access.data?.teams?.find((t) => t.id === id)?.name ?? id;
+  const by = (h: Past) => (h.source === 'rule' ? 'Rule' : h.source === 'tags' ? 'Tags' : nameOf(h.set_by));
+  return (
+    <details className="share-hist">
+      <summary>History</summary>
+      {history.map((h) => (
+        <Prow
+          key={h.id}
+          name={h.splits.length ? h.splits.map((p) => `${p.team ? teamOf(p.team) : nameOf(p.teammate ?? '')} ${pctOf(p.share_bps)}%`).join(' · ') : 'No split'}
+          sub={[h.set_at ? fmtDate(h.set_at) : '', by(h)].filter(Boolean).join(' · ')}
+          fig=""
+        />
+      ))}
+    </details>
   );
 }
 

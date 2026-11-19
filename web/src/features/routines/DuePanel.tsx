@@ -42,7 +42,8 @@ const fromDay = (s: string | undefined): Date | null => {
 const longDay = (s: string) => fromDay(s)?.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) ?? s;
 
 export function DuePanel({ id, onClose }: { id: string; onClose: () => void }) {
-  if (id === 'new') return <DueEditor onDone={onClose} onClose={onClose} />;
+  // `new:<rule>`: opened from a rule's panel, that rule already picked
+  if (id === 'new' || id.startsWith('new:')) return <DueEditor rule={id.slice(4) || undefined} onDone={onClose} onClose={onClose} />;
   return <DueView id={id} onClose={onClose} />;
 }
 
@@ -155,11 +156,11 @@ function History({ d }: { d: DueDetail }) {
 
 // ---------------------------------------------------------------- the form
 
-function DueEditor({ due, onDone, onClose }: { due?: DueDetail; onDone: () => void; onClose: () => void }) {
+function DueEditor({ due, rule: preset, onDone, onClose }: { due?: DueDetail; rule?: string; onDone: () => void; onClose: () => void }) {
   const me = useQuery(meQuery).data?.id ?? null;
   const actors = useActors();
   const rules = useQuery({ ...orgRulesQuery('active'), enabled: !due }).data ?? [];
-  const [rule, setRule] = useState<string | null>(null);
+  const [rule, setRule] = useState<string | null>(preset ?? null);
   const [day, setDay] = useState<Date | null>(fromDay(due?.due_on));
   const [repeats, setRepeats] = useState<Repeats>(due?.repeats ?? 'yearly');
   const [picked, setOwner] = useState<string | null>(due?.owner ?? null);

@@ -8,7 +8,7 @@ import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
 import { Section } from '@/pagekinds';
-import { decisionsOf, dreamCards, dreamReply } from './model';
+import { decisionsOf, dreamCards, dreamReply, type Decision } from './model';
 import { Fold, Foot } from './parts';
 import { dreamAgain, dreamOpen, dreamQuery, memoryQuery, openTasksQuery, type Dream } from './queries';
 
@@ -23,17 +23,29 @@ export function DecisionsSection({ slug }: { slug: string }) {
   return (
     <Section name="Decisions" count={rows.length}>
       {rows.slice(0, DECISION_ROWS).map((d) => (
-        <div key={d.key} className="row rule" title={d.text}>
-          <span className="rule-how">
-            <Icon name="check" />
-          </span>
-          <span className="row-title">{d.title}</span>
-          <span className="rule-marks">{d.on && <Ago at={d.on} className="row-age" />}</span>
-          <span />
-        </div>
+        <DecisionRow key={d.key} d={d} />
       ))}
-      {rows.length > DECISION_ROWS && <Fold label="Earlier" text={`${rows.length - DECISION_ROWS} more`} />}
+      {rows.length > DECISION_ROWS && (
+        <Fold label="Earlier" text={`${rows.length - DECISION_ROWS} more`}>
+          {rows.slice(DECISION_ROWS).map((d) => (
+            <DecisionRow key={d.key} d={d} />
+          ))}
+        </Fold>
+      )}
     </Section>
+  );
+}
+
+function DecisionRow({ d }: { d: Decision }) {
+  return (
+    <div className="row rule" title={d.text}>
+      <span className="rule-how">
+        <Icon name="check" />
+      </span>
+      <span className="row-title">{d.title}</span>
+      <span className="rule-marks">{d.on && <Ago at={d.on} className="row-age" />}</span>
+      <span />
+    </div>
   );
 }
 

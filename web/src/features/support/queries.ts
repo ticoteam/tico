@@ -1,6 +1,7 @@
 import { queryOptions } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import { QUIET_STALE_MS, meQuery, queryClient, quietRoot, write } from '@/data';
+import { browserFailures } from './failures';
 
 /* Tico support (backend/support.py): the person's tickets, drawn as one conversation. A message goes to the newest
    ticket still open, or starts a new one; the person never sees a ticket. Replies come from Tico support's own server,
@@ -129,7 +130,13 @@ export const composeQuery = queryOptions({
 export const diagnosticsQuery = (hours: number) =>
   queryOptions({
     queryKey: ['support', 'diagnostics', hours] as const,
-    queryFn: ({ signal }) => api.get<DiagnosticsBundle>(`/api/v2/support/diagnostics?performance_hours=${hours}`, { signal }),
+    // What failed in this browser goes with it when anything did (POST capture); otherwise the plain read.
+    queryFn: ({ signal }) => {
+      const browser = browserFailures();
+      return browser.length
+        ? api.post<DiagnosticsBundle>('/api/v2/support/diagnostics/capture', { browser, performance_hours: hours }, { signal })
+        : api.get<DiagnosticsBundle>(`/api/v2/support/diagnostics?performance_hours=${hours}`, { signal });
+    },
     staleTime: Infinity,
     gcTime: 0,
     retry: false,

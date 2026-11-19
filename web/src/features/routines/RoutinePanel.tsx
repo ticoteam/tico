@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -19,7 +19,7 @@ import { Face, HeadSwitch, press, pressOut, RemoveItem, useConfirmRemove, useNam
 import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
 import type { Routine, Run, Trigger, Version } from './types';
-import { browserZone, EVERY, eventWords, parseSchedule, scheduleCron, timeChoices, triggerWords, WEEKDAYS, runWords, type Every } from './words';
+import { browserZone, EVERY, eventWords, flowLines, lineDiff, parseSchedule, scheduleCron, timeChoices, triggerWords, WEEKDAYS, runWords, type Every } from './words';
 
 /* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
    the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
@@ -113,9 +113,18 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-/** What its trigger hands a run, as JSON to edit (automations-editors.ts auSample); a schedule hands nothing. */
-export function sampleFor(t: Trigger): string {
-  const due = { due_on: t.first_due ?? '', first_due: t.first_due ?? '', repeats: t.repeats ?? 'once', open_days: t.open_days ?? 14, ...(t.tz ? { tz: t.tz } : {}) };
+/** What its trigger hands a run, as JSON to edit (automations-editors.ts auSample); a schedule hands nothing. A due
+   routine's is what its scheduler starts a run with for its next due day (`nextDue`), naming the rule's due date it was
+   made for. */
+export function sampleFor(t: Trigger, nextDue?: string | null): string {
+  const due = {
+    due_on: nextDue || t.first_due || '',
+    first_due: t.first_due ?? '',
+    repeats: t.repeats ?? 'once',
+    open_days: t.open_days ?? 14,
+    ...(t.tz ? { tz: t.tz } : {}),
+    ...(t.rule_due_id ? { rule_due_id: t.rule_due_id } : {}),
+  };
   const samples: Record<string, unknown> = {
     message: { message: { from: '', subject: '', body: '' } },
     task_received: { task: { title: '', body: '' } },
@@ -129,7 +138,7 @@ export function sampleFor(t: Trigger): string {
 
 /** Run it once with sample input standing in for its trigger. A sample its filters drop makes no run, and says so. */
 function TestRun({ routine, onClose }: { routine: Routine; onClose: () => void }) {
-  const [text, setText] = useState(() => sampleFor(routine.trigger));
+  const [text, setText] = useState(() => sampleFor(routine.trigger, routine.next_due_at));
   const [dropped, setDropped] = useState(false);
   const [busy, setBusy] = useState(false);
   const go = async () => {
@@ -181,6 +190,7 @@ function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () =
   const proposed = all.filter((v) => v.status === 'pending');
   const saved = all.filter((v) => v.status !== 'pending');
   const can = !!routine.can_edit;
+  const [diff, setDiff] = useState<number | null>(null);
   return (
     <SidePanel
       className="rr"
@@ -197,14 +207,18 @@ function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () =
         <section className="rail-sec">
           <h3>Proposed</h3>
           {proposed.map((v) => (
-            <VersionRow key={v.n} v={v}>
-              {can && (
-                <>
-                  <Verb onClick={() => void press('routines.restoreVersion', { routine: routine.id, n: v.n })}>Turn on</Verb>
-                  <Verb onClick={() => void press('routines.discardVersion', { routine: routine.id, n: v.n })}>Discard</Verb>
-                </>
-              )}
-            </VersionRow>
+            <Fragment key={v.n}>
+              <VersionRow v={v}>
+                <Verb onClick={() => setDiff(diff === v.n ? null : v.n)}>{diff === v.n ? 'Hide diff' : 'View diff'}</Verb>
+                {can && (
+                  <>
+                    <Verb onClick={() => void press('routines.restoreVersion', { routine: routine.id, n: v.n })}>Turn on</Verb>
+                    <Verb onClick={() => void press('routines.discardVersion', { routine: routine.id, n: v.n })}>Discard</Verb>
+                  </>
+                )}
+              </VersionRow>
+              {diff === v.n && <FlowDiff from={routine} to={v.flow} />}
+            </Fragment>
           ))}
         </section>
       )}
@@ -222,6 +236,23 @@ function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () =
         ))}
       </section>
     </SidePanel>
+  );
+}
+
+/** What a proposal changes, against the routine as it is now: lines added and taken out. */
+function FlowDiff({ from, to }: { from: Routine; to: Version['flow'] }) {
+  const lines = lineDiff(flowLines(from), flowLines(to ? { trigger: to.trigger ?? from.trigger, steps: to.steps ?? from.steps } : null));
+  return (
+    <pre className="rr-diff" aria-label="Diff">
+      {lines.length
+        ? lines.map((l, i) => (
+            <Fragment key={i}>
+              {l.startsWith('+') ? <ins>{l}</ins> : <del>{l}</del>}
+              {'\n'}
+            </Fragment>
+          ))
+        : 'No changes'}
+    </pre>
   );
 }
 
@@ -363,6 +394,8 @@ const EVENT_CHOICES = ['task.created', 'task.assigned', 'task.step_changed', 'ta
 );
 
 type Start = 'schedule' | 'event';
+const CUSTOM = '+custom';
+const EVENT_NAME = /^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/;
 
 function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone: () => void; onClose: () => void }) {
   const agents = useActors().filter((a) => a.kind === 'agent');
@@ -375,20 +408,28 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   const [start, setStart] = useState<Start>(t?.type === 'event' ? 'event' : 'schedule');
   const [sched, setSched] = useState(parseSchedule(t?.type === 'schedule' && t.cron ? t.cron : '0 9 * * 1-5'));
   const [event, setEvent] = useState(t?.type === 'event' && t.name ? t.name : 'task.created');
+  // an event the catalog does not list is typed as it is (custom.<name>)
+  const [custom, setCustom] = useState(t?.type === 'event' && !!t.name && !EVENT_CHOICES.some((e) => e.value === t.name) && !t.name.startsWith('tico.builtin.'));
+  const [tz, setTz] = useState(t?.type === 'schedule' && t.tz ? t.tz : browserZone());
   const [instruction, setInstruction] = useState(step?.prompt ?? '');
   const [busy, setBusy] = useState(false);
-  const events = EVENT_CHOICES.some((e) => e.value === event) ? EVENT_CHOICES : [{ value: event, label: eventWords(event) }, ...EVENT_CHOICES];
+  const events = [
+    ...(custom || EVENT_CHOICES.some((e) => e.value === event) ? [] : [{ value: event, label: eventWords(event) }]),
+    ...EVENT_CHOICES,
+    { value: CUSTOM, label: 'Custom…' },
+  ];
+  const badEvent = start === 'event' && custom && !EVENT_NAME.test(event.trim());
   const options = agents.map((a) => ({ value: a.id, label: a.name }));
   // An older step may name its agent by slug; the server takes the agent's id.
   const agent = (picked && agents.find((a) => a.id === picked || `bot:${a.slug}` === picked)?.id) ?? picked;
   if (agent && !options.some((o) => o.value === agent)) options.unshift({ value: agent, label: agent.slice(4) });
   // a routine whose work is other steps (a filter, an action) may have no instruction
   const others = !!routine?.steps?.some((x) => x.type !== 'bot_turn');
-  const ready = !!name.trim() && !!agent && (!!instruction.trim() || (others && !step));
+  const ready = !!name.trim() && !!agent && (!!instruction.trim() || (others && !step)) && !badEvent && !!tz.trim();
 
   const save = async () => {
     if (!ready || !agent) return;
-    const when = fixed ? {} : start === 'schedule' ? { cron: scheduleCron(sched), tz: t?.tz ?? browserZone() } : { event };
+    const when = fixed ? {} : start === 'schedule' ? { cron: scheduleCron(sched), tz: tz.trim() } : { event: event.trim() };
     const input = { name: name.trim(), agent, ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...when };
     setBusy(true);
     const ok = await press(routine ? 'routines.update' : 'routines.create', routine ? { routine: routine.id, ...input } : input);
@@ -432,9 +473,23 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
               onValueChange={(v: Start) => setStart(v)}
             />
             {start === 'schedule' ? (
-              <ScheduleFields value={sched} onChange={setSched} />
+              <>
+                <ScheduleFields value={sched} onChange={setSched} />
+                <Field label="Time zone" value={tz} onValueChange={setTz} placeholder="America/New_York" />
+              </>
             ) : (
-              <Select label="When" options={events} value={event} onValueChange={setEvent} />
+              <>
+                <Select
+                  label="When"
+                  options={events}
+                  value={custom ? CUSTOM : event}
+                  onValueChange={(v) => {
+                    setCustom(v === CUSTOM);
+                    setEvent(v === CUSTOM ? 'custom.' : v);
+                  }}
+                />
+                {custom && <Field label="Event name" value={event} onValueChange={setEvent} placeholder="custom.order_paid" error={badEvent ? 'Like custom.order_paid' : undefined} />}
+              </>
             )}
           </>
         )}

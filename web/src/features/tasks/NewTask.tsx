@@ -15,6 +15,7 @@ export function NewTask({
   pipeline,
   stage = null,
   owner,
+  tag,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -23,8 +24,10 @@ export function NewTask({
   /** A stage head's "+": the stage it lands in, while the pipeline stays the same. */
   stage?: string | null;
   owner: string | null;
+  /** From a tag's page: the task is filed with the tag on it (`tags.newTask`). */
+  tag?: { id: string; key: string };
 }) {
-  const create = useAction('tasks.create');
+  const create = useAction(tag ? 'tags.newTask' : 'tasks.create');
   const actors = useActors();
   const [title, setTitle] = useState('');
   const [into, setInto] = useState(pipeline);
@@ -32,7 +35,8 @@ export function NewTask({
   const ready = title.trim().length > 0;
   const submit = () => {
     if (!ready) return;
-    void create.run({ title: title.trim(), pipeline: into, owner: who || null, stage: into === pipeline ? stage : null });
+    if (tag) void create.run({ tag: tag.id, key: tag.key, title: title.trim(), pipeline: into, owner: who || null });
+    else void create.run({ title: title.trim(), pipeline: into, owner: who || null, stage: into === pipeline ? stage : null });
     setTitle('');
     onOpenChange(false);
   };

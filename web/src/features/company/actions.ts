@@ -521,3 +521,229 @@ export const orgNewFactory = defineAction({
   did: ({ name }) => `Made ${name}`,
   target: (_input, out) => (out ? { kind: 'factory', id: out.factory.id } : null),
 });
+
+// ---------------------------------------------------------------- tier 2 gaps: Needs you, records, brand, market
+
+import type { Schema } from '@/actions';
+import {
+  addMatter,
+  addMatterFile,
+  checkCopy,
+  citeInBet,
+  decideBrandProposal,
+  decideNeed,
+  editRisk,
+  listValues,
+  markDate,
+  productsQuery,
+  researchSegment,
+  riskQuery,
+  setProductList,
+  updateProduct as renameProduct,
+  type DateMark,
+} from './queries';
+
+/** Yes or no on what waits on you in Goals: a suggested change to the strategy or the brand book, a KPI, a target, or
+    a recovery (`option`: the one approved; left out, the Strategy Owner's pick). */
+export const goalsAnswer = defineAction({
+  id: 'goals.answer',
+  title: 'Answer a suggestion that waits on you in Goals',
+  kind: 'change',
+  input: s.object({ proposal: id, decision: s.oneOf(['confirm', 'reject'] as const), option: s.optional(s.number({ int: true, min: 0 })) }),
+  run: (_ctx, { proposal, decision, option }) => decideNeed(proposal, decision, option),
+  did: ({ decision }) => (decision === 'confirm' ? 'Approved it' : 'Rejected it'),
+  target: () => ({ kind: 'panel', id: 'needs' }),
+});
+
+export const riskEdit = defineAction({
+  id: 'risk.edit',
+  title: "Change a risk's name and page",
+  kind: 'change',
+  input: s.object({ risk: id, version: s.number({ int: true, min: 0 }), label: s.string({ min: 1, max: 200 }), markdown: s.string({ max: 20000 }) }),
+  run: (_ctx, { risk, version, label, markdown }) => editRisk(risk, label.trim(), markdown, version),
+  did: () => 'Changed the risk',
+  target: ({ risk }) => ({ kind: 'risk', id: risk }),
+});
+
+const MATTER_KINDS = ['dispute', 'request', 'notice', 'incident'] as const;
+
+/** A new matter under a risk: a task that carries the risk, with its kind. */
+export const riskAddMatter = defineAction({
+  id: 'risk.addMatter',
+  title: 'Add a matter to a risk',
+  kind: 'change',
+  input: s.object({ risk: id, title: s.string({ min: 1, max: 300 }), kind: s.oneOf(MATTER_KINDS) }),
+  run: async ({ queryClient }, { risk, title, kind }) => {
+    const d = await queryClient.ensureQueryData(riskQuery(risk));
+    return addMatter({ id: risk, key: d.risk.key }, title.trim(), kind);
+  },
+  did: ({ title }) => `Added ${title}`,
+  target: ({ risk }) => ({ kind: 'risk', id: risk }),
+});
+
+/** One occurrence of a risk's date: met with proof (a link or a file), waived (with why) or missed. */
+export const riskMarkDate = defineAction({
+  id: 'risk.markDate',
+  title: "Mark a risk's date met with proof, waived or missed",
+  kind: 'change',
+  input: s.object({
+    risk: id,
+    date: id,
+    on: day,
+    how: s.oneOf(['proof', 'waived', 'missed'] as const),
+    link: s.optional(s.string({ max: 2000, pattern: /^https:\/\/\S+$/i, what: 'a link, https://…' })),
+    file: s.optional(id),
+    note: s.optional(s.string({ max: 2000 })),
+  }),
+  // A waiver is a person's own call (backend/rule_due.py: "waived, a person, with a note"); proof needs a link or a file.
+  can: (ctx, i) => (i.how === 'waived' ? ctx.via !== 'tico' && !!i.note?.trim() : i.how === 'missed' || !!(i.link || i.file)),
+  run: (_ctx, { risk, date, on, how, link, file, note }) => {
+    const mark: DateMark =
+      how === 'proof' ? { proof: link ? { kind: 'link', ref: link } : { kind: 'file', ref: file ?? '' } } : { outcome: how, ...(note?.trim() && { note: note.trim() }) };
+    return markDate(risk, date, on, mark);
+  },
+  did: ({ how }) => (how === 'proof' ? 'Added the proof' : how === 'waived' ? 'Waived it' : 'Marked it missed'),
+  target: ({ date }) => ({ kind: 'date', id: date }),
+});
+
+/** A file from the person's disk, only from a click or a drop. */
+const picked: Schema<File> = {
+  parse: (v, p) => (typeof File !== 'undefined' && v instanceof File ? { ok: true, value: v } : { ok: false, error: `${p || 'input'}: expected a file` }),
+  json: () => ({ type: 'object', description: 'A file the person chose' }),
+  optional: false,
+  '~standard': {
+    version: 1,
+    vendor: 'tico',
+    validate: (v) => (typeof File !== 'undefined' && v instanceof File ? { value: v } : { issues: [{ message: 'expected a file' }] }),
+  },
+};
+
+/* The file comes from the person's own disk, so only their press adds it. */
+export const riskAddFile = defineAction({
+  id: 'risk.addFile',
+  title: "Add a file to a matter",
+  kind: 'change',
+  tico: false,
+  input: s.object({ task: id, file: picked }),
+  run: (_ctx, { task, file }) => addMatterFile(task, file),
+  did: ({ file }) => `Added ${file.name}`,
+  target: ({ task }) => ({ kind: 'matter', id: task }),
+});
+
+export const productRename = defineAction({
+  id: 'products.rename',
+  title: 'Rename a product',
+  kind: 'change',
+  input: s.object({ product: id, name: s.string({ min: 1, max: 200 }) }),
+  run: (_ctx, { product, name }) => renameProduct(product, { name: name.trim() }),
+  did: ({ name }) => `Renamed it ${name}`,
+  target: ({ product }) => ({ kind: 'product', id: product }),
+});
+
+const LISTS = ['agreements', 'repositories', 'depends_on'] as const;
+const listInput = s.object({ product: id, field: s.oneOf(LISTS), value: s.string({ min: 1, max: 200 }) });
+
+/** An agreement, a repository or a vendor onto a product: by id, or by name (a new record of that name is made). */
+export const productAddTo = defineAction({
+  id: 'products.addTo',
+  title: "Add an agreement, a repository or a vendor to a product",
+  kind: 'change',
+  input: listInput,
+  run: async ({ queryClient }, { product, field, value }) => {
+    const p = (await queryClient.ensureQueryData(productsQuery)).products.find((x) => x.key === product);
+    return setProductList(product, field, [...(p ? listValues(p, field) : []), value.trim()]);
+  },
+  did: ({ value }) => `Added ${value}`,
+  target: ({ product, field }) => ({ kind: 'fact', id: `${product}:${field}` }),
+});
+
+export const productRemoveFrom = defineAction({
+  id: 'products.removeFrom',
+  title: "Take an agreement, a repository or a vendor off a product",
+  kind: 'change',
+  input: listInput,
+  run: async ({ queryClient }, { product, field, value }) => {
+    const p = (await queryClient.ensureQueryData(productsQuery)).products.find((x) => x.key === product);
+    return setProductList(product, field, (p ? listValues(p, field) : []).filter((v) => v !== value));
+  },
+  did: () => 'Removed it',
+  target: ({ product, field }) => ({ kind: 'fact', id: `${product}:${field}` }),
+});
+
+/** A suggested change to the brand book: added to the draft, or declined. */
+export const brandDecide = defineAction({
+  id: 'brand.decide',
+  title: 'Add a suggested brand change to the draft, or decline it',
+  kind: 'change',
+  input: s.object({ proposal: id, decision: s.oneOf(['confirm', 'reject'] as const) }),
+  run: (_ctx, { proposal, decision }) => decideBrandProposal(proposal, decision),
+  did: ({ decision }) => (decision === 'confirm' ? 'Added it to the draft' : 'Declined it'),
+  target: () => ({ kind: 'page', id: BRAND }),
+});
+
+/** Copy against the published book: the words it avoids, names spelled wrong, claims it never makes. */
+export const brandCheck = defineAction({
+  id: 'brand.check',
+  title: 'Check copy against the brand book',
+  kind: 'view',
+  input: s.object({ text: s.string({ min: 1, max: 20000 }) }),
+  run: (_ctx, { text }) => checkCopy(text),
+  did: (_i, hits) => (hits?.length ? `${hits.length} to fix` : 'Nothing to fix'),
+});
+
+export const marketResearch = defineAction({
+  id: 'market.research',
+  title: 'Ask the Librarian to research a market segment',
+  kind: 'change',
+  input: s.object({ segment: id, instructions: s.string({ min: 1, max: 4000 }) }),
+  run: (_ctx, { segment, instructions }) => researchSegment(segment, instructions.trim()),
+  did: () => 'Asked the Librarian',
+  target: ({ segment }) => ({ kind: 'segment', id: segment }),
+});
+
+export const marketCite = defineAction({
+  id: 'market.cite',
+  title: 'Cite a market segment in a bet',
+  kind: 'change',
+  input: s.object({ bet: id, segment: id }),
+  run: (_ctx, { bet, segment }) => citeInBet(bet, segment),
+  did: () => 'Cited it',
+  target: ({ segment }) => ({ kind: 'segment', id: segment }),
+});
+
+// ---------------------------------------------------------------- a matter's own facts
+
+import { setMatter, type MatterFacts } from './queries';
+
+const fact = (max: number) => s.optional(s.nullable(s.string({ max })));
+
+/** A matter's facts, each saved as it changes: kind, side, party, amount claimed (cents) and its currency, claim,
+    forum, product. Null clears one. Ordinary work on a task, so Tico may do it too. */
+export const riskSetMatter = defineAction({
+  id: 'risk.setMatter',
+  title: "Change a matter's facts",
+  kind: 'change',
+  input: s.object({
+    task: id,
+    version: s.optional(s.number({ int: true, min: 0 })),
+    kind: s.optional(s.nullable(s.oneOf(MATTER_KINDS))),
+    side: s.optional(s.nullable(s.oneOf(['theirs', 'ours'] as const))),
+    party: s.optional(s.nullable(id)),
+    party_name: s.optional(s.string({ max: 300 })),
+    amount: s.optional(s.nullable(s.number({ int: true, min: 0 }))),
+    currency: s.optional(s.nullable(s.string({ pattern: /^[A-Za-z]{3}$/, what: 'three letters, USD' }))),
+    claim: fact(2000),
+    forum: fact(200),
+    product: s.optional(s.nullable(s.string({ min: 1, max: 256 }))),
+    product_name: s.optional(s.string({ max: 300 })),
+  }),
+  run: (_ctx, { task, version, party, party_name, product, product_name, currency, ...rest }) => {
+    const facts = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)) as MatterFacts;
+    if (party !== undefined) facts.party_entity_id = party;
+    if (product !== undefined) facts.product_id = product;
+    if (currency !== undefined) facts.currency = currency?.toUpperCase() ?? null;
+    return setMatter(task, facts, version, { party: party_name, product: product_name });
+  },
+  did: () => 'Saved',
+  target: ({ task }) => ({ kind: 'matter', id: task }),
+});

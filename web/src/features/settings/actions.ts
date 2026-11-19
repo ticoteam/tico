@@ -99,6 +99,23 @@ import {
   type AccessFull,
   type ProductRepoPreview,
 } from './queries';
+import {
+  addPlace,
+  askQuery,
+  dropPlace,
+  findingsQuery,
+  healthQuery,
+  markChangelogRead,
+  replayDay,
+  reportFinding,
+  resetAsk,
+  roadmapQuery,
+  runSetupCheck,
+  saveAsk,
+  setFeed,
+  setReportRule,
+  setRoadmapMore,
+} from './queries';
 import { askDestination } from './Destination';
 import { SECTION_IDS } from './sections';
 
@@ -758,8 +775,8 @@ export const mail = defineAction({
   title: 'Let an agent send mail without asking',
   kind: 'change',
   input: s.object({ agent: id('an agent id or slug'), on: s.boolean() }),
-  // Mail that leaves the company with no one's OK cannot be called back.
-  tico: false,
+  // Mail that leaves the company with no one's OK cannot be called back: Tico may only turn it off (asks first).
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
   run: (_ctx, { agent: bot, on }) => setBotMail(bot, on),
   did: ({ on }) => (on ? 'Sends on its own' : 'Asks first'),
   target: ({ agent: bot }) => agent(bot),
@@ -791,8 +808,8 @@ export const roadmapLabels = defineAction({
   title: 'Change the labels on the public roadmap',
   kind: 'change',
   input: s.object({ labels: s.array(s.string({ min: 1, max: 200 }), { max: 50 }) }),
-  // What the public sees.
-  tico: false,
+  // What the public sees: Tico may only take a label off (shows less); putting one on is the person's own press.
+  can: (ctx, { labels }) => ctx.via !== 'tico' || labels.every((l) => ctx.queryClient.getQueryData(roadmapQuery.queryKey)?.labels.includes(l)),
   run: (_ctx, { labels }) => setRoadmap({ labels }),
   did: () => 'Roadmap changed',
   target: () => setting('roadmap'),
@@ -838,6 +855,8 @@ export const productUpdate = defineAction({
     title: s.string({ min: 1, max: 90 }),
     bullets: s.array(s.string({ min: 1, max: 500 }), { max: 12 }),
   }),
+  // Published to everyone, and the server has no way to take an update back.
+  tico: false,
   run: (_ctx, { title, bullets }) => {
     if (!bullets.length) throw new Error('Add at least one bullet');
     return addProductUpdate(title, bullets);
@@ -1418,4 +1437,176 @@ export const repoCreate = defineAction({
   },
   did: (_input, out) => (out ? `Made ${out.repository}` : 'Made'),
   target: () => setting('repositories'),
+});
+
+// ---- tier 2 gaps (Tasks, Health, Changelog, Contacts): this builder's actions below ----
+
+const askInput = {
+  mode: s.oneOf(['off', 'on'] as const),
+  budget: s.number({ int: true, min: 1, max: 200 }),
+  criteria: s.array(s.string({ min: 1, max: 200 }), { max: 10 }),
+};
+
+export const askRules = defineAction({
+  id: 'settings.askRules',
+  title: 'Change what agents may ask a person',
+  kind: 'change',
+  input: s.object({ ...askInput, team: s.optional(s.boolean()) }),
+  run: (_ctx, { team, ...rules }) => saveAsk(rules, !!team),
+  did: () => 'Saved; the next ask uses it',
+  target: () => setting('ask'),
+});
+
+export const askReset = defineAction({
+  id: 'settings.askReset',
+  title: 'Use the team default for what agents may ask',
+  kind: 'change',
+  input: s.object({}),
+  can: (ctx) => !!ctx.queryClient.getQueryData(askQuery.queryKey)?.settings.own,
+  run: () => resetAsk(),
+  did: () => 'Using the team default',
+  target: () => setting('ask'),
+});
+
+export const askReplay = defineAction({
+  id: 'settings.askReplay',
+  title: 'See what screening would have done with one past day',
+  kind: 'view',
+  input: s.object({ date: s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, YYYY-MM-DD' }) }),
+  run: (ctx, { date }) => {
+    const me = ctx.queryClient.getQueryData(meQuery.queryKey);
+    if (!me) throw new Error('Sign in first');
+    return replayDay(me.id, date);
+  },
+  did: (_input, out) => (out ? `${out.length} asks judged` : 'Replayed'),
+  target: () => setting('ask'),
+});
+
+const origin = s.string({ min: 1, max: 2048, what: 'an https origin' });
+
+export const roadmapSites = defineAction({
+  id: 'settings.roadmapSites',
+  title: 'Change the websites that can show the public roadmap',
+  kind: 'change',
+  input: s.object({ origins: s.array(origin, { max: 50 }) }),
+  // Another website showing the roadmap is the person's own press; Tico may only take one off.
+  can: (ctx, { origins }) => ctx.via !== 'tico' || origins.every((o) => ctx.queryClient.getQueryData(roadmapQuery.queryKey)?.cors_origins?.includes(o)),
+  run: (_ctx, { origins }) => setRoadmapMore({ cors_origins: origins }),
+  did: () => 'Websites changed',
+  target: () => setting('roadmap-sites'),
+});
+
+export const roadmapSuggestions = defineAction({
+  id: 'settings.roadmapSuggestions',
+  title: "Choose the agent that takes visitors' suggestions",
+  kind: 'change',
+  input: s.object({ agent: s.nullable(id('an agent id or slug')) }),
+  run: (_ctx, { agent: bot }) => setRoadmapMore({ suggestions_bot: bot }),
+  did: ({ agent: bot }) => (bot ? 'Suggestions go to the chosen agent' : 'Suggestions go automatically'),
+  target: () => setting('roadmap-suggestions'),
+});
+
+export const roadmapLimits = defineAction({
+  id: 'settings.roadmapLimits',
+  title: "Change the public roadmap's visitor limits",
+  kind: 'change',
+  input: s.object({
+    action_limit: s.optional(s.number({ int: true, min: 1, max: 10000 })),
+    suggestion_limit: s.optional(s.number({ int: true, min: 1, max: 1000 })),
+  }),
+  run: (_ctx, change) => setRoadmapMore(change),
+  did: () => 'Limit changed',
+  target: () => setting('roadmap-limits'),
+});
+
+export const healthCheck = defineAction({
+  id: 'settings.checkHealth',
+  title: 'Check health now',
+  kind: 'view',
+  input: s.object({}),
+  run: async (ctx) => {
+    await Promise.all([
+      ctx.queryClient.refetchQueries({ queryKey: healthQuery.queryKey, exact: true }),
+      ctx.queryClient.refetchQueries({ queryKey: findingsQuery.queryKey, exact: true }),
+    ]);
+  },
+  did: () => 'Checked',
+  target: () => setting('health'),
+});
+
+export const reportToSupport = defineAction({
+  id: 'settings.reportFinding',
+  title: 'Report a Tico bug Check health found to Tico support',
+  kind: 'change',
+  // Only the finding and its redacted diagnostics go, never task or message text.
+  input: s.object({ key: id('a finding key') }),
+  run: (_ctx, { key }) => reportFinding(key),
+  did: () => 'Report sent',
+  target: ({ key }) => ({ kind: 'finding', id: key }),
+});
+
+export const reportRule = defineAction({
+  id: 'settings.reportRule',
+  title: 'Report Tico bugs to Tico support without asking',
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  // On, a finding leaves the company with no person's yes: Tico may only turn it off.
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
+  run: (_ctx, { on }) => setReportRule(on),
+  did: ({ on }) => (on ? 'Reports go without asking' : 'Reports wait for a yes'),
+  target: () => setting('findings'),
+});
+
+export const setupCheck = defineAction({
+  id: 'settings.setupCheck',
+  title: "Run the installer's setup checks from the server",
+  kind: 'view',
+  input: s.object({}),
+  run: () => runSetupCheck(),
+  did: (_input, out) => {
+    const rows = out?.checks ?? [];
+    const bad = rows.filter((c) => c.status === 'bad').length;
+    return bad ? `${bad} of ${rows.length} checks fail` : 'Every check passes';
+  },
+  target: () => setting('setup-check'),
+});
+
+export const changelogRead = defineAction({
+  id: 'settings.changelogRead',
+  title: 'Mark product updates read',
+  kind: 'change',
+  input: s.object({ ids: s.array(id('an entry id'), { max: 250 }) }),
+  run: (_ctx, { ids }) => markChangelogRead(ids),
+  did: () => 'Marked read',
+  target: () => ({ kind: 'page', id: '/settings/changelog' }),
+});
+
+export const operateAdd = defineAction({
+  id: 'settings.addPlace',
+  title: 'Add a place the company operates in',
+  kind: 'change',
+  input: s.object({ us: id('our company id'), place: id('a place id') }),
+  run: (_ctx, { us, place }) => addPlace(us, place),
+  did: () => 'Place added',
+  target: () => setting('operate'),
+});
+
+export const operateDrop = defineAction({
+  id: 'settings.dropPlace',
+  title: 'Remove a place the company operates in',
+  kind: 'change',
+  input: s.object({ link: id('a link id') }),
+  run: (_ctx, { link }) => dropPlace(link),
+  did: () => 'Place removed',
+  target: () => setting('operate'),
+});
+
+export const mailFeed = defineAction({
+  id: 'settings.mailFeed',
+  title: 'Add every sender of an inbox to Contacts',
+  kind: 'change',
+  input: s.object({ box: id('a mailbox id'), on: s.boolean() }),
+  run: (_ctx, { box, on }) => setFeed(box, on),
+  did: ({ on }) => (on ? 'Senders join Contacts' : 'Senders stay out'),
+  target: ({ box }) => ({ kind: 'mailbox', id: box }),
 });

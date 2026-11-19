@@ -171,11 +171,16 @@ export const whoCanReadAction = defineAction({
   id: 'threads.whoCanRead',
   title: 'Choose who can read a thread',
   kind: 'change',
-  input: s.object({ thread, audience: s.oneOf(['members', 'company'] as const) }),
-  // Opening a thread to the whole company is the person's own press; closing it to its members stays Tico's.
-  can: (ctx, { audience }) => !(audience === 'company' && ctx.via === 'tico'),
-  run: (_ctx, { thread, audience }) => changeThread(thread, { audience, audience_group_id: null }),
-  did: ({ audience }) => (audience === 'company' ? 'Everyone in the company can read it' : 'Only its members can read it'),
+  input: s.object({
+    thread,
+    audience: s.oneOf(['members', 'team', 'company'] as const),
+    team: s.optional(id("a team's id, when a team reads it")),
+  }),
+  // Opening a thread wider (to a team or the whole company) is the person's own press; closing it to its members stays Tico's.
+  can: (ctx, { audience, team }) => !(audience !== 'members' && ctx.via === 'tico') && (audience !== 'team' || !!team),
+  run: (_ctx, { thread, audience, team }) => changeThread(thread, { audience, audience_group_id: audience === 'team' ? (team ?? null) : null }),
+  did: ({ audience }) =>
+    audience === 'company' ? 'Everyone in the company can read it' : audience === 'team' ? 'Its team can read it' : 'Only its members can read it',
   target: ({ thread }) => ({ kind: 'thread', id: thread }),
 });
 

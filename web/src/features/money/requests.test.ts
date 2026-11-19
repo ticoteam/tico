@@ -42,7 +42,6 @@ const RULES: Record<string, Rule> = {
   '/api/v2/finance/mercury-users': { params: {} },
   '/api/v2/growth/read': { params: { scope: any, period: (v) => /^\d{4}-(0[1-9]|1[0-2])$/.test(v), detail: list('campaigns', 'retention', 'series') } },
   '/api/v2/growth/segments': { params: {} },
-  '/api/v2/growth/sources': { params: {} },
 };
 
 type Opts = { queryKey: readonly unknown[]; queryFn?: unknown };
@@ -83,7 +82,6 @@ const READS: [string, Opts][] = [
   ['growth', Q.growthReadQuery('seg-a', '2026-02')],
   ['growth, all', Q.growthReadQuery(undefined, undefined, false)],
   ['segments', Q.segmentsQuery],
-  ['growth sources', Q.growthSourcesQuery],
 ];
 
 async function urlOf(opts: Opts): Promise<URL> {

@@ -111,7 +111,7 @@ describe('Docs search', () => {
 });
 
 describe('a doc', () => {
-  it('asks the Librarian to research a section, from the doc’s ⋯ @s774', async () => {
+  it('asks the Librarian to research a section, from the doc’s ⋯ @s774 @s818', async () => {
     const sent = serve((_url, method) => (method === 'POST' ? { task_id: 't-77', bot: 'librarian', kind: 'research', target: 'd1' } : {}));
     queryClient.setQueryData(docQuery('d1').queryKey, full());
     queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
@@ -226,7 +226,7 @@ describe('a contact', () => {
     expect(screen.getByText('Rules')).toBeTruthy();
   });
 
-  it('shows a place’s kind, what it is in, its bodies, what sits in it, and why its rules bind us @s786', async () => {
+  it('shows a place’s kind, what it is in, its bodies, what sits in it, and why its rules bind us @s786 @s810', async () => {
     serve((url) =>
       url.startsWith('/api/v2/entities/self')
         ? { id: 'us', name: 'Sample Co', operates_in: [{ id: 'p1', name: 'Fern County' }] }

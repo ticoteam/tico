@@ -23,9 +23,11 @@ import {
   tmpBudgetId,
   setBillsAddress,
   setBudgetAmount,
+  accessQuery,
   type Decided,
 } from './queries';
 import { FINANCE_TAB_IDS } from './search';
+import { capsOf, tabShown, type AccessList } from './caps';
 import { asOfDay, balanceCsv, balanced, billPayload, compareDay, download, entryPayload, invoicePayload, paidPayload, toCents } from './ledger';
 import { TX_STATUSES, validateFinanceSearch } from './search';
 
@@ -270,7 +272,14 @@ export const viewAs = defineAction({
   title: 'Read Finance as a teammate sees it, or go back to your own view',
   kind: 'view',
   input: s.object({ teammate: s.optional(s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' })) }),
-  run: ({ router }, { teammate }) => go(router, FIN, { as: teammate, panel: undefined }),
+  // Reading as someone lands on their P&L, as the old app did (finance-shared.ts finViewAs); a teammate without one gets
+  // the plain address, their first page. Never the page it was pressed on (Access is closed while viewing).
+  run: ({ router, queryClient: qc }, { teammate }) => {
+    if (!teammate) return go(router, FIN, { as: undefined, panel: undefined });
+    const acc = qc.getQueryData(accessQuery.queryKey) as AccessList | null | undefined;
+    const caps = capsOf(acc, teammate);
+    return router.navigate({ to: FIN, search: { as: teammate, ...(caps && tabShown('pnl', caps, acc, true) ? { tab: 'pnl' } : {}) } });
+  },
   did: ({ teammate }) => (teammate ? 'Viewing as a teammate' : 'Back to your own view'),
 });
 
@@ -377,7 +386,7 @@ export const importHistory = defineAction({
   id: 'finance.importHistory',
   title: "Import a spreadsheet's monthly totals as history",
   kind: 'change',
-  tico: false,
+  // Open to Tico: a posted month can be undone, and a non-owner's import waits for the owner's OK (decide).
   input: s.object({
     csv: s.string({ min: 1, max: 1_000_000 }),
     basis: s.oneOf(['accrual', 'cash'] as const),
@@ -522,26 +531,6 @@ export const openChannel = defineAction({
   run: ({ router }, { channel }) => go(router, GROWTH, { tab: undefined, panel: `channel:${channel}` }),
   did: () => 'Opened the channel',
   target: ({ channel }) => ({ kind: 'channel', id: channel }),
-});
-
-export const openSources = defineAction({
-  id: 'growth.openSources',
-  title: 'Open Growth sources',
-  kind: 'view',
-  input: s.object({}),
-  run: ({ router }) => router.navigate({ to: GROWTH, search: { tab: 'sources' } }),
-  did: () => 'Opened Sources in Growth',
-  target: () => ({ kind: 'page', id: `${GROWTH}?tab=sources` }),
-});
-
-export const openSource = defineAction({
-  id: 'growth.openSource',
-  title: 'Open a Growth source: what it is the truth for and its last sync',
-  kind: 'view',
-  input: s.object({ source: id }),
-  run: ({ router }, { source }) => router.navigate({ to: GROWTH, search: { tab: 'sources', panel: `source:${source}` } }),
-  did: () => 'Opened the source',
-  target: ({ source }) => ({ kind: 'source', id: source }),
 });
 
 /** What the page shows, in words, ahead of a question: "Rental, October 2026". */
