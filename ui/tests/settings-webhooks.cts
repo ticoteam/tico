@@ -305,7 +305,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       pane = page.locator(OUTGOING);
       await pane.locator('[data-wh-hook="wh1"]').waitFor();
       assert.match(await pane.locator('[data-wh-hook="wh1"]').innerText(), /Paused[\s\S]*40 sent · 3 failed/);
-      assert.match(await pane.locator('[data-wh-hook="wh1"]').innerText(), /hooks\.zapier\.com · All tasks, Bot run failed/);
+      assert.match(await pane.locator('[data-wh-hook="wh1"]').innerText(), /hooks\.zapier\.com · All tasks, Agent run failed/);
       await shot(page, 'outgoing-list-desktop', OUTGOING);
       // New endpoint at 1440×900: five fields in one rhythm, each section one line at its default, no box, no tick, no
       // scroll, one size of text, Create in view and the footer's line the only one.
@@ -353,20 +353,20 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       const refusal = make.locator('.wh-foot [data-wh-error]');
       await page.waitForFunction(() => document.querySelector('.wh-foot [data-wh-error]')?.textContent === 'Pick at least one event');
       assert.ok(await refusal.evaluate(e => { const r = e.getBoundingClientRect(); return r.height > 0 && r.bottom <= innerHeight && r.top >= 0; }), 'the refusal is in view');
-      // The Tasks area, Bot held and Health finding: a whole group goes as group.*, the rest by name.
+      // The Tasks area, Agent held and Health finding: a whole group goes as group.*, the rest by name.
       await evPick.locator('[data-ev-area="tasks"] [data-ev-head]').check();
       await evPick.locator('[data-ev-name="bot.held"]').check();
       await evPick.locator('[data-ev-name="health.finding"]').check();
       assert.equal(await evPick.locator('[data-ev-area="tasks"] [data-ev-name]:checked').count(), CATALOG.filter(e => e.group === 'task').length);
       assert.equal(await evPick.locator('[data-ev-area="bots"] [data-ev-head]').evaluate(h => (h as HTMLInputElement).indeterminate), true, 'a part-ticked area shows the dash');
-      assert.equal((await make.locator('[data-ev-words]').innerText()).trim(), 'All tasks, Bot held, Health finding');
+      assert.equal((await make.locator('[data-ev-words]').innerText()).trim(), 'All tasks, Agent held, Health finding');
       if (shots) { await settled(page); await make.screenshot({path: path.join(shots, 'outgoing-choose-desktop.png')}); }
       await make.locator('button[type=submit]').click();
       await make.waitFor({state: 'detached'});
       await pane.locator('[data-wh-secret="secret"]').waitFor();
       const created = state.posts.find(x => x.path === '/api/v2/webhooks')!;
       assert.deepEqual(created.body.events, ['task.*', 'bot.held', 'health.finding']);
-      assert.equal((await pane.locator('[data-wh-event-facts]').innerText()).trim(), 'All tasks, Bot held, Health finding');
+      assert.equal((await pane.locator('[data-wh-event-facts]').innerText()).trim(), 'All tasks, Agent held, Health finding');
       assert.equal(await pane.locator('[data-wh-event-facts]').getAttribute('title'), 'task.*, bot.held, health.finding', 'the codes are the tooltip');
       assert.equal(await pane.locator('[data-wh-secret="secret"] code').innerText(), 'whsec_b3V0Z29pbmc=');
       await pane.locator('[data-wh-back]').click();
@@ -614,7 +614,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       const {page, errors} = await open(browser, '#/tools/webhooks', undefined, state);
       const pane = page.locator(OUTGOING), dlg = page.locator('.wh-dialog');
       await pane.locator('[data-wh-hook="wh3"]').waitFor();
-      assert.match(await pane.locator('[data-wh-hook="wh3"]').innerText(), /Bot held, custom\.deploy/, 'a code the catalog does not know shows as itself');
+      assert.match(await pane.locator('[data-wh-hook="wh3"]').innerText(), /Agent held, custom\.deploy/, 'a code the catalog does not know shows as itself');
       // The Messages area is thread.created and message.*; the page reads "All messages".
       await pane.locator('[data-wh-hook-new]').click();
       await dlg.locator('[name=name]').fill('Chat log');
@@ -675,7 +675,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.equal(await dlg.locator('[data-ev-area="bots"] [data-ev-head]').evaluate(h => (h as HTMLInputElement).indeterminate), true);
       assert.equal(await dlg.locator('[data-ev-area="other"] [data-ev-name="custom.deploy"]').isChecked(), true, 'an unknown code stays, ticked, under Other');
       assert.equal(await dlg.locator('[data-filter="pipelines"] input[value="engineering"]').isChecked(), true);
-      assert.equal((await dlg.locator('[data-ev-words]').innerText()).trim(), 'Bot held, custom.deploy');
+      assert.equal((await dlg.locator('[data-ev-words]').innerText()).trim(), 'Agent held, custom.deploy');
       assert.equal((await dlg.locator('[data-filter-words]').innerText()).trim(), '1 pipeline');
       if (shots) { await settled(page); await dlg.screenshot({path: path.join(shots, 'outgoing-edit-open-desktop.png')}); }
       await dlg.locator('button[type=submit]').click();

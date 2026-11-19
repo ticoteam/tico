@@ -233,5 +233,5 @@ def test_every_event_has_a_plain_label_unique_among_outbound_ones(api):
     assert CAT.EVENTS["task.created"].label == "Task created"
     setup(api)
     out = {e["name"]: e for e in get(api, "event-types")["items"]}
-    assert out["bot.run_failed"]["label"] == "Bot run failed"
+    assert out["bot.run_failed"]["label"] == "Agent run failed"
     assert all(e["label"] for e in out.values())
