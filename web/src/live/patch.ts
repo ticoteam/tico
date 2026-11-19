@@ -1,5 +1,7 @@
 import type { QueryKey } from '@tanstack/react-query';
 import { queryClient } from '@/data/query-client';
+import { keys } from '@/data/keys';
+import { withStatus, type Directory, type StatusLine } from '@/data/directory';
 import type { Topic, LiveEvent } from './stream';
 
 // How the stream's rows reach the cache. A feature registers, once, what a topic's events do to its query keys:
@@ -361,6 +363,23 @@ function patchMessages(batch: MessageEvent[]): void {
   }
 }
 
+// ---------------------------------------------------------------- agents' status lines
+
+/** backend/events.py `_bots`: an agent's status line; `status` is null before it has one. */
+interface BotEvent {
+  bot?: string;
+  status?: StatusLine | null;
+}
+
+function patchDirectory(batch: BotEvent[]): void {
+  const held = queryClient.getQueryData<Directory>(keys.directory());
+  if (!held) return;
+  let dir: Directory | null = held;
+  for (const e of batch) if (dir && e.bot) dir = withStatus(dir, e.bot, e.status);
+  if (!dir) refetchSoon(keys.directory()); // an agent it does not hold yet
+  else if (dir !== held) queryClient.setQueryData(keys.directory(), dir);
+}
+
 // ---------------------------------------------------------------- the built-in patchers
 
 let installed = false;
@@ -372,6 +391,9 @@ export function installPatchers(): void {
   onTopic<MessageEvent>('messages', patchMessages);
   onRefetch('calendar', () => [['calendar']]);
   onRefetch('setup', () => [['setup']]);
+  onTopic<BotEvent>('bots', patchDirectory);
+  // An agent added, archived or brought back.
+  onRefetch<{ area?: string }>('setup', (e) => (e.area === 'org' ? [keys.directory()] : []));
   onRefetch<{ meeting_id?: string }>('meeting_items', (e) => [e.meeting_id ? ['meetings', e.meeting_id] : ['meetings']]);
   onRefetch<{ place?: string }>('presence', (e) => [e.place ? ['presence', e.place] : ['presence']]);
 }
