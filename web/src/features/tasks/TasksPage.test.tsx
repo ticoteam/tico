@@ -135,6 +135,22 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(row.closest('a')?.getAttribute('href')).toBe('/tasks/eng/7');
   });
 
+  it('puts the stage paging buttons outside the scrolling board', async () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(220);
+    try {
+      serve(() => ({ status: 200, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Review the export', 's2')]);
+      show(<TasksPage pipeline="eng" search={{ view: 'board' }} />, '/tasks/eng?view=board');
+      const next = await screen.findByRole('button', { name: 'Later stages' });
+      expect(next.closest('.board-wrap')).toBeTruthy();
+      expect(next.closest('.board')).toBeNull();
+      fireEvent.click(next);
+      expect(await screen.findByRole('button', { name: 'Earlier stages' })).toBeTruthy();
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it('a move shows at once and is taken back with the reason when the server refuses it', async () => {
     let refuse!: () => void;
     const rows = [task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')];
@@ -246,6 +262,41 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(screen.queryByRole('region', { name: 'Closed' })).toBeNull();
   });
 
+  it('keeps the Archived filter in the phone header', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      serve(() => ({ status: 200, body: { tasks: [], cursor: null } }));
+      seed([]);
+      const router = show(<TasksPage pipeline="eng" search={{ view: 'archived' }} />, '/tasks/eng?view=archived');
+      const filter = await screen.findByRole('button', { name: 'Filter' });
+      expect(filter.hasAttribute('data-phone')).toBe(true);
+      fireEvent.click(filter);
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Late' }));
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ view: 'archived', late: true }));
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
+  it('keeps Select controls reachable on the phone list', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      serve(() => ({ status: 200, body: {} }));
+      seed(rows());
+      show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+      fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Select' }));
+      const bar = await screen.findByRole('group', { name: 'Selected tasks' });
+      expect(bar.hasAttribute('data-phone')).toBe(true);
+      fireEvent.click(screen.getByTitle('Fix the export'));
+      expect(within(bar).getByRole('button', { name: 'Change' })).toBeTruthy();
+      fireEvent.click(within(bar).getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('group', { name: 'Selected tasks' })).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
   it('Select picks rows instead of opening them; a bulk move shows at once and comes back when the server skips it', async () => {
     let skip!: () => void;
     serve((url, method) => {
@@ -293,6 +344,25 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(posts[0]).toEqual({ url: '/api/v2/tasks/move', body: { ids: ['a1', 'a2'], to: 'closed' } });
     expect(await screen.findByText('Closed 2 tasks')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+  });
+
+  it('undoes only the tasks the bulk close actually moved', async () => {
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/tasks/move')
+        return {
+          status: 200,
+          body: { batch_id: 'b', moved: ['a1'], moved_unseen: 0, skipped: [{ code: 'task_turn_running', id: 'a2', reason: 'A turn is running' }] },
+        };
+      if (url.startsWith('/api/v2/tasks?')) return { status: 200, body: { tasks: [rows()[1]], cursor: 'c2' } };
+      return { status: 200, body: {} };
+    });
+    seed(rows());
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close all' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[1]?.body).toEqual({ ids: ['a1'], to: 'reopen' });
   });
 
   it("a stage's + files the task, then moves it into that stage @s24", async () => {
@@ -350,6 +420,24 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     fireEvent.click(more);
     expect(await screen.findByRole('link', { name: /Review the export/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'More tasks' })).toBeNull();
+  });
+
+  it('keeps the loaded tasks and allows another attempt when a page fails', async () => {
+    let reads = 0;
+    serve((url) => {
+      if (!url.includes('after=next')) return { status: 200, body: {} };
+      if (++reads === 1) return { status: 503, body: {} };
+      return { status: 200, body: { tasks: [task('a2', 8, 'Review the export', 's2')], cursor: 'c2' } };
+    });
+    seed([]);
+    queryClient.setQueryData(listKey, { tasks: [task('a1', 7, 'Fix the export', 's1')], cursor: 'c1', next_after: 'next' });
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    const more = await screen.findByRole('button', { name: 'More tasks' });
+    fireEvent.click(more);
+    expect(await screen.findByText("Couldn't read more")).toBeTruthy();
+    expect(screen.getByTitle('Fix the export')).toBeTruthy();
+    fireEvent.click(more);
+    expect(await screen.findByTitle('Review the export')).toBeTruthy();
   });
 
   it("a move changes both stages' counts at once, and the next read sets them", async () => {

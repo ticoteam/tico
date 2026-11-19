@@ -40,14 +40,13 @@ export function DropDialog({ task, onto, onClose }: { task: string; onto: string
   const [owner, setOwner] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const first: Choice | null = !c ? null : c.subtask == null ? 'subtask' : c.merge == null ? 'merge' : null;
-  const choice = picked ?? first;
+  const choice = picked ?? (c && c.subtask !== null && c.merge === null ? 'merge' : 'subtask');
   const merge = choice === 'merge';
-  const why = c && choice ? c[choice] : null;
+  const why = c?.[choice];
   const title = c ? `Drop ${nameOf(c.task)} on ${nameOf(c.into)}` : 'Drop a task on another';
 
   const go = async () => {
-    if (!c || !choice || why || busy) return;
+    if (!c || why || busy) return;
     setBusy(true);
     const keeper = owner && owner !== c.into.owner_id ? owner : null;
     const r = merge
@@ -79,7 +78,7 @@ export function DropDialog({ task, onto, onClose }: { task: string; onto: string
               { value: 'subtask', label: 'Subtask' },
               { value: 'merge', label: 'Merge' },
             ]}
-            value={choice ?? 'subtask'}
+            value={choice}
             onValueChange={setPicked}
           />
           <p className="tb-drop-line">
@@ -108,7 +107,7 @@ export function DropDialog({ task, onto, onClose }: { task: string; onto: string
           )}
           <div className="modal-row">
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="primary" type="submit" busy={busy} disabled={!choice || !!why}>
+            <Button variant="primary" type="submit" busy={busy} disabled={!!why}>
               {merge ? 'Merge' : 'Make subtask'}
             </Button>
           </div>
