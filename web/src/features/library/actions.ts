@@ -37,6 +37,7 @@ import {
   createDoc,
   decideDevice,
   declineProposal,
+  docRows,
   docsListQuery,
   fileQuery,
   probeMcp,
@@ -55,7 +56,6 @@ import {
   toolsQuery,
   uploadFile,
   websiteToolQuery,
-  type DocRow,
   type SkillRow,
   acceptQuote,
   agentSendingQuery,
@@ -162,7 +162,7 @@ export const docsOpen = defineAction({
   show: ({ router }, i) => go(router, `/library/${encodeURIComponent(i.doc)}`),
   target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
   offer: ({ queryClient }) =>
-    (queryClient.getQueryData<{ docs: DocRow[] }>(docsListQuery.queryKey)?.docs ?? []).slice(0, 50).map((d) => ({ input: { doc: d.id }, title: `Open ${d.title}` })),
+    docRows(queryClient.getQueryData(docsListQuery.queryKey)).slice(0, 50).map((d) => ({ input: { doc: d.id }, title: `Open ${d.title}` })),
 });
 
 export const docsList = defineAction({
