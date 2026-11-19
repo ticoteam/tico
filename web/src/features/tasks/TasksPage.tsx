@@ -60,8 +60,13 @@ export function TasksPage({ pipeline, search }: { pipeline: string; search: Task
   }, [p]);
 
   const edit = useAction('tasks.editPipeline');
+  const make = useAction('tasks.newPipeline');
   const panel =
-    search.panel === 'pipeline' && p?.mayChange ? <PipelinePanel p={p} onClose={() => void edit.run({ pipeline, open: false })} /> : undefined;
+    search.panel === 'pipeline' && p?.mayChange ? (
+      <PipelinePanel p={p} onClose={() => void edit.run({ pipeline, open: false })} />
+    ) : search.panel === 'new' ? (
+      <PipelinePanel onClose={() => void make.run({ pipeline, open: false })} />
+    ) : undefined;
   const head = {
     path: `/tasks/${pipeline}`,
     after: pipes.data && p && <PipelinePick pipelines={pipes.data} current={p} />,
@@ -110,7 +115,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
     title: 'Tasks',
     search: <TaskFind search={search} />,
     actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} p={p} onNew={() => setNewIn({ stage: null })} />,
-    more: p && <MoreMenu p={p} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
+    more: p && <MoreMenu p={p} pipes={pipes.data ?? []} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
     state,
     empty: p
       ? {
@@ -211,20 +216,21 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
   );
 }
 
-/** The page's "⋯" (list.js moreItems): Archived, Select, then Edit pipeline. */
-function MoreMenu({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
+/** The page's "⋯" (list.js moreItems): Archived, Select, then Edit pipeline, and New pipeline (not drawn in the mock;
+    quiet here) for whoever may make one: the company's owner, or who may change every pipeline (an Admin). */
+function MoreMenu({ p, pipes, onSelect }: { p: Pipeline; pipes: readonly Pipeline[]; onSelect: () => void }) {
   const setView = useAction('tasks.setView');
   const edit = useAction('tasks.editPipeline');
+  const make = useAction('tasks.newPipeline');
+  const owner = useQuery(meQuery).data?.role === 'owner';
+  const mayMake = owner || (pipes.length > 0 && pipes.every((x) => x.mayChange));
   return (
     <PageMore target="tasks:more">
       <MenuItem icon="archive" label="Archived" onSelect={() => void setView.run({ pipeline: p.id, view: 'archived' })} />
       <MenuItem icon="square" label="Select" onSelect={onSelect} />
-      {p.mayChange && (
-        <>
-          <MenuRule />
-          <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />
-        </>
-      )}
+      {(p.mayChange || mayMake) && <MenuRule />}
+      {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
+      {mayMake && <MenuItem icon="plus" label="New pipeline" onSelect={() => void make.run({ pipeline: p.id })} />}
     </PageMore>
   );
 }

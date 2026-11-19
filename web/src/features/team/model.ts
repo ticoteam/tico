@@ -1,6 +1,6 @@
 // Pure rules for the team pages: which teammate an address names, who manages a team, the model line, the figures.
 import type { Actor, Directory } from '@/data';
-import type { AgentFile, AgentRow, Change, Group, Learned, ListRow, Model, PersonRow, Run } from './queries';
+import type { AgentFile, AgentRow, Change, Group, Learned, ListRow, Model, PersonRow, Run, SlackThread } from './queries';
 
 /** The menu's address for a team: its name, lower case, words joined by "-" (shell/Menu teamSlug). */
 export const teamSlug = (name: string) =>
@@ -345,4 +345,49 @@ export function fileOpen(f: Pick<AgentFile, 'locator' | 'open'>): { href: string
   if (f.locator !== 'remote_link') return { href: url, view: true };
   const safe = httpsOnly(url);
   return safe ? { href: safe, view: /^https:\/\/(docs|drive)\.google\.com\//.test(safe) } : null;
+}
+
+/* ---------------------------------------------------------------- instructions, Slack */
+
+const paras = (text: string) =>
+  text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+const clip = (p: string) => {
+  const line = p.split('\n')[0]!;
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+};
+
+/**
+ * What changed between two versions of an agent's instructions, as words Tico can act on: the one stretch of
+ * paragraphs that differs (everything between the first and the last change), placed by the paragraph before it.
+ * Null when nothing changed.
+ */
+export function instructionsChange(before: string, after: string): string | null {
+  const a = paras(before);
+  const b = paras(after);
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0;
+  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  const was = a.slice(s, a.length - e).join('\n\n');
+  const now = b.slice(s, b.length - e).join('\n\n');
+  if (!was && !now) return null;
+  if (!was) return `Add this ${s ? `after the paragraph that starts "${clip(a[s - 1]!)}"` : 'at the start'}:\n\n${now}`;
+  if (!now) return `Remove this:\n\n${was}`;
+  return `Replace this:\n\n${was}\n\nwith this:\n\n${now}`;
+}
+
+/** A Slack thread's line: its newest message's first line, else who it is with. */
+export function slackTitle(t: Pick<SlackThread, 'messages' | 'display_name' | 'bot'>): string {
+  const msgs = t.messages ?? [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const line = (msgs[i]?.body ?? '')
+      .split('\n')
+      .map((l) => l.replace(/^[#>*\-\s]+/, '').trim())
+      .find(Boolean);
+    if (line) return line;
+  }
+  return t.display_name || t.bot;
 }

@@ -1,7 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { useActor, type Actor } from '@/data';
+import { firstPipeline, pipelinesQuery } from '@/features/tasks/exports';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -108,6 +110,7 @@ export function EditDialog({
   area,
   action,
   input,
+  verb = 'Save',
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -117,6 +120,8 @@ export function EditDialog({
   area?: boolean;
   action: string;
   input: (text: string) => unknown;
+  /** The filled button's word: Save, or Send for a request. */
+  verb?: string;
 }) {
   const [text, setText] = useState(value);
   const save = useAction(action);
@@ -136,7 +141,7 @@ export function EditDialog({
         <>
           <Button onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button variant="primary" disabled={text.trim() === value.trim()} onClick={send}>
-            Save
+            {verb}
           </Button>
         </>
       }
@@ -275,4 +280,11 @@ export function SecLink({ href, children }: { href: string; children: string }) 
       <Icon name="chevron" />
     </KitLink>
   );
+}
+
+/** "All tasks" on a teammate's page: the pipeline Tasks opens, filtered to them (`?owner=`). */
+export function AllTasks({ owner }: { owner: string }) {
+  const { data } = useQuery(pipelinesQuery);
+  const p = data ? firstPipeline(data) : null;
+  return <SecLink href={p ? `/tasks/${encodeURIComponent(p)}?owner=${encodeURIComponent(owner)}` : '/tasks'}>All tasks</SecLink>;
 }

@@ -92,6 +92,13 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 .ps.is-open .ps-chev .ico{transform:rotate(90deg)}
 .ps.is-open>.ps-in{margin:var(--s-1) 0 var(--s-2);padding:var(--s-0) 0 var(--s-4);border-block:1px solid var(--line)}
 .ps-body{padding:var(--s-1h) var(--s-2) 0}
+/* the pipeline's facts and an open stage's facts (more.css), as a narrow sheet draws them: goal and manager on lines of
+   their own, the short fields beside each other */
+.pe-facts{display:grid;grid-template-columns:minmax(0,1fr) 88px;gap:var(--s-3);margin-bottom:var(--s-4)}
+.pe-facts .w-pgoal,.pe-facts .w-manager,.pe-facts .w-pname{grid-column:1/-1}
+.pe-facts .f,.ps-facts .f{justify-items:stretch}
+.ps-facts{display:grid;grid-template-columns:64px;gap:var(--s-3);align-items:end;margin-bottom:var(--s-2)}
+.ps-facts .w-goal,.ps-facts .w-owner{grid-column:1/-1}
 
 /* Roadmap (more.css): the track is how far a task is through its pipeline; the last column is its date */
 .row-sub{display:contents}

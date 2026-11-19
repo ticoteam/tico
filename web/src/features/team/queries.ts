@@ -1119,3 +1119,31 @@ export async function browserFrame(tool: string, account: string, signal?: Abort
     height: Number(res.headers.get('X-Page-Height')) || 0,
   };
 }
+
+/* ---------------------------------------------------------------- a person's Slack, an agent's instructions */
+
+/** One Slack DM between a person and an agent, through Tico's Slack app (its hub conversation). */
+export interface SlackThread {
+  /** The agent's bot id. */
+  bot: string;
+  display_name?: string;
+  conversation_id: string;
+  channel?: string;
+  last_message_at?: string | null;
+  messages?: { id?: string; body?: string | null; sender_id?: string; created_at?: string }[] | null;
+}
+
+/** Their Slack DMs with agents (GET /api/v2/humans/{id}/slack), newest first. Only the person and the owner may read
+    them: anyone else gets a 403. */
+export const slackQuery = (person: string) =>
+  queryOptions({
+    queryKey: ['team', 'slack', person] as const,
+    queryFn: async ({ signal }) =>
+      (await api.get<{ threads?: SlackThread[] | null }>(`/api/v2/humans/${at(person)}/slack`, { signal })).threads ?? [],
+    staleTime: QUIET_STALE_MS,
+  });
+
+/** The server keeps no route that writes an agent's instructions: its computer publishes AGENTS.md. A change is a
+    message to Tico (POST /api/v2/assistant/messages, at most 8000 characters), which makes it there (ui bot-details.ts). */
+export const TICO_TEXT_MAX = 8000;
+export const tellTico = (text: string) => api.post<unknown>('/api/v2/assistant/messages', { text });

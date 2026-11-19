@@ -1,26 +1,42 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
+import { ApiError } from '@/api/client';
 import { configQuery, meQuery, useActors, type Actor } from '@/data';
 import { goalFigure, goalLink, goalsTreeQuery } from '@/features/company/exports';
 import { useFollow } from '@/live/follow';
 import { Avatar } from '@/kit/Avatar';
+import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Row } from '@/kit/Row';
+import { Link } from '@/kit/Link';
+import { Row, TaskRow } from '@/kit/Row';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
-import { bareId, startOfMonth, teamOf } from './model';
+import { bareId, slackTitle, startOfMonth, teamOf } from './model';
 import { AccessDialog, GiveTaskDialog, PasswordDialog } from './dialogs';
-import { ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
-import { accessQuery, agentsQuery, doneTasksQuery, groupsQuery, openTasksQuery, peopleQuery, reachLine, teammateAccessQuery } from './queries';
+import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
+import {
+  accessQuery,
+  agentsQuery,
+  doneTasksQuery,
+  groupsQuery,
+  openTasksQuery,
+  peopleQuery,
+  reachLine,
+  slackQuery,
+  teammateAccessQuery,
+  type SlackThread,
+} from './queries';
 
 export interface PersonPageProps {
   actor: Actor;
   settings?: boolean;
+  /** `?tab=slack`: all their Slack threads. */
+  slack?: boolean;
 }
 
 /** A person's own page: the same column as an agent's, beside the chat with them (mates.js personDesk). */
-export function PersonPage({ actor, settings }: PersonPageProps) {
+export function PersonPage({ actor, settings, slack }: PersonPageProps) {
   const id = actor.id.slice(actor.id.indexOf(':') + 1);
   const path = `/team/${encodeURIComponent(id)}`;
   useFollow({ party: actor.id });
@@ -47,7 +63,8 @@ export function PersonPage({ actor, settings }: PersonPageProps) {
       />
     ),
   };
-  return settings ? <PersonSettings actor={actor} id={id} head={head} /> : <PersonWidgets actor={actor} id={id} head={head} />;
+  if (settings) return <PersonSettings actor={actor} id={id} head={head} />;
+  return slack ? <PersonSlack id={id} head={head} /> : <PersonWidgets actor={actor} id={id} head={head} />;
 }
 
 type Head = {
@@ -122,7 +139,7 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
             actions={
               <>
                 <IconButton icon="plus" size="sm" quiet label={`Give ${actor.name} a task`} onClick={() => setGiving(true)} />
-                <SecLink href="/tasks">All tasks</SecLink>
+                <AllTasks owner={actor.id} />
               </>
             }
           >
@@ -143,6 +160,7 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
               ))}
             </Section>
           )}
+          <SlackSection id={id} path={head.path} handle={people.data?.find((p) => p.id === id)?.slack} />
         </>
       }
     />
@@ -277,6 +295,83 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             onConfirm={() => void remove.run({ person: id })}
           />
         </Section>
+      }
+    />
+  );
+}
+
+/* ---------------------------------------------------------------- Slack */
+
+const SLACK_ROWS = 3;
+
+/** One DM with an agent through Tico's Slack app: its newest line, the agent, its age. Opens the thread. */
+function SlackRow({ t }: { t: SlackThread }) {
+  const actors = useActors();
+  const agent = actors.find((a) => a.id === `bot:${t.bot}` || a.slug === t.bot);
+  return (
+    <TaskRow
+      title={slackTitle(t)}
+      href={`/threads/${encodeURIComponent(t.conversation_id)}`}
+      target={`thread:${t.conversation_id}`}
+      pills={<span className="row-stage">{agent?.name ?? t.display_name ?? t.bot}</span>}
+      at={t.last_message_at ?? new Date(0).toISOString()}
+    />
+  );
+}
+
+/**
+ * Their newest Slack threads in the column (mates.js personDesk). Only they and the owner may read them: for anyone
+ * else, and while it loads or if it fails, the column goes on without it.
+ */
+function SlackSection({ id, path, handle }: { id: string; path: string; handle?: string }) {
+  const { data: threads } = useQuery(slackQuery(id));
+  if (!threads) return null;
+  if (!threads.length)
+    return (
+      <Section name="Slack">
+        <div className="row line is-quiet">
+          <span className="row-mark" />
+          <span className="row-title">{handle ? 'No threads yet' : 'Not connected'}</span>
+          {!handle && <SecLink href="/library/tools">Connect</SecLink>}
+        </div>
+      </Section>
+    );
+  return (
+    <Section name="Slack" count={threads.length} actions={<SecLink href={`${path}?tab=slack`}>All threads</SecLink>}>
+      {threads.slice(0, SLACK_ROWS).map((t) => (
+        <SlackRow key={t.conversation_id} t={t} />
+      ))}
+    </Section>
+  );
+}
+
+/** `?tab=slack`: every Slack thread, one step in from the column (mates.js slackPage). */
+function PersonSlack({ id, head }: { id: string; head: Head }) {
+  const q = useQuery(slackQuery(id));
+  const threads = q.data ?? [];
+  const refused = q.error instanceof ApiError && q.error.status === 403;
+  const state: PageState = refused ? 'no-access' : q.isError ? 'fault' : q.isPending ? 'loading' : threads.length ? 'ready' : 'empty';
+  return (
+    <RecordPage
+      {...head}
+      state={state}
+      onRetry={() => void q.refetch()}
+      empty={{ title: 'Nothing from Slack yet' }}
+      noAccess={{ text: 'Only they and the owner can read their Slack.' }}
+      sections={
+        <>
+          <div className="ins-bar t-label">
+            <Link className="ib ib-sm" href={head.path} aria-label="Back" title="Back">
+              <Icon name="chevron" className="flip" />
+            </Link>
+            <b>Slack</b>
+          </div>
+          <Section name="Threads" count={threads.length}>
+            {threads.map((t) => (
+              <SlackRow key={t.conversation_id} t={t} />
+            ))}
+          </Section>
+        </>
       }
     />
   );

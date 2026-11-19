@@ -4,6 +4,7 @@ import { writePref } from '@/prefs';
 import {
   addRequester,
   assignMany,
+  createPipeline,
   createTask,
   listsOf,
   makeSubtask,
@@ -242,21 +243,77 @@ const stageDraft = s.object({
   id: s.optional(s.string({ min: 1, max: 100, what: 'a saved stage id; leave out for a new stage' })),
   name: s.string({ min: 1, max: 80 }),
   side: s.boolean(),
+  purpose: s.optional(s.string({ max: 300 })),
+  owner: clearable(s.string({ min: 1, max: 120, what: "an actor id, assignee (the task's), or pick (one of several, as set)" })),
+  task_limit: clearable(s.number({ int: true, min: 1, max: 1000 })),
 });
 
-/** Saves a pipeline's stages in order. A removed stage that holds tasks needs `move_to`: where they go. */
+const pipelineFacts = {
+  goal: s.optional(s.string({ max: 300 })),
+  manager_id: clearable(actor),
+  factory_id: clearable(s.string({ min: 1, max: 100, what: 'a factory id' })),
+  prefix: clearable(s.string({ pattern: /^[A-Za-z]{1,2}$/, what: 'one or two letters' })),
+};
+
+/** Saves a pipeline: its Goal, Manager, Factory and Prefix, and its stages in order with each one's goal, owner and limit.
+    `version` is the settings_version the person read: someone else's save in between is refused (task_changed). A
+    removed stage that holds tasks needs `move_to`, where they go: that moves them and deletes the stage, which cannot be
+    undone, so it is the person's own press, never Tico's. */
 export const savePipelineStages = defineAction({
   id: 'tasks.savePipeline',
-  title: 'Save a pipeline’s stages',
+  title: 'Save a pipeline',
   kind: 'change',
   input: s.object({
     pipeline,
+    ...pipelineFacts,
     stages: s.array(stageDraft, { max: 40 }),
+    version: s.optional(s.number({ int: true, min: 0 })),
     move_to: s.optional(s.object({ pipeline, stage: s.string({ min: 1, max: 100 }) })),
   }),
-  run: (_ctx, { pipeline, stages, move_to }) => savePipeline(pipeline, stages, move_to),
+  // Removing a stage that holds tasks cannot be undone: Tico may save the rest, not that.
+  can: ({ via }, { move_to }) => !(via === 'tico' && move_to),
+  run: (_ctx, { pipeline, stages, version, move_to, ...facts }) => savePipeline(pipeline, { stages, facts, version, moveTo: move_to }),
   did: () => 'Saved the pipeline',
   target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
+});
+
+/** New pipeline: a panel beside the pipeline on screen (`?panel=new`). */
+export const newPipeline = defineAction({
+  id: 'tasks.newPipeline',
+  title: 'New pipeline',
+  kind: 'view',
+  input: s.object({ pipeline, open: s.optional(s.boolean()) }),
+  run: async ({ router }, { pipeline, open = true }) => {
+    await router.navigate({
+      to: where(pipeline),
+      search: (prev: Record<string, unknown>) => {
+        const next: Record<string, unknown> = { ...prev, panel: 'new' };
+        if (!open) delete next.panel;
+        return next;
+      },
+    });
+  },
+  did: ({ open = true }) => (open ? 'Opened New pipeline' : 'Closed New pipeline'),
+  target: () => ({ kind: 'panel', id: 'new-pipeline' }),
+});
+
+/** Makes a pipeline (the company's owner and Admins; the server says so to anyone else) and opens it. */
+export const makePipeline = defineAction({
+  id: 'tasks.createPipeline',
+  title: 'Make a pipeline',
+  kind: 'change',
+  input: s.object({
+    name: s.string({ min: 1, max: 80 }),
+    ...pipelineFacts,
+    stages: s.array(stageDraft, { max: 40 }),
+  }),
+  run: async ({ router }, { stages, ...facts }) => {
+    const made = await createPipeline(facts, stages);
+    await router.navigate({ to: where(made.id) });
+    return made;
+  },
+  did: ({ name }) => `Made ${name}`,
+  target: (_input, out) => (out ? { kind: 'page', id: where(out.id) } : null),
 });
 
 /* ---------------------------------------------------------------- Roadmap */

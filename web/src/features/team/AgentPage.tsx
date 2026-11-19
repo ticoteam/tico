@@ -9,7 +9,7 @@ import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, PageMore, Record as RecordPage, Section, type PageState } from '@/pagekinds';
@@ -23,7 +23,7 @@ import { FilesSection } from './Files';
 import { LastRun } from './LastRun';
 import { DecisionsSection, DreamSection } from './Learnings';
 import { ListEditor, ListSections, useLists } from './Lists';
-import { ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
+import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, waitsOn } from './parts';
 import {
   agentFilesQuery,
   agentQuery,
@@ -71,7 +71,7 @@ export function AgentPage({ actor, tab }: AgentPageProps) {
     <AgentHead actor={actor} slug={slug} path={path} row={row} sub={sub} settings={settings} paused={paused?.state === 'paused'}>
       {(head) =>
         tab === 'instructions' ? (
-          <Instructions slug={slug} path={path} head={head} />
+          <Instructions slug={slug} path={path} head={head} manage={row?.can_manage !== false} />
         ) : settings ? (
           <AgentSettings slug={slug} actor={actor} row={row} path={path} head={head} pick={tab === 'model'} />
         ) : (
@@ -269,7 +269,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
             </Section>
           )}
           <DreamSection slug={slug} actorId={actor.id} />
-          <Section name="Tasks" actions={<SecLink href="/tasks">All tasks</SecLink>}>
+          <Section name="Tasks" actions={<AllTasks owner={actor.id} />}>
             {rest.map((t) => (
               <OwnRow key={t.id} task={t} me={me?.id} />
             ))}
@@ -312,7 +312,9 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const runs = useQuery(runsQuery(slug));
   const learned = useQuery(learnedQuery(slug));
   const changes = useQuery(changesQuery(slug));
-  const [editing, setEditing] = useState<'' | 'role' | 'team' | 'reports' | 'model' | 'computer' | 'users' | 'credential'>('');
+  const [editing, setEditing] = useState<'' | 'role' | 'team' | 'reports' | 'model' | 'computer' | 'users' | 'credential' | 'instructions'>('');
+  const newRule = useAction('agents.newRule');
+  const openRule = useAction('rules.open');
   const close = (o: boolean) => !o && setEditing('');
 
   const botId = bareId(actor.id);
@@ -367,6 +369,14 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               <div className="ins">
                 <div className="ins-head">
                   <span>Instructions</span>
+                  <span className="grow" />
+                  <IconButton
+                    icon="edit"
+                    size="sm"
+                    quiet
+                    label={manage ? 'Edit the instructions' : 'Request changes'}
+                    onClick={() => setEditing('instructions')}
+                  />
                 </div>
                 <Link className="ins-text" href={`${path}?tab=instructions`} title="Open the instructions">
                   {lead.map((p, i) => (
@@ -384,7 +394,11 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               </Foot>
             )}
           </Section>
-          <Section name="Rules" count={rules.data?.length}>
+          <Section
+            name="Rules"
+            count={rules.data?.length}
+            actions={<IconButton icon="plus" size="sm" quiet label="New rule" onClick={() => void newRule.run({ slug })} />}
+          >
             {(rules.data ?? []).map((r) => (
               <div key={r.key} className={r.off ? 'row rule is-off' : 'row rule'} title={r.text}>
                 <span className="rule-how" title={HOW[r.how][1]}>
@@ -401,7 +415,18 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
                     </span>
                   )}
                 </span>
-                <span />
+                {r.how === 'set' ? (
+                  <span />
+                ) : (
+                  // Changing or removing it happens in the rule's own panel on the Rules page.
+                  <Menu trigger={<IconButton icon="more" size="sm" quiet label="More" />}>
+                    <MenuItem
+                      label="Open"
+                      icon="arrow"
+                      onSelect={() => void openRule.run({ rule: r.key, kind: 'org', ...(r.how === 'outside' ? { tab: 'outside' } : {}) })}
+                    />
+                  </Menu>
+                )}
               </div>
             ))}
           </Section>
@@ -450,6 +475,13 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
             value={row?.machine?.runner_id ?? computer?.id ?? ''}
             action="agents.move"
             input={(c) => ({ slug, computer: c })}
+          />
+          <InstructionsDialog
+            open={editing === 'instructions'}
+            onOpenChange={close}
+            slug={slug}
+            manage={manage}
+            content={instructions.data?.content ?? ''}
           />
           <WorksForDialog open={editing === 'users'} onOpenChange={close} slug={slug} name={actor.name} now={users.map((u) => u.id)} />
           {row?.agent && <CredentialDialog open={editing === 'credential'} onOpenChange={close} slug={slug} name={actor.name} row={row} />}
@@ -510,8 +542,9 @@ function HistRow({ h }: { h: HistLine }) {
 /* ---------------------------------------------------------------- the instructions */
 
 /** The whole instructions, read at a measure (mates.js insPage). Headings, lists and paragraphs; nothing else. */
-function Instructions({ slug, path, head }: { slug: string; path: string; head: Head }) {
+function Instructions({ slug, path, head, manage }: { slug: string; path: string; head: Head; manage: boolean }) {
   const q = useQuery(instructionsQuery(slug));
+  const [editing, setEditing] = useState(false);
   const blocks = (q.data?.content ?? '').split(/\n\s*\n/).filter((b) => b.trim());
   return (
     <RecordPage
@@ -526,7 +559,10 @@ function Instructions({ slug, path, head }: { slug: string; path: string; head: 
               <Icon name="chevron" className="flip" />
             </Link>
             <b>Instructions</b>
+            <span className="grow" />
+            <IconButton icon="edit" size="sm" quiet label={manage ? 'Edit' : 'Request changes'} onClick={() => setEditing(true)} />
           </div>
+          <InstructionsDialog open={editing} onOpenChange={setEditing} slug={slug} manage={manage} content={q.data?.content ?? ''} />
           <article className="read">
             {blocks.map((b, i) => {
               const t = b.trim();
@@ -545,6 +581,49 @@ function Instructions({ slug, path, head }: { slug: string; path: string; head: 
           </article>
         </>
       }
+    />
+  );
+}
+
+/**
+ * Whoever manages the agent edits the whole text; anyone else says what should change. Either way it goes to Tico,
+ * which makes the change on the agent's computer (the server has no route that writes it).
+ */
+function InstructionsDialog({
+  open,
+  onOpenChange,
+  slug,
+  manage,
+  content,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  slug: string;
+  manage: boolean;
+  content: string;
+}) {
+  return manage ? (
+    <EditDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Instructions"
+      label="Instructions"
+      value={content}
+      area
+      action="agents.editInstructions"
+      input={(text) => ({ slug, text })}
+    />
+  ) : (
+    <EditDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Request changes"
+      label="What should change"
+      value=""
+      area
+      verb="Send"
+      action="agents.requestInstructions"
+      input={(changes) => ({ slug, changes })}
     />
   );
 }

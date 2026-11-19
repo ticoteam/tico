@@ -10,6 +10,9 @@ import {
   computersQuery,
   controlAgent,
   giveTask,
+  groupsQuery,
+  agentsQuery,
+  instructionsQuery,
   invitePerson,
   makeCopy,
   makePassword,
@@ -41,9 +44,11 @@ import {
   startLogout,
   saveTabs,
   taskTabsQuery,
+  tellTico,
+  TICO_TEXT_MAX,
   type TaskTab,
 } from './queries';
-import { LIST_FIELDS, rowOf, type ListLine } from './model';
+import { instructionsChange, LIST_FIELDS, resolveWho, rowOf, type ListLine } from './model';
 
 const slug = s.string({ min: 1, max: 100, what: "an agent's slug" });
 const person = s.string({ min: 1, max: 100, what: "a person's id" });
@@ -64,7 +69,7 @@ async function said<T>(fallback: string, send: () => Promise<T>): Promise<T> {
   }
 }
 
-export const TABS = ['settings', 'instructions', 'model', 'computer', 'screen'] as const;
+export const TABS = ['settings', 'instructions', 'model', 'computer', 'screen', 'slack'] as const;
 export type Tab = (typeof TABS)[number];
 
 export const openTeammate = defineAction({
@@ -92,7 +97,18 @@ export const openAdd = defineAction({
   title: 'Add a teammate',
   kind: 'view',
   input: s.object({ step: s.optional(s.oneOf(ADD_STEPS)) }),
-  can: ({ router }) => router.state.location.pathname.startsWith('/team/'),
+  // Its dialog is drawn on a team's page only, not on an agent's or a person's.
+  can: ({ router, queryClient }) => {
+    const at = /^\/team\/([^/]+)\/?$/.exec(router.state.location.pathname);
+    if (!at) return false;
+    let who = at[1]!;
+    try {
+      who = decodeURIComponent(who);
+    } catch {
+      // keep it as written
+    }
+    return resolveWho(who, queryClient.getQueryData(directoryQuery.queryKey), queryClient.getQueryData(groupsQuery.queryKey))?.kind === 'team';
+  },
   run: ({ router }, { step }) =>
     router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: step ?? 'pick' }) }),
   did: () => 'Opened Add teammate',
@@ -751,4 +767,72 @@ export const browserInput = defineAction({
   run: (_ctx, { tool, account, ...input }) => said("It didn't reach the browser", () => sendBrowserInput(tool, account, input)),
   did: () => 'Sent',
   target: ({ account }) => onBrowser(account),
+});
+
+/* ---------------------------------------------------------------- its rules and instructions */
+
+const rosterRow = (qc: { getQueryData: (k: readonly unknown[]) => unknown }, slug: string) =>
+  (qc.getQueryData(agentsQuery.queryKey) as { id: string; slug: string; display_name?: string; can_manage?: boolean }[] | undefined)?.find(
+    (r) => r.slug === slug,
+  );
+
+/** A new rule for one agent: the Rules page's editor, with that agent's rules showing (the rule editor is Rules'). */
+export const newAgentRule = defineAction({
+  id: 'agents.newRule',
+  title: 'Start a new rule for an agent',
+  kind: 'view',
+  input: s.object({ slug }),
+  run: ({ router, queryClient }, { slug }) => {
+    const actor = queryClient.getQueryData(directoryQuery.queryKey)?.actors.find((a) => a.kind === 'agent' && a.slug === slug);
+    const id = actor?.id ?? (rosterRow(queryClient, slug) ? `bot:${rosterRow(queryClient, slug)!.id}` : undefined);
+    return router.navigate({ to: '/company/rules', search: { ...(id ? { who: id } : {}), panel: 'org:new' } });
+  },
+  did: () => 'Opened a new rule',
+  target: () => ({ kind: 'panel', id: 'rule:new' }),
+});
+
+const tooLong = () => {
+  toast({ text: 'Too long to send at once', kind: 'failed' });
+  return new Error('too long');
+};
+
+/** No route writes AGENTS.md: the change goes to Tico as a message, and Tico makes it on the agent's computer. */
+export const editInstructions = defineAction({
+  id: 'agents.editInstructions',
+  title: "Change an agent's instructions",
+  kind: 'change',
+  // A message to Tico itself: Tico changes the file on the computer directly instead.
+  tico: false,
+  input: s.object({ slug, text: s.string({ max: 100_000, what: 'the whole new instructions' }) }),
+  can: ({ queryClient }, { slug }) => rosterRow(queryClient, slug)?.can_manage !== false,
+  run: async ({ queryClient }, { slug, text }) => {
+    const before = (await queryClient.ensureQueryData(instructionsQuery(slug))).content ?? '';
+    const change = instructionsChange(before, text);
+    if (!change) return { sent: false };
+    const name = rosterRow(queryClient, slug)?.display_name ?? slug;
+    const msg = `Update the Instructions (AGENTS.md) for ${name} [${slug}]. Make this change and verify the file on its computer:\n\n${change}`;
+    if (msg.length > TICO_TEXT_MAX) throw tooLong();
+    await said("Couldn't send the change", () => tellTico(msg));
+    return { sent: true };
+  },
+  did: (_input, out) => (out?.sent === false ? 'Nothing changed' : 'Sent the change to Tico. It updates the file on the computer.'),
+  target: ({ slug }) => onPage(slug),
+});
+
+/** For someone who may not manage the agent: Tico takes the request to whoever does. */
+export const requestInstructions = defineAction({
+  id: 'agents.requestInstructions',
+  title: "Ask for a change to an agent's instructions",
+  kind: 'change',
+  // A message to Tico itself: Tico asks the agent's manager directly instead.
+  tico: false,
+  input: s.object({ slug, changes: s.string({ min: 1, max: 6000, what: 'what should change' }) }),
+  run: async ({ queryClient }, { slug, changes }) => {
+    const name = rosterRow(queryClient, slug)?.display_name ?? slug;
+    const msg = `Ask whoever manages ${name} [${slug}] to change its Instructions (AGENTS.md). What should change:\n\n${changes.trim()}`;
+    if (msg.length > TICO_TEXT_MAX) throw tooLong();
+    await said("Couldn't send the request", () => tellTico(msg));
+  },
+  did: () => 'Sent your request to Tico',
+  target: ({ slug }) => onPage(slug),
 });

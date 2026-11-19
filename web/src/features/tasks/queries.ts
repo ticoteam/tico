@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
+  FactoryMap,
   NeedsYou,
   PipelineSettings,
   PipelineSettingsList,
@@ -452,29 +453,77 @@ export const pipelineSettingsQuery = (pipeline: string) =>
     staleTime: QUIET_STALE_MS,
   });
 
-/** A stage as the editor holds it: one already saved keeps its id; a new one has none until the save. */
+/** A stage as the editor holds it: one already saved keeps its id; a new one has none until the save. A field left out
+    keeps what the record has. `owner` is a teammate (`bot:<id>`, `human:<id>`), `assignee` (the task's), `pick` (one of
+    several, set where it was) or null (none: the manager picks). */
 export interface StageDraft {
   id?: string;
   name: string;
   side: boolean;
+  /** The stage's goal, stored as `purpose`. */
+  purpose?: string;
+  owner?: string | null;
+  /** At most this many tasks at once; not on the first stage or a side stage. */
+  task_limit?: number | null;
+}
+
+/** The pipeline's own facts, as the editor holds them. A field left out keeps what the record has. */
+export interface PipelineFacts {
+  name?: string;
+  goal?: string;
+  manager_id?: string | null;
+  factory_id?: string | null;
+  /** One or two letters its tasks are numbered with (E-12); null for none. */
+  prefix?: string | null;
+}
+
+const defined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+/** A drafted stage over the record's (or a new one): what the editor does not show is sent back as it was read. */
+function stageOut(d: StageDraft, was: Record<string, unknown> | undefined): Record<string, unknown> {
+  const base = was ?? { purpose: '', owner: null, task_limit: null, requirements: [] };
+  const out: Record<string, unknown> = { ...base, ...defined(d) };
+  if (!d.id) delete out.id;
+  // One of several keeps its list; any other owner has none (a side stage never picks). The next-pick line is the server's.
+  if (out.owner !== 'pick') delete out.pick;
+  delete out.pick_next;
+  if (out.side) out.task_limit = null;
+  return out;
+}
+
+/** What a save sends, as the editor sets it. `version` is the settings_version the person read; left out, the record's. */
+export interface PipelineSave {
+  stages: readonly StageDraft[];
+  facts?: PipelineFacts;
+  version?: number;
+  moveTo?: { pipeline: string; stage: string };
 }
 
 /**
- * Save a pipeline's stages: names, order, side, added and removed. The record goes back whole, with the version it was
- * read at; the board shows the new stages at once. A removed stage that holds tasks is refused (409 stage_has_tasks)
- * until `moveTo` says where its tasks go.
+ * Save a pipeline: its facts (Goal, Manager, Factory, Prefix) and its stages (names, order, side, goal, owner, limit,
+ * added and removed). The record goes back whole, with the version the person read it at: someone else's save in
+ * between is refused (409 task_changed) and nothing is lost. The board shows the new stages at once. A removed stage that
+ * holds tasks is refused (409 stage_has_tasks) until `moveTo` says where its tasks go.
  */
-export async function savePipeline(pipeline: string, stages: readonly StageDraft[], moveTo?: { pipeline: string; stage: string }): Promise<Pipeline> {
+export async function savePipeline(pipeline: string, { stages, facts = {}, version, moveTo }: PipelineSave): Promise<Pipeline> {
   const rec = await queryClient.ensureQueryData(pipelineSettingsQuery(pipeline));
-  const held = new Map(rec.stages.map((s) => [s.id, s]));
-  const next = stages.map((d) => {
-    const was = d.id ? held.get(d.id) : undefined;
-    return was ? { ...was, name: d.name, side: d.side } : { name: d.name, side: d.side, requirements: [] };
-  });
+  const held = new Map(rec.stages.map((s) => [s.id, s as unknown as Record<string, unknown>]));
+  const next = stages.map((d) => stageOut(d, d.id ? held.get(d.id) : undefined));
+  const { bot_families: _families, may_change: _may, ...kept } = rec;
   const shown = (list: Pipeline[] | undefined) =>
     list?.map((p) =>
       p.id === pipeline
-        ? { ...p, stages: stages.map((d, i) => ({ id: d.id ?? `tmp:${i}`, name: d.name, side: d.side, owner: p.stages.find((st) => st.id === d.id)?.owner ?? null })) }
+        ? {
+            ...p,
+            ...(facts.name ? { name: facts.name } : {}),
+            ...(facts.manager_id !== undefined ? { manager: facts.manager_id } : {}),
+            stages: stages.map((d, i) => ({
+              id: d.id ?? `tmp:${i}`,
+              name: d.name,
+              side: d.side,
+              owner: d.owner !== undefined ? holder(d.owner) : (p.stages.find((st) => st.id === d.id)?.owner ?? null),
+            })),
+          }
         : p,
     );
   const out = await write<PipelineSettingsResult>({
@@ -483,7 +532,7 @@ export async function savePipeline(pipeline: string, stages: readonly StageDraft
     send: (idempotencyKey) =>
       api.post<PipelineSettingsResult>(
         `/api/v2/pipelines/${encodeURIComponent(pipeline)}`,
-        { ...rec, stages: next, settings_version: rec.settings_version, ...(moveTo ? { move_tasks_to: moveTo } : {}) },
+        { ...kept, ...defined(facts), stages: next, settings_version: version ?? rec.settings_version, ...(moveTo ? { move_tasks_to: moveTo } : {}) },
         { idempotencyKey },
       ),
     settle: (list: Pipeline[] | undefined, answer) => list?.map((p) => (p.id === pipeline ? adaptPipeline(answer.pipeline as PipelineRecord) : p)),
@@ -491,6 +540,72 @@ export async function savePipeline(pipeline: string, stages: readonly StageDraft
   queryClient.setQueryData(pipelineSettingsQuery(pipeline).queryKey, out.pipeline as PipelineSettingsRecord);
   return adaptPipeline(out.pipeline as PipelineRecord);
 }
+
+/** The record as it is on the server now, past the cache (someone saved first): the editor compares it with what it read. */
+export const pipelineSettingsNow = (pipeline: string) => queryClient.fetchQuery({ ...pipelineSettingsQuery(pipeline), staleTime: 0 });
+
+/** What changed between two reads of a record, as a person names it: a fact, or a stage by its name (the old editor's
+    peChanged). */
+export function pipelineChanged(a: PipelineSettingsRecord, b: PipelineSettingsRecord): string[] {
+  const out: string[] = [];
+  const facts: [string, string][] = [['name', 'Name'], ['goal', 'Goal'], ['manager_id', 'Manager'], ['factory_id', 'Factory'], ['prefix', 'Prefix'], ['private', 'Private'], ['owner_id', 'Owner']];
+  for (const [key, label] of facts) if (JSON.stringify(a[key] ?? null) !== JSON.stringify(b[key] ?? null)) out.push(label);
+  const own = ({ pick_next: _next, ...s }: Record<string, unknown>) => JSON.stringify(s);
+  const before = new Map(a.stages.map((s) => [s.id, s as unknown as Record<string, unknown>]));
+  for (const s of b.stages) {
+    const was = before.get(s.id);
+    if (!was) out.push(`${s.name} (added)`);
+    else if (own(was) !== own(s as unknown as Record<string, unknown>)) out.push(s.name);
+  }
+  const kept = new Set(b.stages.map((s) => s.id));
+  for (const s of a.stages) if (!kept.has(s.id)) out.push(`${s.name} (removed)`);
+  if (!out.length && a.stages.map((s) => s.id).join() !== b.stages.map((s) => s.id).join()) out.push('The order of the stages');
+  return out;
+}
+
+/* ---------------------------------------------------------------- New pipeline */
+
+/** The ids the server keeps for paths of its own (backend/task_pipelines_routes.py RESERVED). */
+const RESERVED = new Set(['overview', 'setup', 'decisions', 'review', 'tasks', 'new', 'log', 'retire']);
+
+/** A new pipeline's id from its name: lowercase words joined by dashes, never one in use (a retired one included), since
+    a save to a taken id changes that pipeline. */
+export function pipelineIdFor(name: string, taken: ReadonlySet<string>): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56) || 'pipeline';
+  let id = base;
+  for (let n = 2; taken.has(id) || RESERVED.has(id); n += 1) id = `${base}-${n}`;
+  return id;
+}
+
+/** Make a pipeline (POST /api/v2/pipelines/{new id}: the save that makes one). Only the company's owner and Admins may;
+    the server says so otherwise. It shows in the pipeline menu at once. */
+export async function createPipeline(facts: PipelineFacts & { name: string }, stages: readonly StageDraft[]): Promise<Pipeline> {
+  const all = await api.get<PipelineSettingsList>('/api/v2/pipelines');
+  const id = pipelineIdFor(facts.name, new Set(all.pipelines.map((p) => p.id)));
+  const record = { ...defined(facts), stages: stages.map((d) => stageOut({ ...d, id: undefined }, undefined)) };
+  const made: Pipeline = { id, name: facts.name, stages: [], owner: facts.manager_id ?? null, done: null, closed: null, mayChange: true, manager: facts.manager_id ?? null };
+  const out = await write<PipelineSettingsResult>({
+    key: pipelinesQuery.queryKey,
+    optimistic: (list: Pipeline[] | undefined) => (list ? [...list, made] : list),
+    send: (idempotencyKey) => api.post<PipelineSettingsResult>(`/api/v2/pipelines/${encodeURIComponent(id)}`, record, { idempotencyKey }),
+    settle: (list: Pipeline[] | undefined, answer) => list?.map((p) => (p.id === id ? adaptPipeline(answer.pipeline as PipelineRecord) : p)),
+  });
+  queryClient.setQueryData(pipelineSettingsQuery(id).queryKey, out.pipeline as PipelineSettingsRecord);
+  return adaptPipeline(out.pipeline as PipelineRecord);
+}
+
+/** The live factories a pipeline can sit in (GET /api/v2/factories); null when the read fails (the field is left out). */
+export const factoryChoicesQuery = queryOptions({
+  queryKey: ['pipelines', 'factories'] as const,
+  queryFn: async ({ signal }) => {
+    try {
+      return (await api.get<FactoryMap>('/api/v2/factories?period=7d', { signal })).factories.map((f) => ({ id: f.id, name: f.name }));
+    } catch {
+      return null;
+    }
+  },
+  staleTime: QUIET_STALE_MS,
+});
 
 /* ---------------------------------------------------------------- Flow: what waits on you */
 

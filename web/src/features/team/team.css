@@ -170,6 +170,8 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .ins-by{margin-top:var(--s-2);font-size:var(--t-sm);color:var(--muted)}
 .ins-bar{display:flex;align-items:center;gap:var(--s-1h);height:36px;margin:0 calc(-1 * var(--s-2)) var(--s-2h) calc(-1 * var(--s-3));color:var(--ink)}
 .ins-bar .ib{color:var(--muted)}
+/* a person's Slack, not connected (mates.css) */
+.line.is-quiet .row-title{color:var(--muted)}
 .rule-from{display:block;margin-top:calc(var(--s-0) / 2);font-size:var(--t-xs);line-height:1.3;color:var(--muted)}
 .hist.is-learn .row-title{white-space:normal;line-height:1.35}
 .hist.is-learn .hist-kind{align-self:start;height:calc(var(--t-base)*1.35)}

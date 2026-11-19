@@ -14,8 +14,8 @@ export const LAST_PREF = 'tasks.pipeline.v1';
 /** What a pipeline's address holds: the view (when chosen), the filters, and the side panel. */
 export interface TasksSearch extends Filters {
   view?: View;
-  /** Edit pipeline, beside the page. */
-  panel?: 'pipeline';
+  /** Edit pipeline, or New pipeline, beside the page. */
+  panel?: 'pipeline' | 'new';
 }
 
 const text = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
@@ -29,7 +29,7 @@ const DUE: readonly Due[] = ['overdue', 'week', 'any'];
 export function validateTasksSearch(raw: Record<string, unknown>): TasksSearch {
   const out: TasksSearch = {};
   if (raw.view === 'board' || raw.view === 'list' || raw.view === 'archived') out.view = raw.view;
-  if (raw.panel === 'pipeline') out.panel = 'pipeline';
+  if (raw.panel === 'pipeline' || raw.panel === 'new') out.panel = raw.panel;
   const owner = actor(raw.owner);
   if (owner) out.owner = owner;
   const waiting = actor(raw.waiting);

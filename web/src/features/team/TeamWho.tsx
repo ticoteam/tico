@@ -14,7 +14,7 @@ export interface TeamSearch {
   add?: AddStep;
 }
 
-/** `?tab=settings|instructions|model|computer|screen&add=pick|new|template|person`; anything else is dropped. */
+/** `?tab=settings|instructions|model|computer|screen|slack&add=pick|new|template|person`; anything else is dropped. */
 export function validateTeamSearch(raw: Record<string, unknown>): TeamSearch {
   const out: TeamSearch = {};
   if (TABS.includes(raw.tab as Tab)) out.tab = raw.tab as Tab;
@@ -28,7 +28,7 @@ export function TeamWho({ who, tab, add }: { who: string } & TeamSearch) {
   const groups = useQuery(groupsQuery);
   const found = resolveWho(who, dir.data, groups.data);
   if (found?.kind === 'agent') return <AgentPage actor={found.actor} tab={tab} />;
-  if (found?.kind === 'person') return <PersonPage actor={found.actor} settings={tab === 'settings'} />;
+  if (found?.kind === 'person') return <PersonPage actor={found.actor} settings={tab === 'settings'} slack={tab === 'slack'} />;
   if (found?.kind === 'team') return <TeamPage group={found.group} add={add} />;
   const pending = dir.isPending || groups.isPending;
   return (
