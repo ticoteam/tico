@@ -4,10 +4,13 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::runner::Runner;
 use crate::util::text_of;
+
+/// How long the backlog waits for the run loop's first read of this computer's bots before reading them itself.
+const OWN_READ_AFTER: Duration = Duration::from_secs(60);
 
 /// The credential helper `gitcred::apply` sets when no token could be had (git_credentials.is_failed_helper).
 fn failed_helper(value: &str) -> bool {
@@ -17,9 +20,19 @@ fn failed_helper(value: &str) -> bool {
 
 impl Runner {
     pub async fn push_backlog(self: Arc<Self>) {
+        // The run loop's first full pass reads this computer's bots as it starts: the backlog takes that answer, and
+        // asks the hub itself only if the pass has not read them within OWN_READ_AFTER.
+        let began = Instant::now();
         let assignments = loop {
             if self.stopping() {
                 return;
+            }
+            if self.assignments_read() {
+                break self.assignments_seen().as_ref().clone();
+            }
+            if began.elapsed() < OWN_READ_AFTER {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
             }
             match self.client.get("runners/assignments").await {
                 Ok(a) => break a.as_array().cloned().unwrap_or_default(),
