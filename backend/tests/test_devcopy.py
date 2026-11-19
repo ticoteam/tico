@@ -116,6 +116,7 @@ def source_db(tmp_path, booted):
             (now, now),
         )
         c.execute("INSERT INTO schedules(id,bot,cron) VALUES('s1','sales','* * * * *')")
+        c.execute("UPDATE inbound_sync SET cursor=42,last_synced_at=1.0,error='inbound_unavailable' WHERE singleton=1")
     for name in ("credential.key", "slack.key"):
         (store.settings.db_path.parent / name).write_bytes(b"k" * 32)
     # Close the store's idle connections now: the last one to close checkpoints the WAL into the file, which would
@@ -142,7 +143,10 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     with closing(sqlite3.connect(dest)) as c:
         assert c.execute("SELECT monthly_cap FROM alert_company_settings WHERE id=1").fetchone() == (7,)
         for table in devcopy.emptied(c):
-            assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
+            if table not in devcopy.RESEEDED:
+                assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
+        # The source's delivery cursor is gone, and the singleton row the inbox reads is back at its start.
+        assert c.execute("SELECT * FROM inbound_sync").fetchall() == [(1, 0, None, "", "[]")]
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
         # The finished run stays, with its steps and inputs, and no way back in.
         assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts ORDER BY id").fetchall() == [

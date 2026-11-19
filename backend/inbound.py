@@ -155,6 +155,27 @@ def save_inbox(c, item):
     )
 
 
+SYNC_START = {'cursor': 0, 'last_synced_at': None, 'error': '', 'gaps': '[]'}
+
+
+def sync_state(c):
+    """The delivery cursor's singleton row. A database without it (a dev copy made before the copy kept it) reads as
+    an install that has never synced, never as an error."""
+    row = c.execute('SELECT cursor,last_synced_at,error,gaps FROM inbound_sync WHERE singleton=1').fetchone()
+    return dict(row) if row else dict(SYNC_START)
+
+
+def save_sync(c, **fields):
+    """Write the singleton row, making it first when it is missing."""
+    row = {**sync_state(c), **fields}
+    c.execute(
+        'INSERT INTO inbound_sync(singleton,cursor,last_synced_at,error,gaps) VALUES(1,?,?,?,?) ON CONFLICT(singleton) '
+        'DO UPDATE SET cursor=excluded.cursor,last_synced_at=excluded.last_synced_at,error=excluded.error,'
+        'gaps=excluded.gaps',
+        (row['cursor'], row['last_synced_at'], row['error'], row['gaps']),
+    )
+
+
 def connection_json(raw):
     def unique(pairs):
         result = {}
@@ -248,7 +269,7 @@ class Inbound:
                     (after, *values, limit + 1),
                 )
             ]
-            sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
+            sync = sync_state(c)
             # The demo has no HQ, so it is never off in the page's eyes once its seeded inboxes exist. Every write
             # still refuses in `remote`, so nothing can be created or rented there.
             demo_inboxes = bool(self.settings.demo and c.execute('SELECT 1 FROM inbound_inboxes LIMIT 1').fetchone())
@@ -694,7 +715,8 @@ class Inbound:
 
         kicked = False
         with self.store.transaction() as c:
-            cursor = c.execute('SELECT cursor FROM inbound_sync WHERE singleton=1').fetchone()[0]
+            sync = sync_state(c)
+            cursor = sync['cursor']
             through = page['cursor']
             if not isinstance(through, int) or through < cursor:
                 raise ValueError('invalid_cursor')
@@ -739,12 +761,9 @@ class Inbound:
                     # A bill emailed to the bills address waits for the drain below (backend/bills_address.py).
                     bills_address.emailed(c, item)
             # Keep cumulative gap summaries; the cursor commit and gap update are atomic with messages.
-            old = json.loads(c.execute('SELECT gaps FROM inbound_sync WHERE singleton=1').fetchone()[0])
+            old = json.loads(sync['gaps'])
             gaps = {(g['inbox_id'], g['from'], g['to']): g for g in old + page.get('gaps', [])}
-            c.execute(
-                "UPDATE inbound_sync SET cursor=?,last_synced_at=?,error='',gaps=? WHERE singleton=1",
-                (through, time.time(), encode(list(gaps.values())[-100:])),
-            )
+            save_sync(c, cursor=through, last_synced_at=time.time(), error='', gaps=encode(list(gaps.values())[-100:]))
             self.expire(c)
         if kicked:
             self.wake_mail()
@@ -765,14 +784,14 @@ class Inbound:
             else:
                 raise ValueError('inbox_sync_backlog')
             with self.store.read() as c:
-                cursor = c.execute('SELECT cursor FROM inbound_sync WHERE singleton=1').fetchone()[0]
+                cursor = sync_state(c)['cursor']
             page = self.remote('POST', 'pull', {'cursor': cursor, 'wait': 0})
             self.ingest(page)
             # A previous lost ack is retried even when there was no new delivery on this pull.
             self.remote('POST', 'ack', {'through_hq_seq': page['cursor']})
         except Exception:
             with self.store.transaction() as c:
-                c.execute("UPDATE inbound_sync SET error='inbound_unavailable' WHERE singleton=1")
+                save_sync(c, error='inbound_unavailable')
             raise
         finally:
             self.sync_lock.release()

@@ -226,7 +226,7 @@ EMPTY = (
     "support_tickets",
     "support_access",
     "support_access_log",
-    # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
+    # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy (the cursor restarts: RESEEDED).
     "inbound_inboxes",
     "inbound_messages",
     "inbound_sync",
@@ -315,6 +315,9 @@ EMPTY = (
     "_litestream_lock",
     "_litestream_seq",
 )
+# Emptied tables that hold one row from the start (baseline.sql seeds it) and whose readers expect it: the copy gets
+# that starting row back.
+RESEEDED = {"inbound_sync": "INSERT INTO inbound_sync(singleton) VALUES(1)"}
 # Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
 # in its scrub), so no Finance table name is written here.
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
@@ -855,6 +858,9 @@ def prune(c, days, keep_automations=False):
     gone = emptied(c, keep_automations)
     for table in gone:
         delete(table)
+    for table, seed in RESEEDED.items():
+        if table in gone:
+            c.execute(seed)
     if keep_automations:
         revoke_automation_secrets(c)
     # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
@@ -993,7 +999,11 @@ def build(source, dest, days=30, force=False, keep_automations=False):
     with closing(sqlite3.connect(dest.as_uri() + "?mode=ro", uri=True)) as c:
         if c.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise SystemExit(f"devcopy: {dest} failed its integrity check")
-        left = [t for t in emptied(c, keep_automations) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
+        left = [
+            t
+            for t in emptied(c, keep_automations)
+            if c.execute(f"SELECT count(*) FROM {quote(t)}").fetchone()[0] > (1 if t in RESEEDED else 0)
+        ]
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
         where, args = open_attempts(c)
