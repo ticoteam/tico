@@ -1,13 +1,17 @@
 """A bot's task tabs read what a task waits on from the engine (backend/bot_task_tabs.py `waits_ids`, `tab_sql`): Needs
 you, Open and Waiting over the bot's own tasks. On a store with no app."""
 
+import json
+from typing import get_args
+
 import pytest
 
 from backend import bot_task_tabs as T
+from backend import models as M
 from backend import question_marks as Q
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401 - api is a fixture
+from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401 - api is a fixture
 
 ANA = "human:ana"
 
@@ -42,3 +46,28 @@ def test_the_tabs_route_lists_the_bots_tasks_the_caller_may_read(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the plan", "body": "Draft it."})
     out = get(api, "bots/ops/task-tabs/tasks")
     assert any(task["id"] in tab["ids"] for tab in out["tabs"])
+
+
+def test_the_request_model_names_the_same_fields_as_the_filters():
+    assert set(get_args(M.BotTaskCondition.model_fields["field"].annotation)) == set(T.FIELDS)
+
+
+def test_a_filter_on_a_stage_and_a_pipeline_saves_and_reads_back(api):
+    """PUT /bots/{bot}/task-tabs keeps Stage and Pipeline rows, and a Task-list tabs 2/3 `types` tab becomes a Pipeline
+    row; a row saved under the old names (step, type) reads back under the new ones."""
+    rows = [{"field": "stage", "value": ["general-todo"]}, {"field": "pipeline", "value": ["general"]}]
+    tabs = [{"name": "General to do", "conditions": rows}, {"name": "Old", "types": ["general"], "states": ["open"]}]
+    r = api.put("/api/v2/bots/ops/task-tabs", json={"tabs": tabs}, headers=headers())
+    assert r.status_code == 200, r.text
+    saved = get(api, "bots/ops/task-tabs")["tabs"]
+    assert saved[0]["conditions"] == rows
+    assert {"field": "pipeline", "value": ["general"]} in saved[1]["conditions"]
+    with api.app.state.store.transaction() as c:
+        old = [
+            {
+                "name": "Old",
+                "conditions": [{"field": "step", "value": ["general-todo"]}, {"field": "type", "value": ["general"]}],
+            }
+        ]
+        c.execute("UPDATE bot_task_tabs SET tabs=? WHERE bot='ops'", (json.dumps(old),))
+    assert get(api, "bots/ops/task-tabs")["tabs"][0]["conditions"] == rows
