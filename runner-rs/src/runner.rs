@@ -104,6 +104,8 @@ pub struct Runner {
     pub upload_bounds: crate::upload_pace::Bounds,
     /// The last `runners/assignments` answer. A writer replaces the Arc; a reader takes a clone of it, not the list.
     assignments: Mutex<Arc<Vec<Value>>>,
+    /// Whether `assignments` holds an answer from the server yet, not the empty list it starts with.
+    assignments_loaded: AtomicBool,
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
     beat: Mutex<Option<(String, Instant)>>,
     /// When a person asked for a restart (the Restart button): the runner exits once no turn runs, and claims
@@ -222,6 +224,7 @@ impl Runner {
             upload_load: crate::upload_pace::Load::default(),
             upload_bounds: crate::upload_pace::ADAPTIVE,
             assignments: Mutex::new(Arc::new(vec![])),
+            assignments_loaded: AtomicBool::new(false),
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
             restart: Mutex::new(None),
@@ -279,6 +282,11 @@ impl Runner {
     /// The last `runners/assignments` answer, shared: a read is a pointer copy, not a copy of every bot's row.
     pub fn assignments_seen(&self) -> Arc<Vec<Value>> {
         Arc::clone(&self.assignments.lock().unwrap())
+    }
+
+    /// Whether `assignments_seen` is an answer the server gave, not the empty list before the first full pass.
+    pub fn assignments_read(&self) -> bool {
+        self.assignments_loaded.load(Ordering::SeqCst)
     }
 
     /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
@@ -628,6 +636,7 @@ impl Runner {
             let assignments = self.client.get("runners/assignments").await?;
             *self.assignments.lock().unwrap() =
                 Arc::new(assignments.as_array().cloned().unwrap_or_default());
+            self.assignments_loaded.store(true, Ordering::SeqCst);
             // Before the grants are read: a bot from before grants keeps the legacy keys it could read.
             if let Err(e) = crate::credential_migration::migrate(
                 &self.config,
@@ -1312,10 +1321,14 @@ impl Runner {
                 log("Tico runner: no turn running; exiting so the supervisor starts the updated runner");
                 break;
             }
-            // The stream's word (a `work` event) wakes the loop at once instead of at the next quarter second.
-            let _ =
-                tokio::time::timeout(Duration::from_secs_f64(delay), self.events.wake.notified())
-                    .await;
+            // The stream's word (a `work` event) wakes the loop at once instead of at the next quarter second, and a
+            // release's catch-up pass is not left waiting behind a failing hub's longer retry.
+            let wait = Duration::from_secs_f64(delay).min(
+                self.events
+                    .catch_up_in()
+                    .map_or(Duration::MAX, |d| d + Duration::from_millis(50)),
+            );
+            let _ = tokio::time::timeout(wait, self.events.wake.notified()).await;
         }
         self.stop.store(true, Ordering::SeqCst);
         self.events.close();

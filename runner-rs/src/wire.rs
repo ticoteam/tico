@@ -75,6 +75,8 @@ pub struct RenewAnswer {
 #[derive(Debug, Default, Deserialize)]
 pub struct ReadyFrame {
     pub seq: Option<i64>,
+    /// The change this stream resumes after: the `after` the runner sent when the server took it, else `seq`.
+    pub after: Option<i64>,
     /// The release runners should run; empty on a development server.
     pub release: Option<String>,
 }

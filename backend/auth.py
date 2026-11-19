@@ -247,9 +247,8 @@ def validate_identity(c, who):
                 409,
             )
         return
-    runner = c.execute(
-        "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (who.runner_id,)
-    ).fetchone()
+    # Read once a snapshot: the route's own `execution.runner` asks for the same row under the same write lock.
+    runner = read_cache.one(c, H.RUNNER_SQL, (who.runner_id,))
     if not runner:
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)
     if who.role == "bot":
