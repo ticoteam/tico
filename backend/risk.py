@@ -210,7 +210,7 @@ def list_risks(auth, c, who, task=None):
     rows = risk_rows(c, who, ids)
     counts = standing(auth, c, who, [r["id"] for r in rows])
     risks = [risk_view(r, counts.get(r["id"]), brief=True) for r in rows]
-    risks.sort(key=lambda r: (LEVELS.index(r["level"]), r["label"].lower(), r["key"]))
+    risks.sort(key=lambda r: (LEVELS.index(r["level"]), str(r["label"] or "").lower(), r["key"]))
     return {"risks": risks}
 
 
@@ -259,7 +259,7 @@ def matter_view(c, actor, row):
         "updated_at": row["updated_at"],
     }
     for field, column in COLUMNS.items():
-        ident = now.get(row.get(column))
+        ident = now.get(row.get(column) or "")
         value[column] = ident if ident in seen else None
         value[field] = {"id": ident, "name": names.get(ident, "")} if ident in seen else None
     return value
@@ -623,7 +623,7 @@ def create(auth, c, who, body):
     if page_bot:
         # The page owner was chosen by a person (Settings > page owners), so it is granted here, not by the caller.
         c.execute("UPDATE tags SET bot_writers=? WHERE id=?", (H._dump([page_bot]), row["id"]))
-        row = H.tag(c, row["id"])
+        row = H.tag(c, row["id"]) or row
     audit_log.write(c, who.actor, "risk:" + row["id"], None, row, _via(who))
     return {"risk": risk_view(row)}
 
