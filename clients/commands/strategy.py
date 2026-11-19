@@ -414,6 +414,11 @@ SEGMENT_PROPS = {
     "revenue_month": {"type": "number", "description": "Revenue per customer per month; blank uses the settings"},
     "margin_pct": {"type": "number", "description": "Margin as a percent; blank uses the settings"},
     "min_cohort": {"type": "integer", "minimum": 5, "description": "Fewest customers a cohort needs for a rate"},
+    "value_kind": {
+        "type": "string",
+        "enum": ["revenue", "retention"],
+        "description": "What a customer is worth: revenue (LTV) or retention (kept and cost per retained)",
+    },
     "owner": _s("Who runs it: me, a bot slug or a person id; \"\" clears"),
     "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
 }
@@ -938,6 +943,57 @@ def growth_customers_load(api, args):
 
 
 @tool(
+    "tico_growth_read",
+    "The Growth read for a scope's month: signups, activation and paid rates, new customers, cost, CAC (money and "
+    "promotions; with_effort adds bot cost and hours; no_spend, never 0), kept, LTV or a retention segment's value, "
+    "each channel's new, cost, CAC, owner and budget, health, and Growth's KPIs (metrics). Rates say which cohort "
+    "they come from.",
+    {
+        "scope": _s("all (default), mine (the channels you own), segment:<slug> or channel:<slug>"),
+        "period": _s("YYYY-MM; default the last full month"),
+        "detail": _s("Comma list of campaigns, retention, series"),
+    },
+)
+def growth_read(api, args):
+    return api.get("growth/read", **{k: args[k] for k in ("scope", "period", "detail") if args.get(k)})
+
+
+_PUSH = {
+    "source": _s("The push's label: a bot's (hotmic-db) or source:<id>; a push replaces its months"),
+    "csv": _s("The CSV text"),
+    "rows": {"type": "array", "items": {"type": "object"}, "description": "Instead of csv: rows as objects"},
+}
+
+
+@tool(
+    "tico_growth_rows_push",
+    "Owner, admin or the Growth Manager: cohort rows (anchor signup|customer, period YYYY-MM, segment, channel, "
+    "campaign, as_of, entered, and counts with their _eligible: activated, paid, kept_d30/d90/d180, net_d90/d180/d365 "
+    "as _sum). Replaces the source's rows for the months sent. docs/growth.md has the rules.",
+    _PUSH,
+    required=("source",),
+    writes=True,
+)
+def growth_rows_push(api, args):
+    body = {k: args[k] for k in ("source", "csv", "rows") if args.get(k) is not None}
+    return _as_person(api).post("growth/rows", body, key=_key(args))
+
+
+@tool(
+    "tico_growth_costs_push",
+    "Owner, admin or the Growth Manager: costs (period YYYY-MM, channel, campaign, kind money|promo_cash|"
+    "promo_credits|bot|hours, purpose acquisition|retention, amount, quality actual|estimate). Replaces the source's "
+    "costs for the months sent.",
+    _PUSH,
+    required=("source",),
+    writes=True,
+)
+def growth_costs_push(api, args):
+    body = {k: args[k] for k in ("source", "csv", "rows") if args.get(k) is not None}
+    return _as_person(api).post("growth/costs", body, key=_key(args))
+
+
+@tool(
     "tico_growth_customers_delete",
     "Owner or admin: delete every customer fact.",
     {},
@@ -1136,6 +1192,7 @@ CLI = (
             Arg("revenue_month", "--revenue", metavar="N"),
             Arg("margin_pct", "--margin", metavar="PCT"),
             Arg("min_cohort", "--min-cohort", metavar="N"),
+            Arg("value_kind", "--value-kind"),
         ),
         render=_growth_text,
         example="tico growth segment set consumer --name Consumer --churn-days 90 "
@@ -1267,6 +1324,31 @@ CLI = (
         "delete every customer fact (owner or admin)",
         render=_growth_text,
         example="tico growth customers delete",
+    ),
+    Command(
+        "growth read",
+        "the Growth read for a scope's month: headline, channels, health, metrics; --detail adds campaigns, retention, series",
+        args=(Arg("scope", metavar="SCOPE"), Arg("period", metavar="YYYY-MM"), Arg("detail", metavar="LIST")),
+        render=lambda args, result: json.dumps(result, indent=2),
+        example="tico growth read --scope segment:rental --period 2026-10",
+    ),
+    Group("growth rows", "cohort rows: the people in each month's cohort cell"),
+    Command(
+        "growth rows push",
+        "push a source's cohort rows from a CSV; they replace its rows for those months (owner, admin, Growth Manager)",
+        args=(Arg("source", "--source", metavar="LABEL"), Arg("csv", "--file", type=text_file, metavar="FILE")),
+        omit=("rows",),
+        render=_growth_text,
+        example="tico growth rows push --source hotmic-db --file cohorts.csv",
+    ),
+    Group("growth costs", "costs by month, channel, kind and purpose"),
+    Command(
+        "growth costs push",
+        "push a source's costs from a CSV; they replace its costs for those months (owner, admin, Growth Manager)",
+        args=(Arg("source", "--source", metavar="LABEL"), Arg("csv", "--file", type=text_file, metavar="FILE")),
+        omit=("rows",),
+        render=_growth_text,
+        example="tico growth costs push --source promotions --file costs.csv",
     ),
     Command(
         "growth numbers",

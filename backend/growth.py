@@ -1193,11 +1193,12 @@ def install(app, store, auth, mutate):
         SETUP.record(c, who.actor)
         return {**result, "setup": SETUP.block(c, auth, who)}
 
-    from . import growth_computed, growth_customers, growth_proposals
+    from . import growth_computed, growth_core, growth_customers, growth_proposals
 
     growth_customers.install(app, store, auth, mutate)  # customer facts in: load, delete
     SEG.install(app, store, auth, mutate)  # who the team sells to
     growth_computed.install(app, store, auth)  # cohorts computed from them
+    growth_core.install(app, store, auth, mutate)  # cohort rows, costs and the one read
 
     def reader(who):
         auth.domain(who)

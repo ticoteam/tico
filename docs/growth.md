@@ -228,6 +228,52 @@ changes one; `tico growth segment list` names them with their channels.
 Retiring a segment (`--retire`) stops channels being given it; customers whose label names it still count under it. A
 team with no segments reads its labels as before. The owner and admins add, change and retire segments.
 
+### The core: cohort rows, costs, one read
+
+Every Growth number is a sum over two kinds of rows (backend/growth_core.py), read through one read.
+
+- **Cohort rows** (`tico growth rows push --source LABEL --file rows.csv`, MCP `tico_growth_rows_push`). One row is the
+  people in one cohort cell: `anchor` (`signup`: signed up that month; `customer`: reached the segment's customer step
+  that month), `period` (YYYY-MM), `segment` and `channel` (slug or name; blank is No segment and Unknown),
+  `campaign` (blank is none; past 10 per channel the smallest fold into `other`), `as_of` (when the counts were true),
+  `entered`, and counts each with its `_eligible`: `activated`, `paid`, `kept_d30`, `kept_d90`, `kept_d180` (by the
+  segment's own kept rule), and `net_d90_sum`, `net_d180_sum`, `net_d365_sum` with `net_dN_eligible`. Counts are whole
+  numbers with `x <= x_eligible <= entered`; a blank cell is not supplied, never 0. Customer facts fold into
+  customer-anchor rows when read (kept by the segment's `churn_days`, net revenue by age); they are never copied.
+- **Costs** (`tico growth costs push --source LABEL --file costs.csv`, MCP `tico_growth_costs_push`): `period`,
+  `channel` (blank is company-wide), `campaign`, `kind` (`money`, `promo_cash`, `promo_credits` at real cost when
+  redeemed, `bot`, `hours` in money), `purpose` (`acquisition`, the default, or `retention`), `amount`, `quality`. Typed
+  spend and bot cost (and Finance's ad spend, which fills them) read as `money` and `bot` acquisition costs.
+- **A segment's `value_kind`**: `revenue` (the default) or `retention` (`tico growth segment set viewers --value-kind
+  retention`).
+
+A push replaces every row of its source for the months it covers, since cohorts restate as they age. The owner, admins
+and the Growth Manager push; a refusal names the rule, the column and the row numbers, never a value, and nothing is
+pushed. Customer facts' sources (`upload`, `source:<id>`) are not push labels.
+
+**The read** (`GET /api/v2/growth/read`, `tico growth read`, MCP `tico_growth_read`; everyone signed in): `--scope`
+`all`, `mine` (the channels the caller owns; none is an empty list), `segment:<slug>` or `channel:<slug>`, `--period`
+(default the last full month) and `--detail` (`campaigns`, `retention`, `series`). It answers `headline`, `channels`,
+`health` and `metrics`:
+
+- **Counts** (signups, new customers) with `vs_3mo` and a `verdict`: `up`, `down` or `flat` (within 10%) against the
+  trailing 3-month average, `too_few` under 5.
+- **Rates** (activated, paid, kept, LTV as observed net revenue per customer) come from the latest cohort whose eligible
+  count reaches the minimum cohort, and name it (`cohort`, `n`). Not pushed reads `not_supplied`.
+- **Cost and CAC** are money and promotions for acquisition. With none, both are null with `no_spend`, never 0;
+  `with_effort` adds bot cost and hours. Retention costs show as `cost.retention` and never enter CAC. A segment's CAC
+  is its own channels' costs; `cac_loaded` adds company-wide costs by its share of new customers. A CAC under the
+  minimum cohort has the verdict `too_few`. `payback_months` is CAC over net revenue per month, an `estimate`.
+- **Channels** each carry their `owner`, `budget` (`budget_month`) and `over_budget` (cost past the budget, else null).
+- **A retention segment** reads `value` (`kept_d30` and `cost_per_retained`) in place of LTV, LTV:CAC and payback.
+- **Health**: the Unknown share, `no_segment` and `mismatch` (with segments), `reconciled` (`not_reconciled` for now),
+  and `stale_sources` (rows whose newest `as_of` is over 45 days old).
+- **Metrics**: Growth's KPIs (a channel's input or guardrail KPI, or the Growth Manager's own), at most 20, each with
+  its `channel`, latest `value` up to the month's end, `period_end`, `estimate` and `vs_prior` (the reading before).
+  KPIs of bots the caller may not read are left out; a channel or `mine` scope shows only its channels' KPIs.
+
+The read sums when asked: a TIDY-sized company (30,000 customers over two years) reads in under 0.1 s.
+
 **KPI readings.** Each measurement a KPI tracks is a reading, logged with the period it covers. A correction supersedes
 the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goals tab; see
 [Goals and KPIs](goals-and-kpis.md).
@@ -458,8 +504,11 @@ tico growth channel update SLUG --input-kpi KPI_ID the KPI the channel moves (it
 tico growth segment show LABEL            one segment's 6 months from customer facts
 tico growth segment list [--retired]
 tico growth segment set SLUG [--name TEXT] [--rule TEXT] [--churn-days N] [--revenue N] [--margin N]
-                 [--min-cohort N] [--owner WHO] [--retire]
+                 [--min-cohort N] [--value-kind revenue|retention] [--owner WHO] [--retire]
 tico growth channel add|update SLUG --segment SLUG   the segment its spend is for ("" for company-wide)
+tico growth read [--scope all|mine|segment:SLUG|channel:SLUG] [--period YYYY-MM] [--detail campaigns,retention,series]
+tico growth rows push --source LABEL --file rows.csv
+tico growth costs push --source LABEL --file costs.csv
 tico growth source list | add | propose | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
 tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN
