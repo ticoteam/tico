@@ -50,7 +50,9 @@ STRICT_FAMILY = (
     "useUnknownInCatchVariables",
 )
 TS_FILE = re.compile(r"\.(ts|cts|mts|tsx)$")
-UI = "ui/"
+# The apps, each type-checked by its own tsconfig: ui/ by scripts/check_ui_strict.py, web/ and desktop/ by their
+# `npm run typecheck`.
+APPS = ("ui/", "web/", "desktop/")
 DECLARE_GLOBAL = re.compile(r"^\s*declare\s+global\b", re.M)
 
 
@@ -104,7 +106,7 @@ def extends_problems(config):
 
 
 def ts_files():
-    """Every TypeScript file outside ui/, tracked or new (ignored files left out), relative to ROOT."""
+    """Every TypeScript file outside the apps (APPS), tracked or new (ignored files left out), relative to ROOT."""
     done = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
         cwd=ROOT,
@@ -115,7 +117,7 @@ def ts_files():
     return sorted(
         rel
         for rel in done.stdout.splitlines()
-        if TS_FILE.search(rel) and not rel.startswith(UI) and (ROOT / rel).is_file()
+        if TS_FILE.search(rel) and not rel.startswith(APPS) and (ROOT / rel).is_file()
     )
 
 
