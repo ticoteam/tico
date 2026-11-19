@@ -38,8 +38,8 @@ pending, the text goes on the task instead); running it twice finds the same Gma
 On the task: the message id, the draft text, the gaps, and one line on why. While mail sending is off in Tico, keep it as a draft. When sending is on, send requested replies within the mailbox rules using your Tools.
 
 When `Sending` is On and a rule there covers this message, send it as a reply to the thread so it goes to the sender
-and nobody else: `tico email reply <address> --thread <thread> --body-file out/reply.txt`.
+and nobody else: `tico email reply <address> --thread <thread> --task <task id> --body-file out/reply.txt`.
 A forward to an address the rules name is a new message to that address: `tico email draft <address> --to <recipient> --subject "..." --body-file <path>`,
-then `tico email send <address> --draft <draft-id>`. Tico decides every send: the answer says `pending` (it goes after
+then `tico email send <address> --draft <draft-id> --task <task id>`. Tico decides every send: the answer says `pending` (it goes after
 the undo window), `waiting_approval` (once a person OKs it in Tico), or `blocked` with Tico's reason: then leave the
 draft on the task and say why. Everything the rules do not cover stays a request for review.

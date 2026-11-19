@@ -35,7 +35,7 @@ a payment. If a term or a payment-plan answer is needed, write "[for you to deci
 ## 4. Finish
 
 Attach the reminder with recipient, subject, body and its source row. Once a person has turned mail sending on in Tico, send the heads-up
-or a 1, 7 or 30 day reminder with `tico email send <address> --draft <draft-id>` where your sending policy allows it
+or a 1, 7 or 30 day reminder with `tico email send <address> --draft <draft-id> --task <task id>` where your sending policy allows it
 (`tico email policy --bot <your slug>`); otherwise it waits for a person's OK on its preview. A final notice, or any message that names a
 consequence, waits for a person's OK: `tico task ask <id> --to <person> --kind ok "Send this final notice?" --version N`, with the text
 shown. Then `tico task done <id> -m "..." --version N`: the invoice, its step, and
