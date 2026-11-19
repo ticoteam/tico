@@ -13,7 +13,7 @@
 
 /* ---------- the picker: who to call or ask ---------- */
 .pop{--surface:var(--raised);padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3)}
-.call-pick{width:304px;display:grid;gap:var(--s-2h)}
+.call-pick{width:304px;display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-2h)}
 .call-to{align-self:stretch;justify-self:stretch;min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-1h);padding:var(--s-1h) var(--s-2);border-radius:var(--r-ctl);background:var(--surface);box-shadow:inset 0 0 0 1px var(--faint)}
 .call-to:focus-within{box-shadow:inset 0 0 0 1.5px var(--focus)}
 .call-to-chip{display:inline-flex;align-items:center;gap:var(--s-1h);height:28px;padding:0 var(--s-0) 0 var(--s-1h);border-radius:var(--r-chip);background:var(--well-2);white-space:nowrap;font-size:var(--t-sm)}
@@ -21,7 +21,7 @@
 .call-to-chip button .ico{width:12px;height:12px;stroke-width:2}
 .call-to-in{flex:1 1 auto;min-width:0;height:28px;border:0;padding:0;background:none;color:var(--ink);font-family:inherit;font-size:inherit;outline:0}
 .call-to-in::placeholder{color:var(--faint)}
-.pick{display:grid;gap:calc(var(--s-0) / 2);margin:0 calc(var(--s-1h) * -1);max-height:320px;overflow:auto;scrollbar-width:none}
+.pick{display:grid;grid-template-columns:minmax(0,1fr);gap:calc(var(--s-0) / 2);margin:0 calc(var(--s-1h) * -1);max-height:320px;overflow:auto;scrollbar-width:none}
 .pick-row{width:100%;min-height:var(--ctl);display:flex;align-items:center;padding:0 var(--s-2);border:0;border-radius:var(--r-row);gap:var(--s-2h);background:none;color:inherit;font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
 .pick-box{width:16px;height:16px;flex:none;display:grid;place-items:center;border-radius:var(--r-key);color:var(--on-fill);box-shadow:inset 0 0 0 1.5px var(--faint)}
 .pick-box .ico{width:12px;height:12px;stroke-width:3;opacity:0}

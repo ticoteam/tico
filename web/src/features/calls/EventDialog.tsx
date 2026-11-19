@@ -9,7 +9,7 @@ import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { lengthWords } from './model';
 import { PeoplePick } from './PeoplePick';
-import { press, refsOf } from './parts';
+import { press, refsOf, useTicoMeet } from './parts';
 
 const LENGTHS = [15, 30, 45, 60, 90, 120].map((m) => ({ value: String(m), label: lengthWords(m) }));
 
@@ -72,12 +72,13 @@ function EventForm({ event, start, kind, onKind, done }: { event?: CalendarOccur
   const [meet, setMeet] = useState(!!event?.meeting_url);
   const [busy, setBusy] = useState<'save' | 'now' | null>(null);
   const voice = !event && kind === 'voice';
+  const ticoMeet = useTicoMeet();
   // A voice call is with people and agents only; an event also takes teams and emails.
   const callees = guests.filter((g) => g.startsWith('human:') || g.startsWith('bot:'));
 
   const save = async () => {
     if (voice) {
-      if (!callees.length) return;
+      if (!ticoMeet.available || !callees.length) return;
       setBusy('save');
       const ok = await press('calls.schedule', { with: callees, title: title.trim() || undefined, start: when.toISOString(), minutes: Number(mins) });
       setBusy(null);
@@ -122,15 +123,16 @@ function EventForm({ event, start, kind, onKind, done }: { event?: CalendarOccur
           <Segmented label="Kind" options={KINDS} value={kind} onValueChange={onKind} />
         </div>
       )}
+      {voice && ticoMeet.reason && <p role="status">{ticoMeet.reason}</p>}
       <div className="modal-row">
         {voice ? (
-          <Button busy={busy === 'now'} onClick={now}>
+          <Button busy={busy === 'now' || ticoMeet.isPending} disabled={!ticoMeet.available} onClick={now}>
             Start now
           </Button>
         ) : (
           <Button onClick={done}>Cancel</Button>
         )}
-        <Button variant="primary" type="submit" busy={busy === 'save'} disabled={voice ? !callees.length : !title.trim()}>
+        <Button variant="primary" type="submit" busy={busy === 'save'} disabled={voice ? !ticoMeet.available || !callees.length : !title.trim()}>
           {voice ? 'Schedule' : event ? 'Save' : 'Add event'}
         </Button>
       </div>

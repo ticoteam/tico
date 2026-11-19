@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react';
-import type { CalendarOccurrence, Call } from '@/api/schema';
+import type { CalendarOccurrence, Call, GetConfigResponse } from '@/api/schema';
 import { refusal, run } from '@/actions';
-import { meQuery, useActor, useDirectory, type Directory } from '@/data';
+import { configQuery, meQuery, useActor, useDirectory, type Directory } from '@/data';
 import { isCallWindow, useCallWindow } from '@/desktop';
 import { Avatar, Faces, type AvatarSize } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
@@ -38,6 +38,19 @@ export async function press(id: string, input: unknown): Promise<boolean> {
 }
 
 export const useMe = (): string | undefined => useQuery(meQuery).data?.id;
+
+// The server sends its feature flags with config, outside the generated schema.
+export function useTicoMeet() {
+  const { data, isPending } = useQuery({
+    ...configQuery,
+    select: (config: GetConfigResponse & { features?: { tico_meet?: boolean } }) => config.features?.tico_meet,
+  });
+  return {
+    available: data === true,
+    isPending,
+    reason: data === false ? 'Tico Meet is not set up on this server' : data !== true && !isPending ? 'Could not check call availability' : null,
+  };
+}
 
 const bare = (actor: string) => actor.slice(actor.indexOf(':') + 1);
 const kindOf = (actor: string) => (actor.startsWith('bot:') ? 'agent' : 'person');
