@@ -193,7 +193,7 @@ describe('A routine: test run, versions, edit', () => {
     await waitFor(() => expect(sent.some((x) => x.method === 'DELETE' && x.url.endsWith('/automations/r1/versions/3'))).toBe(true));
   });
 
-  it('changes the instruction and keeps the steps the editor does not draw', async () => {
+  it('changes the instruction and keeps the steps the editor does not draw @s563', async () => {
     const filter = { id: 'f1', type: 'filter', rules: [{ when: [{ field: 'task.pipeline', value: 'p1' }] }] };
     const sent = record((_url, method) => (method === 'PATCH' ? ok(routine()) : nothing()));
     queryClient.setQueryData(routinesQuery.queryKey, [routine({ steps: [filter, { id: 's1', type: 'bot_turn', bot: 'bot:growth', prompt: 'Post the numbers.' }] })]);
@@ -210,7 +210,7 @@ describe('A webhook: payload and signing', () => {
   const hook: Hook = { id: 'h1', name: 'Shop orders', url: 'https://in.example/hooks/h1', signed: false, automations: [] };
   const calls = { deliveries: [{ delivery: 'd1', received_at: '2026-11-19T07:00:00Z', outcome: 'accepted', tasks: 1, stored: true }] };
 
-  it('opens a kept call’s headers and body', async () => {
+  it('opens a kept call’s headers and body @s576', async () => {
     record((url) =>
       url.endsWith('/triggers/h1/deliveries/d1')
         ? ok({ delivery: { received_at: '2026-11-19T07:00:00Z', type: 'order.paid', bytes: 7, expired: false, headers: { 'content-type': 'application/json' }, body: '{"a":1}' } })
@@ -227,7 +227,7 @@ describe('A webhook: payload and signing', () => {
     expect(within(dialog).getByRole('region', { name: 'Headers' }).textContent).toContain('content-type: application/json');
   });
 
-  it('turns signing on and shows the made secret once, never in the cache', async () => {
+  it('turns signing on and shows the made secret once, never in the cache @s578', async () => {
     const secret = 'whsec_made_up_7f3a';
     const sent = record((url, method) =>
       method === 'POST' && url.endsWith('/triggers/h1/signing')
@@ -306,7 +306,7 @@ describe('Rules: due dates and documents', () => {
     chain: [{ id: 'd1', satisfied: [{ due_on: '2025-12-01', satisfied_by: 'human:me', via: 'person' }] }],
   };
 
-  it('opens a due date from its row, with its history, and marks it satisfied', async () => {
+  it('opens a due date from its row, with its history, and marks it satisfied @s549', async () => {
     const sent = record((url, method) =>
       method === 'POST' && url.endsWith('/rule-due/d1/satisfied') ? ok({}) : url.endsWith('/rule-due/d1') ? ok(detail) : url.includes('/rules/due') ? ok({ due: [] }) : nothing(),
     );
@@ -321,7 +321,7 @@ describe('Rules: due dates and documents', () => {
     expect(sent[0]!.body).toEqual({});
   });
 
-  it('adds a due date to a rule', async () => {
+  it('adds a due date to a rule @s550', async () => {
     const sent = record((url, method) => (method === 'POST' && url.endsWith('/rules/o1/due') ? ok({ ...detail, id: 'd2' }) : nothing()));
     queryClient.setQueryData(dueQuery.queryKey, []);
     queryClient.setQueryData<OrgRule[]>(orgRulesQuery('active').queryKey, [
@@ -375,7 +375,7 @@ describe('Rules: due dates and documents', () => {
 describe('Rules', () => {
   const stage = { id: 'sr1', name: '', pipeline_id: 'p1', pipeline_name: 'Engineering', stages: ['s2'], stage_names: ['Review'], scope: 'stage', event: 'enters', timer: null, cond: {}, jev: 'Is it ready?', then: 'block', status: 'active', revision: 1, can_edit: true } as StageRule;
 
-  it('groups stage rules by pipeline; a row opens its rule', async () => {
+  it('groups stage rules by pipeline; a row opens its rule @s519', async () => {
     serve(nothing);
     queryClient.setQueryData<StageRules>(stageRulesQuery('active').queryKey, { items: [stage], built_in: [], may_add: true });
     show(<RulesPage search={{ tab: 'stages' }} />, '/company/rules?tab=stages');

@@ -167,7 +167,7 @@ describe('Runs', () => {
 });
 
 describe('The inbox board', () => {
-  it('shows its parts and saves a rule from its editor @s527', async () => {
+  it('shows its parts and saves a rule from its editor @s527 @s568', async () => {
     const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r9') ? ok({ ...boardRoutine() }) : nothing()));
     queryClient.setQueryData(routinesQuery.queryKey, [boardRoutine()]);
     show('/company/routines?panel=routine:r9');
@@ -216,7 +216,7 @@ describe('Inbox templates', () => {
   const templates = { templates: [{ id: 'triage', name: 'Triage', destinations: ['Now', 'Later'] }] };
   const filled = { name: 'Triage', owner: 'person:me', enabled: true, trigger: INBOX, steps: SORT, destinations: DESTS };
 
-  it('adds a new inbox from a template for me', async () => {
+  it('adds a new inbox from a template for me @s569', async () => {
     const sent = record((url, method) =>
       url.endsWith('/automations/templates')
         ? ok(templates)
@@ -270,7 +270,7 @@ describe('Inbox templates', () => {
     return screen.findByRole('dialog', { name: 'Apply a template' });
   };
 
-  it('moves an older inbox onto a template, keeping its instructions', async () => {
+  it('moves an older inbox onto a template, keeping its instructions @s570', async () => {
     const sent = record((url, method) =>
       url.includes('/automations/templates/triage?') ? ok(filled) : method === 'PATCH' && url.endsWith('/automations/r8') ? ok(older()) : nothing(),
     );
@@ -329,7 +329,7 @@ describe('Outgoing webhooks', () => {
   const lists = (url: string) =>
     url.endsWith('/api/v2/triggers') ? ok({ triggers: [] }) : url.includes('/api/v2/event-types') ? ok({ items: TYPES }) : null;
 
-  it('adds one and shows its signing secret once, in the dialog only', async () => {
+  it('adds one and shows its signing secret once, in the dialog only @s579', async () => {
     const secret = 'whsec_made_up_55c1';
     const sent = record((url, method) =>
       method === 'POST' && url.endsWith('/api/v2/webhooks')
