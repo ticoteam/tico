@@ -6709,16 +6709,18 @@ def conversation_rows(conn, ids):
     from .read_cache import cache
 
     ids = list(dict.fromkeys(cid for cid in ids if cid))
-    if cache(conn) is None:
-        out = {}
+    values = cache(conn)
+    if values is None:
+        found = {}
         for part in chunks(ids):
             for row in conn.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
-                out[row["id"]] = row
-        return out
-    prime_conversations(conn, ids)
-    values = cache(conn)
-    found = {cid: values.get(("one", CONVERSATION_SQL, (cid,))) for cid in ids}
-    return {cid: row for cid, row in found.items() if row is not None}
+                found[row["id"]] = row
+    else:
+        prime_conversations(conn, ids)
+        values = cache(conn)
+        found = {cid: values.get(("one", CONVERSATION_SQL, (cid,))) for cid in ids}
+    # In the order asked, either way.
+    return {cid: found[cid] for cid in ids if found.get(cid) is not None}
 
 
 def conversations_for(conn, actor, limit=100):

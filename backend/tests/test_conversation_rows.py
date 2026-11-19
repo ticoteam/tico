@@ -32,6 +32,8 @@ def test_threads_read_once_a_snapshot_with_the_same_rows(api):
             again, _ = threads.read_threads(c, who, list(reversed(ids)))
         finally:
             c.set_trace_callback(None)
-    assert len(_conversation_reads(seen)) == 2, seen  # the two primed, then the third alone; none again
-    assert first == plain and members == plain_members and set(first) == set(ids)
-    assert again == {cid: first[cid] for cid in reversed(ids)}
+    reads = _conversation_reads(seen)
+    assert len(reads) == 2, seen  # the two primed, then only the third and the missing one; none again
+    assert ids[2] in reads[1] and "missing" in reads[1] and ids[0] not in reads[1] and ids[1] not in reads[1]
+    assert first == plain and members == plain_members and list(first) == list(plain) == ids
+    assert list(again) == list(reversed(ids)) and again == {cid: first[cid] for cid in ids}
