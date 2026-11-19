@@ -359,6 +359,9 @@ class GitHubApp:
         self.settings, self.store, self.vault = settings, store, vault
         self.cache = {}
         self.signing = threading.Lock()  # one JWT signed at a time: after a restart every token request finds none
+        # Bumped (under `lock`) whenever the App, its installation or the tokens are forgotten: a JWT signed or a kept
+        # token read on a plain read before that is not published after it.
+        self.generation = 0
         self.audited_tokens = {}
         self.live = {}
         self.lock = threading.Lock()
@@ -552,8 +555,10 @@ class GitHubApp:
         )
         c.execute("DELETE FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,))  # a new App's are learned anew
         c.execute("DELETE FROM github_installation_tokens")  # the old App's tokens
-        self.cache.clear()
-        self.live.clear()
+        with self.lock:
+            self.generation += 1
+            self.cache.clear()
+            self.live.clear()
 
     def row(self, c=None):
         if c is not None:
@@ -598,8 +603,10 @@ class GitHubApp:
         )
         c.execute("DELETE FROM service_health WHERE service=?", (GITHUB_HEALTH,))  # nothing left to be unhealthy
         c.execute("DELETE FROM github_installation_tokens")
-        self.cache.clear()
-        self.live.clear()
+        with self.lock:
+            self.generation += 1
+            self.cache.clear()
+            self.live.clear()
 
     # -- the owner's user token (a personal account) ------------------------------------------
     # The App's user-to-server token lets Tico create an EMPTY repository in the personal account (POST /user/repos); nothing
@@ -831,8 +838,9 @@ class GitHubApp:
         return True
 
     # -- GitHub calls -----------------------------------------------------------------------
-    def app_jwt(self, c, row, reseal=True):
-        """`reseal=False` on a read: a row sealed before KMS raises instead of being re-sealed in place."""
+    def app_jwt(self, c, row, reseal=True, generation=None):
+        """`reseal=False` on a read: a row sealed before KMS raises instead of being re-sealed in place. With
+        `generation` (read before the row), the JWT is not kept when the App was replaced or forgotten meanwhile."""
         now = int(_now())
         with self.lock:
             hit = self.live.get("jwt")
@@ -842,6 +850,8 @@ class GitHubApp:
         key = self.private_key(c, row) if reseal else self.private_key(c, row, reseal=False)
         token = jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])}, key, algorithm="RS256")
         with self.lock:
+            if generation is not None and generation != self.generation:
+                raise Problem("github_unavailable", "The GitHub App changed while its key was read", 503)
             self.live["jwt"] = (row["app_id"], now + 540, token)
         return token
 
@@ -859,13 +869,15 @@ class GitHubApp:
                 if hit and hit[1] - 60 > _now():
                     return hit[2]
             if self._key_ready():
+                with self.lock:
+                    generation = self.generation
                 try:
                     with self.store.read() as c:
                         row = self.row(c)
                         if row:
-                            return self.app_jwt(c, row, reseal=False)
+                            return self.app_jwt(c, row, reseal=False, generation=generation)
                 except Problem:
-                    pass  # the write path below opens it as before, or says why it cannot
+                    pass  # the write path below (which waits for a save in progress) opens it as before, or says why not
             with self.store.transaction() as c:  # the at-rest key may be written the first time it is read
                 return self.app_jwt(c, self.row(c))
 
@@ -929,9 +941,16 @@ class GitHubApp:
         found = next(
             (i for i in r.json() if str((i.get("account") or {}).get("login", "")).lower() == row["org"].lower()), None
         )
+        new = int(found["id"]) if found else None
         with self.store.transaction() as c:
-            c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (found["id"] if found else None,))
-        return int(found["id"]) if found else None
+            c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (new,))
+            if row["installation_id"] and row["installation_id"] != new:
+                # Another installation (or none): its tokens are not this one's.
+                c.execute("DELETE FROM github_installation_tokens")
+                with self.lock:
+                    self.generation += 1
+                    self.cache.clear()
+        return new
 
     def installation_account_id(self, installation_id):
         """The numeric id of the account one of this App's installations is on, or None when GitHub does not know the
@@ -1143,19 +1162,25 @@ class GitHubApp:
         result = (entry["token"], entry["expires_at"])
         return (*result, cached) if include_cache_status else result
 
-    def _remember(self, key, entry):
+    def _remember(self, key, entry, generation=None):
+        """Cache `entry`; with `generation`, only when nothing was forgotten since it was read (returns whether)."""
         with self.lock:
+            if generation is not None and generation != self.generation:
+                return False
             self.cache = {k: v for k, v in self.cache.items() if v["exp"] > _now()}
             if len(self.cache) >= 256:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = entry
+            return True
 
     def _kept(self, key, refresh_margin):
         """The token kept for this scope (keep_tokens) while it still has `refresh_margin` seconds left, else None.
         One primary-key read and no write; a row this server cannot open (its key replaced) is passed over."""
-        if not self.KEEPS_TOKENS or not self._key_ready():
-            return None
+        if not self.KEEPS_TOKENS or self.settings.rehearsal or not self._key_ready():
+            return None  # a rehearsal's restored copy never hands out the live install's tokens
         scope = _scope(key)
+        with self.lock:
+            generation = self.generation
         try:
             with self.store.read() as c:
                 row = c.execute(
@@ -1171,7 +1196,8 @@ class GitHubApp:
             log.info("A kept GitHub installation token could not be opened; minting a new one")
             return None
         entry = {"token": token, "expires_at": row["expires_at"], "exp": _iso(row["expires_at"]), "kept": True}
-        self._remember(key, entry)
+        if not self._remember(key, entry, generation):
+            return None  # forgotten while it was read
         return entry
 
     def keep_tokens(self, c, values):
@@ -1187,36 +1213,51 @@ class GitHubApp:
             ]
         if not fresh:
             return
-        secret = self._key(c, create=False)
-        if secret is None:
+        # Keeping is only a shortcut: a failure here must never roll back the audit written beside it.
+        c.execute("SAVEPOINT keep_tokens")
+        try:
+            secret = self._key(c, create=False)
+            if secret is not None:
+                now = H.now()
+                for key, entry in fresh:
+                    scope, nonce = _scope(key), os.urandom(12)
+                    sealed = AESGCM(secret).encrypt(nonce, entry["token"].encode(), TOKEN_AAD + scope.encode())
+                    c.execute(
+                        "INSERT INTO github_installation_tokens(scope,expires_at,nonce,ciphertext,created_at) "
+                        "VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET expires_at=excluded.expires_at,"
+                        "nonce=excluded.nonce,ciphertext=excluded.ciphertext,created_at=excluded.created_at",
+                        (scope, entry["expires_at"], nonce, sealed, now),
+                    )
+                c.execute("DELETE FROM github_installation_tokens WHERE expires_at<?", (_stamp(_now()),))
+            c.execute("RELEASE keep_tokens")
+        except Exception:  # noqa: BLE001 - the tokens stay in memory; a restart mints them again
+            c.execute("ROLLBACK TO keep_tokens")
+            c.execute("RELEASE keep_tokens")
+            log.info("GitHub installation tokens were not kept for a restart")
             return
-        now = H.now()
-        for key, entry in fresh:
-            scope, nonce = _scope(key), os.urandom(12)
-            sealed = AESGCM(secret).encrypt(nonce, entry["token"].encode(), TOKEN_AAD + scope.encode())
-            c.execute(
-                "INSERT INTO github_installation_tokens(scope,expires_at,nonce,ciphertext,created_at) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(scope) DO UPDATE SET expires_at=excluded.expires_at,nonce=excluded.nonce,"
-                "ciphertext=excluded.ciphertext,created_at=excluded.created_at",
-                (scope, entry["expires_at"], nonce, sealed, now),
-            )
+        for _, entry in fresh:
             entry["kept"] = True
-        c.execute("DELETE FROM github_installation_tokens WHERE expires_at<?", (_stamp(_now()),))
 
     def forget_tokens(self, repository=None):
         """Drop the cached and kept installation tokens: every one, or those naming `repository` (`owner/name`). The next
         request for a dropped scope mints a new token."""
+        name = str(repository or "").lower()
+
+        def names(repos):
+            return repository is None or name in {str(r).lower() for r in repos}
+
+        if self.KEEPS_TOKENS:
+            with self.store.transaction() as c:
+                if repository is None:
+                    c.execute("DELETE FROM github_installation_tokens")
+                else:
+                    for (scope,) in c.execute("SELECT scope FROM github_installation_tokens").fetchall():
+                        if names(json.loads(scope)[0]):
+                            c.execute("DELETE FROM github_installation_tokens WHERE scope=?", (scope,))
+        # After the rows are gone; the generation stops a kept token read before then from coming back.
         with self.lock:
-            self.cache = {k: v for k, v in self.cache.items() if repository is not None and repository not in k[0]}
-        if not self.KEEPS_TOKENS:
-            return
-        with self.store.transaction() as c:
-            if repository is None:
-                c.execute("DELETE FROM github_installation_tokens")
-                return
-            for (scope,) in c.execute("SELECT scope FROM github_installation_tokens").fetchall():
-                if repository in json.loads(scope)[0]:
-                    c.execute("DELETE FROM github_installation_tokens WHERE scope=?", (scope,))
+            self.generation += 1
+            self.cache = {k: v for k, v in self.cache.items() if not names(k[0])}
 
     def _mint(self, key, repos, permissions, diagnose):
         if not permissions:

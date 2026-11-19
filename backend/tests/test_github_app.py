@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, parse_qsl, urlparse
 import httpx
 import jwt
 import pytest
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from backend import github_app as G
@@ -385,8 +386,12 @@ def test_a_restart_hands_out_the_kept_token_without_github_or_a_write_while_it_h
     # Kept sealed for its scope, never in the clear.
     assert len(rows) == 1 and json.loads(rows[0]["scope"])[0] == ["Acme/emp-cpo"]
     assert first["token"].encode() not in bytes(rows[0]["ciphertext"]) and rows[0]["expires_at"] == first["expires_at"]
-    with pytest.raises(Exception):
-        AESGCM(bytes(32)).decrypt(rows[0]["nonce"], rows[0]["ciphertext"], G.TOKEN_AAD + rows[0]["scope"].encode())
+    with store.read() as c:
+        secret = service._key(c, create=False)
+    sealed = (rows[0]["nonce"], bytes(rows[0]["ciphertext"]))
+    assert AESGCM(secret).decrypt(*sealed, G.TOKEN_AAD + rows[0]["scope"].encode()).decode() == first["token"]
+    with pytest.raises(InvalidTag):  # bound to its scope: moved to another, it opens nothing
+        AESGCM(secret).decrypt(*sealed, G.TOKEN_AAD + rows[0]["scope"].replace("cpo", "cmo").encode())
 
     writes = []
     original = store.transaction
@@ -415,6 +420,44 @@ def test_a_restart_hands_out_the_kept_token_without_github_or_a_write_while_it_h
     # Disconnecting forgets every kept token with the App.
     assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
     with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 0
+
+
+def test_kept_tokens_are_forgotten_by_repository_whatever_its_case_and_never_reach_a_rehearsal(api, gh, monkeypatch):
+    connect(api)
+    runner_token(api, "cpo")
+    gh.permissions = {**G.TURN_READS, **G.TURN_PERMISSIONS}
+    service, store = api.app_state.github_app, api.app_state.store
+    first = turn_token(api).json()["token"]
+    service.forget_tokens("acme/EMP-CMO")  # another repository: kept
+    _restart(service)
+    assert turn_token(api).json()["token"] == first
+    monkeypatch.setattr(service.settings, "rehearsal", True)
+    _restart(service)
+    assert turn_token(api).status_code == 409  # a restored copy asks GitHub (refused there), never the kept token
+    monkeypatch.setattr(service.settings, "rehearsal", False)
+    service.forget_tokens("acme/EMP-CPO")
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 0
+    assert not service.cache and turn_token(api).json()["token"] != first
+
+
+def test_a_token_that_cannot_be_kept_is_still_audited(api, gh, monkeypatch):
+    connect(api)
+    runner_token(api, "cpo")
+    service, store = api.app_state.github_app, api.app_state.store
+    assert turn_token(api).status_code == 200  # the JWT and installation are warm
+    service.forget_tokens()
+
+    def lost(c, create=True, replacing="app"):
+        raise Problem("vault_unavailable", "Credential encryption is temporarily unavailable", 503)
+
+    monkeypatch.setattr(service, "_key", lost)
+    with store.read() as c:
+        before = c.execute("SELECT COUNT(*) FROM events WHERE action='github.token'").fetchone()[0]
+    assert turn_token(api).status_code == 200
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.token'").fetchone()[0] == before + 1
         assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 0
 
 

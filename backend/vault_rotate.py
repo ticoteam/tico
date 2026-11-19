@@ -244,7 +244,19 @@ class Json:
                 )
 
 
-def registry() -> list[Raw | Column | Json]:
+class Drop:
+    """A table of sealed values that are only a cache (the GitHub installation tokens kept for a restart): the rotation
+    deletes its rows instead of re-sealing them, so none of them can fail it; the server mints them again."""
+
+    def __init__(self, table: str) -> None:
+        self.table = table
+
+    def run(self, c: Conn, step: "Pass") -> None:
+        if step.writing and _has(c, self.table, "nonce", "ciphertext"):
+            c.execute(f"DELETE FROM {self.table}")
+
+
+def registry() -> list[Raw | Column | Json | Drop]:
     """The entries, built from each owner module's own context function, so a context changed there is followed here.
     Imported on use: the step runs with the server stopped, never inside it."""
     from . import (
@@ -299,13 +311,7 @@ def registry() -> list[Raw | Column | Json]:
         ),
         Raw("github_app", "github_app", "id", lambda r: b"tico-github-app:v1", (GITHUB_KEY,)),
         Raw("github_user_token", "github_user_token", "id", lambda r: github_app.USER_AAD, (GITHUB_KEY,)),
-        Raw(
-            "github_installation_tokens",
-            "github_installation_tokens",
-            "scope",
-            lambda r: github_app.TOKEN_AAD + str(r["scope"]).encode(),
-            (GITHUB_KEY,),
-        ),
+        Drop("github_installation_tokens"),
         Raw(
             "directory_credentials",
             "directory_credentials",
