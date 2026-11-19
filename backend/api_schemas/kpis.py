@@ -34,10 +34,15 @@ SCHEMAS.update(
                 "quality": {"enum": ["measured", "estimate", "partial"]},
                 "evidence": "s",
                 "note": "s",
-                "source": "s",
+                "source": {
+                    "type": "string",
+                    "description": "Where the number came from as its writer named it (a connected tool, a system, an "
+                    "import); 'tico' for Tico's automatic reading, '' when unnamed",
+                },
                 "actor_id": {
                     "type": ["string", "null"],
-                    "description": "The person who recorded it; null for a bot's automatic reading",
+                    "description": "Who logged it: a person (human:<id>) or an agent (bot:<id>); null for Tico's "
+                    "automatic reading",
                 },
                 "definition_version": "i",
                 "supersedes": "n",

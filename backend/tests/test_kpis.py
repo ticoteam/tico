@@ -424,6 +424,29 @@ def test_archived_kpis_do_not_change_remaining_measure_or_owner_fallback(api):
     assert goal_of(api, goal["id"])["status"] == "yellow"
 
 
+def test_a_reading_says_who_logged_it_and_where_the_number_came_from(api):
+    """A reading shows where it came from: who logged it (`actor_id`, a person or an agent; null for Tico's own) and the
+    tool it was read from (`source`), in the KPI's readings and as the latest on the KPI list."""
+    token = goals_session(api)
+    _, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
+    log(api, kpi["id"], 41, token="ben-test", source="Search Console", period_end=stamp(1))
+    log(api, kpi["id"], 45, token=token, source="Stripe", period_end=H.now())
+    rows = get(api, f"kpis/{kpi['id']}/readings")["readings"]
+    assert [(r["actor_id"].split(":")[0], r["source"]) for r in rows] == [
+        ("human", "Search Console"),
+        ("bot", "Stripe"),
+    ]
+    [listed] = [k for k in get(api, "kpis")["kpis"] if k["id"] == kpi["id"]]
+    assert (listed["latest"]["actor_id"], listed["latest"]["source"]) == (rows[-1]["actor_id"], "Stripe")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES('a', 'ops', ?, 1, 'api')",
+            (stamp(1),),
+        )
+        auto = botkpis.readings(c, "auto:ops:cost_7d", NOW)[-1]
+    assert (auto["actor_id"], auto["source"], auto["measured_at"]) == (None, "tico", auto["period_end"])
+
+
 def test_a_target_with_no_kind_has_no_label():
     # A kpi_target proposal's payload may name only a target; its card (GET /proposals) must not fail on it.
     kpi = {"unit": "%"}

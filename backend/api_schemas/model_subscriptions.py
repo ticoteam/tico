@@ -56,6 +56,12 @@ SCHEMAS['ModelSubscription'] = obj(
         'updated_at': 's',
         'order': {'type': ['integer', 'null']},
         'in_use_on': items({'type': 'string'}),
+        'agents': {
+            **items(obj({'id': 's', 'name': 's', 'fallback': 'b'}, required=['id', 'name', 'fallback'])),
+            'description': "The bots it serves, by name: those on a computer given it (from a person's plans, the "
+            'computers using it now) whose turns, tasks or named fallback run its runtime; `fallback` when only '
+            'the fallback does',
+        },
         'reconnect_by': 'n',
     },
     required=[

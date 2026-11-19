@@ -992,12 +992,68 @@ def view(c, sub, ctx=None):
     }
 
 
-def listed(c):
+def agents_sql(count):
+    """The bots on `count` computers with their configs, for the plan list (`_agents_on`)."""
+    return (
+        f"SELECT a.bot,a.runner_id,coalesce(nullif(b.display_name,''),b.slug) AS name,{BS.CONFIG} AS config "
+        "FROM assignments a JOIN bots b ON b.id=a.bot JOIN runners r ON r.id=a.runner_id "
+        f"JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id IN ({','.join('?' * count)}) "
+        "AND r.revoked_at IS NULL AND coalesce(b.state,'')<>'archived'"
+    )
+
+
+def originals_sql(count):
+    """The configs of `count` branches' originals, as shared_bots.follow reads its `rows`."""
+    return (
+        f"SELECT bc.bot,{BS.CONFIG} AS config,coalesce(nullif(bc.repo,''),'emp-'||b.slug) AS repo "
+        f"FROM bot_config bc JOIN bots b ON b.id=bc.bot {BS.JOIN} WHERE bc.bot IN ({','.join('?' * count)})"
+    )
+
+
+def _agents_on(c, settings, runner_ids):
+    """{runner id: [(bot, name, runtimes, first)]}: the bots on these computers, every runtime their turns may sign in
+    (`bot_runtimes`) and those they run before any fallback (`first`), in two reads however many there are."""
+    from . import providers, task_models
+    from .shared_bots import follow, source_of
+
+    rows = []
+    for part in H.chunks(sorted(set(runner_ids))):
+        rows.extend(H._rows(c.execute(agents_sql(len(part)), part)))
+    if not rows:
+        return {}
+    configs = {r["bot"]: json.loads(r["config"] or "{}") for r in rows}
+    sources = sorted({source_of(config) for config in configs.values()} - {""})
+    originals = {}
+    for part in H.chunks(sources):
+        originals.update((r["bot"], r) for r in c.execute(originals_sql(len(part)), part))
+    record = providers.load(c, settings)
+    out = {}
+    for r in rows:
+        filled = providers.fill(record, follow(c, r["bot"], configs[r["bot"]], rows=originals.get))
+        alone = {**filled, "fallback": {"off": True}}
+        task = task_models.of(filled)
+        first = turn_runtimes(alone) + (turn_runtimes(task_models.apply(alone, task)) if task else [])
+        out.setdefault(r["runner_id"], []).append((r["bot"], r["name"], _runtimes_of(filled), first))
+    return out
+
+
+def _agents_of(bots, runner_ids, runtime):
+    """The bots a subscription for `runtime` serves on these computers (`_agents_on`), by name: {id, name, fallback},
+    `fallback` when only a fallback of theirs runs that runtime."""
+    found = {}
+    for rid in runner_ids:
+        for bot, name, runtimes, first in bots.get(rid, ()):
+            if runtime in runtimes:
+                found[bot] = {"id": bot, "name": name, "fallback": runtime not in first}
+    return sorted(found.values(), key=lambda a: (a["name"].lower(), a["id"]))
+
+
+def listed(c, settings=None):
     """Every subscription as Settings > Models lists it, each plan with where it comes in its owner's plans for its
     runtime (`order`: the plans in use on a computer given that person's plans first, as they stay put, then the
     other available ones in pick order; None for one held or needing reconnecting) and the computers whose turns sign
     in with it now (`in_use_on`), and `place`: its place among that person's plans of every tool, those in use first and
-    then by the soonest weekly reset (None when held or needing reconnecting)."""
+    then by the soonest weekly reset (None when held or needing reconnecting). `agents`: the bots it serves (`_agents_of`)."""
     if not _present(c):
         return []
     subs = H._rows(c.execute(f"SELECT * FROM {SUBS} ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,)))
@@ -1008,14 +1064,22 @@ def listed(c):
     from types import SimpleNamespace
 
     holds = SimpleNamespace(holds=ctx["holds"])  # read once by `_listing`: no read per computer
-    using = {}
+    using, serving = {}, {}
     for (runner_id, runtime), entry in _given(c).items():
         on = _pick(c, runner_id, runtime, entry, holds) if entry.get("person") else entry if entry["id"] else None
-        if on and available(c, on, runtime, holds):
-            using.setdefault(on["id"], []).append(runner_id)
+        live = on if on and available(c, on, runtime, holds) else None
+        if live:
+            using.setdefault(live["id"], []).append(runner_id)
+        # A subscription given to a computer serves its bots whatever its state, so one that needs reconnecting still
+        # shows whose turns stopped; from a person's plans, only the one in use there.
+        served = live if entry.get("person") else on
+        if served:
+            serving.setdefault(served["id"], []).append(runner_id)
+    bots = _agents_on(c, settings, [rid for rids in serving.values() for rid in rids])
     groups = {}
     for v in views:
         v["in_use_on"] = using.get(v["id"], [])
+        v["agents"] = _agents_of(bots, serving.get(v["id"], []), v["runtime"])
         v["order"] = v["place"] = None
         if owned(v["kind"]) and v["owner_id"] and available(c, v, v["runtime"], holds):
             groups.setdefault((v["owner_id"], v["runtime"]), []).append(v)
@@ -1789,12 +1853,18 @@ def bot_runtimes(c, settings, bot):
     """The subscription runtimes a bot may run on its computer: its own turns' (as `_bots` reads them) and its task
     model's, which a task runs on when it is set (backend/task_models.py `apply`, the config a task turn runs with).
     Each goes through `turn_runtimes`, so a Tico model and a desktop-app bot count for none."""
-    from . import providers, task_models
+    from . import providers
     from .shared_bots import follow
 
     found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     config = json.loads(found["config"] or "{}") if found else {}
-    filled = providers.fill(providers.load(c, settings), follow(c, bot, config))
+    return _runtimes_of(providers.fill(providers.load(c, settings), follow(c, bot, config)))
+
+
+def _runtimes_of(filled):
+    """`bot_runtimes` of a bot's filled config."""
+    from . import task_models
+
     out = turn_runtimes(filled)
     task = task_models.of(filled)
     if task:
@@ -2556,7 +2626,7 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             manages = _may_manage(auth, who)
             subscriptions = [
-                sub | {"can_remove": may_remove(who, sub["added_by"], manages=manages)} for sub in listed(c)
+                sub | {"can_remove": may_remove(who, sub["added_by"], manages=manages)} for sub in listed(c, settings)
             ]
             return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
 

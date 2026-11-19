@@ -207,9 +207,11 @@ def readings(conn, kpi_id, at=None):
             {
                 "id": f"{kpi_id}@{stamp[:10]}",
                 "kpi_id": kpi_id,
-                "ts": stamp,
+                "measured_at": stamp,
+                "ts": stamp,  # the old name of measured_at, kept for any client that still reads it
                 "value": amount,
-                "actor": "keeper",
+                "actor_id": None,  # Tico's own measure: no person or agent logged it (`source` says so)
+                "actor": "keeper",  # the old name of actor_id, which the web app's KPI panel still reads
                 "source": "tico",
                 "note": "",
                 "created_at": stamp,
