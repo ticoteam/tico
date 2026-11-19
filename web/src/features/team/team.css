@@ -132,6 +132,20 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .sec-link .ico{width:12px;height:12px}
 .sec-link:hover{background:var(--well);color:var(--ink)}
 
+/* The team's manager face: a wrapper only, so the head's phone rule sees it (tasks.css .tk-ask) */
+.tm-face{display:contents}
+
+/* Last run: the pill beside the name is the button that opens what happened */
+.last-stop{display:inline-flex;padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer;border-radius:var(--r-chip)}
+.last-stop:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+
+/* A list's filter: one row per line, its field, its value, then remove */
+.list-rows{display:grid;gap:var(--s-2);margin-top:var(--s-3)}
+.list-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:var(--s-2);align-items:center}
+.list-value{display:flex;flex-wrap:wrap;gap:var(--s-2);align-items:center;font-size:var(--t-sm);color:var(--ink-2)}
+.list-old{font-size:var(--t-sm);color:var(--muted)}
+.list-rows>.btn{justify-self:start}
+
 /* ---------- a computer's mark: a plain tile ---------- */
 .comp-av{width:var(--a);height:var(--a);flex:none;display:grid;place-items:center;border-radius:var(--r-block);background:var(--well-2);color:var(--ink-2)}
 .comp-av .ico{width:55%;height:55%;stroke-width:1.6}

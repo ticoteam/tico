@@ -2,6 +2,8 @@ import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
   CompanyFloor,
+  FactoryCreated,
+  FactoryMap,
   FinanceMetric,
   Goal,
   GoalCheckinView,
@@ -18,6 +20,8 @@ import type {
   KpiReadingView,
   KpiTarget,
   KpiUpdate,
+  LibrarianMarketSetup,
+  LibrarianSetup,
   MatterList,
   MatterRow,
   Product,
@@ -167,27 +171,102 @@ export const strategyDiffQuery = (from: number, to: number) =>
     staleTime: Infinity,
   });
 
-// Market: the latest briefing, the market's spend and players, and Listening's posts a day.
+// Market: the latest briefing, the market's spend and players, its value chain, and Listening's posts a day. None of
+// the market reads is in the schema; these are their shapes as backend/market_spend.py, market.py and
+// market_briefing.py send them (the fields the pages read).
 export interface MarketItem {
   text: string;
   kind?: string;
   entity_ids?: string[];
 }
+export interface MarketFigure {
+  metric?: string;
+  value?: number | string | null;
+  text?: string | null;
+  kind?: string | null;
+  as_of?: string | null;
+  source_url?: string | null;
+}
 export interface MarketPlayer {
   entity_id?: string;
   name: string;
-  figures?: { metric?: string; value?: number | string | null }[] | null;
+  figures?: MarketFigure[] | null;
+}
+interface MarketRange {
+  spend_usd?: number | null;
+  low_usd?: number | null;
+  high_usd?: number | null;
+}
+/** A shared parameter of an estimate: a bare value, or the value with whether it is a judgement and its source. */
+export type MarketParam = number | string | null | { value?: unknown; judgement?: boolean; source?: string | null };
+export interface MarketEstimate extends MarketRange {
+  id: string;
+  method: string;
+  status?: string | null;
+  error?: string | null;
+  arithmetic?: string | null;
+  formula?: string | null;
+  params?: Record<string, MarketParam> | null;
+  evidence?: { source_url?: string | null; source_kind?: string | null; quote?: string | null }[] | null;
+  overlaps?: string | null;
+  spread?: string | null;
+}
+export interface MarketSegment {
+  id: string;
+  name: string;
+  parent?: string | null;
+  depth?: number;
+  summary?: string | null;
+  size?: (MarketRange & { id?: string; growth_pct?: number | null; confidence?: 'high' | 'medium' | 'low' | null; accepted?: boolean; error?: string | null; overlaps?: string | null; spread?: string | null }) | null;
+  rolled_usd?: { spend_usd?: number | null } | null;
+  estimates?: MarketEstimate[] | null;
+  disagree?: boolean;
+  players?: MarketPlayer[] | null;
+  self?: boolean;
+}
+export interface MarketDefinition {
+  description?: string | null;
+  year?: string | number | null;
+  geography?: string | null;
+  currency?: string | null;
+  includes?: string[] | null;
+  excludes?: string[] | null;
+  counting_rules?: string[] | null;
+  params?: Record<string, MarketParam> | null;
+}
+/** The open "Size the market" task: whose turn it is, and the reader's question when it waits on them. */
+export interface MarketSizing {
+  id: string;
+  turn?: string | null;
+  ask?: { line?: string | null } | null;
 }
 export interface MarketSpend {
   name?: string | null;
-  total?: { spend_usd?: number | null } | null;
-  segments?: { id: string; name: string; parent?: string | null; players?: MarketPlayer[] | null; self?: boolean }[] | null;
+  definition?: MarketDefinition | null;
+  year?: string | number | null;
+  total?: MarketRange | null;
+  segments?: MarketSegment[] | null;
+  sizing?: MarketSizing | null;
 }
 export interface MarketBriefing {
-  briefing?: { title: string; created_at?: string; items?: MarketItem[] } | null;
+  briefing?: { week?: string; title: string; body?: string; created_at?: string; items?: MarketItem[]; touched?: { id: string; n?: number; statement: string }[] } | null;
 }
+/** GET /api/v2/market/value-chain: who supplies, sells and buys around the company, layer by layer. */
+export interface ValueChain {
+  layers?: { key: string; title: string; nodes?: { id: string; name: string; type?: string; self?: boolean }[] | null }[] | null;
+}
+/** GET /api/v2/market/entities/{id}?names=true: one organization's note, its relations named. */
+export interface MarketNote {
+  entity: { id: string; name: string; type?: string | null; tier?: string | null; summary?: string | null; aliases?: string[] | null };
+  edges?: Record<string, { out?: { src: string; dst: string }[]; in?: { src: string; dst: string }[] }>;
+  evidence?: { our_read?: string | null; quote?: string | null }[];
+  neighbors?: { id: string; name: string }[];
+}
+/** GET /api/v2/listening/stats (backend/listening.py stats; the schema leaves it untyped): posts sent on each day by
+    site, and the newest posts sent on, each one's text clipped. */
 export interface ListeningStats {
   daily?: { day: string; sources?: Record<string, number> }[];
+  recent?: { item_id: string; source: string; text: string; url?: string | null; at?: string | null }[];
 }
 
 export const marketSpendQuery = queryOptions({
@@ -200,6 +279,74 @@ export const marketBriefingQuery = queryOptions({
   queryFn: ({ signal }) => api.get<MarketBriefing>('/api/v2/market/briefings/latest', { signal }),
   ...quiet,
 });
+export const valueChainQuery = queryOptions({
+  queryKey: ['market', 'chain'],
+  queryFn: ({ signal }) => api.get<ValueChain>('/api/v2/market/value-chain', { signal }),
+  ...quiet,
+});
+/** How many organizations the market holds: none means it was never set up. */
+export const marketCountQuery = queryOptions({
+  queryKey: ['market', 'count'],
+  queryFn: async ({ signal }) => (await api.get<{ total?: number | null; entities?: unknown[] }>('/api/v2/market/entities?status=active&limit=1', { signal })).total ?? 0,
+  ...quiet,
+});
+export const marketNoteQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['market', 'note', id],
+    queryFn: ({ signal }) => api.get<MarketNote>(`/api/v2/market/entities/${enc(id)}?names=true`, { signal }),
+    ...quiet,
+  });
+/** The owner's answers to Market's four set-up questions so far, and the research task they filed. */
+export const marketSetupQuery = queryOptions({
+  queryKey: ['market', 'setup'],
+  queryFn: async ({ signal }) => (await api.get<LibrarianSetup>('/api/v2/librarian/setup', { signal })).market,
+  ...quiet,
+});
+export type MarketSetupState = LibrarianMarketSetup;
+export type MarketAnswer = keyof LibrarianMarketSetup['answers'];
+
+/** Keep the answers (`save`, `skip`), or `finish`: file the research to the Librarian. Owner only. */
+export function setUpMarket(answers: LibrarianMarketSetup['answers'], step: number, action: 'save' | 'skip' | 'finish') {
+  return write<LibrarianMarketSetup>({
+    key: marketSetupQuery.queryKey,
+    optimistic: (m: LibrarianMarketSetup | undefined) => m && { ...m, answers, step, skipped: action === 'skip' },
+    send: (idempotencyKey) => api.post<LibrarianMarketSetup>('/api/v2/librarian/setup/market', { answers, step, action }, { idempotencyKey }),
+    settle: (_m: LibrarianMarketSetup | undefined, r) => r,
+  });
+}
+
+/** The owner asks the Librarian to define and size the market from a sentence. */
+export function sizeMarket(description: string) {
+  return write<{ task_id?: string; sizing?: MarketSizing | null }>({
+    key: marketSpendQuery.queryKey,
+    optimistic: (m: MarketSpend | undefined) => m && { ...m, definition: { ...m.definition, description } },
+    send: (idempotencyKey) => api.post<{ task_id?: string; sizing?: MarketSizing | null }>('/api/v2/market/spend/research', { description }, { idempotencyKey }),
+    settle: (m: MarketSpend | undefined, r) => m && { ...m, sizing: r.sizing ?? m.sizing },
+  });
+}
+
+const mapEstimates = (m: MarketSpend | undefined, f: (e: MarketEstimate, s: MarketSegment) => MarketEstimate) =>
+  m && { ...m, segments: m.segments?.map((s) => ({ ...s, estimates: s.estimates?.map((e) => f(e, s)) })) };
+
+/** An estimate becomes its segment's size. */
+export function acceptSize(size: string) {
+  return write<unknown>({
+    key: marketSpendQuery.queryKey,
+    optimistic: (m: MarketSpend | undefined) => mapEstimates(m, (e) => (e.id === size ? { ...e, status: 'accepted' } : e)),
+    send: (idempotencyKey) => api.post<unknown>(`/api/v2/market/sizes/${enc(size)}/accept`, {}, { idempotencyKey }),
+  });
+}
+
+/** One parameter of an estimate, changed by the owner: the server works the estimate out again. */
+export function setSizeParam(size: string, name: string, value: number) {
+  const put = (p: MarketParam | undefined): MarketParam => (p && typeof p === 'object' ? { ...p, value } : value);
+  return write<unknown>({
+    key: marketSpendQuery.queryKey,
+    optimistic: (m: MarketSpend | undefined) => mapEstimates(m, (e) => (e.id === size ? { ...e, params: { ...e.params, [name]: put(e.params?.[name]) } } : e)),
+    send: (idempotencyKey) => api.post<unknown>(`/api/v2/market/sizes/${enc(size)}/params`, { params: { [name]: value } }, { idempotencyKey }),
+  });
+}
+
 export const listeningStatsQuery = queryOptions({
   queryKey: ['listening', 'stats', { days: 14 }],
   queryFn: async ({ signal }) => {
@@ -213,6 +360,48 @@ export const listeningStatsQuery = queryOptions({
   ...quiet,
 });
 
+// ---------------------------------------------------------------- Org: the factories and who may make one
+
+/** The live factories and the live pipelines with the factory each sits in; null when the read fails (the section is
+    then left out, as the old Org page did). */
+export const factoriesQuery = queryOptions({
+  queryKey: ['company', 'factories'],
+  queryFn: async ({ signal }) => {
+    try {
+      return await api.get<FactoryMap>('/api/v2/factories?period=7d', { signal });
+    } catch {
+      return null;
+    }
+  },
+  ...quiet,
+});
+
+/** The reader's company role as Access gives it ('owner', 'admin'); null for a member, whom Access refuses. */
+export const companyRoleQuery = queryOptions({
+  queryKey: ['company', 'role'],
+  queryFn: async ({ signal }) => {
+    try {
+      return (await api.get<{ you?: string }>('/api/v2/access', { signal })).you ?? null;
+    } catch {
+      return null;
+    }
+  },
+  ...quiet,
+});
+
+/** A new factory, shown at once at the end of the list. Only the company's owner and Admins (403 for anyone else; 409
+    when a live factory has the name). */
+export function createFactory(name: string, goal: string) {
+  const id = tmpId();
+  return write<FactoryCreated>({
+    key: factoriesQuery.queryKey,
+    optimistic: (m: FactoryMap | null | undefined) => m && { ...m, factories: [...m.factories, { id, name, goal, manager_id: null, done: 0 }] },
+    send: (idempotencyKey) => api.post<FactoryCreated>('/api/v2/factories', goal ? { name, goal } : { name }, { idempotencyKey }),
+    settle: (m: FactoryMap | null | undefined, r) => m && { ...m, factories: m.factories.map((f) => (f.id === id ? { ...f, id: r.factory.id } : f)) },
+    revert: (m: FactoryMap | null | undefined) => m && { ...m, factories: m.factories.filter((f) => f.id !== id) },
+  });
+}
+
 /** A group with its lead (sent when the caller may read leads; not in the schema). */
 export type Team = Group & { lead?: string };
 export const groupsQuery = queryOptions({
@@ -220,6 +409,22 @@ export const groupsQuery = queryOptions({
   queryFn: ({ signal }) => api.get<Team[]>('/api/v2/groups', { signal }),
   ...quiet,
 });
+
+/** A teammate into another group (it leaves the one it was in), or out of its group when `to` is empty. People go by
+    id, agents by slug (backend/groups.py update). */
+export function moveTeammate(who: string, from: string, to: string) {
+  const agent = who.startsWith('bot:');
+  const bare = who.slice(who.indexOf(':') + 1);
+  const kind = agent ? 'bots' : 'people';
+  const strip = (g: Team): Team => (agent ? { ...g, bots: g.bots.filter((b) => b !== bare), bot_slugs: g.bot_slugs.filter((b) => b !== bare) } : { ...g, people: g.people.filter((p) => p !== bare && p !== who) });
+  const add = (g: Team): Team => (agent ? { ...g, bots: [...g.bots, bare], bot_slugs: [...g.bot_slugs, bare] } : { ...g, people: [...g.people, bare] });
+  return write<Team>({
+    key: groupsQuery.queryKey,
+    optimistic: (gs: Team[] | undefined) => gs?.map((g) => (g.id === to ? add(strip(g)) : strip(g))),
+    send: (idempotencyKey) =>
+      to ? api.patch<Team>(`/api/v2/groups/${enc(to)}`, { add: { [kind]: [bare] } }, { idempotencyKey }) : api.patch<Team>(`/api/v2/groups/${enc(from)}`, { remove: { [kind]: [bare] } }, { idempotencyKey }),
+  });
+}
 
 // Brand: the published book, its versions, and for an owner or admin the draft (backend/brand.py view).
 export interface BrandBody {
@@ -462,6 +667,32 @@ export function archiveKpi(kid: string) {
     key: treeKey,
     optimistic: (t: GoalTree | undefined) => mapKpis(t, (k) => (k.id === kid ? null : k)),
     send: (idempotencyKey) => api.post<KpiDetail>(`/api/v2/kpis/${enc(kid)}/archive`, {}, { idempotencyKey }),
+  });
+}
+
+/** A KPI's place in the KPI tree (GET /api/v2/growth/kpis; not in the schema): what it feeds and its role. */
+export type GrowthRole = NonNullable<KpiUpdate['growth_role']>;
+export interface PlacedKpi {
+  id: string;
+  name: string;
+  parent_kpi_id: string | null;
+  growth_role: GrowthRole | null;
+  may_edit?: boolean;
+}
+export const placedKpisQuery = queryOptions({
+  queryKey: ['kpis', 'placed'],
+  queryFn: async ({ signal }) => (await api.get<{ kpis?: PlacedKpi[] }>('/api/v2/growth/kpis', { signal })).kpis ?? [],
+  ...quiet,
+});
+
+/** What a KPI feeds and its role; one North Star at a time, so naming one moves the role from the old. */
+export function placeKpi(kid: string, feeds: string | null, role: GrowthRole | null) {
+  const body: KpiUpdate = { parent_kpi_id: feeds, growth_role: role };
+  return write<unknown>({
+    key: placedKpisQuery.queryKey,
+    optimistic: (ks: PlacedKpi[] | undefined) =>
+      ks?.map((k) => (k.id === kid ? { ...k, parent_kpi_id: feeds, growth_role: role } : role === 'north_star' && k.growth_role === 'north_star' ? { ...k, growth_role: null } : k)),
+    send: (idempotencyKey) => api.post<unknown>(`/api/v2/kpis/${enc(kid)}`, body, { idempotencyKey }),
   });
 }
 

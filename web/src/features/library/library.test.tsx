@@ -13,6 +13,7 @@ import { nameFromUrl, ReplaceLoginDialog } from './AddTool';
 import { replaceLogin } from './queries';
 import { skillsSearch } from './search';
 import { newAddressFor } from '@/oldAddress/map';
+import { forgetHelperCode, heldHelperCode, takeHelperCode } from './helperCode';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -268,5 +269,51 @@ describe("Connect Claude Code from the helper's old link", () => {
     await waitFor(() => expect(router.state.location.href).toBe('/library/skills'));
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
     expect(skillsSearch({ connect: 'https://evil.example' })).toEqual({});
+  });
+
+  /** The Skills page alone, as the app opens it after sign-in: the code is not in the address. */
+  function openSkills() {
+    vi.stubGlobal('fetch', async (url: string) => {
+      const body = String(url).endsWith(`/skills/devices/codes/${CODE}`) ? { user_code: CODE, label: 'Studio laptop', expires_at: '2026-11-19T08:00:00Z' } : {};
+      return new Response(JSON.stringify(body), { status: String(url).includes('/skills/devices/') ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+    });
+    const Skills = () => <SkillsPage search={skillsSearch(useSearch({ strict: false }))} />;
+    const root = createRootRoute({ component: Outlet });
+    const page = createRoute({ getParentRoute: () => root, path: '/library/skills', component: Skills });
+    const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ['/library/skills'] }) });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    return router;
+  }
+
+  it('takes only the code out of the address, and keeps the rest', () => {
+    expect(takeHelperCode(`/library/skills?connect=${CODE}&q=calls`)).toBe('/library/skills?q=calls');
+    expect(heldHelperCode()).toBe(CODE);
+    expect(takeHelperCode('/library/skills?connect=setup')).toBe('/library/skills?connect=setup');
+    expect(takeHelperCode(`/tasks?connect=${CODE}`)).toBe(`/tasks?connect=${CODE}`);
+    forgetHelperCode();
+    expect(heldHelperCode()).toBeNull();
+  });
+
+  it('comes back after sign-in, from this tab only, and the first read takes it out', async () => {
+    sessionStorage.setItem('tico.skillsHelper', JSON.stringify({ code: CODE, at: Date.now() }));
+    const router = openSkills();
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Claude Code' });
+    expect(await within(dialog).findByText(CODE)).toBeTruthy();
+    expect(sessionStorage.getItem('tico.skillsHelper')).toBeNull();
+    expect(heldHelperCode()).toBeNull();
+    expect(router.state.location.href).toBe('/library/skills');
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
+  });
+
+  it('a code left from over ten minutes ago does not come back', async () => {
+    sessionStorage.setItem('tico.skillsHelper', JSON.stringify({ code: CODE, at: Date.now() - 11 * 60_000 }));
+    openSkills();
+    expect(await screen.findByRole('heading', { name: 'Skills' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Connect Claude Code' })).toBeNull();
+    expect(sessionStorage.getItem('tico.skillsHelper')).toBeNull();
   });
 });

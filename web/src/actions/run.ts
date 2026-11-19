@@ -1,6 +1,7 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
+import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { flight, waitForTarget, wash } from '@/motion';
 import { bound } from './bind';
@@ -40,7 +41,7 @@ export async function runIn(
   try {
     out = await a.run(ctx, input);
   } catch (e) {
-    return { ok: false, error: problem(e) };
+    return refused(e);
   }
   // The change is made: from here nothing may turn it into a failure. Reads never get here (they are not actions),
   // and only Tico's hand flies the Dot.
@@ -72,7 +73,7 @@ export async function showIn(
   try {
     await a.show?.({ router, queryClient, via: 'tico' }, parsed.value);
   } catch (e) {
-    return { ok: false, error: problem(e) };
+    return refused(e);
   }
   const did = didOf(a, parsed.value, undefined);
   await land(() => a.target?.(parsed.value, undefined), true, did);
@@ -95,6 +96,28 @@ function allowed(a: AnyAction, ctx: Ctx, input: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+function refused(e: unknown): Result {
+  const why = whyOf(e);
+  return why ? { ok: false, error: problem(e), why } : { ok: false, error: problem(e) };
+}
+
+const MAX_WHY = 140;
+// What a toast never shows: JSON, a stack or a traceback, an address.
+const UNSAFE = /^\s*[[{]|"\s*:|\n\s*at \S|Traceback \(|https?:|www\.|\/\/|\/api\//i;
+
+/** The server's own reason for a refusal (a Problem's `detail`), as one short sentence; undefined when it gave none, or
+    when it reads like data rather than words. A thrown error that is not the server's says nothing here. */
+export function whyOf(e: unknown): string | undefined {
+  if (!(e instanceof ApiError) || e.status < 400 || e.code.startsWith('http_')) return undefined;
+  if (UNSAFE.test(e.message)) return undefined;
+  const text = e.message.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  const first = /^.+?[.!?](?=\s|$)/.exec(text)?.[0] ?? text;
+  const space = first.lastIndexOf(' ', MAX_WHY - 1);
+  const cut = first.length <= MAX_WHY ? first : `${first.slice(0, space > 0 ? space : MAX_WHY - 1).trimEnd()}…`;
+  return cut.charAt(0).toUpperCase() + cut.slice(1);
 }
 
 function problem(e: unknown): string {

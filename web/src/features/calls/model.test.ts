@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CalendarOccurrence } from '@/api/schema';
-import { calendarSearch, dayKey, hoursFor, joinOf, onDay, place, rangeOf, rangeWords, step, type Placed } from './model';
+import { calendarSearch, dayKey, hoursFor, joinOf, onDay, place, rangeOf, rangeWords, shortRange, step, type Placed } from './model';
 
 const d = (s: string) => {
   const [y, m, day] = s.split('-').map(Number);
@@ -55,6 +55,23 @@ describe('ranges', () => {
     const list = rangeOf('list', d('2026-11-18'));
     expect(dayKey(list.from)).toBe('2026-11-18');
     expect(dayKey(list.to)).toBe('2026-11-25');
+  });
+
+  it('3 days start on the day itself, step by three and cross a month', () => {
+    const r = rangeOf('3day', d('2026-11-30'));
+    expect(keys(r.days)).toEqual(['2026-11-30', '2026-12-01', '2026-12-02']);
+    expect(dayKey(r.to)).toBe('2026-12-03');
+    expect(dayKey(step('3day', d('2026-11-30'), 1))).toBe('2026-12-03');
+    expect(dayKey(step('3day', d('2026-11-30'), -1))).toBe('2026-11-27');
+    expect(rangeWords('3day', d('2026-11-30'))).toBe('Nov 30 to Dec 2');
+    expect(calendarSearch({ view: '3day' })).toEqual({ view: '3day' });
+  });
+
+  it('gives a phone the short range', () => {
+    expect(shortRange('week', d('2026-11-18'))).toBe('Nov 15 – 21');
+    expect(shortRange('3day', d('2026-11-30'))).toBe('Nov 30 – Dec 2');
+    expect(shortRange('day', d('2026-11-18'))).toBe('Nov 18');
+    expect(shortRange('month', d('2026-11-18'))).toBe('Nov 2026');
   });
 
   it('steps by the view, a month landing on its first', () => {

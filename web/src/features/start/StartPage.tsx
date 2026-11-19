@@ -56,16 +56,19 @@ export function StartPage() {
         <>
           {items.length > 0 && (
             <Section name="Needs you" count={needs.data?.count} target="section:needs">
-              {items.map((n) => (
-                <TaskRow
-                  key={n.id}
-                  title={n.title}
-                  href={n.href}
-                  at={n.at}
-                  avatar={n.from ? <Face id={n.from} /> : undefined}
-                  target={`need:${n.id}`}
-                />
-              ))}
+              <div className="st-needs">
+                {items.map((n) => (
+                  <TaskRow
+                    key={n.id}
+                    title={n.title}
+                    href={n.href}
+                    at={n.at}
+                    pills={n.sub ? <span className="row-stage">{n.sub}</span> : undefined}
+                    avatar={n.from ? <Face id={n.from} /> : undefined}
+                    target={`need:${n.id}`}
+                  />
+                ))}
+              </div>
             </Section>
           )}
           {agents.length > 0 && (

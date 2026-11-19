@@ -26,6 +26,10 @@ export { FilesPage } from './FilesPage';
 // FilePreview draws one in place (a task's Details).
 export { FilePreview, FileViewer, FileViewerHost } from './FileViewer';
 export { SkillsPage } from './SkillsPage';
+// The skills helper's code out of the address at startup (router.tsx), held for the Skills page.
+export { takeHelperCode } from './helperCode';
+// An outgoing webhook's Tools page, read again after Routines changes it.
+export { webhookQuery } from './queries';
 export { ToolsPage } from './ToolsPage';
 export {
   contactsSearch,

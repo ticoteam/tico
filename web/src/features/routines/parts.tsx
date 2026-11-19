@@ -24,8 +24,9 @@ export async function press(id: string, input: unknown): Promise<boolean> {
 export async function pressOut<T>(id: string, input: unknown): Promise<{ out: T | undefined } | null> {
   const r = await run(id, input, { via: 'click' });
   if (!r.ok) {
-    const why = r.error?.includes(': ') ? r.error.slice(r.error.indexOf(': ') + 2).trim() : '';
-    toast({ text: why || "Couldn't save", kind: 'failed' });
+    // the server's reason, else one this feature gave ("code: reason"); never a thrown error's own words ("failed: …")
+    const said = r.error?.includes(': ') && !r.error.startsWith('failed:') ? r.error.slice(r.error.indexOf(': ') + 2).trim() : '';
+    toast({ text: r.why || said || "Couldn't save", kind: 'failed' });
     return null;
   }
   return { out: r.out as T | undefined };

@@ -43,7 +43,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('Start page', () => {
   it('each row opens its page: a need its task, an agent its page, today the calendar', async () => {
     seed(
-      [{ id: 'n1', kind: 'ask', title: 'Approve the launch plan', href: '/task/t1', at: '2026-01-02T10:00:00Z', from: 'bot:ada' }],
+      [{ id: 'n1', kind: 'ask', title: 'Approve the launch plan', sub: undefined, href: '/task/t1', at: '2026-01-02T10:00:00Z', from: 'bot:ada' }],
       [ADA, IDLE],
       [{ occurrence_id: 'o1', title: 'Weekly review', start: '2026-01-02T15:00:00Z' }],
     );
@@ -55,6 +55,19 @@ describe('Start page', () => {
     expect(within(main).queryByTitle('Bo')).toBeNull();
     expect(within(main).getByTitle('Weekly review').closest('a')?.getAttribute('href')).toBe('/calendar');
     expect(within(main).getByRole('button', { name: 'Ask Tico' })).toBeTruthy();
+  });
+
+  it('tells apart asks that share a kind: the task is the title, the kind is quiet on the same row', async () => {
+    const ask = (id: string, title: string): Need => ({ id, kind: 'ask', title, sub: 'Spec', href: `/task/${id}`, at: '2026-01-02T10:00:00Z', from: 'bot:ada' });
+    seed([ask('t1', 'Rename the export button'), ask('t2', 'Pick a default theme')], [ADA]);
+    show(<StartPage />);
+    const main = await screen.findByRole('main');
+    for (const [id, title] of [['t1', 'Rename the export button'], ['t2', 'Pick a default theme']] as const) {
+      const row = within(main).getByTitle(title).closest('a') as HTMLElement;
+      expect(row.getAttribute('href')).toBe(`/task/${id}`);
+      expect(row.querySelector('.row-title')?.textContent).toBe(title);
+      expect(row.querySelector('.row-pills .row-stage')?.textContent).toBe('Spec');
+    }
   });
 
   it('says so when nothing needs the person', async () => {

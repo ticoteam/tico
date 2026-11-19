@@ -78,8 +78,8 @@ const name = s.string({ min: 1, max: 200 });
 const owner = s.string({ min: 1, max: 200, pattern: /^(bot|human):\S+$/, what: 'bot:<id> or human:<id>' });
 const day = s.string({ min: 10, max: 10, pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, YYYY-MM-DD' });
 const REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;
-/** The range the Runs tab shows when the address names none. */
-export const RUNS_RANGE = '24h';
+/** The range the Runs tab shows when the address names none: the last hour, as the old app opened it. */
+export const RUNS_RANGE = '1h';
 
 const go = (router: AnyRouter, to: string, search: Record<string, string | undefined> = {}) => router.navigate({ to, search });
 const panelOff = (router: AnyRouter) =>

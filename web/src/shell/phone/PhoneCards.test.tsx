@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRootRoute, createRouter, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { Sheet } from '@/shell/Sheet';
 import { PhoneCards } from './PhoneCards';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => null }));
@@ -48,5 +50,54 @@ describe('PhoneCards', () => {
     const { rerender } = render(cards());
     rerender(cards({ chat: true }));
     expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
+  });
+
+  it('an address that names a chat opens on its card, with the conversation in the card-high sheet', () => {
+    render(
+      <PhoneCards
+        page={<h1>Finance</h1>}
+        tico={<p>Tico's chat</p>}
+        menu={<a href="/next/tasks">Tasks</a>}
+        chat={
+          <Sheet kind="chat" label="Chat with Finance Owner">
+            <div className="chat-body" role="log" />
+          </Sheet>
+        }
+        labels={{ chat: 'Finance Owner' }}
+      />,
+    );
+    const card = screen.getByRole('dialog', { name: 'Finance Owner' });
+    // phone.css draws this sheet again in the card at the card's height (`.ly-chat>.full>.pane`), so .chat-body
+    // scrolls inside it; jsdom has no layout, so the structure that rule needs is what is checked here
+    expect(card.querySelector(':scope > .full > .pane.side > .chat-body')).toBeTruthy();
+    expect(window.history.state?.['tico-next:card']).toBe('chat');
+  });
+
+  it('a chat opened by a navigation in the same press keeps its address (the router writes it before the card does)', async () => {
+    window.history.replaceState(null, '', '/tasks/eng');
+    function Shell() {
+      const r = useRouter();
+      const chat = useLocation({ select: (l) => (l.search as Record<string, unknown>).chat });
+      return (
+        <PhoneCards
+          page={
+            <button type="button" onClick={() => void r.navigate({ to: '/tasks/eng' as never, search: { chat: 'agent:builder' } as never })}>
+              Ask
+            </button>
+          }
+          tico={<p>Tico's chat</p>}
+          menu={<p>Menu</p>}
+          chat={chat ? <p>Builder's chat</p> : undefined}
+          labels={{ chat: 'Birch Builder' }}
+        />
+      );
+    }
+    const router = createRouter({ routeTree: createRootRoute({ component: Shell }) });
+    render(<RouterProvider router={router} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask' }));
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(router.state.location.search).toEqual({ chat: 'agent:builder' });
+    expect(location.search).toBe('?chat=agent%3Abuilder');
+    expect(screen.getByRole('dialog', { name: 'Birch Builder' })).toBeTruthy();
   });
 });

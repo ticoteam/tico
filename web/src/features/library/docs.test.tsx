@@ -7,6 +7,7 @@ import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
+import { Toasts } from '@/kit/Toast';
 import { ContactsPage } from './ContactsPage';
 import { DocPage } from './DocPage';
 import { DocsPage } from './DocsPage';
@@ -167,6 +168,37 @@ describe('docs list', () => {
     const more = screen.getByRole('button', { name: 'More' });
     expect(add.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it('files a doc under the folders below its section, never its own file name', async () => {
+    serve();
+    queryClient.setQueryData(docsListQuery.queryKey, {
+      docs: [
+        { ...doc('d1', 'Glossary'), path: 'plant-care/glossary.md' },
+        { ...doc('d2', 'Repotting'), path: 'plant-care/how-to/repotting.md' },
+      ],
+      next_cursor: null,
+    });
+    at('/library/docs', <DocsPage search={{}} />);
+    const glossary = (await screen.findByText('Glossary')).closest('.drow') as HTMLElement;
+    expect(glossary.querySelector('.tie')?.textContent).toBe('');
+    expect(screen.queryByText('glossary.md')).toBeNull();
+    const repotting = screen.getByText('Repotting').closest('.drow') as HTMLElement;
+    expect(repotting.querySelector('.tie')?.textContent).toBe('How to');
+  });
+
+  it('keeps the owner’s face in a phone’s head, so Docs and Skills can open a chat', async () => {
+    serve();
+    queryClient.setQueryData(['settings', 'page-owners'], { docs: { bot: 'fern-librarian' }, skills: { bot: 'fern-ops' } });
+    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Fern index')], next_cursor: null });
+    at('/library/docs', <DocsPage search={{}} />);
+    const face = await screen.findByRole('link', { name: /^Chat with/ });
+    expect(face.closest('[data-phone]')).toBeTruthy();
+    expect(face.getAttribute('href')).toContain('chat=');
+    cleanup();
+    queryClient.setQueryData(skillsQuery.queryKey, []);
+    at('/library/skills', <SkillsPage search={skillsSearch({})} />);
+    expect((await screen.findByRole('link', { name: /^Chat with/ })).closest('[data-phone]')).toBeTruthy();
+  });
 });
 
 describe('import a file', () => {
@@ -307,6 +339,68 @@ describe('propose a new skill', () => {
     expect(dialog.isConnected).toBe(false);
     expect(await screen.findByRole('heading', { name: 'triage-calls' })).toBeTruthy();
     expect(writes(sent)).toEqual([{ url: '/api/v2/skills/proposals', method: 'POST', body: { name: 'triage-calls', files: [{ path: 'SKILL.md', content: TEXT }] } }]);
+  });
+});
+
+describe('a proposal: who may decide it', () => {
+  const TEXT = '---\ndescription: Use when a call comes in\n---\n\n# Steps\nAsk who is calling.';
+  const proposal = { id: 'skp_1', name: 'triage-calls', status: 'pending', description: 'Use when a call comes in', note: null, base_version: null, version: null, proposed_by: { type: 'Human', id: 'me' }, task_id: null, created_at: '2026-11-19T00:00:00Z', updated_at: '2026-11-19T00:00:00Z' };
+  /** The server as a reader with `you` in Access (null: Access refuses, a member). */
+  function server(you: string | null) {
+    vi.stubGlobal('fetch', async (url: string) => {
+      const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+      if (url === '/api/v2/access') return you ? json(200, { you }) : json(403, { error: { code: 'forbidden', detail: 'Only owners and admins see who can sign in' } });
+      if (url === '/api/v2/skills/proposals/skp_1') return json(200, { proposal, files: [{ path: 'SKILL.md', content: TEXT }], diff: '', stale: false, screening: null });
+      return json(200, { skills: [], proposals: [] });
+    });
+  }
+  const Skills = () => <SkillsPage search={skillsSearch(useSearch({ strict: false }))} />;
+
+  it('a member reads it only: no Approve, no Send back', async () => {
+    server(null);
+    at('/library/skills?proposal=skp_1', <Skills />);
+    expect(await screen.findByRole('heading', { name: 'triage-calls' })).toBeTruthy();
+    await screen.findByText('Ask who is calling.');
+    await waitFor(() => expect(queryClient.getQueryState(['skills', 'access-role'])?.status).toBe('success'));
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send back' })).toBeNull();
+  });
+
+  it('an admin, or the owner, sees Approve and Send back', async () => {
+    server('admin');
+    at('/library/skills?proposal=skp_1', <Skills />);
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Send back' })).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
+    queryClient.setQueryData(['directory'], { actors: [], byId: {} });
+    server(null);
+    at('/library/skills?proposal=skp_1', <Skills />);
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it("a refused bundle says the server's reason", async () => {
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const refused = init?.method === 'POST' && url === '/api/v2/skills/proposals';
+      const body = refused ? { error: { code: 'skill_bundle', detail: 'The SKILL.md description is over 1024 characters' } } : { skills: [], proposals: [] };
+      return new Response(JSON.stringify(body), { status: refused ? 422 : 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    queryClient.setQueryData(skillsQuery.queryKey, []);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    at(
+      '/library/skills',
+      <>
+        <Skills />
+        <Toasts />
+      </>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'New skill' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'triage-calls' } });
+    fireEvent.change(screen.getByLabelText('Text'), { target: { value: TEXT } });
+    fireEvent.click(screen.getByRole('button', { name: 'Propose' }));
+    expect(await screen.findByText('The SKILL.md description is over 1024 characters')).toBeTruthy();
+    expect(screen.getByText(/Not proposed/)).toBeTruthy();
   });
 });
 

@@ -22,6 +22,9 @@ export interface Result {
   ok: boolean;
   did?: string;
   error?: string;
+  /** On a refusal: the server's own reason as one short sentence, for a toast's second part. Never JSON, a stack or an
+      address; absent when the server gave none. */
+  why?: string;
   /** What the action returned (a token shown once, a sign-in), for the person's own press only: never from Tico, never
       posted to the server. */
   out?: unknown;

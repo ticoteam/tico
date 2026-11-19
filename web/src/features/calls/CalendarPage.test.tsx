@@ -3,7 +3,8 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarEvents, CalendarOccurrence } from '@/api/schema';
-import { ActionsRoot } from '@/actions';
+import { ActionsRoot, run } from '@/actions';
+import './actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { CalendarPage } from './CalendarPage';
@@ -46,7 +47,7 @@ const occ = (p: Partial<CalendarOccurrence>): CalendarOccurrence => ({
 });
 const events = (list: CalendarOccurrence[]): CalendarEvents => ({ calendars: [], errors: [], from: '', to: '', month_counts: [], occurrences: list });
 
-function seed(view: 'day' | 'week' | 'month', list: CalendarOccurrence[]) {
+function seed(view: 'day' | '3day' | 'week' | 'month', list: CalendarOccurrence[]) {
   const r = rangeOf(view, parseDay(DAY) as Date);
   queryClient.setQueryData(eventsQuery(r.from, r.to).queryKey, events(list));
 }
@@ -128,6 +129,36 @@ describe('Calendar', () => {
     await screen.findByText('November 2026');
     expect(router.state.location.search).toMatchObject({ view: 'month', date: DAY });
     expect(block('Pricing review').classList.contains('mi')).toBe(true);
+  });
+
+  it('3 days: three columns from the picked day, stepping by three, the view in the address', async () => {
+    seed('week', [occ({})]);
+    seed('3day', [occ({})]);
+    const router = show(`/calendar?view=week&date=${DAY}`);
+    await screen.findByText('Nov 15 to Nov 21');
+    fireEvent.click(screen.getByRole('button', { name: '3 days' }));
+    await screen.findByText('Nov 18 to Nov 20');
+    expect(router.state.location.search).toMatchObject({ view: '3day', date: DAY });
+    expect(document.querySelectorAll('.cv-dh')).toHaveLength(3);
+    expect([...document.querySelectorAll('.cv-dh')].map((h) => h.textContent)).toEqual(['Wed18', 'Thu19', 'Fri20']);
+    expect(block('Pricing review').classList.contains('ev')).toBe(true);
+    const next = screen.getByLabelText('Next 3 days');
+    expect(next.getAttribute('href')).toContain('date=2026-11-21');
+    expect(next.getAttribute('href')).toContain('view=3day');
+    expect(screen.getByLabelText('Previous 3 days').getAttribute('href')).toContain('date=2026-11-15');
+    fireEvent.click(next);
+    await screen.findByText('Nov 21 to Nov 23');
+    expect(router.state.location.search).toMatchObject({ view: '3day', date: '2026-11-21' });
+  });
+
+  it('Tico can pick 3 days', async () => {
+    seed('week', [occ({})]);
+    seed('3day', [occ({})]);
+    const router = show(`/calendar?view=week&date=${DAY}`);
+    await screen.findByText('Nov 15 to Nov 21');
+    expect(await run('calls.show', { view: '3day' }, { via: 'tico' })).toMatchObject({ ok: true });
+    await screen.findByText('Nov 18 to Nov 20');
+    expect(router.state.location.search).toMatchObject({ view: '3day', date: DAY });
   });
 
   it('says when a day has nothing on it', async () => {
@@ -220,11 +251,31 @@ describe('Calendar on a phone', () => {
     expect(await screen.findByRole('dialog', { name: 'Start call' })).toBeTruthy();
   });
 
+  it('draws 3 days as the grid, where Week shows the agenda', async () => {
+    seed('3day', [occ({})]);
+    show(`/calendar?view=3day&date=${DAY}`);
+    await waitFor(() => expect(document.querySelectorAll('.cv-dh')).toHaveLength(3));
+    expect(document.querySelector('.pk-cal')?.classList.contains('has-agenda')).toBe(false);
+    const head = screen.getByRole('heading', { name: 'Calendar' }).closest('header') as HTMLElement;
+    expect(head.querySelector('.cv-range-s')?.textContent).toBe('Nov 18 – 20');
+  });
+
   it('puts List’s filter under the ⋯', async () => {
     show('/calendar?view=list');
     const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
     fireEvent.click(within(head).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Filter' }));
     expect(await screen.findByRole('menuitem', { name: 'Shared with me' })).toBeTruthy();
+  });
+
+  it("List's search sits under the head, and stays while it searches", async () => {
+    const router = show('/calendar?view=list');
+    const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
+    expect(within(head).queryByRole('searchbox')).toBeNull();
+    const box = screen.getByRole('searchbox', { name: 'Find a meeting' });
+    expect(box.closest('.cl-find')).toBeTruthy();
+    fireEvent.change(box, { target: { value: 'sync' } });
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync' }));
+    expect(screen.getByRole('searchbox', { name: 'Find a meeting' })).toBe(box);
   });
 });

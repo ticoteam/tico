@@ -7,7 +7,8 @@ import { Select } from '@/kit/Select';
 import { EmptyRow, Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, List, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
-import { axis, count, funnelSteps, growthMonths, monShort, monthName, pct, ratio, statusWord } from './model';
+import { ChannelMonths, CustomersPanel, ManagerFace, MonthPanel, SourcePanel } from './GrowthPanels';
+import { axis, count, funnelSteps, growthMonths, isYm, monShort, monthName, pct, ratio, statusWord } from './model';
 import { ActLink, Pfig, Ptrace, usePress } from './parts';
 import {
   growthReadQuery,
@@ -20,10 +21,11 @@ import {
   type GrowthSource,
   type Segment,
 } from './queries';
-import { panelOf, type GrowthSearch } from './search';
+import { pairOf, panelOf, type GrowthSearch } from './search';
 
 /* Growth: read-only, as in the old app. A scope tab for all customers and each segment, a month, and a channel opened
-   beside to show where its number comes from. Changes go through the Growth Manager's chat. Money here is dollars. */
+   beside to show where its number comes from; from there its months, and from Retention the customers behind a figure.
+   Changes go through the Growth Manager's chat (its face in the head). Money here is dollars. */
 
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
 /** A figure, or the muted reason it has none. */
@@ -31,7 +33,7 @@ const orWhy = (f: GrowthFig | undefined, write: (v: number) => string) => (f?.va
 const head = { title: 'Growth', path: GROWTH, className: 'money' } as const;
 
 export function GrowthPage({ search }: { search: GrowthSearch }) {
-  if (search.tab === 'sources') return <GrowthSources />;
+  if (search.tab === 'sources') return <GrowthSources search={search} />;
   return <GrowthBoard search={search} />;
 }
 
@@ -52,6 +54,16 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const month = search.month ?? months[0]!;
   const open = panelOf(search.panel);
   const channel = open?.[0] === 'channel' ? d?.channels.find((c) => c.slug === open[1]) : undefined;
+  const nameOf = (slug: string) => (slug === 'unknown' ? 'Unknown' : (d?.channels.find((c) => c.slug === slug)?.name ?? slug));
+  const pair = open && open[0] !== 'channel' ? pairOf(open[1]) : null;
+  const panel =
+    open?.[0] === 'month' && pair ? (
+      <MonthPanel channel={pair[0]} name={nameOf(pair[0])} month={pair[1]} />
+    ) : open?.[0] === 'customers' && pair ? (
+      <CustomersPanel segment={search.segment} month={pair[0]} day={pair[1] as '30' | '90' | '180'} />
+    ) : (
+      channel && d && <ChannelPanel channel={channel} read={d} month={month} sources={sources.data?.sources ?? []} />
+    );
   const spark = (pick: (p: (typeof series)[number]) => number | null) => {
     const pts = series.map(pick).filter((v): v is number => v != null);
     return pts.length > 1 ? <Sparkline points={pts} /> : undefined;
@@ -85,15 +97,18 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
         ),
       }}
       actions={
-        <div className="month-pick" data-target="range:growth">
-          <Select
-            label="Month"
-            labelHidden
-            options={months.map((m) => ({ value: m, label: monthName(m) }))}
-            value={month}
-            onValueChange={(m) => void press('growth.setMonth', { month: m })}
-          />
-        </div>
+        <>
+          <ManagerFace />
+          <div className="month-pick" data-target="range:growth" data-phone>
+            <Select
+              label="Month"
+              labelHidden
+              options={months.map((m) => ({ value: m, label: monthName(m) }))}
+              value={month}
+              onValueChange={(m) => void press('growth.setMonth', { month: m })}
+            />
+          </div>
+        </>
       }
       tabs={tabs}
       figures={<FiguresStrip figures={figures} />}
@@ -122,13 +137,13 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
                 <Trend title="New customers, by month" points={series.map((p) => [p.period, p.new_customers] as const)} fmt={(v) => count(v)} />
                 <Trend title="Cost per customer, by month" points={series.map((p) => [p.period, p.cac] as const)} fmt={(v) => usd(v, true)} />
               </div>
-              <Retention read={d} />
+              <Retention read={d} open={open?.[0] === 'customers' ? open[1] : undefined} />
               <Kpis metrics={d.metrics} />
             </>
           )}
         </div>
       }
-      panel={channel && d && <ChannelPanel channel={channel} read={d} month={month} sources={sources.data?.sources ?? []} />}
+      panel={panel}
     />
   );
 }
@@ -242,7 +257,8 @@ function Trend({ title, points, fmt }: { title: string; points: readonly (readon
   );
 }
 
-function Retention({ read }: { read: GrowthRead }) {
+/** Each cohort kept by day 30, 90, 180; a month's figure opens the customers behind it. */
+function Retention({ read, open }: { read: GrowthRead; open?: string }) {
   const rows = read.retention ?? [];
   if (!rows.length) return null;
   return (
@@ -273,17 +289,38 @@ function Retention({ read }: { read: GrowthRead }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.cohort}>
-              <td className="t-name">{/^\d{4}-\d{2}$/.test(r.cohort) ? monthName(r.cohort) : r.cohort}</td>
-              <td className="num">{count(r.entered)}</td>
-              {[r.kept_d30, r.kept_d90, r.kept_d180].map((w, i) => (
-                <td key={i} className="num">
-                  {w?.value != null ? pct(w.value) : ''}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const ym = isYm(r.cohort);
+            return (
+              <tr key={r.cohort} className={open?.startsWith(`${r.cohort}:`) ? 'is-selected' : undefined}>
+                <td className="t-name">{ym ? monthName(r.cohort) : r.cohort}</td>
+                <td className="num">{count(r.entered)}</td>
+                {(['30', '90', '180'] as const).map((day) => {
+                  const w = r[`kept_d${day}`];
+                  const v = w?.value != null ? pct(w.value) : '';
+                  return (
+                    <td key={day} className="num">
+                      {ym && v ? (
+                        <ActLink
+                          to={GROWTH}
+                          search={{ tab: undefined, panel: `customers:${r.cohort}:${day}` }}
+                          action="growth.openCustomers"
+                          input={{ month: r.cohort, day }}
+                          className="t-link"
+                          title={`Customers, day ${day}`}
+                          data-target={`kept:${r.cohort}:${day}`}
+                        >
+                          {v}
+                        </ActLink>
+                      ) : (
+                        v
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </Table>
     </Section>
@@ -349,6 +386,7 @@ function ChannelPanel({ channel: c, read, month, sources }: { channel: GrowthCha
           {ltv != null && <Ptrace name="LTV" sub={fills(sources, 'revenue') || fills(sources, 'net_revenue')} fig={usd(ltv)} />}
           {ltv != null && c.cac ? <Ptrace name="LTV to cost" sub={`${usd(ltv)} over ${usd(c.cac, true)}`} fig={ratio(ltv / c.cac)} /> : null}
         </Section>
+        <ChannelMonths channel={c.slug} />
       </div>
     </SidePanel>
   );
@@ -359,8 +397,10 @@ const words = (v: string[] | string | null | undefined) =>
   (Array.isArray(v) ? v : v ? [v] : []).map((x) => x.replace(/_/g, ' ')).map((x, i) => (i ? x : x.charAt(0).toUpperCase() + x.slice(1))).join(', ');
 
 /** Where Growth's numbers come from, and what each word means here. Reading only; the Growth Manager changes them. */
-function GrowthSources() {
+function GrowthSources({ search }: { search: GrowthSearch }) {
   const q = useQuery(growthSourcesQuery);
+  const open = panelOf(search.panel);
+  const picked = open?.[0] === 'source' ? open[1] : undefined;
   const segments = useQuery(segmentsQuery);
   const list = (q.data?.sources ?? []).filter((s) => !s.retired_at);
   const defs = (segments.data?.segments ?? []).filter((s) => s.customer_rule);
@@ -372,6 +412,8 @@ function GrowthSources() {
       className="money"
       state={q.isPending ? 'loading' : q.isError ? 'fault' : 'ready'}
       onRetry={() => void q.refetch()}
+      actions={<ManagerFace />}
+      panel={picked && <SourcePanel id={picked} />}
       sections={
         <>
           <Section name="Sources" count={list.length}>
@@ -395,9 +437,17 @@ function GrowthSources() {
               <tbody>
                 {list.length === 0 && <EmptyRow span={4}>No source connected</EmptyRow>}
                 {list.map((s) => (
-                  <tr key={s.id}>
+                  <tr key={s.id} className={s.id === picked ? 'is-selected' : undefined} data-target={`source:${s.id}`}>
                     <td className="t-name">
-                      {s.name ?? s.system ?? s.id}
+                      <ActLink
+                        to={GROWTH}
+                        search={{ tab: 'sources', panel: `source:${s.id}` }}
+                        action="growth.openSource"
+                        input={{ source: s.id }}
+                        className="t-link"
+                      >
+                        {s.name ?? s.system ?? s.id}
+                      </ActLink>
                       {HEALTH[s.health] && <Pill flag={s.health === 'failing'}>{HEALTH[s.health]}</Pill>}
                     </td>
                     <td className="t-words">{words(s.fills)}</td>

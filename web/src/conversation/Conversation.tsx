@@ -221,7 +221,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card }: Co
     ) : null;
 
   const footer = (
-    <footer className="chat-foot">
+    <footer className="chat-foot" data-dock>
       {foot}
       {look}
       {myId && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}

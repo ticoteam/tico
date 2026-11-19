@@ -1,6 +1,6 @@
 // Pure rules for the team pages: which teammate an address names, who manages a team, the model line, the figures.
 import type { Actor, Directory } from '@/data';
-import type { AgentRow, Change, Group, Learned, Model, PersonRow, Run } from './queries';
+import type { AgentFile, AgentRow, Change, Group, Learned, ListRow, Model, PersonRow, Run } from './queries';
 
 /** The menu's address for a team: its name, lower case, words joined by "-" (shell/Menu teamSlug). */
 export const teamSlug = (name: string) =>
@@ -273,3 +273,76 @@ export function dreamCards(text: string): { n: string; text: string }[] {
 /** The answers as one reply, numbered to match the questions. */
 export const dreamReply = (cards: { n: string }[], answers: string[]) =>
   cards.length === 1 ? (answers[0] ?? '').trim() : cards.map((c, i) => `${c.n}. ${(answers[i] ?? '').trim() || 'No answer'}`).join('\n');
+
+/* ---------------------------------------------------------------- its own lists */
+
+/** The filter fields a list's rows take here (backend/bot_task_tabs.py FIELDS, less Stage and Pipeline: see below). */
+export const LIST_FIELDS = ['status', 'assigned_to', 'asked_by', 'waiting_on', 'needs', 'created_within', 'updated_within', 'done_within', 'due', 'label'] as const;
+export type ListField = (typeof LIST_FIELDS)[number];
+/** A row as a person or Tico writes it: the value in words ("open,done", "7", "overdue", "this_bot"). */
+export interface ListLine {
+  field: ListField;
+  value: string;
+}
+
+export const FIELD_NAME: Record<string, string> = {
+  status: 'Status',
+  assigned_to: 'Assigned to',
+  asked_by: 'Asked by',
+  waiting_on: 'Waiting on',
+  needs: 'Needs',
+  created_within: 'Created within',
+  updated_within: 'Updated within',
+  done_within: 'Done within',
+  due: 'Due',
+  label: 'Label',
+  stage: 'Stage',
+  pipeline: 'Pipeline',
+};
+const DAYS = new Set<string>(['created_within', 'updated_within', 'done_within']);
+
+/** A written row as the server stores it: a list for Status, whole days for the day fields and Due. */
+export function rowOf(l: ListLine): ListRow {
+  const v = l.value.trim();
+  if (l.field === 'status') return { field: l.field, value: v.split(',').map((x) => x.trim()).filter(Boolean) };
+  if (DAYS.has(l.field) || (l.field === 'due' && v !== 'overdue')) return { field: l.field, value: Number(v) };
+  return { field: l.field, value: v };
+}
+
+/** A stored row in words, for the editor. */
+export const lineOf = (r: ListRow): { field: string; value: string } => ({
+  field: r.field,
+  value: Array.isArray(r.value) ? r.value.join(',') : String(r.value),
+});
+
+export const isListField = (f: string): f is ListField => (LIST_FIELDS as readonly string[]).includes(f);
+
+/* ---------------------------------------------------------------- its files */
+
+/** A file's name as the old widget showed it: a stored file's own name when the title is "folder/name". */
+export function fileName(f: Pick<AgentFile, 'title' | 'name' | 'locator'>): string {
+  const title = f.title || f.name || '';
+  if (f.locator === 'remote_link') return title;
+  const name = f.name ?? '';
+  return name && title.endsWith(`/${name}`) ? name : title;
+}
+
+const httpsOnly = (url: unknown): string => {
+  try {
+    return new URL(String(url)).protocol === 'https:' ? String(url) : '';
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * Where a file opens: a stored file over the page (`view`), a Google file too, any other link at its provider over
+ * https only; a file that never synced opens nowhere.
+ */
+export function fileOpen(f: Pick<AgentFile, 'locator' | 'open'>): { href: string; view: boolean } | null {
+  const url = f.open?.url;
+  if (typeof url !== 'string' || !url) return null;
+  if (f.locator !== 'remote_link') return { href: url, view: true };
+  const safe = httpsOnly(url);
+  return safe ? { href: safe, view: /^https:\/\/(docs|drive)\.google\.com\//.test(safe) } : null;
+}

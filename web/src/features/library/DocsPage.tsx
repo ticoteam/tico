@@ -35,11 +35,12 @@ function tabs(docs: number | undefined, sources: number | undefined): PageTab[] 
 /** A folder as a person reads it (docs-page.ts docsFolderWords): "_librarian" is "Librarian", "how-to" "How to". */
 const folderWords = (part: string) => part.replace(/^_+/, '').replace(/[-_]+/g, ' ').trim().replace(/^./, (c) => c.toUpperCase()) || part;
 
-/** A doc's folder: its first part names the section, the rest is what it is filed under. A doc at the top has none. */
+/** A doc's folder: its first part names the section, the folders below it are what it is filed under ("How to"), and
+    its own file name is neither. A doc at the top, or straight in its section's folder, is filed under nothing. */
 function folder(path: string): [string, string] {
   const parts = path.split('/').filter(Boolean);
   if (parts.length < 2) return ['Docs', ''];
-  return [folderWords(parts[0] ?? ''), parts.slice(1).join(' / ')];
+  return [folderWords(parts[0] ?? ''), parts.slice(1, -1).map(folderWords).join(' / ')];
 }
 
 const newDoc = () => void press('docs.new', {});
@@ -106,7 +107,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       actions={
         <>
           <Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />
-          <OwnerButton page="docs" />
+          <OwnerButton page="docs" phone />
           <Button variant="primary" icon="plus" onClick={newDoc} data-target="docs:new">
             New doc
           </Button>
@@ -188,7 +189,7 @@ function SourcesPage({ panel }: { panel?: string }) {
       tabs={tabs(docs.data?.docs.length, sources.data?.sources.length)}
       actions={
         <>
-          <OwnerButton page="docs" />
+          <OwnerButton page="docs" phone />
           <Button variant="primary" icon="plus" onClick={() => setAdding(true)} data-target="sources:new">
             Connect
           </Button>

@@ -55,8 +55,31 @@ import {
   websiteToolQuery,
   type DocRow,
   type SkillRow,
+  acceptQuote,
+  agentSendingQuery,
+  cancelNumberRequest,
+  checkGoogle,
+  checkLetters,
+  connectMyGoogle,
+  disconnectGoogle,
+  disconnectMyGoogle,
+  googleQuery,
+  googleSetupCommand,
+  lettersSettingsQuery,
+  sendingQuery,
+  setAgentSending,
+  setIntake,
+  setLegalMail,
+  setLetterGrant,
+  setLettersOut,
+  setMailMay,
+  setSending,
+  sharedInbox,
+  uploadGoogleKey,
+  type MailMay,
+  type SendPolicy,
 } from './queries';
-import type { ToolIndex } from '@/api/schema';
+import type { PolicyUpdate, ToolIndex } from '@/api/schema';
 import { viewing } from './viewing';
 
 /* Every view and change on the Library pages: Docs, a doc, Files, Skills, Tools, Contacts. Anything that sets a secret,
@@ -926,4 +949,269 @@ export const contactsNote = defineAction({
   run: (_ctx, i) => addNote(i.contact, i.body.trim(), i.audience ?? 'company'),
   did: () => 'Added a note',
   target: (i) => ({ kind: 'contact', id: i.contact }),
+});
+
+/* ---------------------------------------------------------------- company settings for Email, Texts and Letters */
+
+/* The old Tools › Settings. The person's own press (`tico: false`): anything paid (a number's quote), anything that
+   reveals or stores a secret (a Workspace key, a setup code, a Google sign-in, a connection code) and joining another
+   company's shared Inbox, which sends this company's mail there. Rules on what agents may send, and the letters'
+   sending rule and cap, Tico may only tighten: from Tico a change that lets more out is refused, as is one on rules not
+   read yet. Everything else is Tico's too. */
+
+const RANK: Record<string, number> = { never: 0, ask_first: 1, on_their_own: 2, replies_only: 0, replies_and_new: 1, internal: 0, known_addresses: 1, anyone: 2 };
+const up = (next: string | null | undefined, was: string | null | undefined) =>
+  next !== undefined && (next === null || (RANK[next] ?? 9) > (RANK[was ?? ''] ?? -1));
+const CAPS = ['daily_cap', 'mailbox_daily_cap', 'company_daily_cap', 'max_outside_recipients'] as const;
+const ASKS = ['ask_new_address', 'ask_legal_money', 'ask_attachments', 'ask_many_recipients', 'ask_outside_cc'] as const;
+
+/** Whether a change to the sending rules lets agents send more, sooner or to more people than `was`. */
+export function sendsMore(was: SendPolicy | undefined, next: PolicyUpdate): boolean {
+  if (!was || next.inherit) return true;
+  if (up(next.mode, was.mode) || up(next.what, was.what) || up(next.to, was.to)) return true;
+  if (CAPS.some((k) => next[k] != null && (next[k] as number) > (was[k] ?? 0))) return true;
+  if (next.undo_seconds != null && next.undo_seconds < (was.undo_seconds ?? 0)) return true;
+  if (ASKS.some((k) => next[k] === false && was[k])) return true;
+  return !!next.blocked_recipients && (was.blocked_recipients ?? []).some((x) => !next.blocked_recipients?.includes(x));
+}
+
+const mayIn = s.object({ organize_mail: s.boolean(), send_mail: s.boolean(), change_calendar: s.boolean() });
+
+export const toolsSetMailMay = defineAction({
+  id: 'tools.setMailMay',
+  title: 'Change what agents may do in Google',
+  kind: 'change',
+  input: mayIn,
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    const was = ctx.queryClient.getQueryData(googleQuery.queryKey)?.permissions;
+    return !!was && (Object.keys(i) as (keyof MailMay)[]).every((k) => !i[k] || was[k]);
+  },
+  run: (_ctx, i) => setMailMay(i),
+  did: () => 'Saved',
+  target: () => ({ kind: 'tool-set', id: 'mail-may' }),
+});
+
+export const toolsCheckGoogle = defineAction({
+  id: 'tools.checkGoogle',
+  title: 'Check the Google Workspace connection',
+  kind: 'change',
+  input: s.object({}),
+  run: () => checkGoogle(),
+  did: (_i, out) => ((out as { ok?: boolean } | undefined)?.ok === false ? 'Google did not accept it' : 'Google accepts it'),
+  target: () => ({ kind: 'tool-set', id: 'google' }),
+});
+
+/** A setup command for an agent or a terminal to run: it carries a one-time code, so it is the person's own. */
+export const toolsGoogleSetup = defineAction({
+  id: 'tools.googleSetup',
+  title: 'Make a Google Workspace setup command',
+  kind: 'change',
+  tico: false,
+  input: s.object({ domain: s.string({ min: 3, max: 253 }) }),
+  run: (_ctx, i) => googleSetupCommand(i.domain.trim().toLowerCase()).then((r) => r.command),
+  did: () => 'Made a setup command',
+  target: () => null,
+});
+
+export const toolsUploadGoogleKey = defineAction({
+  id: 'tools.uploadGoogleKey',
+  title: 'Upload a Google Workspace key',
+  kind: 'change',
+  tico: false,
+  input: s.object({ domain: s.string({ min: 3, max: 253 }), key: s.string({ min: 2, max: 20000 }) }),
+  run: (_ctx, i) => uploadGoogleKey(i.domain.trim().toLowerCase(), JSON.parse(i.key) as Record<string, unknown>),
+  did: () => 'Key uploaded',
+  target: () => ({ kind: 'tool-set', id: 'google' }),
+});
+
+export const toolsDisconnectGoogle = defineAction({
+  id: 'tools.disconnectGoogle',
+  title: 'Disconnect the Google Workspace',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  run: () => disconnectGoogle(),
+  did: () => 'Disconnected',
+  target: () => ({ kind: 'tool-set', id: 'google' }),
+});
+
+/** The person's own Google sign-in: off to Google's page, back to Tico when done. */
+export const toolsConnectMyGoogle = defineAction({
+  id: 'tools.connectMyGoogle',
+  title: 'Connect your Google account',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  run: async () => {
+    window.location.assign((await connectMyGoogle()).auth_url);
+  },
+  did: () => 'Off to Google',
+  target: () => null,
+});
+
+export const toolsDisconnectMyGoogle = defineAction({
+  id: 'tools.disconnectMyGoogle',
+  title: 'Disconnect your Google account',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  run: () => disconnectMyGoogle(),
+  did: () => 'Disconnected',
+  target: () => ({ kind: 'tool-set', id: 'google' }),
+});
+
+const capIn = s.optional(s.number({ int: true, min: 0, max: 1_000_000 }));
+
+export const toolsSetSending = defineAction({
+  id: 'tools.setSending',
+  title: 'Change what agents may send by email',
+  kind: 'change',
+  input: s.object({
+    mode: s.optional(s.oneOf(['ask_first', 'on_their_own', 'never'] as const)),
+    what: s.optional(s.oneOf(['replies_only', 'replies_and_new'] as const)),
+    to: s.optional(s.oneOf(['anyone', 'known_addresses', 'internal'] as const)),
+    daily_cap: capIn,
+    mailbox_daily_cap: capIn,
+    company_daily_cap: capIn,
+    max_outside_recipients: s.optional(s.number({ int: true, min: 0, max: 100 })),
+    undo_seconds: s.optional(s.oneOf([0, 30, 120, 600] as const)),
+    ask_new_address: s.optional(s.boolean()),
+    ask_legal_money: s.optional(s.boolean()),
+    ask_attachments: s.optional(s.boolean()),
+    ask_many_recipients: s.optional(s.boolean()),
+    ask_outside_cc: s.optional(s.boolean()),
+    blocked_recipients: s.optional(s.array(s.string({ min: 1, max: 320 }), { max: 500 })),
+  }),
+  can: (ctx, i) => ctx.via !== 'tico' || !sendsMore(ctx.queryClient.getQueryData(sendingQuery.queryKey)?.effective, i),
+  run: (_ctx, i) => setSending(i),
+  did: () => 'Saved',
+  target: () => ({ kind: 'tool-set', id: 'sending' }),
+});
+
+export const toolsSetAgentSending = defineAction({
+  id: 'tools.setAgentSending',
+  title: 'Change what one agent may send by email',
+  kind: 'change',
+  input: s.object({ bot: id, mode: s.nullable(s.oneOf(['ask_first', 'on_their_own', 'never'] as const)) }),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    const own = ctx.queryClient.getQueryData(agentSendingQuery(i.bot).queryKey);
+    const company = ctx.queryClient.getQueryData(sendingQuery.queryKey)?.effective.mode;
+    return !!own && company !== undefined && !up(i.mode, own.mode ?? company);
+  },
+  run: (_ctx, i) => setAgentSending(i.bot, i.mode),
+  did: (i) => (i.mode ? 'Saved' : 'Uses the company’s rule'),
+  target: (i) => ({ kind: 'tool-set', id: `sending:${i.bot}` }),
+});
+
+/** Joining the company's shared Inbox: this workspace's mail goes there and the company's comes here. */
+export const toolsJoinSharedInbox = defineAction({
+  id: 'tools.joinSharedInbox',
+  title: 'Join the company’s shared Inbox',
+  kind: 'change',
+  tico: false,
+  input: s.object({ code: s.string({ min: 43, max: 43 }) }),
+  run: (_ctx, i) => sharedInbox('connect', i.code).then(() => undefined),
+  did: () => 'Joined',
+  target: () => null,
+});
+
+/** Accepting a number's quote buys it for 30 days: paid, so the person's own. */
+export const toolsAcceptQuote = defineAction({
+  id: 'tools.acceptQuote',
+  title: 'Accept a phone number’s quote',
+  kind: 'change',
+  tico: false,
+  input: s.object({ request: id, price_micros: s.number({ int: true, min: 0 }) }),
+  run: (_ctx, i) => acceptQuote(i.request, i.price_micros),
+  did: () => 'Quote accepted',
+  target: () => ({ kind: 'tool-set', id: 'numbers' }),
+});
+
+export const toolsCancelNumberRequest = defineAction({
+  id: 'tools.cancelNumberRequest',
+  title: 'Cancel a phone number request',
+  kind: 'change',
+  input: s.object({ request: id }),
+  run: (_ctx, i) => cancelNumberRequest(i.request),
+  did: () => 'Request canceled',
+  target: () => ({ kind: 'tool-set', id: 'numbers' }),
+});
+
+export const toolsSetIntake = defineAction({
+  id: 'tools.setIntake',
+  title: 'Choose where emailed letters come in',
+  kind: 'change',
+  input: s.object({ inbox: s.nullable(id), senders: s.array(s.string({ min: 1, max: 320 }), { max: 100 }) }),
+  // Tico may stop it, never set where letters come in or who may send them.
+  can: (ctx, i) => (i.inbox ? ctx.via !== 'tico' && i.senders.length > 0 : true),
+  run: (_ctx, i) => setIntake(i.inbox, i.inbox ? i.senders.map((x) => x.trim().toLowerCase()) : []),
+  did: (i) => (i.inbox ? 'Saved' : 'Stopped'),
+  target: () => ({ kind: 'tool-set', id: 'intake' }),
+});
+
+export const toolsSetLetterAccess = defineAction({
+  id: 'tools.setLetterAccess',
+  title: 'Change who may read every letter',
+  kind: 'change',
+  input: s.object({ type: s.oneOf(['person', 'bot'] as const), who: id, read: s.boolean() }),
+  // Tico may take the read away, never give it.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.read,
+  run: (_ctx, i) => setLetterGrant(i.type, i.who, i.read),
+  did: (i) => (i.read ? 'Can read letters' : 'Removed'),
+  target: () => ({ kind: 'tool-set', id: 'letter-access' }),
+});
+
+export const toolsSetLegalMail = defineAction({
+  id: 'tools.setLegalMail',
+  title: 'Choose who gets legal letters',
+  kind: 'change',
+  input: s.object({ bot: s.nullable(id) }),
+  // Tico may hand legal letters back to the owner, never to an agent.
+  can: (ctx, i) => ctx.via !== 'tico' || i.bot === null,
+  run: (_ctx, i) => setLegalMail(i.bot),
+  did: () => 'Saved',
+  target: () => ({ kind: 'tool-set', id: 'legal' }),
+});
+
+const addressIn = s.object({
+  name: s.string({ min: 1, max: 100 }),
+  line1: s.string({ min: 1, max: 100 }),
+  line2: s.optional(s.string({ max: 100 })),
+  city: s.string({ min: 1, max: 100 }),
+  state: s.string({ pattern: /^[A-Z]{2}$/, what: 'a two-letter state' }),
+  postal_code: s.string({ pattern: /^\d{5}(-\d{4})?$/, what: 'a ZIP code' }),
+});
+
+/** Letters out: who decides a letter goes (each one is paid), the month's cap and the return address. */
+export const toolsSetLettersOut = defineAction({
+  id: 'tools.setLettersOut',
+  title: 'Change how letters go out',
+  kind: 'change',
+  input: s.object({
+    mode: s.optional(s.oneOf(['ask_first', 'on_their_own', 'never'] as const)),
+    monthly_cap_micros: s.optional(s.nullable(s.number({ int: true, min: 0, max: 1_000_000_000_000 }))),
+    return_address: s.optional(s.nullable(addressIn)),
+  }),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    const was = ctx.queryClient.getQueryData(lettersSettingsQuery.queryKey);
+    if (!was) return false;
+    const cap = i.monthly_cap_micros;
+    return !up(i.mode, was.mode) && (cap === undefined || (cap !== null && (was.monthly_cap_micros === null || cap <= was.monthly_cap_micros)));
+  },
+  run: (_ctx, i) => setLettersOut(i),
+  did: () => 'Saved',
+  target: () => ({ kind: 'tool-set', id: 'letters-out' }),
+});
+
+export const toolsCheckLetters = defineAction({
+  id: 'tools.checkLetters',
+  title: 'Check letters can go out',
+  kind: 'change',
+  input: s.object({}),
+  run: () => checkLetters(),
+  did: () => 'Checked',
+  target: () => ({ kind: 'tool-set', id: 'letters-out' }),
 });

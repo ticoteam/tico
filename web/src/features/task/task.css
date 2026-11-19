@@ -12,15 +12,16 @@
 /* ---------- the head on a phone (parts.css .tv-head, t-task-details-phone-dark.png): the title wraps at 20, then the
    where line under it keeps the pipeline ("Engineering › QA"), so its chevron never stands alone. The head grows to
    hold both lines, below the status bar. */
-html[data-layout="cards"] .tv .pk-head{height:auto;min-height:var(--head-h);align-items:flex-start;padding-top:calc(var(--page-top) + var(--s-3));padding-bottom:var(--s-1)}
+html[data-layout="cards"] .tv .pk-head{height:auto;min-height:var(--head-h);align-items:flex-start;padding-top:calc(var(--page-top) + var(--s-3));padding-bottom:calc((var(--ctl) - 22px) / 2)}
 html[data-layout="cards"] .tv .pk-where>.pk-crumb{display:contents}
 html[data-layout="cards"] .tv .pk-title h1{white-space:normal;font-size:var(--t-fig);line-height:var(--lh-tight);text-wrap:balance;
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3}
 html[data-layout="cards"] .tv .pk-where{margin-top:var(--s-2)}
 /* back and "⋯" sit on the title's first line */
 html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(--lh-tight) - var(--ctl)) / 2)}
-/* the trail's steps, the stage and who has it look 22 high but take a press a control's height (--ctl, 44 on a phone),
-   centered on them, without moving anything */
+/* the trail's steps, the stage and who has it look 22 high (.tv-where) but take a press a control's height (--ctl, 44
+   on a phone), centered on them. The head's bottom padding is that press's lower half past the line, so the tab row
+   under the head does not cover it (it starts where the press ends). */
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick){position:relative}
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick)::after{content:"";position:absolute;top:50%;right:0;left:0;height:var(--ctl);transform:translateY(-50%)}
 

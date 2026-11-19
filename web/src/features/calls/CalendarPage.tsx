@@ -40,6 +40,7 @@ import {
   place,
   rangeOf,
   rangeWords,
+  shortRange,
   step,
   tip,
   toggled,
@@ -56,16 +57,17 @@ import './calls.css';
 const HOUR = 56;
 const VIEW_WORDS: { value: CalView; label: string }[] = [
   { value: 'day', label: 'Day' },
+  { value: '3day', label: '3 days' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
   { value: 'list', label: 'List' },
 ];
-const UNIT: Record<CalView, string> = { day: 'day', week: 'week', month: 'month', list: 'week' };
+const UNIT: Record<CalView, string> = { day: 'day', '3day': '3 days', week: 'week', month: 'month', list: 'week' };
 
 /** The calendar's address with some of it changed: what every link on the page points at. */
 type At = (patch: CalendarSearch, drop?: 'panel') => CalendarSearch;
 
-/** Calendar: Day, Week, Month and List. Meetings, due dates, routines' runs and time away; an event opens on the right. */
+/** Calendar: Day, 3 days, Week, Month and List. Meetings, due dates, routines' runs and time away; an event opens on the right. */
 export function CalendarPage() {
   const search = calendarSearch(useSearch({ strict: false }) as Record<string, unknown>);
   const navigate = useNavigate();
@@ -94,11 +96,16 @@ export function CalendarPage() {
       <MeetingPanel id={open.id} onClose={close} />
     ) : undefined;
 
+  const find = <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />;
   const grid =
     view === 'month' ? (
       <MonthGrid days={range.days} weeks={range.weeks} month={day.getMonth()} list={list} now={now} today={today} at={at} />
     ) : view === 'list' ? (
-      <ListView list={list} now={now} today={today} at={at} search={search} />
+      <>
+        {/* a phone's head keeps two controls: the search sits under it */}
+        {cards && <div className="cl-find">{find}</div>}
+        <ListView list={list} now={now} today={today} at={at} search={search} />
+      </>
     ) : (
       <TimeGrid view={view} days={range.days} list={list} now={now} today={today} at={at} open={open?.kind === 'event' ? open.id : null} />
     );
@@ -113,6 +120,7 @@ export function CalendarPage() {
           view === 'list' ? undefined : (
             <>
               <span className="cv-range">{rangeWords(view, day)}</span>
+              <span className="cv-range-s">{shortRange(view, day)}</span>
               <span className="cv-step">
                 <Link
                   to="/calendar"
@@ -138,9 +146,7 @@ export function CalendarPage() {
         }
         actions={
           <>
-            {view === 'list' && (
-              <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />
-            )}
+            {view === 'list' && !cards && find}
             {view === 'list' && <ListFilter search={search} at={at} />}
             <Segmented
               label="View"
@@ -334,7 +340,8 @@ interface GridProps {
   at: At;
 }
 
-function TimeGrid({ view, days, list, now, today, at, open }: GridProps & { view: 'day' | 'week'; days: Date[]; open: string | null }) {
+/** Day, or 3 days and Week: the same columns, as many as the view's days (3 days is the phone's grid; Week there is an agenda). */
+function TimeGrid({ view, days, list, now, today, at, open }: GridProps & { view: 'day' | '3day' | 'week'; days: Date[]; open: string | null }) {
   const placed = days.map((d) => onDay(list, d));
   const [h0, h1] = hoursFor(placed.flat(), view);
   const y = (m: number) => ((m - h0 * 60) * HOUR) / 60;
@@ -402,7 +409,7 @@ function TimeGrid({ view, days, list, now, today, at, open }: GridProps & { view
             </div>
           ))}
         </div>
-        {empty && <p className="cv-none">{isDay ? 'Nothing this day' : 'Nothing this week'}</p>}
+        {empty && <p className="cv-none">{isDay ? 'Nothing this day' : view === '3day' ? 'Nothing these 3 days' : 'Nothing this week'}</p>}
       </div>
     </div>
   );

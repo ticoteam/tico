@@ -87,8 +87,13 @@ export function TeamPage({ group, add }: TeamPageProps) {
         className="rec"
         actions={
           <>
-            <IconButton icon="plus" label="Add a teammate" onClick={() => void addOpen.run({ step: 'pick' })} data-target="team:add" />
-            {manager && <OwnerButton actor={manager.id} />}
+            <IconButton icon="plus" label="Add a teammate" onClick={() => void addOpen.run({ step: 'pick' })} data-target="team:add" data-phone />
+            {/* On a phone the manager's face stays: it is the way to their chat there. */}
+            {manager && (
+              <span className="tm-face" data-phone>
+                <OwnerButton actor={manager.id} />
+              </span>
+            )}
           </>
         }
         more={

@@ -164,8 +164,9 @@ function toolsAddress(rest: string, q: URLSearchParams): string {
   // A Tico inbox's address is the same for a number and an email inbox (backend/api_tools.py); the page draws both.
   if (head === 'number' && id) return tool(`number:${name}`);
   if (head === 'address' && id) return tool(`address:${name}`);
-  // Tools › Settings (email, texts, letters) has no page in the new design: the inboxes it set up.
-  if (head === 'settings') return MAIL_TOOLS;
+  // Tools › Settings' sections (ui/app/pages-shell.ts INBOX_SECTIONS) are settings on their tools now: Email's page,
+  // Phone numbers' requests and the mailing address. No section was Email.
+  if (head === 'settings') return tool(id === 'texts' ? 'number' : id === 'letters-in' || id === 'letters-out' ? 'address' : 'mailbox');
   if (head === 'messages') return '/threads/messaging';
   // GitHub's install and sign-in return here with ?github=… (backend/github_app.py): a known word is carried for the
   // page to read; nothing else is.
@@ -312,10 +313,7 @@ export const ROWS: readonly Row[] = [
   {
     page: 'Calendar',
     path: /^#\/calendar(?:\/.*)?$/,
-    to: (_m, q) => {
-      const view = q.get('view');
-      return at('/calendar', { view: view === '3day' ? 'week' : view, date: q.get('date'), q: q.get('q') });
-    },
+    to: (_m, q) => at('/calendar', { view: q.get('view'), date: q.get('date'), q: q.get('q') }),
   },
   { page: 'New message', path: /^#\/threads\/new$/, to: () => '/threads/new' },
   { page: 'Thread', path: /^#\/thread\/([^/]+)(?:\/.*)?$/, to: ([id]) => `/threads/${seg(id)}` },

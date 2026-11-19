@@ -154,7 +154,9 @@ div.row{cursor:default}
 
 /* Agents as one screen (a trial, Nov 19). */
 .row-own{display:grid}
-/* over the table: search (or what to do with the checked rows) at the left, how it is grouped at the right */
+/* over the table: search (or what to do with the checked rows) at the left, how it is grouped at the right. Narrow, the
+   grouping wraps under them, still at the right, instead of running past the page's edge (it does not shrink). */
+.fl-tools{flex-wrap:wrap;row-gap:var(--s-2)}
 .fl-tools .bulk{margin-left:0}
 .fl-tools .tools-n{margin-left:0}
 .fl-tools .search{flex:0 1 300px;max-width:none}
@@ -174,8 +176,10 @@ div.row{cursor:default}
 .pk-sec+.list-tools,.pk-sec+.fl{border-top:1px solid var(--line)}
 /* the table measures its own width (the page's includes the section list): narrow, the model for tasks and the owner give way */
 .fl{container:fleet / inline-size}
+/* The third column (Computer, Team or Next) takes its full 140 before the name grows, so "No computer" is not cut; only
+   when there is no room left does it give way, to 72, rather than push the row past the edge. */
 @container fleet (max-width:840px){
-  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) 176px 72px 34px}
+  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) 176px minmax(72px,140px) 34px}
   .g-fleet .c-tasks,.g-fleet .c-own{display:none}
 }
 /* a row's ⋯: only on a phone, where the model, tasks and limit cells give way */
@@ -240,7 +244,11 @@ html[data-layout="cards"] .g-utask{--g:minmax(0,1fr) 56px 44px}
 html[data-layout="cards"] .g-utask>:nth-child(2),html[data-layout="cards"] .g-utask>:nth-child(4),html[data-layout="cards"] .g-utask>:nth-child(5){display:none}
 html[data-layout="cards"] .cl-list li{grid-template-columns:48px minmax(0,1fr)}
 html[data-layout="cards"] .cl-list li.cl-act{grid-template-columns:minmax(0,1fr) auto}
-html[data-layout="cards"] .fl-tools{flex-wrap:wrap}
+/* phone: the search has its own line, edge to edge; the count and the grouping go under it */
+html[data-layout="cards"] .fl-tools .search{flex:1 1 100%}
+/* the row's ⋯ on the 16 gutter, as a head's: its 20px icon sits 12 in from the 44px press, so the press reaches into the
+   gutter by that much (the row and the section body put its edge on 16) */
+html[data-layout="cards"] .g-fleet>.fl-more{margin-right:calc(var(--s-3) * -1)}
 .set-leaves{margin:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--t-sm)}
 .set-link .set-out{display:grid;margin-left:auto;color:var(--faint)}
 .set-link .set-out .ico{width:13px;height:13px;stroke-width:2}

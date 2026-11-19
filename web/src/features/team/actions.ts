@@ -38,7 +38,11 @@ import {
   wakeUp,
   startLogin,
   startLogout,
+  saveTabs,
+  taskTabsQuery,
+  type TaskTab,
 } from './queries';
+import { LIST_FIELDS, rowOf, type ListLine } from './model';
 
 const slug = s.string({ min: 1, max: 100, what: "an agent's slug" });
 const person = s.string({ min: 1, max: 100, what: "a person's id" });
@@ -325,6 +329,91 @@ export const add = defineAction({
   },
   did: ({ name }) => `Added ${name}`,
   target: (_input, out) => (out ? onPage(out.slug) : null),
+});
+
+/* ---------------------------------------------------------------- its own lists */
+
+const listName = s.string({ min: 1, max: 40 });
+const listId = s.string({ pattern: /^c\d{1,3}$/, what: "a list's key (c0, c1…) as its page names it" });
+// A row's value in words: "open" or "open,done" (Status), a number of days, "overdue" or days (Due), "this_bot", "me",
+// "others" or an actor id (Assigned to, Asked by), "any", "person", "bot", "me" or "not_me" (Waiting on), "you" (Needs).
+const listRows = s.array(s.object({ field: s.oneOf(LIST_FIELDS), value: s.string({ min: 1, max: 200 }) }), { max: 20 });
+const onList = (slug: string, list: string) => ({ kind: 'list', id: `${slug}:${list}` });
+const own = (tabs: TaskTab[], list: string) => {
+  const i = Number(list.slice(1));
+  if (!tabs[i] || tabs[i].builtin) throw new Error(`No list ${list}`);
+  return i;
+};
+const mayEdit = (qc: { getQueryData: (k: readonly unknown[]) => unknown }, slug: string) =>
+  (qc.getQueryData(taskTabsQuery(slug).queryKey) as { can_edit?: boolean } | undefined)?.can_edit !== false;
+
+export const addList = defineAction({
+  id: 'agents.addList',
+  title: "Add a list to an agent's page: tasks matching a saved filter",
+  kind: 'change',
+  input: s.object({ slug, name: listName, conditions: listRows }),
+  can: ({ queryClient }, { slug }) => mayEdit(queryClient, slug),
+  run: async (_ctx, { slug, name, conditions }) => {
+    let key = '';
+    await said("Couldn't add the list", () =>
+      saveTabs(slug, (tabs) => {
+        key = `c${tabs.length}`;
+        return [...tabs, { name, conditions: conditions.map((c) => rowOf(c as ListLine)) }];
+      }),
+    );
+    return { list: key };
+  },
+  did: ({ name }) => `Added ${name}`,
+  target: ({ slug }, out) => (out ? onList(slug, out.list) : onPage(slug)),
+});
+
+export const changeList = defineAction({
+  id: 'agents.changeList',
+  title: "Rename one of an agent's lists, or change its filter",
+  kind: 'change',
+  input: s.object({ slug, list: listId, name: s.optional(listName), conditions: s.optional(listRows) }),
+  can: ({ queryClient }, { slug }) => mayEdit(queryClient, slug),
+  run: (_ctx, { slug, list, name, conditions }) =>
+    said("Couldn't change the list", () =>
+      saveTabs(slug, (tabs) => {
+        const i = own(tabs, list);
+        return tabs.map((t, j) =>
+          j === i ? { ...t, ...(name ? { name } : {}), ...(conditions ? { conditions: conditions.map((c) => rowOf(c as ListLine)) } : {}) } : t,
+        );
+      }),
+    ),
+  did: ({ name }) => (name ? `Changed ${name}` : 'Changed the list'),
+  target: ({ slug, list }) => onList(slug, list),
+});
+
+export const removeList = defineAction({
+  id: 'agents.removeList',
+  title: "Remove one of an agent's lists (its tasks stay)",
+  kind: 'change',
+  input: s.object({ slug, list: listId }),
+  can: ({ queryClient }, { slug }) => mayEdit(queryClient, slug),
+  run: (_ctx, { slug, list }) =>
+    said("Couldn't remove the list", () =>
+      saveTabs(slug, (tabs) => {
+        const i = own(tabs, list);
+        return tabs.filter((_t, j) => j !== i);
+      }),
+    ),
+  did: () => 'Removed the list',
+  target: ({ slug }) => onPage(slug),
+});
+
+/* ---------------------------------------------------------------- its last run */
+
+export const reviewStopped = defineAction({
+  id: 'agents.reviewStopped',
+  title: "Open an agent's stopped run, to try it again or let it go",
+  kind: 'view',
+  input: s.object({ slug }),
+  run: ({ router }, { slug }) => router.navigate({ to: '/settings/$section', params: { section: 'agents' }, search: { open: slug } }),
+  show: ({ router }, { slug }) => router.navigate({ to: '/settings/$section', params: { section: 'agents' }, search: { open: slug } }),
+  did: () => 'Opened the stopped run',
+  target: () => ({ kind: 'page', id: '/settings/agents' }),
 });
 
 /* ---------------------------------------------------------------- teams and people */

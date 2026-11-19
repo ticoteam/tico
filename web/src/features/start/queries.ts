@@ -59,6 +59,8 @@ export interface Need {
   id: string;
   kind: NeedsYouItem['kind'];
   title: string;
+  /** Quiet, beside the title on the same line: what is asked when the title is the task's, or the task a message is on. */
+  sub: string | undefined;
   /** The page it opens: its task, else its thread. */
   href: string | undefined;
   at: string;
@@ -74,6 +76,25 @@ export function needHref(item: NeedsYouItem & { task_ids?: string[] }): string |
   return thread ? `/threads/${enc(thread)}` : undefined;
 }
 
+/**
+ * A need's one line. An OK or a task's wait (`ask`, `task`) has the requirement's name for its line ("Spec", "Release
+ * report"), the same on every task in that stage, so the task's title is the title and the line is quiet beside it; a
+ * task filed for the OK alone is titled by its kind, and then `about` says what it is about (views.py needs_items). A
+ * question or an @ has the message itself for its line, which is already its own: it stays the title, with its task
+ * beside it. A Paused cause stands for several tasks: its line alone.
+ */
+export function needLine(it: NeedsYouItem): { title: string; sub: string | undefined } {
+  const task = it.task?.title?.trim() || undefined;
+  const line = it.line.trim();
+  const pair = (title: string, sub: string | undefined) => ({ title, sub: sub && sub !== title ? sub : undefined });
+  if (it.kind === 'ask' || it.kind === 'task') {
+    const name = it.about?.trim() || task;
+    return name ? pair(name, line) : pair(line, undefined);
+  }
+  if (it.kind === 'question' || it.kind === 'mention') return line ? pair(line, task) : pair(task ?? '', undefined);
+  return pair(line, undefined);
+}
+
 export function adaptNeeds(data: GetNeedsYouResponse): { count: number; items: Need[] } {
   const items = 'items' in data && Array.isArray(data.items) ? data.items : [];
   return {
@@ -81,7 +102,7 @@ export function adaptNeeds(data: GetNeedsYouResponse): { count: number; items: N
     items: items.map((it) => ({
       id: it.id,
       kind: it.kind,
-      title: it.line,
+      ...needLine(it),
       href: needHref(it),
       at: it.since ?? new Date().toISOString(),
       from: it.from_id || undefined,

@@ -1,14 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, type ReactNode } from 'react';
-import { run } from '@/actions';
+import { run, type Result } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
-import { toast } from '@/kit/Toast';
+import { toast, type ToastInput } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
 import { chatAddress } from '@/lib';
 
@@ -35,11 +35,18 @@ export function Who({ actor, name, className = 'doc-owner' }: { actor: string | 
 
 /**
  * The page owner's face in the head (backend/page_owners.py: docs and contacts default to the Librarian, skills to
- * BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner.
+ * BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner. `phone`
+ * keeps it in a phone's head (pagekinds.css keeps only `data-phone` controls there), as the Roadmap's face is kept.
  */
-export function OwnerButton({ page }: { page: 'docs' | 'skills' | 'contacts' | 'tools' }) {
+export function OwnerButton({ page, phone }: { page: 'docs' | 'skills' | 'contacts' | 'tools'; phone?: boolean }) {
   const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
-  return <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
+  const face = <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
+  if (!phone || !bot) return face;
+  return (
+    <span className="lib-ask" data-phone>
+      {face}
+    </span>
+  );
 }
 
 /** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */
@@ -77,10 +84,15 @@ export function Find({ label, value, onFind }: { label: string; value: string | 
   return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus />;
 }
 
+/** A refusal's toast: what did not happen, then the server's reason when it gave one. */
+export function refusal(r: Result, failed: string, denied = 'You cannot do that here'): ToastInput {
+  return { text: r.error === 'not_allowed' && !r.why ? denied : failed, name: r.why, kind: 'failed' };
+}
+
 /** Run an action from a control and say why when it is refused (`run` itself shows nothing). */
 export async function press(id: string, input: unknown, failed = 'That did not work'): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
-  if (!r.ok) toast({ text: r.error === 'not_allowed' ? 'You cannot do that here' : failed, kind: 'failed' });
+  if (!r.ok) toast(refusal(r, failed));
   return r.ok;
 }
 

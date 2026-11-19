@@ -22,6 +22,9 @@
 .lib .read-code{margin:var(--s-3) 0 0;padding:var(--s-3);border-radius:var(--r-ctl);background:var(--well);color:var(--ink-2);overflow-x:auto;white-space:pre}
 .lib .read-note{margin-bottom:var(--s-3h);color:var(--muted)}
 
+/* the owner's face kept in a phone's head (parts.tsx OwnerButton `phone`): the wrapper draws nothing */
+.lib-ask{display:contents}
+
 /* ---------- the library row: a 32 px lead, the name, one quiet context column, who, age ---------- */
 .lib .lrow{--rule-from:40px}
 .lib .lrow+.lrow::before{content:"";position:absolute;left:var(--rule-from);right:8px;top:0;height:1px;background:var(--line);pointer-events:none}
@@ -32,9 +35,10 @@
 .lib .lrow .row-title{padding-right:var(--s-4)}
 .lib .frow{grid-template-columns:32px minmax(0,1fr) auto var(--av-sm) 52px}
 .lib .frow .row-title{color:inherit}
-.lib .drow,.lib .doc-cols{grid-template-columns:20px minmax(0,1fr) 208px 168px 52px}
-.lib .drow{--rule-from:28px}
-.lib .drow.is-gone,.lib .doc-cols.is-gone{grid-template-columns:20px minmax(0,1fr) 208px 168px 52px 28px}
+/* the lead is 24 so a title starts at 8 + 24, on the section name's edge (parts.css .stage-head, 32) */
+.lib .drow,.lib .doc-cols{grid-template-columns:24px minmax(0,1fr) 208px 168px 52px}
+.lib .drow{--rule-from:32px}
+.lib .drow.is-gone,.lib .doc-cols.is-gone{grid-template-columns:24px minmax(0,1fr) 208px 168px 52px 28px}
 .lib .doc-cols.is-gone span:nth-last-child(2){text-align:right}
 .lib .srow{grid-template-columns:32px minmax(0,1fr) auto 92px var(--av-sm) 52px}
 .lib .hrow{grid-template-columns:32px minmax(0,1fr) auto 52px}
@@ -171,6 +175,9 @@
 .tools .tool-head .kind{margin-right:var(--s-0)}
 .tools .tool.is-empty .conv-head{border-bottom:0}
 .tools .conv-body.tool-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:var(--s-1h) var(--s-4) var(--s-8)}
+/* a section's name on the rows' edge, as Settings has it (settings.css .set-body): parts.css .stage-head keeps 32px for
+   the task lists' hanging marks, which a tool's facts and rows do not have */
+.tools .tool-body .stage-head{padding-left:var(--s-2)}
 /* one label column for every fact; a row keeps its height whatever it holds */
 .tools .tool .fact{display:grid;grid-template-columns:128px minmax(0,1fr);justify-content:start;gap:0;height:var(--row);padding:0 var(--s-2);border-radius:var(--r-row)}
 .tools .tool .fact>span:first-child{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:var(--s-3)}

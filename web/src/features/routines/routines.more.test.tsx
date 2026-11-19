@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot, run } from '@/actions';
 import { queryClient } from '@/data';
 import { validateRoutinesSearch } from './load';
+import { webhookQuery } from '@/features/library/exports';
 import { endpointsQuery, eventTypesQuery, hooksQuery, routinesQuery, templatesQuery, type Endpoint } from './queries';
 import { RoutinesPage } from './RoutinesPage';
 import type { Routine } from './types';
@@ -128,7 +129,8 @@ describe('Runs', () => {
     expect(within(row).getByText('Timed out')).toBeTruthy();
     // Tico's own jobs have no page
     expect(screen.getByTitle('Tidy up').tagName).toBe('DIV');
-    expect(screen.getByRole('region', { name: 'Last 24 hours' })).toBeTruthy();
+    // the old app's default: the last hour
+    expect(screen.getByRole('region', { name: 'Last hour' })).toBeTruthy();
   });
 
   it('filters by status in the address and says when there are none', async () => {
@@ -144,7 +146,7 @@ describe('Runs', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Failed' }));
     expect(await screen.findByText('No failed runs')).toBeTruthy();
     expect(router.state.location.search).toMatchObject({ tab: 'runs', status: 'failed' });
-    expect(asked.some((u) => u.includes('status=failed') && u.includes('range=24h'))).toBe(true);
+    expect(asked.some((u) => u.includes('status=failed') && u.includes('range=1h'))).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(await screen.findByTitle('Morning numbers')).toBeTruthy();
     expect(router.state.location.search).toEqual({ tab: 'runs' });
@@ -181,6 +183,21 @@ describe('The inbox board', () => {
     expect(body.steps[0]!.rules![0]).toMatchObject({ when: [{ field: 'message.from', op: 'contains', value: '@store.example' }], to: 'later', then: [{ do: 'label', args: { name: 'Receipts' } }] });
     expect(body.destinations).toEqual(DESTS);
     expect(await screen.findByRole('complementary', { name: 'Ada inbox' })).toBeTruthy();
+  });
+
+  it('has no Edit: a board is edited a part at a time', async () => {
+    record(nothing);
+    queryClient.setQueryData(routinesQuery.queryKey, [boardRoutine(), routine()]);
+    const router = show('/company/routines?panel=routine:r9');
+    const panel = await screen.findByRole('complementary', { name: 'Ada inbox' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Versions' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Edit' })).toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await router.navigate({ to: '/company/routines', search: { panel: 'routine:r1' } as never });
+    const other = await screen.findByRole('complementary', { name: 'Morning numbers' });
+    fireEvent.click(within(other).getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Edit' })).toBeTruthy();
   });
 
   it('keeps one destination at least', async () => {
@@ -369,6 +386,31 @@ describe('Outgoing webhooks', () => {
     });
     expect(writes(sent)[1]!.body).toMatchObject({ credentials: 'keep', url: 'https://other.example/in' });
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it("opens one on Tools from its ⋯, and a change reads Tools' copy again", async () => {
+    record((url, method) =>
+      method === 'POST' && url.endsWith('/webhooks/e1/update')
+        ? ok({ webhook: endpoint({ name: 'Orders' }) })
+        : url.includes('/api/v2/webhooks?')
+          ? ok({ items: [endpoint({ name: 'Orders' })] })
+          : (lists(url) ?? nothing()),
+    );
+    seed([endpoint()]);
+    const tools = webhookQuery('e1').queryKey;
+    queryClient.setQueryData([...tools], { webhook: { id: 'e1', name: 'Order feed' } });
+    const router = show('/company/routines?tab=webhooks');
+    fireEvent.click(await screen.findByRole('button', { name: 'Order feed' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit outgoing webhook' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Orders' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(queryClient.getQueryState(tools)?.isInvalidated).toBe(true);
+    const row = (await screen.findByRole('button', { name: 'Orders' })).closest('.hook') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in Tools' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/library/tools'));
+    expect(router.state.location.search).toMatchObject({ tool: 'webhook:e1' });
   });
 
   it('keeps secrets and new endpoints from Tico', async () => {

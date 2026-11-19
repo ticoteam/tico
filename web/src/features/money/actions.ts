@@ -2,6 +2,7 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
+import { chatAddress } from '@/lib';
 import { budgetDay } from './model';
 import {
   addBudget,
@@ -11,6 +12,7 @@ import {
   connectSource,
   decide,
   disconnectBooks,
+  findGrowthManager,
   KEY_SOURCES,
   removeBudget,
   setBillsAddress,
@@ -482,6 +484,55 @@ export const openSources = defineAction({
   run: ({ router }) => router.navigate({ to: GROWTH, search: { tab: 'sources' } }),
   did: () => 'Opened Sources in Growth',
   target: () => ({ kind: 'page', id: `${GROWTH}?tab=sources` }),
+});
+
+const slug = s.string({ min: 1, max: 80, pattern: /^[\w-]+$/, what: 'a channel slug' });
+
+export const openMonth = defineAction({
+  id: 'growth.openMonth',
+  title: "Open a channel's month: each number and where it came from",
+  kind: 'view',
+  input: s.object({ channel: slug, month: ym }),
+  run: ({ router }, { channel, month }) => go(router, GROWTH, { tab: undefined, panel: `month:${channel}:${month}` }),
+  did: () => 'Opened the month',
+  target: ({ channel, month }) => ({ kind: 'month', id: `${channel}:${month}` }),
+});
+
+export const openCustomers = defineAction({
+  id: 'growth.openCustomers',
+  title: 'Open the customers behind a retention figure',
+  kind: 'view',
+  input: s.object({ month: ym, day: s.oneOf(['30', '90', '180'] as const) }),
+  run: ({ router }, { month, day }) => go(router, GROWTH, { tab: undefined, panel: `customers:${month}:${day}` }),
+  did: () => 'Opened the customers',
+  target: ({ month, day }) => ({ kind: 'kept', id: `${month}:${day}` }),
+});
+
+export const openSource = defineAction({
+  id: 'growth.openSource',
+  title: 'Open a Growth source: what it is the truth for and its last sync',
+  kind: 'view',
+  input: s.object({ source: id }),
+  run: ({ router }, { source }) => router.navigate({ to: GROWTH, search: { tab: 'sources', panel: `source:${source}` } }),
+  did: () => 'Opened the source',
+  target: ({ source }) => ({ kind: 'source', id: source }),
+});
+
+/** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. */
+export const askManager = defineAction({
+  id: 'growth.askManager',
+  title: "Open the Growth Manager's chat",
+  kind: 'view',
+  input: s.object({}),
+  run: async ({ router, queryClient: qc }): Promise<string> => {
+    const who = await findGrowthManager(qc);
+    if (!who) throw new Error('No Growth Manager');
+    const chat = chatAddress(who, 'agent');
+    await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
+    return chat;
+  },
+  did: () => 'Opened the chat',
+  target: (_i, chat) => (chat ? { kind: 'chat', id: chat } : null),
 });
 
 export const closeGrowthPanel = defineAction({

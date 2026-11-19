@@ -145,6 +145,10 @@
 .money .fr-group{height:var(--s-10);display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) var(--s-1h);font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);border-bottom:1px solid var(--line)}
 .money .fr-group .count{font-size:var(--t-sm)}
 
+/* Growth: the Growth Manager's face kept in a phone's head (GrowthPanels.tsx ManagerFace), a long customer list */
+.money .gm-ask{display:contents}
+.money .cust-list{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}
+
 :where(html[data-layout="cards"]){
   .money .chart-sec{padding:0 var(--s-2) var(--s-3)}
   .money .ctl-row{padding:var(--s-3) var(--s-2) var(--s-2h)}

@@ -13,7 +13,7 @@ import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Foot, SCHEMES, trimmed, useGo, type Scheme } from './AddTool';
-import { More } from './parts';
+import { More, press, refusal } from './parts';
 import { readMessage, type Inbox, type PasteItem } from './queries';
 
 /* The dialogs an open tool raises (the old app's tools-api, tools-website and inboxes dialogs). A secret shown here
@@ -175,7 +175,7 @@ export function RevealDialog({ credential, title, onClose }: { credential: strin
     const r = await run('tools.reveal', { credential }, { via: 'click' });
     setBusy(false);
     if (r.ok && typeof r.out === 'string') setValue(r.out);
-    else toast({ text: r.error === 'not_allowed' ? 'You cannot see this' : 'Not shown', kind: 'failed' });
+    else toast(refusal(r, 'Not shown', 'You cannot see this'));
   };
   return (
     <Dialog
@@ -209,7 +209,7 @@ export function PasteDialog({ tool, onClose }: { tool: string; onClose: () => vo
     setChecking(false);
     const items = (r.out as { items?: PasteItem[] } | undefined)?.items;
     if (r.ok && items) setFound(items);
-    else toast({ text: 'Not read', kind: 'failed' });
+    else toast(refusal(r, 'Not read'));
   };
   return (
     <Dialog
@@ -354,7 +354,11 @@ export function NewAddressDialog({ onClose }: { onClose: () => void }) {
 
 export function RequestNumberDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('Mobile number');
-  const [busy, go] = useGo(onClose);
+  // the price comes back on Phone numbers' requests, which opens once asked
+  const [busy, go] = useGo(() => {
+    onClose();
+    void press('tools.open', { tool: 'number' });
+  });
   return (
     <Dialog
       open

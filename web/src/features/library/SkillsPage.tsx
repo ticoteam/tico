@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { run } from '@/actions';
-import { useActor } from '@/data';
+import { meQuery, useActor } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -20,8 +20,10 @@ import { Document, List, PageMore, type PageState } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { MenuItem } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
-import { Face, Find, OwnerButton, press, when, Who } from './parts';
+import { forgetHelperCode, heldHelperCode } from './helperCode';
+import { Face, Find, OwnerButton, press, refusal, when, Who } from './parts';
 import {
+  accessRoleQuery,
   installTargetsQuery,
   proposalQuery,
   proposalsQuery,
@@ -44,7 +46,7 @@ import './library.css';
 
 /* Skills (tools.js skillsPage, skillPage, proposalPage): one list, no tabs. A proposed change waits at the top with the
    Flow mark; a skill opens as its text with who has it beside it; a proposal opens as its changes, with Approve and
-   Send back at the foot. */
+   Send back at the foot for an admin (anyone else reads it only). */
 
 const CRUMB = [{ label: 'Skills', to: '/library/skills' }];
 
@@ -53,8 +55,10 @@ export const actorOf = (a: { type: string; id: string }) => `${a.type === 'Bot' 
 
 export function SkillsPage({ search }: { search: SkillsSearch }) {
   const router = useRouter();
-  // A helper's code from an old link is a one-time approval: held in this state, and out of the address at once.
-  const [device, setDevice] = useState<string | null>(null);
+  // A helper's code is a one-time approval, held in this state only. The app took it out of the address at startup
+  // (helperCode.ts), across a sign-in too; one that still comes by the address leaves it at once.
+  const [device, setDevice] = useState<string | null>(heldHelperCode);
+  useEffect(() => forgetHelperCode(), []);
   const incoming = search.connect && search.connect !== 'setup' ? search.connect : null;
   if (incoming && incoming !== device) setDevice(incoming);
   useEffect(() => {
@@ -108,7 +112,7 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       actions={
         <>
           <Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />
-          <OwnerButton page="skills" />
+          <OwnerButton page="skills" phone />
           <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
             New skill
           </Button>
@@ -165,8 +169,7 @@ function NewSkill({ onClose }: { onClose: () => void }) {
     const r = await run('skills.propose', { name, text }, { via: 'click' });
     setBusy(false);
     if (r.ok) return onClose();
-    const why = r.error === 'exists' ? `${name} is already a skill` : r.error === 'not_allowed' ? 'You cannot do that here' : 'Not proposed';
-    toast({ text: why, kind: 'failed' });
+    toast(r.error === 'exists' ? { text: `${name} is already a skill`, kind: 'failed' } : refusal(r, 'Not proposed'));
   };
   return (
     <Dialog
@@ -275,7 +278,7 @@ function SkillPage({ name }: { name: string }) {
       className="lib"
       actions={
         <>
-          <OwnerButton page="skills" />
+          <OwnerButton page="skills" phone />
           {latest && (
             <Button variant={d.data?.installs.length ? 'plain' : 'primary'} onClick={() => setInstalling(true)} data-target={`skill-install:${name}`}>
               Install
@@ -415,8 +418,17 @@ export function diffLines(diff: string, many: boolean): DiffLine[] {
   return out;
 }
 
+/** Whether the server lets this reader approve or send back a proposal (backend/brand.py admin): the owner, or an admin
+    on their own click. Never an agent; a member reads it only. */
+function useDecider(): boolean {
+  const me = useQuery(meQuery).data;
+  const role = useQuery({ ...accessRoleQuery, enabled: me?.role === 'person' }).data;
+  return me?.role === 'owner' || (me?.role === 'person' && (role === 'owner' || role === 'admin'));
+}
+
 function ProposalPage({ id }: { id: string }) {
   const d = useQuery(proposalQuery(id));
+  const decider = useDecider();
   const skills = useQuery(skillsQuery);
   const [back, setBack] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -439,7 +451,7 @@ function ProposalPage({ id }: { id: string }) {
       toast({ text: 'Screening rated this high risk', kind: 'failed', action: { label: 'Approve', run: () => void approve(true) } });
     else if (r.error === 'not_screened') toast({ text: 'Screening is not done yet', kind: 'failed' });
     else if (r.error === 'stale') toast({ text: 'The skill changed since. It needs screening again.', kind: 'failed' });
-    else toast({ text: r.error === 'not_allowed' ? 'You cannot do that here' : 'Not approved', kind: 'failed' });
+    else toast(refusal(r, 'Not approved'));
   };
 
   return (
@@ -448,7 +460,7 @@ function ProposalPage({ id }: { id: string }) {
       path={`/library/skills?proposal=${id}`}
       crumb={CRUMB}
       className="lib"
-      actions={<OwnerButton page="skills" />}
+      actions={<OwnerButton page="skills" phone />}
       state={stateOf(d)}
       onRetry={() => void d.refetch()}
       noAccess={{ text: 'Only an admin or the one who proposed it can read it.' }}
@@ -515,7 +527,8 @@ function ProposalPage({ id }: { id: string }) {
         )
       }
       foot={
-        open && (
+        open &&
+        decider && (
           <>
             <Button onClick={() => setBack(true)} data-target={`proposal-back:${id}`}>
               Send back

@@ -32,7 +32,7 @@ import {
   SettingDialog,
   SitesDialog,
 } from './ToolDialogs';
-import { Face, Held, KindTile, More, OwnerButton, press, when } from './parts';
+import { Face, Held, KindTile, More, OwnerButton, press, refusal, when } from './parts';
 import {
   apiToolQuery,
   inboxesQuery,
@@ -46,6 +46,7 @@ import {
   webhookSendsQuery,
   websiteToolQuery,
 } from './queries';
+import { GoogleSection, LettersInSettings, LettersOutSection, MayDo, NumberRequests, PostalAddresses, SendingSection, SharedInboxDialog } from './ToolSettings';
 import { useGithubReturn } from './githubReturn';
 import type { ToolsSearch } from './search';
 import './library.css';
@@ -188,6 +189,11 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
               ))}
             </Menu>
             <AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />
+            <PageMore>
+              {SETTINGS.map(([tool, label]) => (
+                <MenuItem key={tool} label={label} onSelect={() => void press('tools.open', { tool })} />
+              ))}
+            </PageMore>
           </>
         }
         open={!!open}
@@ -240,6 +246,13 @@ function NoTool({ none, onAdd }: { none: boolean; onAdd: (a: Adding) => void }) 
   );
 }
 
+/** The company's settings for each kind of mail, on the tool they belong to (the old Tools › Settings). */
+const SETTINGS = [
+  ['mailbox', 'Email settings'],
+  ['number', 'Number requests'],
+  ['address', 'Letter settings'],
+] as const;
+
 /* ---------------------------------------------------------------- one tool */
 
 /** The open tool: its head, then the five sections the kind has. */
@@ -252,6 +265,8 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   if (kind === 'vendor') return <VendorView vendor={key} />;
   if (kind === 'mailbox' && (row as { mailbox_id?: string } | undefined)?.mailbox_id)
     return <MailboxView id={(row as unknown as { mailbox_id: string }).mailbox_id} row={row as ToolIndexRow} />;
+  if (kind === 'mailbox' && !key) return <EmailView />;
+  if (kind === 'number' && !key) return <NumbersView />;
   if (kind === 'tico' || kind === 'number') return <InboxView inbox={key} row={row} number={kind === 'number'} />;
   if (kind === 'address') return <AddressView row={row} />;
   if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
@@ -358,7 +373,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
     const r = await run('tools.connect', { tool: id }, { via: 'click' });
     if (!r.ok) {
       setConnecting(false);
-      toast({ text: r.error === 'not_allowed' ? 'You cannot do that here' : 'Not connected', kind: 'failed' });
+      toast(refusal(r, 'Not connected'));
     }
   };
   const fill =
@@ -725,8 +740,14 @@ function VendorView({ vendor }: { vendor: string }) {
 function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
   const q = useQuery(mailboxQuery(id));
   const m = q.data?.mailbox;
+  const agents = (q.data?.accesses ?? []).filter((a) => a.grantee_type === 'bot').map((a) => ({ id: a.grantee_id, name: a.name }));
+  const more = (
+    <PageMore>
+      <MenuItem label="Email settings" onSelect={() => void press('tools.open', { tool: 'mailbox' })} />
+    </PageMore>
+  );
   return (
-    <Shell name={m?.address ?? row.name} kind="mailbox" problem={bad(row)} state={stateOf(q)} onRetry={() => void q.refetch()} target={`tool:${row.id}`}>
+    <Shell name={m?.address ?? row.name} kind="mailbox" problem={bad(row)} more={more} state={stateOf(q)} onRetry={() => void q.refetch()} target={`tool:${row.id}`}>
       {q.data && m && (
         <>
           <Section name="What it is">
@@ -758,16 +779,30 @@ function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
               ))}
             </Section>
           )}
-          <Section name="What it can do">
-            <Facts>
-              <LabelValue label="Read mail">{q.data.may.read ? 'Yes' : 'No'}</LabelValue>
-              <LabelValue label="Send mail">{q.data.may.send ? 'Yes' : 'No'}</LabelValue>
-              <LabelValue label="Organize">{q.data.may.organize ? 'Yes' : 'No'}</LabelValue>
-              <LabelValue label="Change the calendar">{q.data.may.change_calendar ? 'Yes' : 'No'}</LabelValue>
-            </Facts>
-          </Section>
+          <MayDo may={q.data.may} />
+          <SendingSection agents={agents} />
         </>
       )}
+    </Shell>
+  );
+}
+
+/** Email itself, before or beside any one mailbox: the Google connection, what agents may do and send. */
+function EmailView() {
+  return (
+    <Shell name="Email" kind="mailbox" target="tool:mailbox">
+      <GoogleSection />
+      <MayDo />
+      <SendingSection />
+    </Shell>
+  );
+}
+
+/** Numbers asked for: each waits on a price to accept, or is canceled. */
+function NumbersView() {
+  return (
+    <Shell name="Phone numbers" kind="number" target="tool:number">
+      <NumberRequests always />
     </Shell>
   );
 }
@@ -779,11 +814,12 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
   const messages = useQuery(inboxMessagesQuery(inbox));
   const box = boxes.data?.find((b) => b.inbox_id === inbox);
   const name = box?.name ?? row?.name ?? (number ? 'Phone number' : 'Tico address');
-  const [dialog, setDialog] = useState<'edit' | 'release' | null>(null);
+  const [dialog, setDialog] = useState<'edit' | 'release' | 'join' | null>(null);
   const [reading, setReading] = useState<{ id: string; title: string } | null>(null);
   const more = box && (
     <PageMore>
       <MenuItem label="Edit" onSelect={() => setDialog('edit')} />
+      {!number && <MenuItem label="Join shared Inbox" onSelect={() => setDialog('join')} />}
       <MenuRule />
       <MenuItem label="Stop using" onSelect={() => setDialog('release')} />
     </PageMore>
@@ -841,7 +877,9 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
           })}
         </Section>
       )}
+      {number && <NumberRequests />}
       {reading && <MessageDialog message={reading.id} title={reading.title} onClose={() => setReading(null)} />}
+      {dialog === 'join' && <SharedInboxDialog onClose={() => setDialog(null)} />}
       {box && dialog === 'edit' && <EditInboxDialog box={box} onClose={() => setDialog(null)} />}
       {box && dialog === 'release' && <ReleaseDialog box={box} number={number} onClose={() => setDialog(null)} />}
     </Shell>
@@ -898,6 +936,9 @@ function AddressView({ row }: { row: ToolIndexRow | undefined }) {
           <LabelValue label="State">{row?.status.text ?? ''}</LabelValue>
         </Facts>
       </Section>
+      <PostalAddresses />
+      <LettersOutSection />
+      <LettersInSettings />
       <Section name="Letters out" count={letters.data?.length}>
         {letters.data?.length === 0 && <Empty title="No letters sent yet" />}
         {letters.data?.map((l) => (
