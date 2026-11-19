@@ -62,14 +62,14 @@ function serve(reply: (url: string, method: string) => Reply): Sent[] {
 const nothing = (): Reply => ({ status: 404, body: { detail: 'not_found' } });
 const ok = (body: unknown = {}): Reply => ({ status: 200, body });
 
-function show(page: (search: Record<string, unknown>) => ReactNode, at: string) {
+function show(page: (search: Record<string, unknown>) => ReactNode, at: string, basepath = '/') {
   function Routed() {
     const search = useLocation({ select: (l) => l.search as Record<string, unknown> });
     return <>{page(search)}</>;
   }
   const root = createRootRoute({ component: Outlet });
   const route = createRoute({ getParentRoute: () => root, path: at.split('?')[0] ?? '/', component: Routed });
-  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([route]), basepath, history: createMemoryHistory({ initialEntries: [basepath === '/' ? at : basepath + at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -242,9 +242,9 @@ describe('One product @n:re:product', () => {
   it('adds and removes an agreement, a repository and a vendor, the whole set sent', async () => {
     const sent = serve((_url, method) => (method === 'POST' ? ok({ product }) : nothing()));
     queryClient.setQueryData(productsQuery.queryKey, { products: [product] } as unknown as ProductList);
-    show((s) => <ProductsPage search={s} />, '/company/products?panel=garden-kit');
+    show((s) => <ProductsPage search={s} />, '/company/products?panel=garden-kit', '/next');
     const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
-    expect(href(within(panel).getByText('Terms of sale, v4'))).toBe('/library/f1');
+    expect(href(within(panel).getByText('Terms of sale, v4'))).toBe('/next/library/f1');
     fireEvent.click(within(panel).getByRole('button', { name: 'Add an agreement' }));
     fireEvent.change(within(panel).getByRole('textbox', { name: 'Agreement' }), { target: { value: 'Rental terms' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Add' }));
