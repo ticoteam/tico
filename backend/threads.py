@@ -3642,9 +3642,8 @@ def remove_member(c, principal, thread_id, actor):
         # (backend/residents.py). A person leaving only narrows who reads it.
         from . import residents
 
-        residents.revoke(
-            c, "thread_member_removed", bot=actor[4:] if actor.startswith("bot:") else None, roots=[root["id"]]
-        )
+        bot = actor[4:] if actor.startswith("bot:") else None
+        residents.revoke(c, "thread_member_removed", bot=bot, roots=[str((root or {}).get("id"))])
     _event(c, me, "thread.member_removed", root["id"], {"actor": actor})
     _audit(c, me, "thread:" + root["id"], {"member": actor}, None)
     return {"thread_id": root["id"], "actor": actor, "removed": bool(gone)}
@@ -3729,7 +3728,8 @@ def set_audience(c, principal, thread_id, audience, *, audience_group_id=None):
     )
     from . import residents
 
-    residents.revoke(c, "audience_changed", roots=[root["id"]])  # its sessions were kept for the old readers
+    # Its sessions were kept for the old readers.
+    residents.revoke(c, "audience_changed", roots=[str((root or {}).get("id"))])
     if audience == "members":
         now = _now()
         owner = root.get("owner_id") or actor

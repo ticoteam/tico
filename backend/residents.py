@@ -22,6 +22,9 @@ or unassigned and a computer whose credential is revoked are fenced by triggers 
 makes the change. A runner learns of every stop from renew, bind or `reconcile`.
 """
 
+from collections.abc import Iterable
+from typing import Any
+
 from .store import H, Problem
 
 CAPABILITY = "resident_threads_v1"
@@ -105,7 +108,8 @@ def admissible(c, row):
     root, audience = payload.get("root_id"), payload.get("audience_class")
     # Mirrors clients/sessions.py session_key for a turn with a thread root, across every session mode.
     if task:
-        keys = ["task:" + H.session_root(c, row["bot_id"], task_id), "task:" + task_id]
+        tid = str(task_id)
+        keys = ["task:" + str(H.session_root(c, row["bot_id"], tid) or tid), "task:" + tid]
         if audience == "public" and not H.task_private(c, task):
             keys.append("bot")
     elif root:
@@ -166,7 +170,17 @@ def _lapse(c, where, args):
     _close(c, ids, "expired", revoked=False, fence=False)
 
 
-def revoke(c, reason, *, bot=None, runner=None, roots=(), tasks=(), everyone=False, fence=True):
+def revoke(
+    c: Any,
+    reason: str,
+    *,
+    bot: str | None = None,
+    runner: str | None = None,
+    roots: Iterable[str] = (),
+    tasks: Iterable[str] = (),
+    everyone: bool = False,
+    fence: bool = True,
+) -> list[str]:
     """End the residents a change of access touches, in the change's own write: one bot's (`bot`), one computer's
     (`runner`), the sessions of these thread trees or tasks (`roots`, `tasks`), or every one (`everyone`). A thread
     or task scope also ends the bots' shared public sessions, which may have read it. `fence=False` (a cleared
@@ -212,7 +226,7 @@ def revoke(c, reason, *, bot=None, runner=None, roots=(), tasks=(), everyone=Fal
     return _close(c, ids, reason, revoked=fence, fence=fence)
 
 
-def revoke_for(c, reason, subject):
+def revoke_for(c: Any, reason: str, subject: object) -> list[str]:
     """`revoke` for what a grant or a key was given to: one bot's residents for `bot:<id>`, every one otherwise (a
     group, a person, the company), since which bots act under it is not cheap to tell here and a stopped resident
     only costs its next turn a fresh start."""

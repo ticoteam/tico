@@ -228,7 +228,7 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
         from . import residents
 
         # The old owner's process on this task ends with its ownership (backend/residents.py).
-        residents.revoke(conn, "task_access_changed", bot=old[4:], tasks=[task_id])
+        residents.revoke(conn, "task_access_changed", bot=str(old)[4:], tasks=[task_id])
         for link in H.task_links(conn, task_id):
             if link["kind"] == "worktree":
                 detail: Row = H._json(link.get("detail"), {}) or {}
