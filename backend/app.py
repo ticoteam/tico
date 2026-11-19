@@ -2431,6 +2431,9 @@ def _install_features(
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")  # Make task from a message
     counsel.install(app, store, auth, mutate)  # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    from . import risk
+
+    risk.install(app, store, auth, mutate)  # risks, matters and their links (Risk plan, slice 1)
     from . import stage_rules_api
 
     stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups

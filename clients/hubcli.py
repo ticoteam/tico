@@ -454,6 +454,7 @@ def parser():
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
+    from clients.commands import risk as risk_commands
     from clients.commands import market as market_commands
     from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
     from clients.commands import calls, webhooks
@@ -857,6 +858,7 @@ def parser():
     cli_spec.add(sub, goal_commands.PROPOSAL)
 
     cli_spec.add(sub, rule_commands.CLI)  # tico rules: clients/commands/rules.py
+    cli_spec.add(sub, risk_commands.CLI)  # tico risk: clients/commands/risk.py
     cli_spec.add(sub, strategy_commands.STRATEGY)  # tico strategy and tico brand: clients/commands/strategy.py
     cli_spec.add(sub, strategy_commands.BRAND)
     cli_spec.add(sub, browser_commands.CLI)  # tico browser: clients/commands/browser.py

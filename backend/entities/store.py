@@ -1261,6 +1261,21 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("entity_sources", "DELETE FROM entity_sources WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_watches", "DELETE FROM entity_watches WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("market_figures", "DELETE FROM market_figures WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    # A matter (backend/risk.py) stays with its task; it only stops naming the erased party, place or product.
+    (
+        "matters",
+        "UPDATE matters SET "
+        "party_entity_id = CASE WHEN party_entity_id IN (SELECT value FROM json_each(:ids)) THEN NULL "
+        "ELSE party_entity_id END, "
+        "place_id = CASE WHEN place_id IN (SELECT value FROM json_each(:ids)) THEN NULL ELSE place_id END, "
+        "product_id = CASE WHEN product_id IN (SELECT value FROM json_each(:ids)) THEN NULL ELSE product_id END "
+        "WHERE party_entity_id IN (SELECT value FROM json_each(:ids)) OR place_id IN (SELECT value FROM json_each(:ids)) "
+        "OR product_id IN (SELECT value FROM json_each(:ids))",
+    ),
+    (
+        "risk_links",
+        "DELETE FROM risk_links WHERE linkable_type = 'entity' AND linkable_id IN (SELECT value FROM json_each(:ids))",
+    ),
     (
         "entity_links",
         "DELETE FROM entity_links WHERE from_entity_id IN (SELECT value FROM json_each(:ids)) "

@@ -516,6 +516,10 @@ TRIGGERS = [
     # The rest of what a task's row in a list shows: its tags, files and cover and routine.
     ("changes_task_tags_insert", "INSERT", "task_tags", None, _row("tasks", "tags", "NEW.task_id")),
     ("changes_task_tags_delete", "DELETE", "task_tags", None, _row("tasks", "tags", "OLD.task_id")),
+    # A task's matter (backend/risk.py): the facts its full view shows.
+    ("changes_matters_insert", "INSERT", "matters", None, _row("tasks", "matter", "NEW.task_id")),
+    ("changes_matters_update", "UPDATE", "matters", None, _row("tasks", "matter", "NEW.task_id")),
+    ("changes_matters_delete", "DELETE", "matters", None, _row("tasks", "matter", "OLD.task_id")),
     (
         "changes_tags_update",
         "UPDATE",

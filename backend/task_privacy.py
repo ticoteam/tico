@@ -1783,11 +1783,11 @@ def tags_readable(c, who, rows):
     rows = list(rows)
     gated = json.dumps(sorted(counsel.page_copies(c)))
     open_tags = set()
-    for part in H.chunks([row["id"] for row in rows if not row.get("is_template")]):
+    for part in H.chunks([row["id"] for row in rows if not _listed_alone(row)]):
         sql = TAGS_ON_OPEN_TASKS_SQL.format(marks=",".join("?" * len(part)))
         open_tags.update(tag for (tag,) in c.execute(sql, [*part, gated]))
-    # A template passes on its content alone too (_tag_readable): neither needs its links read.
-    rest = [row for row in rows if row["id"] not in open_tags and not row.get("is_template")]
+    # A template or a risk passes on its content alone too (_tag_readable): neither needs its links read.
+    rest = [row for row in rows if row["id"] not in open_tags and not _listed_alone(row)]
     linked, attached = {}, {}
     for part in H.chunks([row["id"] for row in rest]):
         marks = ",".join("?" * len(part))
@@ -1801,21 +1801,29 @@ def tags_readable(c, who, rows):
         for row in rows
         if (
             content_readable(c, actor(who), row)
-            if row["id"] in open_tags or row.get("is_template")
+            if row["id"] in open_tags or _listed_alone(row)
             else _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))
         )
     ]
 
 
+def _listed_alone(row):
+    """A template, or a risk (backend/risk.py): every teammate lists it on its own content, whatever tasks carry it. A
+    risk's counts follow privacy instead: a teammate who reads none of its tasks sees it with 0."""
+    return bool(row.get("is_template")) or row.get("kind") == "risk"
+
+
 def _tag_readable(c, who, row, linked, attached):
+    if _listed_alone(row):
+        return content_readable(c, actor(who), row)
     linked = set(linked)
     for detail in attached:
         linked.update(references(c, detail))
     # The parties row (id, private, owner, requester, readers) is all task_readable reads; no body is loaded.
-    parties = _task_rows(c, linked) if linked and not row.get("is_template") else {}
-    return (
-        not linked or bool(row.get("is_template")) or any(task_readable(c, who, parties[tid]) for tid in linked)
-    ) and content_readable(c, actor(who), row)
+    parties = _task_rows(c, linked) if linked else {}
+    return (not linked or any(task_readable(c, who, parties[tid]) for tid in linked)) and content_readable(
+        c, actor(who), row
+    )
 
 
 def require_destination(c, who, to, conversation_id, refs, reply=None, reach=None, sealed=()):

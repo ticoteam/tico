@@ -49,6 +49,7 @@ TASK_ROWS = (
     "maintenance_listings",
     "maintenance_handoffs",
     "holds",
+    "matters",  # a risk's facts on the task (backend/risk.py)
 )
 # Where a task stands in its pipeline is not kept: its visits, answers, asks and snooze go with it
 # (task_engine.on_delete), and a restore starts it on a new visit (task_engine.restore). The tasks it filed, and the

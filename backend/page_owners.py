@@ -52,6 +52,7 @@ PAGES: dict[str, dict[str, str]] = {
     "goals": {"name": "Goals", "default": "strategy-owner"},
     "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
     "growth": {"name": "Growth", "default": "growth-manager"},
+    "risk": {"name": "Risk", "default": "legal-owner", "then": "rules-owner"},
     "automations": {"name": "Automations", "default": "automations-owner"},
     "listening": {"name": "Listening", "default": "automations-owner"},
     "rules": {"name": "Rules", "default": "rules-owner"},

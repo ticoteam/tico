@@ -640,6 +640,7 @@ SCHEMAS['Task']['properties'].update(
         'external_requesters': {'type': 'integer'},
         'internal_requesters': {'type': 'integer'},
         'important_requesters': {'type': 'integer'},
+        'matter': {'$ref': '#/components/schemas/Matter'},  # the full task view only, when the task has one
     }
 )
 
