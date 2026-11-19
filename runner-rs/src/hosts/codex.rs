@@ -338,6 +338,7 @@ impl CodexHost {
         let gone = Arc::new(AtomicBool::new(false));
         let (relay_tx, relay_rx) = oneshot::channel();
         let (reaped_tx, reaped_rx) = tokio::sync::watch::channel(false);
+        let (stdout_done, stdout_drained) = oneshot::channel();
         let flag = gone.clone();
         let diagnostics = self.0.tx.clone();
         tokio::spawn(async move {
@@ -345,6 +346,9 @@ impl CodexHost {
                 .await
                 .unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
             _stderr.drained().await;
+            // Usage and completion notifications can still be in the pipe when the process exits.
+            // A tool that inherited the pipe must not keep the host alive.
+            let _ = tokio::time::timeout(Duration::from_millis(100), stdout_drained).await;
             let code = super::return_code(&status);
             let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
             flag.store(true, Ordering::SeqCst);
@@ -374,6 +378,7 @@ impl CodexHost {
             for (_, slot) in host.0.pending.lock().unwrap().drain() {
                 let _ = slot.send(Err(json!({"message": "codex app-server exited"})));
             }
+            let _ = stdout_done.send(());
         });
         let info = json!({"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"});
         self.request(

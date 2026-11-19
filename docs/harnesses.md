@@ -530,6 +530,8 @@ another bot's home; all turns use the original login in its own home.
 | `skill_events` | Every skill the model uses is reported as a `Skill` call with its name, so a bot's install with no use in 30 days can read **Unused** (docs/skills.md) | Its installs read **Unknown**, never Unused |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
+| `voice_session` | The harness can answer live call questions in one resident session | `false` |
+| `voice_session_runner` | Additional heartbeat capability required to place a resident call session on the runner | `voice_sessions_v1` suffices |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
 | `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |

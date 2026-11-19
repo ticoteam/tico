@@ -51,6 +51,8 @@ mcp_transports = ["http"]
 # Checked against codex 0.163: a thread whose turn was interrupted takes the next turn, in the same app-server and
 # after a restart (thread/resume).
 resume_after_interrupt = true
+voice_session = true
+voice_session_runner = "voice_session_resume_v1"
 # A message for the running turn goes in with turn/steer.
 steer = true
 goal_runs_across_turns = true

@@ -812,6 +812,10 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "steer" => c.steer = flag(k, v)?,
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "voice_session" => c.voice_session = flag(k, v)?,
+            "voice_session_runner" => {
+                // The hub uses this to place a resident job only on runners that support it.
+                text(k, v)?;
+            }
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
             // Retired with the one-turn-per-login queue; a manifest from an older checkout may still name it.

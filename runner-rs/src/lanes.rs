@@ -20,6 +20,7 @@ pub const FRESH_SESSION: &str = "fresh_session_v1";
 pub const PLAN_SWITCH_RESUME: &str = "plan_switch_resume_v1";
 
 const VOICE_SESSIONS: &str = "voice_sessions_v1";
+const VOICE_SESSION_RESUME: &str = "voice_session_resume_v1";
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -53,6 +54,7 @@ pub const CAPABILITIES: &[&str] = &[
     VOICE_SESSIONS,
     // A push to a bot's repository is heard at once, so its chat turns never start on an older fetch (fetch_fresh.rs).
     crate::fetch_fresh::PUSH_HINTS,
+    VOICE_SESSION_RESUME,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -203,6 +205,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            VOICE_SESSION_RESUME,
             crate::fetch_fresh::PUSH_HINTS,
             VOICE_SESSIONS,
             PLAN_SWITCH_RESUME,
@@ -427,6 +430,7 @@ mod tests {
             .filter(|c| {
                 ![
                     crate::fetch_fresh::PUSH_HINTS,
+                    VOICE_SESSION_RESUME,
                     VOICE_SESSIONS,
                     FRESH_SESSION,
                     crate::claude_login::CAPABILITY,
@@ -460,9 +464,18 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(crate::fetch_fresh::PUSH_HINTS)
+            Some(VOICE_SESSION_RESUME)
         );
         let older: Vec<&str> = CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|c| *c != VOICE_SESSION_RESUME)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::fetch_fresh::PUSH_HINTS)
+        );
+        let older: Vec<&str> = older
             .iter()
             .copied()
             .filter(|c| *c != crate::fetch_fresh::PUSH_HINTS)

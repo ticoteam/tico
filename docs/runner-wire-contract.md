@@ -86,7 +86,10 @@ skips automatic file publication, and discards scratch after the turn. Later cha
 Older servers negotiate the flag away through the heartbeat 422 fallback.
 
 
-A runner advertises `voice_sessions_v1` to take a call's resident model job. The claim's
+A runner advertises `voice_sessions_v1` to take a call's resident model job. A harness can require an additional
+runner capability in `voice_session_runner`. Codex requires `voice_session_resume_v1` for resident sessions and
+keeps a warm thread across a computer restart. An interrupted question is settled without replay.
+The claim's
 `message.refs.live_meeting.voice_call` names that call. The same attempt's `inputs` reply has a `call_voice` field
 with `closed` and, when a question is ready, its turn ID, text and notes. The runner sends that turn's ID as
 `voice_turn` on its delta and final message events. The lease and the attachment must still belong to that attempt
