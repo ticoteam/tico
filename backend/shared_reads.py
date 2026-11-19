@@ -121,7 +121,6 @@ class _Slot:
 class SharedReads:
     def __init__(self) -> None:
         self._slots: dict[tuple[Any, ...], _Slot] = {}
-        self._owners: dict[asyncio.Task[Response], Compute] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._kept_bytes = 0
         self._pruned = 0.0
@@ -132,7 +131,6 @@ class SharedReads:
         loop = asyncio.get_running_loop()
         if loop is not self._loop:  # a slot's computations belong to one event loop
             self._slots.clear()
-            self._owners.clear()
             self._kept_bytes, self._loop = 0, loop
         now = clock()
         self._prune(now)
@@ -143,25 +141,18 @@ class SharedReads:
             self.reused += 1
             return copy(slot.kept)
         if slot.running is not None and slot.running_seq >= seq:
-            return await self._join(slot.running, compute)
+            return await self._join(slot.running, compute, owner=False)
         if slot.running is None:
-            return await self._join(self._start(key, slot, compute, seq), compute)
+            return await self._join(self._start(key, slot, compute, seq), compute, owner=True)
         # A computation from before this request's newest change is under way: the next one begins when it ends.
         if slot.waiting is None:
-            slot.waiting = self._own(loop.create_task(self._after(slot.running, compute)), compute)
-            slot.waiting_seq = seq
-        else:
-            slot.waiting_seq = max(slot.waiting_seq, seq)
-        return await self._join(slot.waiting, compute)
-
-    def _own(self, task: asyncio.Task[Response], compute: Compute) -> asyncio.Task[Response]:
-        """`task` computes for the request that made `compute` (the context it runs in is that request's)."""
-        self._owners[task] = compute
-        task.add_done_callback(lambda done: self._owners.pop(done, None))
-        return task
+            slot.waiting, slot.waiting_seq = loop.create_task(self._after(slot.running, compute)), seq
+            return await self._join(slot.waiting, compute, owner=True)
+        slot.waiting_seq = max(slot.waiting_seq, seq)
+        return await self._join(slot.waiting, compute, owner=False)
 
     def _start(self, key: tuple[Any, ...], slot: _Slot, compute: Compute, seq: int) -> asyncio.Task[Response]:
-        task = self._own(asyncio.get_running_loop().create_task(compute()), compute)
+        task = asyncio.get_running_loop().create_task(compute())  # in this request's context: its timing and marks
         slot.running, slot.running_seq = task, seq
         task.add_done_callback(lambda done: self._ended(key, slot, done, seq))
         return task
@@ -188,9 +179,9 @@ class SharedReads:
             slot.running, slot.running_seq = waiting, label
             waiting.add_done_callback(lambda done: self._ended(key, slot, done, label))
 
-    async def _join(self, task: asyncio.Task[Response], compute: Compute) -> Response:
-        """The answer `task` gives, copied for this request; this request's own when that one cannot be shared."""
-        owner = self._owners.get(task) is compute
+    async def _join(self, task: asyncio.Task[Response], compute: Compute, owner: bool) -> Response:
+        """The answer `task` gives, copied for this request; this request's own when that one cannot be shared. The
+        `owner` is the request whose `compute` the task runs."""
         if owner:
             self.computed += 1
         else:
