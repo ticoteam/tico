@@ -2700,7 +2700,10 @@ def _plate_people(c, auth):
     """Everyone on the roster as the identity they sign in with. A person who has left, or whose sign-in is off, has no
     plate that anyone reads here."""
     found = []
-    for row in H.humans(c):
+    # Each person's row as identity_for_actor reads it (H.human), from the one read of the roster: not a read a person.
+    people = c.execute("SELECT * FROM humans ORDER BY id").fetchall()
+    read_cache.prime(c, "SELECT * FROM humans WHERE id=?", {(row["id"],): row for row in people})
+    for row in people:
         try:
             found.append(auth.identity_for_actor(c, "human:" + row["id"]))
         except Problem:
@@ -2723,11 +2726,18 @@ def _plate_check(c, who, auth, full):
     over = []
     visible_sql = auth.task_sql(c, who) if full else None
     plates = waiting_on.needs_by_person(c)  # one pass over the open tasks for every person's plate
-    for person in _plate_people(c, auth) if full else [who]:
+    people = _plate_people(c, auth) if full else [who]
+    # Another person's plate counts only what the reader may read: a private task is not theirs to count. One read for
+    # every other person's plate.
+    others = [plates.get(person.actor, []) for person in people if visible_sql and person.actor != who.actor]
+    readable = (
+        _readable(c, visible_sql, sorted({tid for items in others for item in items for tid in _plate_tasks(item)}))
+        if others
+        else set()
+    )
+    for person in people:
         items = plates.get(person.actor, [])
         if visible_sql and person.actor != who.actor:
-            # Another person's plate counts only what the reader may read: a private task is not theirs to count.
-            readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
             items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
@@ -2865,8 +2875,17 @@ def _never_stuck_check(c, visible_sql=None):
         # is stuck after it closed. A task that got stuck since then waits for the next reading.
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
-        readable = _readable(c, visible_sql or "1", sorted(ids))
-        still_open = _readable(c, f"status='open' AND ({visible_sql or '1'})", sorted(ids))
+        # One read gives both: the tasks the reader may read, and which of them are still open.
+        readable, still_open = set(), set()
+        if ids:
+            for tid, is_open in c.execute(
+                "SELECT id, status='open' FROM tasks WHERE id IN (SELECT value FROM json_each(?)) "
+                f"AND ({visible_sql or '1'})",
+                (json.dumps(sorted(ids)),),
+            ):
+                readable.add(tid)
+                if is_open:
+                    still_open.add(tid)
         counts = {key: sum(1 for tid in listed.get(key, []) if tid in still_open) for key in NEVER_STUCK_COUNTS}
         counts["no_one"] = len({tid for tid in listed.get("no_one", []) if tid in still_open})
         # A break can be about a done task (a wake queued after it closed), so it counts until the next reading. It

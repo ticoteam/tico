@@ -697,6 +697,19 @@ def operation_issues(c, who, auth):
     status_inputs = privacy.status_inputs(c, shown)
     # Each bot's computer, status and queue read together, not a few queries per bot.
     prime_machines(c, shown)
+    # The cloud machine each active bot with no computer may wait for (cloud_machines.coming, below), read together:
+    # TIDY had 18 such bots, each read alone on every status poll (Nov 19).
+    unplaced = (
+        [
+            b["id"]
+            for b in bots
+            if b["id"] in status_inputs and b["state"] == "active" and not read_cache.one(c, ASSIGNED_SQL, (b["id"],))
+        ]
+        if read_cache.cache(c) is not None
+        else []
+    )
+    if len(unplaced) > 1:
+        cloud_machines.prime_rows(c, unplaced)
     queues = bot_rows.job_queues(
         c, who, [b["id"] for b in bots if b["id"] in status_inputs and b["state"] != "archived"]
     )

@@ -43,7 +43,7 @@ PATHS = tuple(
 TOKENS = tuple(os.environ.get("TOKENS", "ana-test,ben-test").split(","))
 RUNS = int(os.environ.get("RUNS", 5))
 # The answer's own clock: the same database read twice a few seconds apart differs here and nowhere else.
-CLOCK = {"server_time", "tick_age_s", "last_tick", "seq", "age_minutes", "quiet", "minutes"}
+CLOCK = {"server_time", "tick_age_s", "last_tick", "seq", "age_minutes", "quiet", "minutes", "cursor"}
 
 
 def seed(api):
@@ -69,6 +69,10 @@ def seed(api):
                     "INSERT OR REPLACE INTO cloud_machines(bot,machine_id,runner_id,state,updated_at) VALUES(?,?,?,?,?)",
                     (slug, f"m-{n:04d}", f"r{n % 4}", "running", H.now()),
                 )
+        # Eighteen active bots with no computer (TIDY, Nov 19): the status page asks after each one's cloud machine.
+        c.execute(
+            "DELETE FROM assignments WHERE bot IN (SELECT id FROM bots WHERE id LIKE 'bot%' ORDER BY id LIMIT 18)"
+        )
         for k, (tid,) in enumerate(
             c.execute("SELECT id FROM tasks WHERE status='open' AND owner_id LIKE 'bot:%' ORDER BY rowid").fetchall()
         ):
@@ -77,6 +81,9 @@ def seed(api):
                 "VALUES(?,?,'pr',?,?,'open','bot:x',?,'acme/app',?,'{}')",
                 (H.new_id(), tid, f"https://github.example/acme/app/pull/{k + 1}", f"PR {k + 1}", H.now(), k + 1),
             )
+    from backend import health
+
+    health.record_never_stuck(store)  # the hourly reading Health's Tasks check shows
 
 
 def blank_clock(value):
@@ -115,6 +122,12 @@ def report(api):
             seen, ms, size, answer = measure(api, path, token)
             print(f"{path:40s} {token:9s} {len(seen):6d} statements {ms:9.1f} ms {size / 1024:8.1f} KB")
             answers[f"{path} {token}"] = blank_clock(answer)
+            if os.environ.get("SIZES") and isinstance(answer, list) and answer and isinstance(answer[0], dict):
+                fields = collections.Counter()
+                for row in answer:
+                    for key, value in row.items():
+                        fields[key] += len(json.dumps(value, separators=(",", ":"), default=str))
+                print("      bytes by field:", ", ".join(f"{k} {v // 1024} KB" for k, v in fields.most_common(12)))
             if os.environ.get("STATEMENTS"):
                 shapes = collections.Counter(re.sub(r"'[^']*'|\b\d+\b", "?", " ".join(q.split()))[:160] for q in seen)
                 for q, k in shapes.most_common(12):
