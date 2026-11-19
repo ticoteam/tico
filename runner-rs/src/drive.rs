@@ -136,6 +136,8 @@ impl Runner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // `settle!` applies a step the same way wherever it ends; before the last `break` some of what it sets is not read.
+    #[allow(unused_assignments)]
     pub(crate) async fn drive(
         &self,
         d: &Drive<'_>,
