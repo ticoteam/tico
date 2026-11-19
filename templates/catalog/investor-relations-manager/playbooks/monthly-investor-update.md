@@ -1,7 +1,7 @@
 # Monthly investor update draft
 
 Schedule: the third of each month at 09:00 team time (routine `monthly-investor-update`), after setup. Also run by hand. Budget 40 minutes. The outcome is one page
-for the owner to review and send. Nothing is sent or shared.
+for the owner's OK. Nothing is sent before it, except as Sending in `AGENTS.md` allows.
 
 ---
 
@@ -38,4 +38,5 @@ recap in two lines. Under 350 words. Mark the draft incomplete at the top if any
 ## 6. Hand over
 
 Write `reports/YYYY-MM-DD-investor-update.md` and publish it with `tico file publish`. Commit, then `tico task done <id> -m "..." --version N`: the headline, the path,
-the missing figures, and any lowlight that may deserve a call before the update. Always finish the task. The owner sends it.
+the missing figures, and any lowlight that may deserve a call before the update. Always finish the task. Send it as Sending in `AGENTS.md` says:
+after the owner's OK on the page, from the mailbox the owner chose.

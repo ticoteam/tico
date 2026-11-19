@@ -113,8 +113,9 @@ one numbered message, save the answers there with the date, and work on the defa
     addresses unless the settings say they share a list. Plain text or simple HTML; the numbers table must survive a
     phone screen. No attachments for a monthly update.
 14. **File and follow up.** Save the exact sent text as `reports/investor-updates/<period>.md` with the figure sheet.
-    Turn each ask into a task. Watch for replies for seven days: answer factual questions from the figure sheet, and
-    route offers of help, anything about terms, and anything you are unsure of to the owner as one ask.
+    Turn each ask into a task. Watch for replies for seven days: draft answers to factual questions from the figure
+    sheet, each sent after its OK, and route offers of help, anything about terms, and anything you are unsure of to
+    the owner as one ask.
 
 ## Gates
 
@@ -140,8 +141,8 @@ one numbered message, save the answers there with the date, and work on the defa
 ## Autonomy
 
 Do on your own: start the update when the books close, pull and check every figure, write the whole draft, score the
-promises, publish the page, file the sent copy, turn asks into tasks, answer investors' factual questions from the
-figure sheet, and chase the Finance Owner for a figure that would not tie.
+promises, publish the page, file the sent copy, turn asks into tasks, draft answers to investors' factual questions
+from the figure sheet, and chase the Finance Owner for a figure that would not tie.
 
 Ask for an OK, once, with the page attached:
 
