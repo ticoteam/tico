@@ -14,6 +14,11 @@ from backend.tests.helpers.thread_events import cursor, new_thread, say, who
 from backend.tests.helpers.threads_core import demo_template, made_threads, world  # noqa: F401  (the fixtures)
 
 
+def no_views(rows, c, who, visible_sql="1"):
+    """The task views these reads build: none (one function, as the app installs one for every stream)."""
+    return []
+
+
 def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammate(world):  # noqa: F811
     store, auth, people = world
     with store.transaction() as c:
@@ -57,7 +62,7 @@ def read_shared(api, person, after, shared, threads_scope=()):
             after,
             topics=("messages",),
             threads_scope=threads_scope,
-            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_views=no_views,
             task_view=None,
             shared=shared,
         )
@@ -90,7 +95,7 @@ def test_a_message_hydrated_once_for_every_stream_is_sent_only_to_its_readers(ap
             who(api, "ben-test"),
             edited_after,
             topics=("messages",),
-            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_views=no_views,
             task_view=None,
             shared=shared,
         )
@@ -127,7 +132,7 @@ def round_of(api, *polls):
                 auth,
                 person,
                 after,
-                task_views=lambda rows, c, who, visible_sql="1": [],
+                task_views=no_views,
                 task_view=None,
                 **arguments,
             )
@@ -151,7 +156,7 @@ def lone_read(api, person, after, **arguments):
             api.app.state.auth,
             person,
             after,
-            task_views=lambda rows, c, who, visible_sql="1": [],
+            task_views=no_views,
             task_view=None,
             **arguments,
         )
