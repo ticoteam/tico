@@ -87,7 +87,7 @@ const auCap = (s: unknown) => String(s || '').charAt(0).toUpperCase() + String(s
 const AU_EVENTS: Record<string, string> = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task stage changed', 'task.moved': 'Task changed pipeline',
   'task.commented': 'Task comment', 'task.done': 'Task finished', 'task.closed': 'Task closed', 'task.reopened': 'Task reopened',
   'thread.created': 'Thread started', 'message.created': 'Message sent', 'message.held': 'Message held',
-  'bot.run_failed': 'Bot run failed', 'bot.held': 'Bot held', 'bot.released': 'Bot released', 'org_rule.retired': 'Rule retired',
+  'bot.run_failed': 'Agent run failed', 'bot.held': 'Agent held', 'bot.released': 'Agent released', 'org_rule.retired': 'Rule retired',
   'rules.blocked': 'Rule blocked', 'rules.escalated': 'Rule escalated', 'rules.warned': 'Rule warned', 'rules.unchecked': 'Rule unchecked',
   'meeting.ready': 'Meeting ready', 'strategy.published': 'Strategy published', 'brand.published': 'Brand published',
   'market.insight.urgent': 'Urgent insight', 'market.briefing': 'Market briefing', 'inbound.received': 'Message received',

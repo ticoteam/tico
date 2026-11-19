@@ -160,20 +160,20 @@ def _build():
 
     add(
         "bot.run_failed",
-        "A bot's run failed.",
-        "Bot run failed",
+        "An agent's run failed.",
+        "Agent run failed",
         {"bot": "ops", "run_id": "r1", "error_class": "login"},
     )
     add(
         "bot.held",
-        "A bot was held: it hit a limit or kept failing.",
-        "Bot held",
+        "An agent was held: it hit a limit or kept failing.",
+        "Agent held",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK},
     )
     add(
         "bot.released",
-        "A held bot was released.",
-        "Bot released",
+        "A held agent was released.",
+        "Agent released",
         {"bot": "ops", "reason": "budget", "released_by": "human:ana"},
     )
     add(
