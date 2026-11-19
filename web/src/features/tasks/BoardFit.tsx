@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { IconButton } from '@/kit/IconButton';
 import { FlowMark } from '@/kit/FlowMark';
 
@@ -26,13 +27,13 @@ const edge = (list: Element[]): Edge | null =>
   list.length ? { stages: list.map(stageOf), waits: list.reduce((n, c) => n + waitsIn(c), 0) } : null;
 
 /**
- * Drawn inside the board (its arrows are placed against `.board-wrap`). `shape` changes whenever columns open, fold
+ * Drawn inside the board; its arrows go into `.board-wrap`, outside the board's clip. `shape` changes whenever columns open, fold
  * or fill, so the fit runs again.
  */
 export function BoardFit({ shape }: { shape: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [start, setStart] = useState(0);
-  const [edges, setEdges] = useState<{ prev: Edge | null; next: Edge | null; end: number }>({ prev: null, next: null, end: 0 });
+  const [edges, setEdges] = useState<{ wrap: HTMLElement; prev: Edge | null; next: Edge | null; end: number } | null>(null);
 
   useLayoutEffect(() => {
     const inn = ref.current?.parentElement;
@@ -45,7 +46,7 @@ export function BoardFit({ shape }: { shape: string }) {
       inn.style.paddingRight = '';
       if (document.documentElement.dataset.layout === 'cards' || !board.clientWidth) {
         inn.style.removeProperty('--col-w');
-        return setEdges({ prev: null, next: null, end: cols.length });
+        return setEdges(null);
       }
       const more = need(cols, MIN) > board.clientWidth - EDGE;
       wrap.classList.toggle('has-more', more);
@@ -63,7 +64,7 @@ export function BoardFit({ shape }: { shape: string }) {
         inn.style.paddingRight = `${Math.max(0, avail - need(cols.slice(from), w))}px`;
         board.scrollLeft = (cols[from] as HTMLElement).offsetLeft - (cols[0] as HTMLElement).offsetLeft;
       } else board.scrollLeft = 0;
-      setEdges(more ? { prev: edge(cols.slice(0, from)), next: edge(cols.slice(end)), end } : { prev: null, next: null, end });
+      setEdges(more ? { wrap, prev: edge(cols.slice(0, from)), next: edge(cols.slice(end)), end } : null);
     };
     fit();
     if (typeof ResizeObserver === 'undefined') return;
@@ -102,8 +103,14 @@ export function BoardFit({ shape }: { shape: string }) {
   return (
     <>
       <span ref={ref} hidden />
-      {arrow(edges.prev, 'is-prev', 'Earlier stages', Math.max(0, start - Math.max(1, edges.end - start)))}
-      {arrow(edges.next, 'is-next', 'Later stages', edges.end)}
+      {edges &&
+        createPortal(
+          <>
+            {arrow(edges.prev, 'is-prev', 'Earlier stages', Math.max(0, start - Math.max(1, edges.end - start)))}
+            {arrow(edges.next, 'is-next', 'Later stages', edges.end)}
+          </>,
+          edges.wrap,
+        )}
     </>
   );
 }

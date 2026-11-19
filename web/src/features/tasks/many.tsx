@@ -94,7 +94,7 @@ export function StageMenu({ p, stage, ids, onEdit }: { p: Pipeline; stage: { id:
 export function SelectBar({ p, ids, onDone }: { p: Pipeline; ids: readonly string[]; onDone: () => void }) {
   const many = useMany(ids, onDone);
   return (
-    <div className="filter-row" role="group" aria-label="Selected tasks">
+    <div className="filter-row" role="group" aria-label="Selected tasks" data-phone>
       <span className="scope">{ids.length} selected</span>
       {ids.length > 0 && (
         <Menu align="start" trigger={<Button>Change</Button>}>
