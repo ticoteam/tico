@@ -1518,6 +1518,7 @@ class Calls:
         oldest is dropped, and in a 1:1 bot call the person is asked to repeat it."""
         order = self.order.setdefault(call_id, {"n": 0, "queue": []})
         buffer["heard"] = self.voice.clock()
+        buffer["duration_ms"] = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
         clip = {"n": order["n"], "start": buffer["start_ms"], "identity": identity, "buffer": buffer}
         clip.update(text=None, ready=False, dropped=False)
         order["n"] += 1
@@ -1525,6 +1526,7 @@ class Calls:
         out = sorted((one for one in order["queue"] if not one["ready"] and not one["dropped"]), key=lambda x: x["n"])
         for oldest in out[: max(0, len(out) - BACKLOG)]:
             oldest["dropped"] = True
+            oldest["ready"] = True  # a discarded clip can settle before its Gateway request returns
             oldest["buffer"]["pcm"] = b""
         self._track(call_id, self.workers.submit(self._transcribe_clip, call_id, clip))
 
@@ -1570,23 +1572,23 @@ class Calls:
             report("calls_transcribe", call_id, exc, logger="tico.calls")
         finally:
             with self.lock:
-                clip["text"] = None if clip["dropped"] else text  # dropped while it was out: a repeat is asked for
-                clip["ready"] = True
+                if not clip["dropped"]:
+                    clip.update(text=text, ready=True)
             self._settle(call_id)
 
     def _transcribe(self, call_id, buffer):
-        """The clip's text: "" for none (the call ended, or nothing was said), None when it could not be transcribed."""
+        """The Gateway's text (possibly empty), or None when transcription was unavailable or the call ended."""
         pcm = bytes(buffer["pcm"])
         if not pcm:
-            return ""
+            return None
         with self.store.read() as c:
             state = c.execute("SELECT state FROM calls WHERE id=?", (call_id,)).fetchone()
             if not state or state["state"] != "live":
-                return ""  # the call has ended: its speech was sent at the end, and nothing after it is kept
+                return None  # the call has ended: its speech was sent at the end, and nothing after it is kept
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
         if not key:
             log.warning("A call's speech was not transcribed: no Gateway connection is set")
-            return ""
+            return None
         try:
             return call_media.transcribe(base, key, call_media.wav_bytes(pcm))
         except call_media.MediaUnavailable as exc:
@@ -1605,6 +1607,8 @@ class Calls:
         """Store a call's transcribed clips in the order they start: a clip waits for the ones before it, and for an
         utterance someone began before it and is still saying. Each clip's audio is let go once it is stored."""
         with self.lock:
+            if call_id not in self.order:
+                return
             gate = self.settling.setdefault(call_id, threading.Lock())
         with gate:
             while True:
@@ -1616,35 +1620,47 @@ class Calls:
                     if not clip["ready"] or self._held_back(call_id, clip):
                         return
                     order["queue"].pop(0)
+                outcome = "untranscribed"
                 try:
-                    self._store_clip(call_id, clip["identity"], clip["buffer"], clip["text"])
+                    outcome = self._store_clip(call_id, clip)
                 except Exception as exc:  # noqa: BLE001 - one clip that cannot be stored must not hold up the rest
                     from .batch_work import report
 
                     report("calls_transcribe", call_id, exc, logger="tico.calls")
                 finally:
                     clip["buffer"]["pcm"] = b""
+                    self._log_clip(call_id, clip, outcome)
 
-    def _store_clip(self, call_id, identity, buffer, text):
-        """One transcribed clip in the call's transcript, and in a voice call the bots it asks (call_voice.Voice.route,
-        through live_meetings.QUESTION_ROUTERS). A clip that could not be transcribed asks for a repeat where every
-        utterance is a question (a 1:1 bot call)."""
-        if not text:
-            if text is None:
-                with self.store.transaction() as c:
-                    row = _call(c, call_id)
-                    if voice_call(c, row["live_meeting_id"]) and not row["ending_at"]:
-                        if self.voice.answers_all(c, row):
-                            self.voice._note(self.voice._call(call_id), REPEAT_NOTE)
-                            self.voice.touch(call_id, c)
-            return
-        duration_ms = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
+    def _log_clip(self, call_id, clip, outcome):
+        buffer = clip["buffer"]
+        log.info(
+            "call_clip call=%s n=%s ms=%s outcome=%s wait_ms=%s",
+            call_id,
+            clip["n"],
+            buffer["duration_ms"],
+            outcome,
+            max(0, round((self.voice.clock() - buffer["heard"]) * 1000)),
+        )
+
+    def _store_clip(self, call_id, clip):
+        """Store and route one clip. The segmenter only submits clips with enough voiced audio to be speech, so
+        even an empty Gateway result asks for a repeat in a 1:1 bot call."""
+        identity, buffer, text = clip["identity"], clip["buffer"], clip["text"]
         with self.store.transaction(notify=True) as c:
-            row = _call(c, call_id)
+            row = c.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
+            if not row or row["state"] != "live":
+                return "ended"
             meeting = live_meetings._meeting(c, row["live_meeting_id"])
-            if row["state"] != "live" or meeting["state"] != "live":
-                return
+            if meeting["state"] != "live":
+                return "ended"
             voiced = bool(voice_call(c, meeting["id"]))
+            if not text:
+                if voiced and not row["ending_at"] and self.voice.answers_all(c, row):
+                    self.voice._note(self.voice._call(call_id), REPEAT_NOTE)
+                    self.voice.touch(call_id, c)
+                if clip["dropped"]:
+                    return "dropped_backlog"
+                return "empty" if text == "" else "untranscribed"
             previous = c.execute(
                 "SELECT COALESCE(MAX(start_ms),0) FROM live_meeting_chunks WHERE meeting_id=?", (meeting["id"],)
             ).fetchone()[0]
@@ -1653,7 +1669,7 @@ class Calls:
                 "seq": meeting["seq"] + 1,
                 "speaker": H.actor_id(identity),
                 "start_ms": start,
-                "end_ms": start + duration_ms,
+                "end_ms": start + buffer["duration_ms"],
                 "text": text,
                 "heard": buffer.get("heard"),
                 "spoken": True,
@@ -1661,6 +1677,7 @@ class Calls:
             live_meetings.append_chunks(c, meeting["id"], meeting, identity, [chunk])
         if not voiced:
             self.app.state.live_meeting_routing.later(meeting["id"])
+        return "stored"
 
     def stop_listening(self, call_id):
         """End was pressed (and stored): nothing more is heard, and the bots stop speaking now."""
@@ -1746,8 +1763,11 @@ class Calls:
         with self.lock:
             for key in [key for key in self.buffers if key[0] == call_id]:
                 self.buffers.pop(key, None)
-            self.order.pop(call_id, None)
+            order = self.order.pop(call_id, None)
             self.settling.pop(call_id, None)
+        if order:
+            for clip in order["queue"]:
+                self._log_clip(call_id, clip, "ended")
         return True
 
     def _post_in_thread(self, c, row, body, notes=None):

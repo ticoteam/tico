@@ -70,6 +70,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         # Imported after the relay is spawned, so its start overlaps the import instead of following it; inside this
         # try, so a failed import still stops the relay.
         import uvicorn
+        from uvicorn.config import LOGGING_CONFIG
         from .app import create_app
 
         line = lines.get(timeout=15)
@@ -99,9 +100,22 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
                 process.send_signal(signal.SIGTERM)
                 super().handle_exit(sig, frame)
 
+        # Uvicorn's default handlers only cover its own loggers. Keep the support ring on the root logger.
+        log_config = {
+            **LOGGING_CONFIG,
+            "handlers": {
+                **LOGGING_CONFIG["handlers"],
+                "calls": {"class": "logging.StreamHandler", "formatter": "default", "stream": "ext://sys.stdout"},
+            },
+            "loggers": {
+                **LOGGING_CONFIG["loggers"],
+                "tico.calls": {"handlers": ["calls"], "level": log_level.upper()},
+            },
+        }
         server = Server(
             uvicorn.Config(
                 create_app(settings),
+                log_config=log_config,
                 log_level=log_level,
                 access_log=False,
                 proxy_headers=False,

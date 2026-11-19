@@ -155,8 +155,9 @@ A Google Meet call still opens Meet in a tab of its own.
    start, across people: a clip waits for the clips that start before it and for an utterance someone else began before
    it and is still saying. The text becomes the call's live meeting chunks. Audio is held in memory until its clip is
    stored and is never stored itself. At most 4 clips of a call wait for their text at once: past that the oldest is
-   dropped. If the Gateway does not answer, that clip is lost and the call goes on; in a 1:1 call with a bot a lost or
-   dropped clip shows `Please repeat that`, and no bot is asked.
+   dropped without waiting for its request to finish. In a 1:1 call with a bot, a dropped clip or one the Gateway
+   cannot turn into text shows `Please repeat that`. The server writes one `call_clip` line per clip with only its call
+   ID, clip number, duration, outcome and elapsed time since the cut.
 4. **Bots.** A person who can write to the thread and has joined the call attaches bots (up to 10 in the call, counting
    the ones already in it; more is `422 bot_limit`, through the call's route and the live meeting's alike). A bot must
    be one

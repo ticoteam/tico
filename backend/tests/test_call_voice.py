@@ -3,9 +3,11 @@ and when, the bots' spoken replies, End, presence and the bot limit. LiveKit and
 meet fixture), and every name is synthetic (Acme, acme.example)."""
 
 import asyncio
+import io
 import json
 import logging
 import threading
+import wave
 from array import array
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
@@ -974,6 +976,77 @@ def test_the_meeting_routes_keep_to_a_voice_call_one_question_its_bot_limit_and_
 
 
 # --- what is heard
+
+
+def test_questions_across_silent_mic_pauses_are_stored_or_ask_for_a_repeat(meet, monkeypatch, caplog):
+    stalled, release = threading.Event(), threading.Event()
+    answers = iter(["", "Second question", None, "Fourth question", "Fifth question"])
+
+    def transcribe(base, key, audio):
+        with wave.open(io.BytesIO(audio)) as clip:
+            assert (clip.getframerate(), clip.getnchannels(), clip.getsampwidth()) == (16000, 1, 2)
+            assert clip.getnframes() >= 16000 * 1.4
+        answer = next(answers)
+        if answer is None:
+            stalled.set()
+            assert release.wait(10)
+            return "Superseded question"
+        return answer
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    monkeypatch.setattr(calls, "BACKLOG", 1)
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    call_id, meeting_id, identity = call["id"], call["meeting_id"], "human:ana"
+    machine, media = meet.app.state.calls, meet.app.state.call_media
+
+    def question(n, *, packets_stop=False):
+        audio = SPEECH * 70 + (QUIET if packets_stop else QUIET * 100)
+        frame_bytes = call_voice.BYTES_PER_MS * 10
+        for offset in range(0, len(audio), frame_bytes):
+            start = n * 6000 + offset // call_voice.BYTES_PER_MS
+            media.recorders[call_id](identity, audio[offset : offset + frame_bytes], start)
+        media.quiet[call_id](identity)
+
+    question(0)
+    assert machine.settle()
+    repeat = get(meet, f"calls/{call_id}")["voice"]["note"]
+    question(1, packets_stop=True)
+    assert machine.settle()
+
+    try:
+        question(2, packets_stop=True)
+        assert stalled.wait(5)
+        with machine.lock:
+            original = set(machine.pending[call_id])
+        question(3)
+        with machine.lock:
+            later = machine.pending[call_id] - original
+        for future in later:
+            future.result(5)
+        assert [chunk["text"] for chunk in _chunks(meet, meeting_id)] == ["Second question", "Fourth question"]
+    finally:
+        release.set()
+
+    question(4, packets_stop=True)
+    assert machine.settle()
+    assert [chunk["text"] for chunk in _chunks(meet, meeting_id)] == [
+        "Second question",
+        "Fourth question",
+        "Fifth question",
+    ]
+    assert repeat == calls.REPEAT_NOTE
+    lines = [record.getMessage() for record in caplog.records if record.getMessage().startswith("call_clip ")]
+    fields = [dict(pair.split("=", 1) for pair in line.split()[1:]) for line in lines]
+    assert [(entry["n"], entry["outcome"]) for entry in fields] == [
+        ("0", "empty"),
+        ("1", "stored"),
+        ("2", "dropped_backlog"),
+        ("3", "stored"),
+        ("4", "stored"),
+    ]
+    assert all(entry.keys() == {"call", "n", "ms", "outcome", "wait_ms"} for entry in fields)
+    assert all(entry["call"] == call_id and int(entry["ms"]) >= 1400 and int(entry["wait_ms"]) >= 0 for entry in fields)
 
 
 def test_a_backlog_of_clips_is_bounded_and_freed_and_a_question_heard_too_long_ago_is_not_asked(meet, monkeypatch):
