@@ -1595,7 +1595,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico rules due add: error: argument --basis: invalid choice: 'weekly' (choose from law, order, agency, contract, ours, asked, theirs)",
+  "stderr": "tico rules due add: error: argument --basis: invalid choice: 'weekly' (choose from , law, order, agency, contract, ours, asked, theirs)",
   "exit": 64
  },
  {
@@ -1672,6 +1672,43 @@
     "rule-due/d1",
     {
      "task_id": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--basis",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "basis": "",
+     "id": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "basis": ""
     }
    ]
   ],

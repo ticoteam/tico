@@ -157,3 +157,45 @@ def test_a_weekly_premium_reads_back_a_year_ahead_to_its_horizon_or_to_its_next_
         ("2026-12-09", "due", "later"),
     ]
     assert [o["due_on"] for o in D.obligations(c, [weekly], 21, today, only_next=True)][-1] == "2026-11-18"
+    # A date over a year old that someone marked lately still shows with the past ones.
+    c.execute("INSERT INTO rule_due_status VALUES('old','2025-10-14','2026-11-17T09:00:00Z','met','link')")
+    old = {"id": "old", "first_due_on": "2025-10-14", "repeats": "once", "timezone": "UTC", "basis": "law"}
+    assert [(o["due_on"], o["state"], o["group"]) for o in D.obligations(c, [old], 90, today)] == [
+        ("2025-10-14", "met", "past")
+    ]
+
+
+def test_the_migration_reads_a_mark_from_before_it_as_met_with_no_proof_and_runs_again():
+    import sqlite3
+    from importlib import import_module
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute(
+        "CREATE TABLE rule_due_dates(id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, first_due_on TEXT NOT NULL, repeats TEXT "
+        "NOT NULL, timezone TEXT NOT NULL, owner TEXT NOT NULL, routine_id TEXT, replaces TEXT, ended_on TEXT, "
+        "retired_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    c.execute(
+        "CREATE TABLE rule_due_status(due_date_id TEXT NOT NULL, due_on TEXT NOT NULL, satisfied_by TEXT NOT NULL, via "
+        "TEXT NOT NULL, task_id TEXT, satisfied_at TEXT NOT NULL, PRIMARY KEY(due_date_id, due_on))"
+    )
+    c.execute(
+        "INSERT INTO rule_due_dates VALUES('d1','r1','2026-01-31','monthly','UTC','bot:ops',NULL,NULL,NULL,NULL,'x','t')"
+    )
+    c.execute("INSERT INTO rule_due_status VALUES('d1','2026-01-31','bot:ops','routine','t1','2026-01-31T09:00:00Z')")
+    up = import_module("backend.migrations.20261119034134_rule_due_proof").up
+    up(c)
+    up(c)
+    date_row = dict(c.execute("SELECT title, basis, task_id FROM rule_due_dates").fetchone())
+    assert date_row == {"title": "", "basis": "", "task_id": None}
+    mark = dict(c.execute("SELECT * FROM rule_due_status").fetchone())
+    assert D.mark_fields(mark) == {
+        "outcome": "met",
+        "proof": None,
+        "note": "",
+        "confirmed_by_id": None,
+        "confirmed_at": None,
+    }
+    with pytest.raises(sqlite3.IntegrityError):
+        c.execute("UPDATE rule_due_dates SET basis='fortnightly'")

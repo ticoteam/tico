@@ -403,8 +403,8 @@ OBLIGATION = {
     "title": _s("What is due, such as Paiva records"),
     "basis": _s(
         "Where the date comes from: law, order (a court or arbitrator), agency (a government letter), contract, "
-        "ours (we promised it), asked (the other side wants it), theirs (the other side owes it)",
-        enum=BASES,
+        "ours (we promised it), asked (the other side wants it), theirs (the other side owes it); '' clears it",
+        enum=["", *BASES],
     ),
     "task": _s("The one task (a matter) it belongs to: only that task's readers see the date"),
 }

@@ -103,7 +103,8 @@ def test_an_unproved_premium_makes_its_risk_live_until_proof_and_a_draft_is_not_
         marked["mark"]["satisfied_by"],
         marked["mark"]["satisfied_at"],
     )
-    assert proved["mark"]["proof"] == {"kind": "email", "ref": "es-sent"} and proved["mark"]["note"] == "Paid by phone"
+    assert proved["mark"]["proof"] == {"kind": "email", "ref": "es-sent", "name": "Premium paid"}
+    assert proved["mark"]["note"] == "Paid by phone"
     # A proved mark is final.
     satisfied(api, lapsed["id"], {"proof": {"kind": "link", "ref": "https://bank.example/r/1"}}, expected=409)
     seen = risk_of(api, PEOPLE)
@@ -231,3 +232,88 @@ def test_a_date_with_no_basis_behaves_as_before_and_a_reopen_keeps_a_proved_mark
         D.on_due_task_reopened(c, {"id": "t-routine"}, "human:ana")
         left = [r[0] for r in c.execute("SELECT due_on FROM rule_due_status WHERE task_id='t-routine'")]
     assert left == [day(-40)]
+
+
+def test_a_date_moved_onto_a_task_the_owner_cannot_read_keeps_that_task_out_of_its_chain_audit_and_events(api):
+    from backend import audit_log
+
+    court = rule(api, {"kind": "internal", "text": "Meet every date a court sets", "who": {"bots": ["ops"]}})
+    public = due(api, court["id"], day(10), title="Paiva records", basis="order")
+    # Priya's private warrant, which the owner does not read; she owns a date on it and one in the open.
+    body = {"owner": "human:priya", "title": "LAPD warrant", "body": "x", "private": True}
+    warrant = post(api, "tasks", body, token="priya-test")
+    warrant = warrant.get("task", warrant)
+    get(api, "tasks/" + warrant["id"], expected=404)
+    with api.app.state.store.transaction() as c:
+        for ident, replaces, task_id in (("due-warrant", public["id"], warrant["id"]), ("due-open", None, None)):
+            c.execute(
+                "INSERT INTO rule_due_dates(id,rule_id,first_due_on,repeats,timezone,owner,replaces,created_by,"
+                "created_at,title,basis,task_id) VALUES(?,?,?,'once','UTC','human:priya',?,'human:priya',?,?,'order',?)",
+                (
+                    ident,
+                    court["id"],
+                    day(-1),
+                    replaces,
+                    H.now(),
+                    "Warrant return" if task_id else "Open return",
+                    task_id,
+                ),
+            )
+        c.execute("UPDATE rule_due_dates SET ended_on=? WHERE id=?", (day(0), public["id"]))
+    # Its chain from the old date leaves the warrant's row out for the owner, and keeps it for Priya.
+    assert [link["id"] for link in get(api, f"rule-due/{public['id']}")["chain"]] == [public["id"]]
+    assert [link["id"] for link in get(api, f"rule-due/{public['id']}", token="priya-test")["chain"]] == [
+        public["id"],
+        "due-warrant",
+    ]
+    # Marking it: Priya's answer names her file; the owner's audit row and events show neither the task nor the file.
+    task_file(api, "file-warrant", warrant["id"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET bot_id='ops', scope=? WHERE id='file-warrant'", ("task:" + warrant["id"],))
+    proof = {"kind": "file", "ref": "file-warrant"}
+    marked = satisfied(api, "due-warrant", {"proof": proof}, token="priya-test")
+    assert marked["mark"]["proof"] == {**proof, "name": "receipt.pdf"}
+    proved = satisfied(api, "due-open", {"proof": proof}, token="priya-test")
+    assert proved["due"]["history"][0]["proof"] == {**proof, "name": "receipt.pdf"}
+    rows = get(api, f"audit?object=org_rule:{court['id']}")["rows"]
+    after = {r["after"]["due"]: r["after"] for r in rows if r["after"] and "satisfied" in r["after"]}
+    assert after["due-open"]["proof"] == {"kind": "file", "ref": None, "name": None}
+    assert [r["after"] for r in rows if r["after"] == {"due": "due-warrant"}]  # only which date it was
+    events = "SELECT detail FROM events WHERE action='org_rule.due_satisfied' ORDER BY created_at"
+    seen = [r[0] for r in post(api, "sql", {"sql": events})["rows"]]
+    assert len(seen) == 1 and "due-open" in seen[0]
+    assert len(post(api, "sql", {"sql": events}, token="priya-test")["rows"]) == 2
+    # A date moved in place from an open task onto the warrant keeps its id: its audit row is read by the task each side
+    # names, not by the first one seen.
+    open_task = post(api, "tasks", {"owner": "ops", "title": "Paiva claim", "body": "x"})
+    with api.app.state.store.transaction() as c:
+        audit_log.write(
+            c,
+            "human:priya",
+            "org_rule:" + court["id"],
+            {"due": {"id": "due-open", "task_id": open_task["id"], "title": "Open return"}},
+            {"due": {"id": "due-open", "task_id": warrant["id"], "title": "Warrant return"}},
+        )
+    row = get(api, f"audit?object=org_rule:{court['id']}&limit=1")["rows"][0]
+    assert row["before"]["due"]["title"] == "Open return" and row["after"] == {"due": "due-open"}
+
+
+def test_a_risks_level_counts_a_day_marked_early_without_proof_and_finds_a_date_over_a_year_away(api):
+    post(api, "risks", {"label": "People & benefits", "key": "people-benefits"})
+    premiums = standing_rule(api, "Pay each insurance premium on time", PEOPLE)
+    weekly = post(
+        api,
+        f"rules/{premiums['id']}/due",
+        {"first_due": day(3), "repeats": "weekly", "owner": "ops", "timezone": "UTC", "basis": "contract"},
+    )
+    satisfied(api, weekly["id"], {"due_on": day(10)})  # paid early, no proof yet
+    seen = risk_of(api, PEOPLE)
+    listed = [o for o in obligations(api) if o["state"] == "unconfirmed"]
+    assert (seen["unconfirmed"], len(listed), seen["level"], seen["next_date"]) == (1, 1, "live", day(3))
+    # A link with no host, or one that does not parse, is no proof.
+    for ref in ("https://:", "https://["):
+        satisfied(api, weekly["id"], {"due_on": day(10), "proof": {"kind": "link", "ref": ref}}, expected=422)
+    post(api, f"rule-due/{weekly['id']}/remove", {})
+    due(api, premiums["id"], day(400), title="Five-year bond renewal", basis="contract")
+    seen = risk_of(api, PEOPLE)
+    assert (seen["next_date"], seen["unconfirmed"], seen["level"]) == (day(400), 0, "quiet")

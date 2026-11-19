@@ -284,6 +284,7 @@ def detail(c, row, today=None):
                 "id": link["id"],
                 "title": link.get("title") or "",
                 "basis": link.get("basis") or "",
+                "task_id": link.get("task_id"),
                 "first_due_on": link["first_due_on"],
                 "repeats": link["repeats"],
                 "timezone": link["timezone"],
@@ -322,6 +323,7 @@ def satisfied_days(c, due_id):
 SOON_DAYS = 14  # a binding date this close makes its risk live
 PAST_DAYS = 30  # a settled occurrence stays in the list this long
 LOOKBACK_DAYS = 366  # how far back an unproved occurrence is still listed
+NEXT_MAX_DAYS = 3660  # how far ahead a risk's next date is looked for
 
 
 def mark_fields(mark):
@@ -371,27 +373,48 @@ def occurrence_group(found, due_on, today, mark):
 def obligations(c, rows, days=90, today=None, only_next=False):
     """The occurrences of these rule_due_dates rows the Risk page lists, each as {row, due_on, state, group, mark}:
     every unconfirmed one back to LOOKBACK_DAYS, every due one up to `days` ahead, and every other one settled or
-    passed in the last PAST_DAYS. `today` is each row's own day in its zone unless given. `only_next` stops each row at
-    its first due occurrence (all a risk's level and next date read)."""
+    passed in the last PAST_DAYS (an older day marked lately included). `today` is each row's own day in its zone
+    unless given. `only_next` reads each row's occurrences only up to its first due one, however far ahead (up to
+    NEXT_MAX_DAYS), and then the days marked ahead of it: all a risk's level and next date need."""
     marks = _status_rows(c, [r["id"] for r in rows])
     out = []
     for row in rows:
         now = today or local_today(row["timezone"])
+        basis = row.get("basis") or ""
         found = {m["due_on"]: m for m in marks.get(row["id"], [])}
-        start, horizon = now - timedelta(days=LOOKBACK_DAYS), now + timedelta(days=days)
-        for day in occurrences(parse_date(row["first_due_on"]), row["repeats"], horizon):
+        start = now - timedelta(days=LOOKBACK_DAYS)
+        horizon = now + timedelta(days=NEXT_MAX_DAYS if only_next else days)
+
+        for day in _each_occurrence(parse_date(row["first_due_on"]), row["repeats"]):
             if day > horizon:
                 break
-            if day < start:
-                continue
             mark = found.get(day.isoformat())
-            current = occurrence_state(row.get("basis") or "", day, now, mark)
-            group = occurrence_group(current, day, now, mark)
-            if group:
-                out.append({"row": row, "due_on": day.isoformat(), "state": current, "group": group, "mark": mark})
-            if only_next and current == "due":
+            if day < start and mark is None:
+                continue
+            if _emit(out, row, basis, now, day, mark) == "due" and only_next:
+                # A day marked ahead of it still counts: a binding one marked early without proof is unconfirmed.
+                for due_on in sorted(d for d in found if d > day.isoformat()):
+                    _emit(out, row, basis, now, parse_date(due_on), found[due_on])
                 break
     return out
+
+
+def _each_occurrence(first, repeats):
+    """The occurrences in order, one at a time (`occurrences` lists them all up to a day first)."""
+    for n in range(MAX_OCCURRENCES):
+        day = automation_due.occurrence(first, repeats, n)
+        if day is None:
+            return
+        yield day
+
+
+def _emit(out, row, basis, now, day, mark):
+    """Append one occurrence to `out` when it is in the list; its state either way."""
+    current = occurrence_state(basis, day, now, mark)
+    group = occurrence_group(current, day, now, mark)
+    if group:
+        out.append({"row": row, "due_on": day.isoformat(), "state": current, "group": group, "mark": mark})
+    return current
 
 
 def readable(c, auth, who, rows):
@@ -446,8 +469,12 @@ def check_proof(c, auth, who, kind, ref):
             raise Problem("validation", f"That email was not sent (it is {row['state']}); a draft is not proof", 422)
         return kind, ref
     if kind == "link":
-        parts = urlsplit(ref)
-        if parts.scheme != "https" or not parts.netloc or len(ref) > LINK_MAX or any(ch.isspace() for ch in ref):
+        try:
+            parts = urlsplit(ref)
+            scheme, host = parts.scheme, parts.hostname
+        except ValueError:  # such as an unclosed [ in the host
+            scheme, host = "", None
+        if scheme != "https" or not host or len(ref) > LINK_MAX or any(ch.isspace() for ch in ref):
             raise Problem("validation", "A link is an https address", 422)
         return kind, ref
     if kind == "bank":

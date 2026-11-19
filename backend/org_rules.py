@@ -211,7 +211,7 @@ def _via(who):
 def redact_audit(c, auth, who, found):
     """The audit rows of org rules (backend/audit_log.py `rows`), with each cite's quote shown only where the reader may
     read its file now, as `view` shows it. Changed in place: `before` and `after` of each row."""
-    memo, hidden = {}, {}
+    memo, hidden, proofs = {}, {}, {}
     for item in found:
         if not str(item.get("object") or "").startswith("org_rule:"):
             continue
@@ -222,6 +222,12 @@ def redact_audit(c, auth, who, found):
                 due = snap["due"]
                 item[key] = {"due": due["id"] if isinstance(due, dict) else due}
                 continue
+            if isinstance(snap, dict) and snap.get("due"):
+                # A mark's proof as the reader reads it now: a file or email they cannot open loses its ref.
+                if snap.get("proof"):
+                    snap["proof"] = D.proof_view(c, auth, who, snap["proof"], proofs)
+                if isinstance(snap["due"], dict) and snap["due"].get("history"):
+                    snap["due"] = _shown_due(c, auth, who, snap["due"], proofs)
             cite = snap.get("cite") if isinstance(snap, dict) else None
             if not cite:
                 continue
@@ -229,13 +235,18 @@ def redact_audit(c, auth, who, found):
 
 
 def _due_hidden(c, auth, who, due, memo):
-    """Whether an audit snapshot's due date (its view, or its id) belongs to a task `who` does not read."""
-    due_id = due.get("id") if isinstance(due, dict) else due
-    if due_id not in memo:
-        row = D.one(c, str(due_id or ""))
-        task_id = (due.get("task_id") if isinstance(due, dict) else None) or (row or {}).get("task_id")
-        memo[due_id] = bool(task_id) and not D.readable(c, auth, who, [{"task_id": task_id}])
-    return memo[due_id]
+    """Whether an audit snapshot's due date (its view, or its id) belongs to a task `who` does not read. A view says
+    which task it had then (a date moves between tasks in place, keeping its id); an id alone is read as it is now."""
+    if isinstance(due, dict) and "task_id" in due:
+        task_id = due["task_id"]
+    else:
+        due_id = due.get("id") if isinstance(due, dict) else due
+        task_id = (D.one(c, str(due_id or "")) or {}).get("task_id")
+    if not task_id:
+        return False
+    if task_id not in memo:
+        memo[task_id] = not D.readable(c, auth, who, [{"task_id": task_id}])
+    return memo[task_id]
 
 
 def _audit(c, actor, rule_id, before, after, who):
@@ -244,6 +255,16 @@ def _audit(c, actor, rule_id, before, after, who):
 
 def _event(c, actor, action, rule_id, detail=None):
     H.event(c, actor, "org_rule." + action, "org_rule:" + rule_id, detail or {})
+
+
+def _due_task(*rows):
+    """A due date's task (and the one it had, when moved) for its event: the events view shows a row that names a task
+    only to that task's readers."""
+    tasks = [r["task_id"] for r in rows if r and r.get("task_id")]
+    out = {"task_id": tasks[-1]} if tasks else {}
+    if len(set(tasks)) > 1:
+        out["was_task_id"] = tasks[0]
+    return out
 
 
 def _save(c, rule_id, status=None, extra=None):
@@ -1037,7 +1058,8 @@ def decide_rule(c, auth, who, rule_id, body, action):
             },
             who.actor,
         )
-    due = D.readable(c, auth, who, D.views(c, D.live_rows(c, [rule_id])))
+    memo = {}
+    due = [_shown_due(c, auth, who, d, memo) for d in D.readable(c, auth, who, D.views(c, D.live_rows(c, [rule_id])))]
     return {"rule": view(c, auth, who, stored, ctx, quote=False), "due": due}
 
 
@@ -1120,8 +1142,8 @@ def add_due(c, auth, who, rule_id, body):
         RR.sync(c, who.actor, D.one(c, due_id), row["text"], days, _via(who))
     after = D.views(c, [D.one(c, due_id)])[0]
     _audit(c, who.actor, rule_id, None, {"due": after}, who)
-    _event(c, who.actor, "due_added", rule_id, {"due": due_id})
-    return after
+    _event(c, who.actor, "due_added", rule_id, {"due": due_id, **_due_task(after)})
+    return _shown_due(c, auth, who, after)
 
 
 def edit_due(c, auth, who, due_text, body):
@@ -1166,8 +1188,8 @@ def edit_due(c, auth, who, due_text, body):
     after = D.views(c, [D.one(c, new_id)])[0]
     replaces = row["id"] if replaced else None
     _audit(c, who.actor, rule["id"], {"due": before}, {"due": after}, who)
-    _event(c, who.actor, "due_edited", rule["id"], {"due": new_id, "replaces": replaces})
-    return {**after, "replaces": replaces}
+    _event(c, who.actor, "due_edited", rule["id"], {"due": new_id, "replaces": replaces, **_due_task(before, after)})
+    return {**_shown_due(c, auth, who, after), "replaces": replaces}
 
 
 def remove_due(c, auth, who, due_text):
@@ -1194,7 +1216,7 @@ def remove_due(c, auth, who, due_text):
     RR.off(c, who.actor, row, _via(who))
     stored = D.one(c, row["id"])
     _audit(c, who.actor, rule["id"], {"due": before}, {"due": D.views(c, [stored])[0]}, who)
-    _event(c, who.actor, "due_removed", rule["id"], {"due": row["id"]})
+    _event(c, who.actor, "due_removed", rule["id"], {"due": row["id"], **_due_task(row)})
     return {"id": row["id"], "retired_at": stored["retired_at"]}
 
 
@@ -1216,12 +1238,25 @@ def satisfy_due(c, auth, who, due_text, due_on=None, outcome="met", proof=None, 
     )
     fields = D.mark_fields(mark)
     _audit(c, who.actor, rule["id"], None, {"due": row["id"], "satisfied": day, **fields}, who)
-    _event(c, who.actor, "due_satisfied", rule["id"], {"due": row["id"], "due_on": day, "outcome": fields["outcome"]})
+    _event(
+        c,
+        who.actor,
+        "due_satisfied",
+        rule["id"],
+        {"due": row["id"], "due_on": day, "outcome": fields["outcome"], **_due_task(row)},
+    )
     current = D.one(c, row["id"]) or row
+    memo = {}
     return {
-        "due": D.views(c, [current])[0],
+        "due": _shown_due(c, auth, who, D.views(c, [current])[0], memo),
         "satisfied": day,
-        "mark": {"due_on": day, "satisfied_by": mark["satisfied_by"], "satisfied_at": mark["satisfied_at"], **fields},
+        "mark": {
+            "due_on": day,
+            "satisfied_by": mark["satisfied_by"],
+            "satisfied_at": mark["satisfied_at"],
+            **fields,
+            "proof": D.proof_view(c, auth, who, fields["proof"], memo),
+        },
         "state": D.occurrence_state(current["basis"], D.parse_date(day), D.local_today(current["timezone"]), mark),
     }
 
@@ -1485,6 +1520,11 @@ def _shown_proofs(c, auth, who, marks, memo):
     return [{**m, "proof": D.proof_view(c, auth, who, m.get("proof"), memo)} for m in marks]
 
 
+def _shown_due(c, auth, who, due, memo=None):
+    """A due date's view with the proofs in its history as the caller reads them."""
+    return {**due, "history": _shown_proofs(c, auth, who, due.get("history") or [], {} if memo is None else memo)}
+
+
 def due_list(c, auth, who, args):
     """Due dates of rules in force: overdue always; the rest that fall due within `next` days."""
     auth.domain(who)
@@ -1553,6 +1593,8 @@ def due_show(c, auth, who, due_id):
     found = D.detail(c, row)
     memo = {}
     found["history"] = _shown_proofs(c, auth, who, found["history"], memo)
+    # A date moved to (or from) a task by an edit: the rows of a task the caller does not read are left out.
+    found["chain"] = D.readable(c, auth, who, found["chain"])
     for link in found["chain"]:
         link["satisfied"] = _shown_proofs(c, auth, who, link["satisfied"], memo)
     return {
