@@ -40,6 +40,18 @@ def _logging_config(log_level):
     }
 
 
+def _freeze_startup_heap():
+    """Once the app has started: what it holds from then on (every module, the catalogs, the open store) moves out of
+    the cycle collector's generations (gc.freeze), so a full collection walks only what requests made since. On a
+    TIDY-sized heap (~410k tracked objects) a full collection inside a request took ~60 ms, about one request in four;
+    frozen it takes 2-6 ms. Frozen objects are still freed by reference count; only a reference cycle among them that
+    later becomes garbage is never collected, and what exists at start lives as long as the process."""
+    import gc
+
+    gc.collect()
+    gc.freeze()
+
+
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
     from .config import Settings
     from .screen_binary import prepare
@@ -122,6 +134,11 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
             settings = replace(settings, screen_relay_url=url, screen_relay_key=key)
 
         class Server(uvicorn.Server):
+            async def startup(self, sockets=None):
+                await super().startup(sockets=sockets)
+                if not self.should_exit:
+                    _freeze_startup_heap()
+
             def handle_exit(self, sig, frame):  # uvicorn takes SIGINT and SIGTERM while it runs: a stop starts here
                 # The public port closes with the server, so a new connect is refused (Caddy holds it), not a relay 502.
                 stopping.set()
