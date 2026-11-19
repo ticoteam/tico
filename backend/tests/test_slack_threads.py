@@ -485,6 +485,18 @@ def test_users_info_is_asked_once_an_hour_per_user(world, monkeypatch):
     assert asked.count("U1") == 1
 
 
+def test_a_carried_message_and_its_edit_name_the_people_they_mention_from_the_cached_lookups(world, monkeypatch):
+    activate_marketing(world)
+    asked = []
+    real = world.slack.users_info
+    monkeypatch.setattr(world.slack, "users_info", lambda uid: asked.append(uid) or real(uid))
+    assert world.bridge.receive(chan_event(ts(1), f"<@U2> and <@U9>, see <@{BOT_USER}>")) == "posted"
+    assert origin_message(world, ts(1))["body"] == "@ben and @U9, see @Tico"
+    assert world.bridge.receive(chan_edit(ts(1), "<@U2> see this")) == "edited"
+    assert origin_message(world, ts(1))["body"] == "@ben see this"
+    assert asked.count("U2") == 0 and BOT_USER not in asked  # linking asked for the members already, within the hour
+
+
 def rule_world(world, with_scope=None):
     """A rule in force that every person's message breaks when it says the favorite color: the test judge answers.
     `with_scope` narrows it to the people it names (a With rule)."""

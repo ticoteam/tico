@@ -31,7 +31,7 @@ A figure the read has no value for says why in a muted word: too few, not suppli
 
 Each month has one row per channel and one **Unknown** row. A row holds:
 
-- spend and bot cost, in dollars;
+- spend and agent cost, in dollars;
 - new customers;
 - the share still customers at 30, 90 and 180 days, blank until the cohort is that old (or computed from customers:
   see "Computed from customers" below);
@@ -42,7 +42,7 @@ Each month has one row per channel and one **Unknown** row. A row holds:
 
 Tico computes the channel numbers from these inputs, so nobody types a computed number:
 
-- **CAC** = (spend + bot cost) ÷ new customers. Blank with no new customers.
+- **CAC** = (spend + agent cost) ÷ new customers. Blank with no new customers.
 - **Profit per month** = revenue per month × margin ÷ 100.
 - **Expected months** is the area under the retention curve through the share kept at 30, 90 and 180 days, with the
   last monthly decay carried on, capped at 60 months.
@@ -157,7 +157,7 @@ changes one; `tico growth segment list` names them with their channels.
 - **Which spend is whose.** A channel's spend is for one segment (`tico growth channel update brand --segment
   consumer`) or company-wide (no segment). The customer's own segment decides counts, retention and LTV; the channel's
   segment decides spend only.
-- **Direct CAC**: the spend and bot cost of the segment's own channels ÷ its new customers. Payback uses it.
+- **Direct CAC**: the spend and agent cost of the segment's own channels ÷ its new customers. Payback uses it.
 - **Loaded CAC**: direct plus company-wide spend times the segment's share of the period's new customers in a segment
   (No segment takes no share, so company-wide spend is spread over the customers Growth can place). Filtering to one
   segment keeps the share it has among all of them. The segments' loaded costs add up to their own channels' spend plus
@@ -304,7 +304,7 @@ owner) gives a file source an address and a signing secret, shown once; a new on
 as the request body to `/api/v2/growth/in/<id>` with `X-Signature: sha256=<HMAC-SHA256 of the body under the secret>`, and
 the result is the same as an upload. A missing or wrong signature is refused with 401 and writes nothing.
 
-**Bot cost.** A `bot_cost` source (`tico growth source add --sync bot_cost`) fills only bot cost: each month, the run cost
+**Agent cost.** A `bot_cost` source (`tico growth source add --sync bot_cost`) fills only agent cost: each month, the run cost
 of the bot that owns a channel goes on that channel. A bot that owns several channels cannot be split, so its cost goes on
 Unknown and the run result carries a note. `sync` runs it.
 

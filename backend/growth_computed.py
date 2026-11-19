@@ -687,9 +687,9 @@ def computed(
         elif "spend_monthly" in statuses:
             note = "weeks touching a month with typed spend say monthly"
             if daily.bot_cost:  # the weeks that show a CAC still leave bot cost out
-                note += "; bot cost is monthly"
+                note += "; agent cost is monthly"
         elif daily.bot_cost:
-            note = "weekly CAC is daily ad spend: bot cost is monthly"
+            note = "weekly CAC is daily ad spend: agent cost is monthly"
     out: Row = {
         "by": cut,
         "grain": grain,
