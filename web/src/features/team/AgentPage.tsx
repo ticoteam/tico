@@ -164,8 +164,8 @@ function AgentHead({
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </PageMore>
-        <ArchiveDialog open={archiving} onOpenChange={setArchiving} slug={slug} name={actor.name} row={row} />
-        <ListEditor open={listing} onOpenChange={setListing} slug={slug} />
+        {archiving && <ArchiveDialog open onOpenChange={setArchiving} slug={slug} name={actor.name} row={row} />}
+        {listing && <ListEditor open onOpenChange={setListing} slug={slug} />}
       </>
     ),
   };
@@ -442,29 +442,18 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
             ))}
             {history.length > HISTORY_ROWS && <Fold label="Earlier" text={`${history.length - HISTORY_ROWS} more`} />}
           </Section>
-          <EditDialog
-            open={editing === 'role'}
-            onOpenChange={close}
-            title="Role"
-            label="Role"
-            value={role}
-            area
-            action="agents.setRole"
-            input={(r) => ({ slug, role: r })}
-          />
-          <InstructionsDialog
-            open={editing === 'instructions'}
-            onOpenChange={close}
-            slug={slug}
-            manage={manage}
-            content={instructions.data?.content ?? ''}
-          />
-          <WorksForDialog open={editing === 'users'} onOpenChange={close} slug={slug} name={actor.name} now={users.map((u) => u.id)} />
+          {editing === 'role' && (
+            <EditDialog open onOpenChange={close} title="Role" label="Role" value={role} area action="agents.setRole" input={(r) => ({ slug, role: r })} />
+          )}
+          {editing === 'instructions' && (
+            <InstructionsDialog open onOpenChange={close} slug={slug} manage={manage} content={instructions.data?.content ?? ''} />
+          )}
+          {editing === 'users' && <WorksForDialog open onOpenChange={close} slug={slug} name={actor.name} now={users.map((u) => u.id)} />}
           {row?.agent && <CredentialDialog open={editing === 'credential'} onOpenChange={close} slug={slug} name={actor.name} row={row} />}
-          {row && (
+          {row && (editing === 'model' || pick) && (
             <ModelPicker
               agent={row}
-              open={editing === 'model' || pick}
+              open
               onOpenChange={(o) => {
                 if (o) return;
                 if (pick) void open.run({ who: slug, tab: 'settings' });
@@ -538,7 +527,7 @@ function Instructions({ slug, path, head, manage }: { slug: string; path: string
             <span className="grow" />
             <IconButton icon="edit" size="sm" quiet label={manage ? 'Edit' : 'Request changes'} onClick={() => setEditing(true)} />
           </div>
-          <InstructionsDialog open={editing} onOpenChange={setEditing} slug={slug} manage={manage} content={data.content} />
+          {editing && <InstructionsDialog open onOpenChange={setEditing} slug={slug} manage={manage} content={data.content} />}
           <article className="read">
             {blocks.map((b, i) => {
               const t = b.trim();

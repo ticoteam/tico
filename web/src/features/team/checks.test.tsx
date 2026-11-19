@@ -157,6 +157,46 @@ describe("An agent's column", () => {
 });
 
 describe("An agent's Settings", () => {
+  it('reopens the role editor with the saved role after cancelling a draft', async () => {
+    const agent = { ...roster[0]!, description: 'Writes the brief' };
+    serve((url) => url === '/api/employees' ? { status: 200, body: [agent] } : undefined);
+    queryClient.setQueryData(agentsQuery.queryKey, [agent]);
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    const edit = () => screen.findByRole('button', { name: /^Role/ });
+    fireEvent.click(await edit());
+    const field = await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Role' });
+    fireEvent.change(field, { target: { value: 'Unsent role' } });
+    expect(field.value).toBe('Unsent role');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Role' })).toBeNull());
+
+    fireEvent.click(await edit());
+    expect((await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Role' })).value).toBe('Writes the brief');
+    expect(sent).toEqual([]);
+  });
+
+  it('reopens the model picker with the saved model after cancelling a draft', async () => {
+    const agent = { ...roster[0]!, model: 'standard' };
+    const models = { models: [{ id: 'standard', label: 'Standard' }, { id: 'advanced', label: 'Advanced' }], harnesses: [] };
+    serve((url) => {
+      if (url === '/api/employees') return { status: 200, body: [agent] };
+      if (url === '/api/v2/models') return { status: 200, body: models };
+    });
+    queryClient.setQueryData(agentsQuery.queryKey, [agent]);
+    queryClient.setQueryData(modelsQuery.queryKey, models);
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    const edit = () => screen.findByRole('button', { name: /^Model/ });
+    fireEvent.click(await edit());
+    fireEvent.click(await screen.findByRole('radio', { name: 'Advanced' }));
+    expect(screen.getByRole('radio', { name: 'Advanced', checked: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).toBeNull());
+
+    fireEvent.click(await edit());
+    expect(await screen.findByRole('radio', { name: 'Standard', checked: true })).toBeTruthy();
+    expect(sent).toEqual([]);
+  });
+
   it('lists its rules, its own and the company’s @s616', async () => {
     serve((url) =>
       url.endsWith('/bots/ana/rules')
@@ -330,7 +370,7 @@ describe('Picks save on select', () => {
   it('sets where the conversation compacts from the model picker’s More', async () => {
     queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm-one', label: 'Model One' }], harnesses: [] } as never);
     queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0], model: 'm-one' } as AgentRow]);
-    serve((url, method) => (method === 'POST' && url.endsWith('/compact-at') ? { status: 200, body: {} } : undefined));
+    serve((url, method) => (method === 'POST' && url.endsWith('/compact-at') ? { status: 200, body: { revision: 4 } } : undefined));
     show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
     const dialog = await screen.findByRole('dialog', { name: 'Model' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'More' }));
