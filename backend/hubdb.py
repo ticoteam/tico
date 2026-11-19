@@ -6612,10 +6612,13 @@ def prune_deltas(conn, before=None):
 
 
 # ----------------------------------------------------------------------------- reads
+BOT_SQL = "SELECT * FROM bots WHERE id=?"
+
+
 def bot(conn, bot_id):
     """The bot with this id: an actor's id, or a foreign key's value. Never a slug: a person's or a client's input
     goes through resolve_bot, which accepts either."""
-    return _one(conn, "SELECT * FROM bots WHERE id=?", (actor_id(bot_id),))
+    return _one(conn, BOT_SQL, (actor_id(bot_id),))
 
 
 def resolve_bot(conn, ref):
@@ -6650,9 +6653,15 @@ def bots(conn, state=None):
         args.append(state)
     if where:
         sql += " WHERE " + " AND ".join(where)
-    from .read_cache import rows
+    from .read_cache import cache, prime, rows
 
-    return [dict(row) for row in rows(conn, sql + " ORDER BY slug", args)]
+    found = rows(conn, sql + " ORDER BY slug", args)
+    values = cache(conn)
+    if not state and values is not None and ("bots primed",) not in values:
+        # Every bot, once a snapshot: each bot() lookup that follows reads none.
+        prime(conn, BOT_SQL, {(row["id"],): row for row in found})
+        values[("bots primed",)] = True
+    return [dict(row) for row in found]
 
 
 # The Tico account a person signed in with (backend/oidc.py `person`): matched by the sign-in only, never sent out.
@@ -6940,6 +6949,18 @@ def notices(conn, actor, at=None):
 
 
 TASK_SQL = f"SELECT * FROM {TASKS} tasks WHERE id=?"
+# The same one-task read as task_engine.task, task_privacy and waiting_on.prime key it in the snapshot (read_cache.one).
+TASK_ROW_SQL = "SELECT * FROM tasks WHERE id=?"
+
+
+def prime_task_rows(conn, rows):
+    """Seed both one-task reads (TASK_SQL, TASK_ROW_SQL) with whole task rows (`SELECT *`, as stored) already read in
+    this snapshot, so neither task() nor task_engine.task() nor waiting_on.prime reads them again."""
+    from .read_cache import prime
+
+    found = {(row["id"],): row for row in rows}
+    prime(conn, TASK_SQL, found)
+    prime(conn, TASK_ROW_SQL, found)
 
 
 def prime_tasks(conn, ids, with_tags=True):
@@ -6951,12 +6972,17 @@ def prime_tasks(conn, ids, with_tags=True):
     if values is None:
         return
     wanted = {tid for tid in ids if tid}
-    # A row already read in this snapshot is not read again; only its missing tags are.
+    # A row already read in this snapshot, under either one-task read, is not read again (it stands for the other read
+    # too); only its missing tags are.
+    for have, other in ((TASK_ROW_SQL, TASK_SQL), (TASK_SQL, TASK_ROW_SQL)):
+        known = [tid for tid in wanted if ("one", have, (tid,)) in values and ("one", other, (tid,)) not in values]
+        prime(conn, other, {(tid,): values[("one", have, (tid,))] for tid in known})
     unread = sorted(tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values)
     for part in chunks(unread):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute(f"SELECT * FROM {TASKS} tasks WHERE id IN ({marks})", part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
+        prime(conn, TASK_ROW_SQL, {(tid,): found.get(tid) for tid in part})
     for part in chunks(sorted(tid for tid in wanted if with_tags and (TASK_TAGS_SQL % "?", (tid,)) not in values)):
         marks = ",".join("?" * len(part))
         tags = {tid: [] for tid in part}
