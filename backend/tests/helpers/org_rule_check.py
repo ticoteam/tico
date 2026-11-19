@@ -14,7 +14,9 @@ NEEDLE = "favorite color is"
 
 class Judge:
     """Answers rule-check@1: a rule is broken when the output holds that rule's needle. It notes whether the store's
-    write lock was held when it was asked, which must never happen."""
+    write lock was held when it was asked, which must never happen. A rule-part@1 call is not noted: it runs on its
+    own thread, started from the hold's after-commit hook while the committing thread still holds the gate (released
+    after the hooks), so a queued write then is that other thread's, not the part call's."""
 
     def __init__(self, store, needles=None):
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
@@ -24,7 +26,6 @@ class Judge:
 
     def part(self, state, questions):
         """Answers rule-part@1: the first part that holds a needle, else `whole`."""
-        self.locked.append(bool(self.store.writer.queue))
         self.parts.append({"state": state, "questions": questions})
         if self.part_gate is not None:
             self.part_gate.wait(10)
