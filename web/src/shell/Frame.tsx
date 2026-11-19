@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSP
 import { motionLevel } from '@/motion';
 import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
+import { useTicoPower } from '@/tico/power';
 import { useArrangement } from './arrangement';
 import { useDesktopInset } from '@/desktop';
 import { IconButton } from '@/kit/IconButton';
@@ -402,6 +403,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
 
 /* Tico folded: the Dot at the top, the panel icon at the foot. No number beside the Dot (motion.md R1). */
 function TicoStrip({ onOpen }: { onOpen: () => void }) {
+  // folded, the strip's Dot still shows when Tico is off
+  useTicoPower();
   return (
     <aside className="pane tico is-fold" aria-label="Tico">
       <button className="tico-orb" type="button" aria-label="Open Tico" title="Open Tico" onClick={onOpen}>

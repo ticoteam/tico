@@ -44,7 +44,10 @@
 /* cannot do it, and not there at all */
 .dw.s-grey .dot i::before{opacity:1}
 .dw.s-grey .dot b{opacity:.45}
-.dw.s-off .dot i{animation:none;background:none;box-shadow:inset 0 0 0 max(1.5px,calc(var(--d)*.07)) var(--faint)}
+/* turning off, the hollow ring fades in over the jade's place (motion.md A11); motion off: at once */
+.dw.s-off .dot i{animation:dot-off var(--dur) var(--ease);background:none;box-shadow:inset 0 0 0 max(1.5px,calc(var(--d)*.07)) var(--faint)}
+@keyframes dot-off{from{opacity:0}}
+.is-frozen .dw.s-off .dot i{animation:none}
 .dw.s-off .dot i::before,.dw.s-off .dot b{display:none}
 /* a Dot off screen stands still (motion.md 7) */
 .dw.is-idle *,.dw.is-idle *::before,.dw.is-idle *::after{animation-play-state:paused}

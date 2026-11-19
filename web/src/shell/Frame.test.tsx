@@ -6,6 +6,7 @@ import { Sheet } from './Sheet';
 // the frame alone: no motion, a plain Dot, no phone cards
 vi.mock('@/motion', () => ({ motionLevel: () => 'off' }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" /> }));
+vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
 vi.mock('@/shell/phone', () => ({ PhoneCards: () => <div>cards</div> }));
 
 const KEY = 'tico-next:sheets.v1';

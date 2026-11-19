@@ -15,6 +15,7 @@ const { gate, q } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
 vi.mock('@/tico', async (orig) => ({
   ...(await orig<object>()),
    TicoSheet: () => <aside aria-label="Tico">Tico</aside> }));
@@ -52,7 +53,7 @@ vi.mock('@/features/calls/exports', () => ({
   TOGGLE_MUTE: 'calls.toggleMute',
   useCall: () => ({ muted: false }),
 }));
-vi.mock('@/features/tasks/exports', () => ({ flowQuery: q('flow', { count: 4, items: [] }), pipelinesQuery: q('pipelines', []) }));
+vi.mock('@/features/tasks/exports', () => ({ flowQuery: q('flow', { count: 4, items: [] }), pipelinesQuery: q('pipelines', []), roadmapPipeline: () => null }));
 vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null, teamSlug: (t: string) => t, whoHref: () => '/' }));
 vi.mock('@/features/threads/exports', () => ({
   ChatSheet: () => <p>a teammate chat</p>,
