@@ -135,6 +135,10 @@ SUPPORT_REVISION_KEY = "cloud-machine-support-revision"
 NAME_KEY = (
     "cloud-machine-name:"  # + machine key: the name a person gave its computer, kept when the machine is made again
 )
+REPLACES_KEY = (
+    "cloud-machine-replaces:"  # + machine key: the computers it had before its row stopped naming one (`left`)
+)
+REPLACES_KEPT = 8
 TICK = 10  # seconds between looks
 SYNC = 60  # seconds between HQ lists
 DELETION_BATCH = 4  # old ids reconciled per look, even when HQ's list cannot be read
@@ -1086,6 +1090,7 @@ def enrolled(c, execution, runner_id, key):
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
     for source in gone:
         MS.carry_over(c, source, runner_id)
+    c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     for bot in hosted(c, key):
         bind(c, execution, bot)
     for bot in hosted(c, key):  # a new computer, even while its bot's last turn is still out elsewhere
@@ -1094,9 +1099,36 @@ def enrolled(c, execution, runner_id, key):
             lend_plans(c, execution, bot, runner_id, chooser, new=True)
 
 
+def left(c, key):
+    """Machine `key`'s row is about to stop naming its computer (made again: `adopt`, or deleted for a Replace:
+    `deleted`) before the next one enrolls. Kept, newest first, so `replaced` still finds it when the bots set to run there are no
+    longer assigned to it by then: otherwise the new computer gets only what the company lends, and a person's plans
+    given to the old one are lost (Tico Team, 2026-11-18: Reviewer 1 and Reviewer 2 lost Chris's Claude set)."""
+    runner_id = (row(c, key) or {}).get("runner_id")
+    if not runner_id:
+        return
+    earlier = were(c, key)
+    value = json.dumps([runner_id, *(r for r in earlier if r != runner_id)][:REPLACES_KEPT])
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (REPLACES_KEY + key, value),
+    )
+
+
+def were(c, key):
+    """The computers machine `key` had before its row stopped naming one, newest first (`left`)."""
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,)).fetchone()
+    try:
+        ids = json.loads(found["value"]) if found else []
+    except ValueError:
+        return []
+    return [r for r in ids if isinstance(r, str)] if isinstance(ids, list) else []
+
+
 def replaced(c, key, old, runner_id):
     """The computers machine `key`'s new computer `runner_id` takes the place of, newest first: the one the machine
-    still names (`old`), and the ones the bots set to run there are still assigned to, when that computer is gone
+    still names (`old`), the ones it named before it was made again or deleted (`left`), and the ones the bots set to
+    run there are still assigned to, when that computer is gone
     (revoked: a replaced or deleted machine's, or one a person removed). Their plans follow the bots
     (model_subscriptions.carry_over), so a Replace keeps every runtime the old machine signed in, a person's plans
     included, and not only the ones the company would lend it now. A computer still in use keeps its plans to itself.
@@ -1107,7 +1139,7 @@ def replaced(c, key, old, runner_id):
         if found:
             placed_on.append(found["runner_id"])
     out = []
-    for source in dict.fromkeys([old, *placed_on]):
+    for source in dict.fromkeys([old, *were(c, key), *placed_on]):
         if not source or source == runner_id:
             continue
         gone = c.execute("SELECT revoked_at FROM runners WHERE id=?", (source,)).fetchone()
@@ -2030,6 +2062,7 @@ class Manager:
             c.execute(
                 "UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?", (current["runner_id"], old_id)
             )
+            left(c, key)
         c.execute(
             "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
             "WHERE bot=? AND replacement_for IS NOT ?)",
@@ -2366,7 +2399,8 @@ class Manager:
         fails = live["enroll_fails"]
         # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
         # answers with that one (act), which is not the new machine.
-        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails})
+        # Part of the replacement it was made for: the next attempt still takes the old computer's place.
+        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails}, replacing=True)
 
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
@@ -2378,7 +2412,7 @@ class Manager:
         elif refused.status == 404 and action != "create":
             # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
             with self.store.transaction() as c:
-                deleted(c, row(c, key), H.TICO_ACTOR)
+                deleted(c, row(c, key), H.TICO_ACTOR, replacing=True)  # HQ lost it: the next one takes its place
             return
         else:
             fields = retry_backoff(current, at)
@@ -3010,13 +3044,21 @@ def present(current):
     return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
-def deleted(c, current, actor, changed_by=None, details=None):
-    """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts."""
+def deleted(c, current, actor, changed_by=None, details=None, replacing=False):
+    """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts.
+    `replacing`: the next machine takes this one's place (a Replace, the shared machine, one HQ lost, or an attempt
+    that never enrolled), so its computer is kept for the next to carry its plans over (`left`). Any other deletion
+    forgets the computers kept: a machine deleted for good gives a later one no plan, a person's included, without a
+    new grant."""
     key = current["bot"]
     fails = row(c, key)["enroll_fails"]
     fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None
+    if not replacing:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     if current["runner_id"] and current["runner_id"] != fresh_runner:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
+        if replacing:
+            left(c, key)
     c.execute(
         "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
         "WHERE bot=? AND (replacement_for IS NOT ? OR ? IS NULL))",
@@ -3119,7 +3161,11 @@ def _remove(service, who, auth, key, request, mutate, replace):
         # Enrollment can finish during HQ's call. Revoke the runner found here, under the same lock enrollment takes.
         # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
         deleted(
-            c, live, who.actor, live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor
+            c,
+            live,
+            who.actor,
+            live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor,
+            replacing=explicit,
         )
         return {"ok": True}
 
