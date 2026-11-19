@@ -6,6 +6,8 @@ import json
 import pytest
 
 from backend import hubdb as H
+from backend import products
+from backend.entities import store as ES
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.openapi_v2 import conforms
 from clients import hubcli, remotecli
@@ -195,3 +197,42 @@ def test_tico_products_adds_edits_and_clears_a_set(api, repos, monkeypatch):
     product = ok(api, "get", "products/" + product["key"])["product"]
     assert product["repositories"] == [] and product["tax_kind"] == "software_service"
     assert names(product["agreements"]) == ["App Terms"] and names(product["depends_on"]) == ["Lumen Parts"]
+
+
+def test_a_bot_owner_reads_only_to_who_sees_the_bot(api):
+    from backend.tests.helpers.api import restrict
+
+    key = ok(api, "post", "products", json={"name": "Lightshow App", "owner_teammate": "bot:ops"})["product"]["key"]
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["ana"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    assert ok(api, "get", "products/" + key)["product"]["owner_teammate"] == "bot:ops"
+    assert ok(api, "get", "products/" + key, "cara-test")["product"]["owner_teammate"] is None
+    assert ok(api, "get", "products", "cara-test")["products"][0]["owner_teammate"] is None
+
+
+def test_a_link_set_to_start_later_is_not_current_and_survives_a_replace(api):
+    product = ok(api, "post", "products", json={"name": "Lightshow Kit", "depends_on": ["Lumen Parts"]})["product"]
+    with api.app.state.store.transaction() as c:
+        future = ES.upsert(c, "human:ana", "organization", match={"name": "Later Co"}, name="Later Co")["id"]
+        ES.link(c, "human:ana", product["id"], "depends_on", future, valid_from_on="2099-01-01")
+    assert names(ok(api, "get", "products/" + product["key"])["product"]["depends_on"]) == ["Lumen Parts"]
+
+    ok(api, "post", "products/" + product["key"], json={"depends_on": []})
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT valid_until_on FROM entity_links WHERE to_entity_id=?", (future,)).fetchone()
+    assert row["valid_until_on"] is None
+
+
+def test_a_long_name_that_takes_a_numbered_key_still_opens(api):
+    long = "L" * 200
+    first = ok(api, "post", "products", json={"name": long})["product"]
+    ok(api, "post", "products/" + first["key"], json={"name": "Renamed"})
+    second = ok(api, "post", "products", json={"name": long})["product"]
+    assert second["key"] != first["key"]
+    assert ok(api, "get", "products/" + second["key"])["product"]["name"] == long
+
+
+def test_values_of_another_shape_read_as_unset_not_as_an_error():
+    assert products.text("live") == "live" and products.text(3) is None and products.text("") is None
+    assert products.texts("Acme/web") == ["Acme/web"]
+    assert products.texts(["Acme/web", 4, ""]) == ["Acme/web"] and products.texts(None) == []

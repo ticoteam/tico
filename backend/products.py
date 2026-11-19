@@ -36,7 +36,7 @@ SOURCE = (
 TYPE = "product"
 CHOICES = ("kind", "status", "tax_kind")  # the select fields, by attribute key
 LINKS = {"agreements": ("sold_under", "document"), "depends_on": ("depends_on", "organization")}
-KEY = re.compile(r"^[a-z0-9][a-z0-9-]{0,199}$")
+KEY = re.compile(r"^[a-z0-9][a-z0-9-]{0,299}$")  # the slug after product/: a 200-character name plus a -2 still fits
 MOST = 50  # the most repositories, agreements or vendors one write names
 
 
@@ -56,6 +56,18 @@ class ProductCreate(ProductFields):
 
 class ProductUpdate(ProductFields):
     name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+def text(value: object) -> str | None:
+    """A single field's value as the answer carries it. A hub that defined the attribute itself before this migration may
+    hold another shape; that reads as unset rather than breaking the list."""
+    return value if isinstance(value, str) and value else None
+
+
+def texts(value: object) -> list[str]:
+    """A multiple field's values: a list of text, or one text value when the attribute was defined single."""
+    items = cast("list[object]", value) if isinstance(value, list) else [value]
+    return [item for item in items if isinstance(item, str) and item]
 
 
 def install(
@@ -119,6 +131,20 @@ def install(
         far = ES.entity_names(c, list(seen))
         agreement_ids = {item["id"] for links in linked.values() for item in links["agreements"]}
         agreement_files = files(c, who, sorted(agreement_ids & seen))
+        bots: dict[str, bool] = {}
+
+        def owner(actor: object) -> str | None:
+            """The owner as this reader may know it: a bot they cannot see reads as no owner."""
+            if not isinstance(actor, str) or not actor:
+                return None
+            if actor.startswith("bot:"):
+                slug = actor.removeprefix("bot:")
+                if slug not in bots:
+                    bots[slug] = bool(auth.visible_bot(c, who, slug))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                if not bots[slug]:
+                    return None
+            return actor
+
         out: list[dict[str, Any]] = []
         for entity_id in ids:
             own = values.get(entity_id, {})
@@ -126,9 +152,9 @@ def install(
                 "id": entity_id,
                 "key": entity_id.removeprefix(TYPE + "/"),
                 "name": names.get(entity_id, ""),
-                **{field: own.get(field) for field in CHOICES},
-                "owner_teammate": own.get("owner_teammate"),
-                "repositories": sorted(own.get("repositories") or [], key=str.lower),
+                **{field: text(own.get(field)) for field in CHOICES},
+                "owner_teammate": owner(own.get("owner_teammate")),
+                "repositories": sorted(texts(own.get("repositories")), key=str.lower),
             }
             for field in LINKS:
                 items = [{**item, "name": far[item["id"]]} for item in linked[entity_id][field] if item["id"] in seen]
@@ -192,7 +218,7 @@ def install(
             ES.upsert(c, actor, TYPE, match={"id": entity_id}, values=values, source_type=SOURCE, source_id=actor)
         if body.repositories is not None:
             wanted = list(dict.fromkeys(repository(c, name) for name in body.repositories))
-            have = ES.values_for(c, actor, [entity_id]).get(entity_id, {}).get("repositories") or []
+            have = texts(ES.values_for(c, actor, [entity_id]).get(entity_id, {}).get("repositories"))
             for name in have:
                 if name not in wanted:
                     ES.clear_value(c, actor, entity_id, "repositories", name)

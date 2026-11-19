@@ -28,6 +28,7 @@ const PR_CHOICES: Record<PrChoice, [string, string][]> = {
 const PR_FIELD_NAMES: Record<PrChoice | 'owner_teammate', string> = {kind: 'Kind', status: 'Status', tax_kind: 'Tax kind', owner_teammate: 'Owner'};
 
 let PRP: { run: number } | null = null;   // the page on screen: a late answer for a page left behind draws nothing
+let PR_RUN = 0;   // never reset, so a page opened after leaving Products never takes an earlier page's answer
 
 const prHref = (key: string): string => PRODUCTS_ROUTE + '/' + encodeURIComponent(key);
 const prLive = (run: number): boolean => PRP !== null && PRP.run === run;
@@ -41,7 +42,7 @@ const prAgreement = (a: PrLink): string => a.file
 
 // ----------------------------------------------------------------- the list
 async function pageProducts(): Promise<void> {
-  const run = (PRP?.run ?? 0) + 1;
+  const run = ++PR_RUN;
   PRP = { run };
   const main = document.getElementById('main');
   if (!main) return;
@@ -116,7 +117,7 @@ function prAddDialog(): void {
 
 // ----------------------------------------------------------------- one product
 async function pageProduct(key: string): Promise<void> {
-  const run = (PRP?.run ?? 0) + 1;
+  const run = ++PR_RUN;
   PRP = { run };
   const main = document.getElementById('main');
   if (!main) return;
@@ -174,12 +175,17 @@ function prListCard(field: PrList, title: string, items: {value: string; html: s
 // The values a list field holds now, as the server takes them: a repository's name, an agreement's or a vendor's id.
 const prValues = (p: Product, field: PrList): string[] => field === 'repositories' ? [...p.repositories] : p[field].map(x => x.id);
 
+// One edit at a time: each sends a whole list built from the product on screen, so the page's controls wait until the
+// answer redraws it (two quick removes would otherwise each send a list that still holds the other's item).
 async function prSave(root: HTMLElement, run: number, p: Product, body: Record<string, unknown>): Promise<boolean> {
+  const held = [...root.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.pr-main button, .pr-main select')].filter(el => !el.disabled);
+  held.forEach(el => { el.disabled = true; });
   try {
     const answer = await post(`/v2/products/${encodeURIComponent(p.key)}`, body) as { product: Product };
     if (prLive(run)) { prDraw(root, answer.product); prBind(root, run, answer.product); }
     return true;
   } catch (e) {
+    held.forEach(el => { el.disabled = false; });
     toast(errorMessage(e, 'Something went wrong.'), true);
     return false;
   }
