@@ -45,7 +45,13 @@ export function Capped<T extends { id: string }>({
         onReachEnd={more}
       />
     );
-  if (all || list.length <= cap) return list.map(draw);
+  if (all || list.length <= cap)
+    return (
+      <>
+        {list.map(draw)}
+        {more && moreRow(0, more)}
+      </>
+    );
   return (
     <>
       {list.slice(0, show).map(draw)}
@@ -54,8 +60,8 @@ export function Capped<T extends { id: string }>({
   );
 }
 
-/** "N more"; "N+ more" while the server holds more than was read. */
-export const moreText = (n: number, cut?: boolean) => `${n}${cut ? '+' : ''} more`;
+/** "N more"; "N+ more" while the server holds more than was read. Zero is the next server page. */
+export const moreText = (n: number, cut?: boolean) => (n ? `${n}${cut ? '+' : ''} more` : 'More tasks');
 
 /** "N more" under a list stage's first rows. */
 export const RowMore = ({ n, cut, onClick }: { n: number; cut?: boolean; onClick: () => void }) => (
