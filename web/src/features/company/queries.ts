@@ -6,6 +6,7 @@ import type {
   Goal,
   GoalCheckinView,
   GoalCreate,
+  GoalProposalView,
   GoalResult,
   GoalTree,
   GoalUpdate,
@@ -30,7 +31,7 @@ import type {
   TaskBrief,
   Usage,
 } from '@/api/schema';
-import { keys, QUIET_STALE_MS, quietRoot, write } from '@/data';
+import { keys, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 
 /* Company, Strategy, Products and Risk. None of these has a live topic: each root is read again after the person's
    own writes, on reconnect and on open when older than 60 s. Three widgets on Company read other areas' endpoints
@@ -303,6 +304,30 @@ export const kpiQuery = (kid: string) =>
   });
 
 const treeKey = goalsTreeQuery.queryKey;
+
+/** A proposal on a goal or a KPI, as the tree sends it: what its card says, and whether this reader decides it. */
+export type Proposal = GoalProposalView;
+export interface ProposalCard {
+  target_label?: string;
+  now_label?: string;
+  measure?: { name: string };
+  changes?: { label: string; now: string; proposed: string }[];
+}
+
+/** The owner's yes or no on a proposal: the card goes at once and comes back if refused. A yes changes the goal or
+    its KPIs, so both are read again. */
+export function decideProposal(id: string, decision: 'confirm' | 'reject') {
+  return write<{ proposal: Proposal }>({
+    key: treeKey,
+    optimistic: (t: GoalTree | undefined) => t && { ...t, proposals: t.proposals.filter((p) => p.id !== id) },
+    send: async (idempotencyKey) => {
+      const out = await api.post<{ proposal: Proposal }>(`/api/v2/proposals/${enc(id)}/decide`, { decision }, { idempotencyKey });
+      void queryClient.invalidateQueries({ queryKey: ['kpis'] });
+      void queryClient.invalidateQueries({ queryKey: ['goals', 'detail'] });
+      return out;
+    },
+  });
+}
 const mapGoals = (tree: GoalTree | undefined, f: (g: TreeGoal) => TreeGoal | null): GoalTree | undefined =>
   tree && { ...tree, goals: tree.goals.map(f).filter((g): g is TreeGoal => g !== null) };
 const mapKpis = (tree: GoalTree | undefined, f: (k: Kpi) => Kpi | null): GoalTree | undefined =>

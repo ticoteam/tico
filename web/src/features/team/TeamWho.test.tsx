@@ -6,6 +6,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { agentsQuery, changeAgent, groupsQuery, moveToTeam, type AgentRow, type Group } from './queries';
 import { TeamWho } from './TeamWho';
+import type { GoalTree } from '@/api/schema';
+import { goalsTreeQuery } from '@/features/company/exports';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
@@ -132,6 +134,25 @@ describe('Team pages', () => {
     show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
     expect(await screen.findByRole('dialog', { name: 'Model' })).toBeTruthy();
     expect(await screen.findByText('Writes copy')).toBeTruthy();
+  });
+
+  it('lists a person’s goals, each opening that goal’s sheet', async () => {
+    serve(() => undefined);
+    const kpi = { id: 'k1', name: 'Signups', unit: '', latest: { value: 12 }, link: { target: 20 } };
+    queryClient.setQueryData(goalsTreeQuery.queryKey, {
+      goals: [
+        { id: 'g1', title: 'Grow signups', owner_id: pat.id, kpis: [kpi] },
+        { id: 'g2', title: 'Ship kits', owner_id: ana.id, kpis: [] },
+      ],
+      other_kpis: [],
+      owners: {},
+      proposals: [],
+      unaligned: {},
+    } as unknown as GoalTree);
+    show(<TeamWho who="p1" />, '/team/p1');
+    await waitFor(() => expect(link('Grow signups')?.getAttribute('href')).toBe('/company/strategy/goals?panel=goal%3Ag1'));
+    expect(screen.getByText('12 of 20')).toBeTruthy();
+    expect(link('Ship kits')).toBeUndefined();
   });
 
   it('says so for a team with nobody in it', async () => {

@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useActor, useActors } from '@/data';
 import { Button } from '@/kit/Button';
 import { LineChart } from '@/kit/Chart';
 import { DatePick } from '@/kit/DatePick';
 import { Field } from '@/kit/Field';
+import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Pill } from '@/kit/Pill';
@@ -12,7 +13,7 @@ import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
 import { List, SidePanel, type PageTab } from '@/pagekinds';
 import { amount, Face, NameOf, PanelLink, Trend, useDo } from './parts';
-import { goalQuery, goalsTreeQuery, kpiQuery, type TreeGoal } from './queries';
+import { goalQuery, goalsTreeQuery, kpiQuery, type Proposal, type ProposalCard, type TreeGoal } from './queries';
 import type { Kpi, KpiDetail, KpiReadingView } from '@/api/schema';
 
 /* Goals (pages/3-company/company.js goalsBody): a List of the goal tree, a goal sits under the goal it feeds and each
@@ -49,7 +50,7 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
       state={state}
       onRetry={() => void q.refetch()}
       empty={{ title: 'No goals yet', action: add }}
-      sections={<GoalTreeView goals={goals} selected={kind === 'goal' ? ref : null} />}
+      sections={<GoalTreeView goals={goals} waiting={waiting(q.data?.proposals)} selected={kind === 'goal' ? ref : null} />}
       panel={
         panel === 'goal-new' ? (
           <GoalForm goals={goals} />
@@ -92,7 +93,8 @@ export function placeGoals(goals: readonly TreeGoal[]): Placed[] {
   return out;
 }
 
-function GoalTreeView({ goals, selected }: { goals: readonly TreeGoal[]; selected: string | null }) {
+function GoalTreeView({ goals, waiting: mine, selected }: { goals: readonly TreeGoal[]; waiting: readonly Proposal[]; selected: string | null }) {
+  const needs = new Set(mine.map((p) => p.goal_id));
   return (
     <div className="gt" role="tree" aria-label="Goals">
       {placeGoals(goals).map(({ goal: g, depth, last }) => {
@@ -105,6 +107,7 @@ function GoalTreeView({ goals, selected }: { goals: readonly TreeGoal[]; selecte
               <PanelLink panel={`goal:${g.id}`} className="gt-title" data-target={`goal:${g.id}`}>
                 <span>{g.title}</span>
                 {flag(g.status) && <Pill flag>{flag(g.status)}</Pill>}
+                {needs.has(g.id) && <FlowMark size={10} />}
               </PanelLink>
               {g.kpis.slice(0, KPIS_SHOWN).map((k) => (
                 <PanelLink key={k.id} panel={`kpi:${k.id}`} className="gk" data-target={`kpi:${k.id}`}>
@@ -169,6 +172,10 @@ function GoalPanel({ gid }: { gid: string }) {
   const kpis = fromTree?.kpis ?? detail.data?.goal.kpis ?? [];
   const parent = tree.data?.goals.find((x) => x.id === g.parent_id);
   const checkins = detail.data?.goal.checkins ?? [];
+  const asks = waiting(tree.data?.proposals).filter((p) => p.goal_id === gid);
+  const onKpi = (kid: string) => asks.filter((p) => p.kpi_id === kid && p.kind !== 'goal_kpi');
+  const newKpis = asks.filter((p) => p.kind === 'goal_kpi');
+  const onGoal = asks.filter((p) => !p.kpi_id && p.kind !== 'goal_kpi');
   const done = async (status: 'done' | 'dropped') => {
     if (await shut.run({ goal: gid, status })) void close.run({});
   };
@@ -218,6 +225,9 @@ function GoalPanel({ gid }: { gid: string }) {
             <Select label="Owner" labelHidden look="quiet" options={owners} value={g.owner_id} onValueChange={(owner) => void update.run({ goal: gid, owner })} />
           </span>
         </div>
+        {onGoal.map((p) => (
+          <ProposalCardView key={p.id} p={p} />
+        ))}
         {parent && (
           <div className="fact">
             <span>Feeds</span>
@@ -232,27 +242,45 @@ function GoalPanel({ gid }: { gid: string }) {
       </section>
       <section className="rail-sec" aria-label="KPIs">
         <h3>
-          KPIs<span>{kpis.length || ''}</span>
+          KPIs<span>{kpis.length + newKpis.length || ''}</span>
         </h3>
         {kpis.map((k) => (
-          <PanelLink key={k.id} panel={`kpi:${k.id}`} className="kr" data-target={`kpi:${k.id}`}>
-            <span className="kr-name">
-              {k.name}
-              {flag(k.status) && <Pill flag>{flag(k.status)}</Pill>}
-            </span>
-            <KpiFig k={k} className="gt-fig" />
-            {k.latest ? (
-              <From r={k.latest} when={fmtAge(k.latest.measured_at ?? k.latest.created_at ?? k.latest.period_end)} />
-            ) : (
-              <span className="kr-src">
-                <Face id={k.owner_id} size={16} />
-                <span>
-                  <NameOf id={k.owner_id} />
-                </span>
+          <KpiWithAsks key={k.id} asks={onKpi(k.id)}>
+            <PanelLink panel={`kpi:${k.id}`} className="kr" data-target={`kpi:${k.id}`}>
+              <span className="kr-name">
+                {onKpi(k.id).length > 0 && <FlowMark size={10} />}
+                {k.name}
+                {flag(k.status) && <Pill flag>{flag(k.status)}</Pill>}
               </span>
-            )}
-            <span className="kr-by">{k.link?.deadline ? `by ${fmtDate(k.link.deadline)}` : ''}</span>
-          </PanelLink>
+              <KpiFig k={k} className="gt-fig" />
+              {k.latest ? (
+                <From r={k.latest} when={fmtAge(k.latest.measured_at ?? k.latest.created_at ?? k.latest.period_end)} />
+              ) : (
+                <span className="kr-src">
+                  <Face id={k.owner_id} size={16} />
+                  <span>
+                    <NameOf id={k.owner_id} />
+                  </span>
+                </span>
+              )}
+              <span className="kr-by">{k.link?.deadline ? `by ${fmtDate(k.link.deadline)}` : ''}</span>
+            </PanelLink>
+          </KpiWithAsks>
+        ))}
+        {newKpis.map((p) => (
+          <KpiWithAsks key={p.id} asks={[p]}>
+            <div className="kr">
+              <span className="kr-name">
+                <FlowMark size={10} />
+                {card(p).measure?.name}
+              </span>
+              <span className="gt-fig">{card(p).target_label}</span>
+              <span className="kr-src" />
+              <span className="kr-by">
+                <Pill flag>Proposed</Pill>
+              </span>
+            </div>
+          </KpiWithAsks>
         ))}
         <PanelLink panel={`kpi-new:${gid}`} className="kr-add">
           <Icon name="plus" />
@@ -271,6 +299,94 @@ function GoalPanel({ gid }: { gid: string }) {
         </section>
       )}
     </SidePanel>
+  );
+}
+
+// ---------------------------------------------------------------- what waits on you: proposals as answer cards
+
+/** The proposals this reader decides, still open. */
+const waiting = (all: readonly Proposal[] | undefined) => (all ?? []).filter((p) => p.status === 'pending' && p.may_decide && ask(p));
+const card = (p: Proposal) => (p.card ?? {}) as ProposalCard;
+
+/** What a proposal asks, and its two answers (company.js propose: "Move the target from $22 to $24?", Keep $22, Set $24). */
+function ask(p: Proposal): { q: string; no: string; yes: string } | null {
+  const c = card(p);
+  const said = (k: string) => {
+    const v = (p.payload ?? {})[k];
+    return typeof v === 'string' ? v : '';
+  };
+  switch (p.kind) {
+    case 'kpi_target': {
+      const to = c.target_label;
+      if (!to) return null;
+      return c.now_label ? { q: `Move the target from ${c.now_label} to ${to}?`, no: `Keep ${c.now_label}`, yes: `Set ${to}` } : { q: `Set the target to ${to}?`, no: 'Leave it', yes: `Set ${to}` };
+    }
+    case 'goal_kpi':
+      return c.measure?.name ? { q: `Add ${c.measure.name}${c.target_label ? `, ${c.target_label}` : ''}?`, no: 'Leave it', yes: 'Add' } : null;
+    case 'kpi_definition':
+    case 'goal_wording': {
+      const ch = c.changes ?? [];
+      if (!ch.length) return null;
+      const one = ch.length === 1 ? ch[0] : undefined;
+      return {
+        q: one ? `Change ${one.label.toLowerCase()} to “${one.proposed}”?` : `Change ${ch.map((x) => x.label.toLowerCase()).join(', ')}?`,
+        no: 'Keep',
+        yes: 'Change',
+      };
+    }
+    case 'goal_why':
+      return said('why') ? { q: `Use “${said('why')}” as the why?`, no: 'Leave it', yes: 'Use it' } : null;
+    case 'flag':
+      return said('issue') ? { q: `Flag this goal as ${said('issue')}?`, no: 'Leave it', yes: 'Flag' } : null;
+    default:
+      return null;
+  }
+}
+
+/** A row and, under it, the cards about it. */
+function KpiWithAsks({ asks, children }: { asks: readonly Proposal[]; children: ReactNode }) {
+  return (
+    <>
+      {children}
+      {asks.map((p) => (
+        <ProposalCardView key={p.id} p={p} />
+      ))}
+    </>
+  );
+}
+
+/** A proposal that waits on you: an answer card under the row it is about, with who asks and why. */
+function ProposalCardView({ p }: { p: Proposal }) {
+  const decide = useDo('goals.decide');
+  const a = ask(p);
+  if (!a) return null;
+  const answer = (decision: 'confirm' | 'reject') => void decide.run({ proposal: p.id, decision });
+  return (
+    <section className="answer is-ask kp-ask" aria-label={a.q} data-target={`proposal:${p.id}`}>
+      <p className="an-q">
+        <FlowMark />
+        <span>{a.q}</span>
+      </p>
+      {p.reason && (
+        <p className="kp-why">
+          <Face id={p.proposed_by} size={16} />
+          <span>
+            <b>
+              <NameOf id={p.proposed_by} />
+            </b>{' '}
+            {p.reason}
+          </span>
+        </p>
+      )}
+      <div className="an-row">
+        <Button disabled={decide.pending} onClick={() => answer('reject')}>
+          {a.no}
+        </Button>
+        <Button variant="primary" disabled={decide.pending} onClick={() => answer('confirm')}>
+          {a.yes}
+        </Button>
+      </div>
+    </section>
   );
 }
 

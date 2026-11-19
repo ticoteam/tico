@@ -299,3 +299,10 @@
   .co .two-col>.stage+.stage{box-shadow:none;margin-top:var(--s-1h);padding-top:var(--s-1h);border-top:1px solid var(--line)}
   .pnl .fld{height:44px}
 }
+
+/* ---------- Goals: a proposal that waits on you, an answer card under its row (company.css kp-ask) ---------- */
+.pnl .kp-ask{margin:var(--s-1) 0 var(--s-2)}
+.pnl .kp-why{display:flex;align-items:flex-start;gap:var(--s-1h);margin:var(--s-2) var(--s-0) 0;font-size:var(--t-sm);line-height:var(--lh-meta);color:var(--ink-2)}
+.pnl .kp-why b{font-weight:var(--w-strong);color:var(--ink)}
+.pnl .kr-name .dot{margin-right:var(--s-1h);vertical-align:-1px}
+.co .gt-title .dot{margin-left:var(--s-1h);vertical-align:-1px}

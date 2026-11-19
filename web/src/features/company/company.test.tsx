@@ -147,6 +147,41 @@ describe('Goals', () => {
   });
 });
 
+describe('Goal proposals', () => {
+  const proposal = {
+    id: 'pr1',
+    kind: 'kpi_target',
+    goal_id: 'g1',
+    kpi_id: 'k1',
+    payload: { target: 50 },
+    reason: 'Signups beat the plan two weeks running.',
+    proposed_by: 'bot:growth',
+    status: 'pending',
+    card: { target_label: '50', now_label: '40', measure: { name: 'Weekly signups' } },
+    may_decide: true,
+  };
+  const asked = { ...tree, proposals: [proposal] } as unknown as GoalTree;
+
+  it('marks the goal, asks on its KPI, and says yes with an idempotency key', async () => {
+    const posts: { url: string; key: string | null; body: unknown }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push({ url: String(url), key: new Headers(init.headers).get('Idempotency-Key'), body: JSON.parse(String(init.body)) });
+      const body = init?.method === 'POST' ? { proposal: { ...proposal, status: 'confirmed' } } : { detail: 'not_found' };
+      return new Response(JSON.stringify(body), { status: init?.method === 'POST' ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+    });
+    queryClient.setQueryData(goalsTreeQuery.queryKey, asked);
+    show(<StrategyPage tab="goals" search={{ panel: 'goal:g1' }} />, '/company/strategy/goals?panel=goal:g1');
+    const card = await screen.findByRole('region', { name: 'Move the target from 40 to 50?' });
+    expect(document.querySelector('.gt-title .dot')).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: 'Set 50' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]?.url).toContain('/api/v2/proposals/pr1/decide');
+    expect(posts[0]?.body).toEqual({ decision: 'confirm' });
+    expect(posts[0]?.key).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Move the target from 40 to 50?' })).toBeNull());
+  });
+});
+
 describe('Strategy and Brand versions', () => {
   const strategy: Strategy = {
     current: { n: 3, summary: 'Sell kits to new gardeners.', sections: { serve: 'First gardeners.\n\nRenters with a balcony.' }, published_by: 'bot:strat', published_at: '2026-11-18T10:00:00Z' },

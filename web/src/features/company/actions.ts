@@ -9,6 +9,7 @@ import {
   createKpi,
   createProduct,
   createRisk,
+  decideProposal,
   publishBrand,
   saveBrandDraft,
   updateGoal,
@@ -175,6 +176,17 @@ export const goalClose = defineAction({
   input: s.object({ goal: id, status: s.oneOf(['done', 'dropped'] as const) }),
   run: (_ctx, { goal, status }) => closeGoal(goal, status),
   did: ({ status }) => (status === 'done' ? 'Marked the goal done' : 'Archived the goal'),
+});
+
+/** Yes or no on what a teammate proposes for a goal or a KPI (a target, a measure, new words, a flag, a why). */
+export const goalDecide = defineAction({
+  id: 'goals.decide',
+  title: 'Decide a proposal on a goal or a KPI',
+  kind: 'change',
+  input: s.object({ proposal: id, decision: s.oneOf(['confirm', 'reject'] as const) }),
+  run: (_ctx, { proposal, decision }) => decideProposal(proposal, decision),
+  did: ({ decision }) => (decision === 'confirm' ? 'Said yes' : 'Said no'),
+  target: (_input, out) => (out?.proposal.goal_id ? { kind: 'goal', id: out.proposal.goal_id } : null),
 });
 
 const kpiFields = {

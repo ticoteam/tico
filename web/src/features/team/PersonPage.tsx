@@ -2,9 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { configQuery, meQuery, useActors, type Actor } from '@/data';
+import { goalFigure, goalLink, goalsTreeQuery } from '@/features/company/exports';
 import { useFollow } from '@/live/follow';
 import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
+import { Row } from '@/kit/Row';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { bareId, startOfMonth, teamOf } from './model';
@@ -64,6 +66,7 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   const people = useQuery(peopleQuery);
   const [since] = useState(() => startOfMonth(new Date()).toISOString());
   const open = useQuery(openTasksQuery(actor.id));
+  const goals = (useQuery(goalsTreeQuery).data?.goals ?? []).filter((g) => g.owner_id === actor.id);
   const done = useQuery(doneTasksQuery(actor.id, since));
   const tasks = open.data?.tasks ?? [];
   const waits = tasks.filter((t) => waitsOn(t, me?.id));
@@ -97,6 +100,17 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
             <Section name="Waits on you" count={waits.length}>
               {waits.map((t) => (
                 <OwnRow key={t.id} task={t} me={me?.id} />
+              ))}
+            </Section>
+          )}
+          {goals.length > 0 && (
+            <Section name="Goals" count={goals.length}>
+              {goals.map((g) => (
+                <Row key={g.id} className="line" title={g.title} href={goalLink(g.id).href} target={`goal:${g.id}`}>
+                  <span className="row-mark" />
+                  <span className="row-title">{g.title}</span>
+                  <span className="row-age">{goalFigure(g)}</span>
+                </Row>
               ))}
             </Section>
           )}
