@@ -15,7 +15,8 @@
           "presence",
           "letters",
           "calendar",
-          "setup"
+          "setup",
+          "screen"
         ]
       },
       "event": "ready",
