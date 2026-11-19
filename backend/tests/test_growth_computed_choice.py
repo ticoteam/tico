@@ -44,7 +44,8 @@ def ask_text(typed, computed=75):
     """The notice the channel's owner gets for a typed actual that differs from the computed figure."""
     return (
         "Growth: numbers typed as actual for Search ads differ from the ones computed from customers: kept to day 30 "
-        f"in Sep 2026 (typed {typed}%, computed {computed}%). Keep the typed number or the computed one on the Growth page."
+        f"in Sep 2026 (typed {typed}%, computed {computed}%). Keep the typed number or the computed one: "
+        "tico growth cohort resolve, or tell the Growth Manager."
     )
 
 

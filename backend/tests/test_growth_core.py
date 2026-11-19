@@ -11,7 +11,7 @@ from datetime import date, timedelta
 import pytest
 
 from backend import growth_computed as GX
-from backend.tests.helpers.api import get, post
+from backend.tests.helpers.api import get, post, put
 from backend.tests.helpers.growth_computed import TODAY
 from backend.tests.helpers.growth_segments import load, people, team
 
@@ -135,6 +135,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
     assert outbound == {
         "slug": "outbound",
         "new": 4,
+        "name": "Outbound",
         "new_share": 0.33,
         "owner": None,
         "budget": None,
@@ -294,6 +295,7 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
     assert mine["channels"][1] == {
         "slug": "events",
         "new": 0,
+        "name": "Events",
         "new_share": 0.0,
         "owner": "bot:5e0b0a7a",
         "budget": 200.0,
@@ -367,3 +369,28 @@ def test_a_zero_or_tiny_cost_never_divides_by_zero(api):
     push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,free,money,0.004"))
     top = read(api, "period=2026-10")["headline"]
     assert top["cac"]["value"] == 0.0 and top["ltv_cac"]["value"] == 150000.0  # from unrounded CAC
+
+
+def test_typed_months_count_their_customers_where_no_rows_do_and_cost_shares_without_customers(api):
+    for slug in ("typed", "rows", "quiet"):
+        post(api, "growth/channels", {"slug": slug, "name": slug.title()})
+    for slug, new in (("typed", 10), ("rows", 99)):
+        put(api, "growth/cohorts", {"channel": slug, "month": "2026-10", "spend": 100, "new_customers": new})
+    put(api, "growth/cohorts", {"channel": "quiet", "month": "2026-10", "spend": 50})
+    push(api, "rows", "hq", lines("anchor,period,channel,as_of,entered", "customer,2026-10,rows,2026-11-01,5"))
+    out = read(api, "period=2026-10")
+    by = {c["slug"]: c for c in out["channels"]}
+    assert by["typed"]["new"] == 10 and by["typed"]["cac"] == 10.0  # typed counts where no row covers the month
+    assert by["rows"]["new"] == 5  # rows win: the typed 99 is not added
+    assert out["headline"]["new_customers"]["value"] == 15
+    assert by["quiet"]["status"] == "no_customers" and by["quiet"]["cost_share"] == 0.2
+    assert out["health"]["stale_sources"] == []
+
+
+def test_the_read_records_growth_first_opened(api):
+    from backend import growth_setup as GS
+
+    read(api)
+    with api.app.state.store.read() as c:
+        first = GS.recorded(c)
+    assert first["first_opened_at"] and first["first_opened_by"] == "human:ana"

@@ -56,6 +56,7 @@ from .store import Problem
 G: Any = _growth_untyped
 H: Any = _hubdb_untyped
 may_edit = cast("Callable[[Any, Any, Any], bool]", _setup_untyped.editor)
+opened = cast("Callable[..., None]", _setup_untyped.opened)
 Row = dict[str, Any]
 
 ANCHORS = ("signup", "customer")
@@ -87,7 +88,7 @@ ROW_REQUIRED = ("anchor", "period", "as_of", "entered")
 COST_REQUIRED = ("period", "kind", "amount")
 ROW_KEY = ("anchor", "period", "segment", "channel", "campaign")
 COST_KEY = ("period", "channel", "campaign", "kind", "purpose")
-TYPED = "typed"  # the source growth_cohorts' typed spend and bot cost read under
+TYPED = "typed"  # the source growth_cohorts' typed spend, bot cost and new customers read under
 CAMPAIGNS_MAX, OTHER = 10, "other"
 COUNT_MAX = 10**12
 LABEL_MAX = 40
@@ -507,7 +508,7 @@ class Data:
     conf: Row
     on: date
     slugs: set[str]  # the channels' slugs
-    lines: dict[str, Row]  # channel slug -> its owner_ref, budget_month and retired_at
+    lines: dict[str, Row]  # channel slug -> its name, owner_ref, budget_month and retired_at
 
 
 def load(c: sqlite3.Connection) -> Data:
@@ -516,7 +517,7 @@ def load(c: sqlite3.Connection) -> Data:
     segs = GX.segments(c)
     lines: dict[str, Row] = {
         str(r["slug"]): r
-        for r in H._rows(c.execute("SELECT slug, owner_ref, budget_month, retired_at FROM growth_channels"))
+        for r in H._rows(c.execute("SELECT slug, name, owner_ref, budget_month, retired_at FROM growth_channels"))
     }
     slugs = set(lines)
     rows: list[Row] = H._rows(c.execute("SELECT * FROM growth_cohort_rows"))
@@ -527,7 +528,26 @@ def load(c: sqlite3.Connection) -> Data:
         }
         rows += fold(GX.facts(c), segs, slugs, on, loaded)
     costs: list[Row] = H._rows(c.execute("SELECT * FROM growth_costs"))
-    for (slug, month), typed in GX.typed_cohorts(c).items():
+    typed_months = GX.typed_cohorts(c)
+    covered = {(r["channel"], r["period"]) for r in rows if r["anchor"] == "customer"}
+    for (slug, month), typed in typed_months.items():
+        # A typed month's new customers count where no cohort row covers that channel and month: rows win.
+        if typed.get("new_customers") is None or (slug or "", month) in covered:
+            continue
+        rows.append(
+            {
+                **{col: None for col in ROW_COLUMNS},
+                "source": TYPED,
+                "anchor": "customer",
+                "period": month,
+                "segment": segs.channels.get(slug or "") or "",
+                "channel": slug or "",
+                "campaign": "",
+                "as_of": str(typed.get("updated_at") or on.isoformat())[:10],
+                "entered": int(typed["new_customers"]),
+            }
+        )
+    for (slug, month), typed in typed_months.items():
         for field, kind in (("spend", "money"), ("bot_cost", "bot")):
             if typed.get(field) is not None:
                 costs.append(
@@ -815,8 +835,8 @@ def _value(scope: Scope, month: str) -> Row:
 
 
 def channels(scope: Scope, month: str) -> list[Row]:
-    """Each channel's new customers, cost and CAC in the month, with its owner and monthly budget (cost over budget as
-    backend/growth_line.py has it); Unknown last. Scoped to mine, every live channel the caller owns."""
+    """Each channel's new customers, cost and CAC in the month, with its name, owner and monthly budget (cost over
+    budget as backend/growth_line.py has it); Unknown last. Scoped to mine, every live channel the caller owns."""
     data = scope.data
     new: dict[str, int] = {}
     for r in scope.at("customer", month):
@@ -836,7 +856,7 @@ def channels(scope: Scope, month: str) -> list[Row]:
             continue
         line = data.lines.get(slug) or {}
         budget = line.get("budget_month")
-        row.update(owner=line.get("owner_ref"), budget=budget, over_budget=None)
+        row.update(name=line.get("name") or slug, owner=line.get("owner_ref"), budget=budget, over_budget=None)
         if scope.kind == "segment" and data.segs.channels.get(slug) != scope.slug:
             # company-wide or another segment's spend: not split to this segment
             spends = any(k["channel"] == slug and k["period"] == month and k["kind"] in MONEY for k in data.costs)
@@ -856,12 +876,13 @@ def channels(scope: Scope, month: str) -> list[Row]:
         row["over_budget"] = _r(over) if over is not None and over > 0 else None
         raw = money / n if money is not None and n else None
         row["cac"] = _r(raw)
+        if money is not None:
+            row["cost_share"] = _r(money / total_cost) if total_cost else None
         if money is None:
             row["status"] = "no_spend"
         elif not n:
             row["status"] = "no_customers"
         else:
-            row["cost_share"] = _r(money / total_cost) if total_cost else None
             row["verdict"] = verdict(raw, scope.average(cac_of, month), n, scope.least)
         if effort is not None and n:
             row["with_effort"] = _r(((money or 0) + effort) / n)
@@ -889,7 +910,8 @@ def health(scope: Scope, month: str) -> Row:
         out.update(no_segment=no_segment, mismatch=mismatch)
     newest: dict[str, str] = {}
     for r in data.rows:
-        newest[r["source"]] = max(newest.get(r["source"], ""), str(r["as_of"]))
+        if r["source"] != TYPED:  # typed by hand: no source to go stale
+            newest[r["source"]] = max(newest.get(r["source"], ""), str(r["as_of"]))
     line = (data.on - timedelta(days=STALE_DAYS)).isoformat()
     out.update(reconciled="not_reconciled", stale_sources=sorted(s for s, at in newest.items() if at < line))
     return out
@@ -983,7 +1005,7 @@ def metrics(c: sqlite3.Connection, scope: Scope, month: str, hidden: Iterable[st
         k
         for k in H._rows(
             c.execute(
-                f"SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL AND (id IN ({marks}) OR owner_id=?) "
+                f"SELECT id, name, unit, owner_id FROM kpis WHERE archived_at IS NULL AND (id IN ({marks}) OR owner_id=?) "
                 "ORDER BY created_at",
                 [*linked, manager or ""],
             )
@@ -1015,6 +1037,7 @@ def metrics(c: sqlite3.Connection, scope: Scope, month: str, hidden: Iterable[st
             {
                 "id": kpi["id"],
                 "name": kpi["name"],
+                "unit": kpi["unit"] or "",
                 "owner": kpi["owner_id"],
                 "channel": linked.get(str(kpi["id"])),
                 "value": top["value"] if top else None,
@@ -1132,7 +1155,9 @@ def install(app: Any, store: Any, auth: Any, mutate: Callable[..., Any]) -> None
         who = request.state.identity
         auth.domain(who)
         with store.read_transaction() as c:
-            return read(c, scope, period, detail, who.actor, cast("set[str]", routes._hidden_owners(c, auth, who)))
+            out = read(c, scope, period, detail, who.actor, cast("set[str]", routes._hidden_owners(c, auth, who)))
+        opened(store, who, seen=True)  # the first open and, once set up, numbers seen (backend/growth_setup.py)
+        return out
 
     @app.post("/api/v2/growth/rows")
     def growth_rows_push(request: Request, body: M.GrowthCorePush) -> Any:  # pyright: ignore[reportUnusedFunction]

@@ -447,14 +447,6 @@ interface ParentNode {
   moveBefore(node: Node, child: Node | null): void;
 }
 
-/** The open Growth page (ui/app/growth-page.ts GR): its route's load, sub-page and month; `data` is Sources' own. */
-interface GrowthState {
-  load: number;
-  sub: string;
-  month: string;
-  data: unknown;
-}
-
 // ---------------------------------------------------------------- the health answer (HL, ui/health.ts) and live task drafts (task-live.ts)
 
 /** A bot the health answer lists as stuck (`HL.stuck`). */
