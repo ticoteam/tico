@@ -31,5 +31,5 @@ export function ChatSheet({ chat }: ChatSheetProps) {
   // The face in the head: the agent or person the address names, or the other one in a DM.
   const actor = chatActor(chat) ?? (isDm(t) ? othersOf(t, me)[0] : undefined);
   const name = (actor && nameOf(actor)) || title;
-  return <Conversation key={t.id} id={t.id} variant="side" title={name} actor={actor} card={callCard} />;
+  return <Conversation key={t.id} id={t.id} variant="side" title={name} actor={actor} card={callCard} canPost={t.me?.can_post !== false} />;
 }

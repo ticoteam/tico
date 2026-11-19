@@ -211,7 +211,7 @@ function CatchUpRow({ selected }: { selected: boolean }) {
 function ThreadConversation({ id }: { id: string }) {
   const { data } = useQuery(threadQuery(id));
   const title = useTitle(data);
-  return <Conversation id={id} variant="page" title={title || undefined} card={callCard} />;
+  return <Conversation id={id} variant="page" title={title || undefined} card={callCard} canPost={data?.me?.can_post !== false} />;
 }
 
 /* ---------------------------------------------------------------- Catch up */

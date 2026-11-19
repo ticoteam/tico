@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import type * as Live from '@/live';
@@ -63,13 +63,25 @@ beforeEach(() => {
   calls.length = 0;
 });
 
-describe('A picture in a message', () => {
+describe('A picture in a message @s197', () => {
   it('opens full size over the page, not in a new tab', async () => {
     serve(() => ({ status: 200, body: { items: [], counts: [] } }));
     show([msg(1, 'bot:qa', 'Here it is: ![Chart](/api/v2/files/f1)')]);
     fireEvent.click(await screen.findByRole('img', { name: 'Chart' }));
     const dialog = await screen.findByRole('dialog', { name: 'Chart' });
     expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f1');
+  });
+});
+
+describe('A picture attached to a chat message @s218', () => {
+  it('opens full size from its file chip, with Download', async () => {
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    const shot = { id: 'f2', name: 'shot.png', content_type: 'image/png' };
+    show([{ ...msg(1, 'bot:qa', 'The new header'), refs: { attachments: [shot] } } as ChatMessage]);
+    fireEvent.click(await screen.findByRole('link', { name: /shot\.png/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'shot.png' });
+    expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f2');
+    expect(within(dialog).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/files/f2');
   });
 });
 

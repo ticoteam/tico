@@ -36,19 +36,20 @@ export function MailPage({ box, open, view }: MailPageProps) {
   const reading = view === 'instructions' && agent;
   const list = useInfiniteQuery(mailListQuery(current));
   const rows = letterRows(list.data?.pages.flatMap((p) => p.messages) ?? []);
+  const choices = (boxes.data ?? []).map((b) => ({ value: b.address, label: b.name || b.address }));
+  // With more than one mailbox an empty one stays a list: the pick (only shown on a ready list) leads to the others.
+  const pick = choices.length > 1;
   const state =
     boxes.isPending || (!!current && list.isPending)
       ? 'loading'
       : boxes.isError || list.isError
         ? 'fault'
-        : rows.length === 0 && !open && !agent
+        : rows.length === 0 && !open && !agent && !pick
           ? 'empty'
           : 'ready';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
-  const choices = (boxes.data ?? []).map((b) => ({ value: b.address, label: b.name || b.address }));
-
   return (
     <ListAndItem
       title="Threads"
@@ -56,7 +57,7 @@ export function MailPage({ box, open, view }: MailPageProps) {
       className="is-mail"
       actions={<NewButton />}
       search={
-        choices.length > 1 ? (
+        pick ? (
           <div className="ml-box">
             <Select label="Mailbox" labelHidden options={choices} value={current} onValueChange={(v) => void press('mail.pickBox', { box: v })} />
           </div>
@@ -82,6 +83,7 @@ export function MailPage({ box, open, view }: MailPageProps) {
               <span className="tl-slot" />
             </Row>
           )}
+          {pick && rows.length === 0 && !agent && <Empty title="No mail" />}
           <VirtualList
             className="tl-vl"
             label="Mail"

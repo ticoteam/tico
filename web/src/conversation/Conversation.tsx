@@ -37,6 +37,8 @@ export interface ConversationProps {
   foot?: ReactNode;
   /** What a message draws in place of its text, when it is more than words (a thread's call card). */
   card?: (m: ChatMessage) => ReactNode;
+  /** false: the person may read but not write here (an archived, closed or meeting thread): no box. */
+  canPost?: boolean;
 }
 
 type Item =
@@ -97,7 +99,7 @@ const herePage = (): PageRef => ({
 
 installConversationLive();
 
-export function Conversation({ id, variant, title, actor, page, foot, card }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, page, foot, card, canPost = true }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -224,7 +226,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card }: Co
     <footer className="chat-foot" data-dock>
       {foot}
       {look}
-      {myId && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

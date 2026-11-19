@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('People in a thread', () => {
+describe('People in a thread @s177', () => {
   it('opens from the faces under the title, takes someone out at once and puts them back when refused', async () => {
     let refuse!: () => void;
     serve((_url, method) => (method === 'DELETE' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : ok()));
@@ -194,7 +194,7 @@ describe('Mail instructions', () => {
   });
 });
 
-describe('Learned', () => {
+describe('Learned @s213', () => {
   it('says so when nothing is learned yet', async () => {
     serve(() => ok());
     queryClient.setQueryData(learnedQuery.queryKey, { personal: [], company: null });

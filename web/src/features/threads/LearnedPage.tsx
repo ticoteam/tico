@@ -11,6 +11,7 @@ import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { Switch } from '@/kit/Switch';
 import { List, Section } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
 import { Face, press, useMe } from './people';
@@ -84,6 +85,13 @@ export function LearnedPage() {
                 {readers.map((b) => (
                   <Reader key={b.bot} b={b} />
                 ))}
+                {viewers.data.bots.length > 0 && !q && (
+                  <Switch
+                    label="Include what Tico learned"
+                    checked={viewers.data.include_learned}
+                    onCheckedChange={(on) => void press('learned.includeLearned', { on })}
+                  />
+                )}
               </Section>
             </div>
           )}

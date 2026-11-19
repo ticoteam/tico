@@ -11,6 +11,7 @@ import {
   editLearned,
   followThread,
   forgetLearned,
+  includeLearned,
   joinThread,
   markUpdatesRead,
   muteThread,
@@ -108,6 +109,7 @@ export const addPeopleAction = defineAction({
   title: 'Add people to a thread',
   kind: 'change',
   input: s.object({ thread, actors: s.array(actor, { max: 50 }) }),
+  // Adding a teammate to a thread is ordinary work among teammates: Tico's too.
   run: (_ctx, { thread, actors }) => addPeople(thread, actors),
   did: ({ actors }) => (actors.length === 1 ? 'Added 1 teammate' : `Added ${actors.length} teammates`),
   target: ({ thread }) => ({ kind: 'thread', id: thread }),
@@ -385,6 +387,17 @@ export const addViewerAction = defineAction({
   tico: false,
   run: (_ctx, { agent }) => addViewer(agent),
   did: () => 'Can read your chat now',
+  target: () => ({ kind: 'page', id: '/learned' }),
+});
+
+export const includeLearnedAction = defineAction({
+  id: 'learned.includeLearned',
+  title: 'Let the agents that read your chat with Tico read what it has learned',
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  tico: false,
+  run: (_ctx, { on }) => includeLearned(on),
+  did: ({ on }) => (on ? 'They read what Tico learned' : 'They no longer read what Tico learned'),
   target: () => ({ kind: 'page', id: '/learned' }),
 });
 

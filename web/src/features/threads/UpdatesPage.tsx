@@ -1,16 +1,19 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useLocation } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useActor } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem, MenuRule } from '@/kit/Menu';
+import { OwnerButton } from '@/kit/OwnerButton';
 import { Row } from '@/kit/Row';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
+import { chatAddress } from '@/lib';
 import { Document, List, PageMore, type PageTab } from '@/pagekinds';
 import { byDay, dayLabel, updateParagraphs, updateTitle, type Update } from './model';
-import { Face, press } from './people';
+import { Face, press, useMe } from './people';
 import { updateListQuery, updateQuery, type UpdateTab } from './queries';
 import './threads.css';
 
@@ -172,7 +175,12 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       title={title}
       path={`${pathOf(tab)}?open=${id}`}
       crumb={tab === 'archive' ? [...ARCHIVE_CRUMB, { label: 'Archive', to: pathOf(tab) }] : [{ label: 'Updates', to: pathOf(tab) }]}
-      actions={<Steps id={id} tab={tab} />}
+      actions={
+        <>
+          {u && <Writer actor={actorOf(u)} />}
+          <Steps id={id} tab={tab} />
+        </>
+      }
       more={more}
       state={isPending ? 'loading' : isError ? 'fault' : 'ready'}
       onRetry={() => void refetch()}
@@ -204,4 +212,21 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       }
     />
   );
+}
+
+/** The writer's face in the head: it opens their chat beside the update (the mock's owner; the old reply box's place). */
+function Writer({ actor }: { actor: string }) {
+  const who = useActor(actor);
+  const me = useMe();
+  // `chat` is the shell's, in no route's search schema: built as an address, it keeps `?open=`.
+  const href = useLocation({
+    select: (l) => {
+      const q = new URLSearchParams(l.searchStr);
+      q.set('chat', chatAddress(actor, who?.kind));
+      return `${l.pathname}?${q.toString()}`;
+    },
+  });
+  if (actor === me) return null;
+  const kind = who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person');
+  return <OwnerButton name={who?.name ?? 'the writer'} kind={kind} hue={who?.hue} live={who?.working} href={href} />;
 }

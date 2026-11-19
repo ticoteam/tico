@@ -1,15 +1,18 @@
-import { useNavigate } from '@tanstack/react-router';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import { refusalFor } from '@/actions';
+import { refusal, refusalFor, run } from '@/actions';
 import { Composer } from '@/conversation';
 import { useActors, type Actor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { toast } from '@/kit/Toast';
-import { press, useMe } from './people';
-import { startWithFiles } from './queries';
+import { rowsOf } from './model';
+import { useMe } from './people';
+import { startWithFiles, threadListQuery } from './queries';
 
 const SHOWN = 8;
+const THREADS_SHOWN = 3;
 
 export interface NewDraft {
   to: Actor[];
@@ -39,6 +42,13 @@ export function NewMessage({ draft }: { draft: NewDraft }) {
     .filter((a) => a.id !== me && !chosen.has(a.id))
     .filter((a) => !words || a.name.toLowerCase().includes(words) || a.team?.toLowerCase().includes(words))
     .slice(0, SHOWN);
+  // A named thread that matches the words: going there may be what was meant (the old app offered it too).
+  const list = useInfiniteQuery(threadListQuery);
+  const threads = words
+    ? rowsOf(list.data)
+        .filter((t) => t.title?.toLowerCase().includes(words))
+        .slice(0, THREADS_SHOWN)
+    : [];
   const add = (a: Actor) => {
     setTo([...to, a]);
     setQ('');
@@ -79,14 +89,23 @@ export function NewMessage({ draft }: { draft: NewDraft }) {
           <input className="to-text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name this thread" />
         </label>
       )}
-      {matches.length > 0 && (
-        <div className="to-list" role="listbox" aria-label="Teammates">
+      {matches.length + threads.length > 0 && (
+        <div className="to-list" role="listbox" aria-label="Suggestions">
           {matches.map((a) => (
             <button key={a.id} type="button" role="option" aria-selected={false} className="sr" onClick={() => add(a)}>
               <Avatar kind={a.kind} name={a.name} hue={a.hue} size={22} decorative />
               <span>{a.name}</span>
               <em>{a.title ?? a.team ?? (a.kind === 'agent' ? 'Agent' : '')}</em>
             </button>
+          ))}
+          {threads.map((t) => (
+            <Link key={t.id} role="option" aria-selected={false} className="sr" to="/threads/$thread" params={{ thread: t.id }}>
+              <span className="tl-kind">
+                <Icon name="threads" />
+              </span>
+              <span>{t.title}</span>
+              <em>Thread</em>
+            </Link>
           ))}
         </div>
       )}
@@ -109,8 +128,12 @@ export function NewMessageFoot({ draft }: { draft: NewDraft }) {
     const members = to.map((a) => a.id);
     const title = name.trim() || undefined;
     if (!files.length) {
-      const ok = await press('threads.new', { members, body: text, ...(title ? { title } : {}) });
-      if (!ok) setFill({ text });
+      const r = await run('threads.new', { members, body: text, ...(title ? { title } : {}) }, { via: 'click' });
+      if (!r.ok) toast(refusal(r, "Couldn't send"));
+      // A rule can hold the first message: no thread is made, and the words stay in the box (new-message.ts).
+      else if (!(r.out as { id?: string } | undefined)?.id) toast({ text: 'Held by a rule', kind: 'failed' });
+      else return;
+      setFill({ text });
       return;
     }
     // Files are no action input: the DM is made, then the message goes up the conversation's own way.

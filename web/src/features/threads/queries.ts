@@ -575,6 +575,16 @@ export function addViewer(bot: string) {
   });
 }
 
+/** Whether the agents that read the person's chat with Tico also read what Tico has learned about them. */
+export function includeLearned(on: boolean) {
+  return write({
+    key: learnedKeys.viewers,
+    optimistic: (d: Viewers | undefined) => d && { ...d, include_learned: on },
+    send: (idempotencyKey) => api.put<Viewers>('/api/v2/assistant/viewers/learned', { include_learned: on }, { idempotencyKey }),
+    settle: (_d: Viewers | undefined, answer) => answer,
+  });
+}
+
 export function removeViewer(bot: string) {
   return write({
     key: learnedKeys.viewers,

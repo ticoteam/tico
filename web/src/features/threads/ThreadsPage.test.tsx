@@ -62,7 +62,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('Threads', () => {
+describe('Threads @s156', () => {
   it('lists threads newest first, each row opening its own address, under Catch up', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(threadKeys.list, seeded());
@@ -141,7 +141,7 @@ describe('A thread head', () => {
   });
 });
 
-describe('Updates', () => {
+describe('Updates @s972', () => {
   it('says so when there are none', async () => {
     serve(() => ({ status: 200, body: { updates: [], unread: 0, next_before: null } }));
     show(<UpdatesPage />, '/updates');
