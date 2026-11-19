@@ -107,8 +107,8 @@ def test_a_plain_job_runs_on_its_saved_preset_not_hourly(api):
 
     scheduler.tick(at)
     assert runs() == 1
-    # The next run is timed from the recorded start (the hub clock when the job began), not from `at`: on a slow runner
-    # the first tick's earlier steps can take over a second, so `at + 4h + 1s` was not yet due (release run 44617444594).
+    # The next run is timed from the recorded start (the hub clock when the job began), not from `at`: on a slow
+    # runner the first tick's earlier steps can take over a second, so `at + 4h + 1s` was not yet due (run 44617444594).
     with store.read() as c:
         started = SR.last_started(c, ["kpi_asks"])["kpi_asks"]
     assert started >= at
