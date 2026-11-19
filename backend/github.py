@@ -637,6 +637,124 @@ def refresh_conflicts(service: Any) -> int:
     return read
 
 
+FINISHED_READS_PER_PASS = 10
+FINISHED_LIST_PAGES = 10  # 100 open pull requests a page: a repository with more is not inferred from (below)
+_finished_retry = {}  # link id -> monotonic time a failed read may be tried again
+
+
+def _open_pr_numbers(service, repo):
+    """The numbers of `repo`'s open pull requests (drafts included), or None when the list could not be read whole."""
+    token, _ = service.mint([repo], {"pull_requests": "read"})
+    numbers = set()
+    for page in range(1, FINISHED_LIST_PAGES + 1):
+        response = service._call(
+            "GET",
+            f"/repos/{quote(repo, safe='/')}/pulls",
+            headers={"Authorization": "Bearer " + token},
+            params={"state": "open", "per_page": 100, "page": page},
+        )
+        if response.status_code != 200:
+            return None
+        found = response.json() or []
+        numbers.update(int(pr["number"]) for pr in found if pr.get("number") is not None)
+        if len(found) < 100:
+            return numbers
+    return None  # more pages than read: absence would prove nothing
+
+
+def refresh_finished_task_prs(service: Any) -> int:
+    """The maintenance pass's check of pull requests still `open` or `draft` on tasks that are no longer open.
+    `refresh_conflicts` reads only open tasks, so a link whose task finished first (a duplicate PR closed after the
+    one that merged, Engineering #2398) kept its old state when the close's webhook did not land, and Health's
+    `aged_prs` went on naming it with a merge to do.
+
+    Every pass lists each such repository's open pull requests (one call a page); a link whose PR is not in the list
+    leaves Health in this pass (its wait is cleared), however many there are and however recently it was read. Each of
+    those is then read on its own, at most FINISHED_READS_PER_PASS a pass, to write what happened (closed or merged;
+    a 404 is closed); the rest are read on later passes. Links naming one pull request are read once. Only the links
+    are written: the task is finished, so nobody is woken and nothing is said on it. A failed read waits
+    CONFLICT_RETRY_S; a list that could not be read whole changes nothing. Returns how many pull requests were read."""
+    with service.store.read() as c:
+        app = service.row(c)
+        if not app:
+            return 0
+        marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+        rows = H._rows(
+            c.execute(
+                "SELECT l.id,l.repo,l.number,l.detail FROM task_links l "
+                "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "WHERE l.kind='pr' AND l.state IN ('open','draft') AND l.number IS NOT NULL AND r.reachable=1 "
+                f"AND lower(l.repo) LIKE ? AND t.status NOT IN ({marks}) "
+                "ORDER BY coalesce(l.updated_at,l.created_at),l.id",
+                (str(app["org"] or "").lower() + "/%", *H.ACTIVE_STATUSES),
+            )
+        )
+    if not rows:
+        return 0
+    gone = {}  # (repo, number) -> its links, for each pull request no longer open
+    for repo in dict.fromkeys(str(r["repo"]).lower() for r in rows):
+        try:
+            open_now = _open_pr_numbers(service, repo)
+        except Exception:
+            logging.getLogger("tico.github").exception("Open PR list failed for %s", repo)
+            continue
+        if open_now is None:
+            continue
+        for r in rows:
+            if str(r["repo"]).lower() == repo and int(r["number"]) not in open_now:
+                gone.setdefault((repo, int(r["number"])), []).append(r)
+    if not gone:
+        return 0
+    with service.store.transaction() as c:
+        # Not open on GitHub: Health stops naming it now, before the read below says closed or merged.
+        for links in gone.values():
+            for r in links:
+                if "health_wait" in (H._json(r["detail"], {}) or {}):
+                    c.execute(
+                        "UPDATE task_links SET detail=json_remove(coalesce(detail,'{}'),'$.health_wait') WHERE id=?",
+                        (r["id"],),
+                    )
+    now = time.monotonic()
+    for stale in [k for k, due in _finished_retry.items() if due <= now]:
+        _finished_retry.pop(stale, None)
+    due = [(key, links) for key, links in gone.items() if key not in _finished_retry]
+    read = 0
+    for (repo, number), links in due[:FINISHED_READS_PER_PASS]:
+        try:
+            token, _ = service.mint([repo], {"pull_requests": "read"})
+            response = service._call(
+                "GET",
+                f"/repos/{quote(repo, safe='/')}/pulls/{number}",
+                headers={"Authorization": "Bearer " + token},
+            )
+            if response.status_code not in (200, 404):
+                _finished_retry[(repo, number)] = now + CONFLICT_RETRY_S
+                continue
+            pr = response.json() if response.status_code == 200 else {"state": "closed"}
+        except Exception:
+            logging.getLogger("tico.github").exception("Finished-task PR read failed for %s #%s", repo, number)
+            _finished_retry[(repo, number)] = now + CONFLICT_RETRY_S
+            continue
+        read += 1
+        if pr.get("state") == "open" and not pr.get("merged"):
+            continue  # reopened since the list: its next list says so
+        state = "merged" if pr.get("merged") else "closed"
+        with service.store.transaction() as c:
+            for r in links:
+                c.execute(
+                    "UPDATE task_links SET state=?,updated_at=?,pr_sha=coalesce(?,pr_sha),"
+                    "pr_merged_at=coalesce(?,pr_merged_at) WHERE id=? AND state IN ('open','draft')",
+                    (
+                        state,
+                        H.now(),
+                        pr.get("merge_commit_sha") if state == "merged" else None,
+                        (pr.get("merged_at") or H.now()) if state == "merged" else None,
+                        r["id"],
+                    ),
+                )
+    return read
+
+
 def _engine_speaks(c, task_id):
     """Whether the task is on a pipeline stage that waits on GitHub (an item requirement of source `github`: a PR
     open, checks, a merge, a release) or queues
