@@ -8,9 +8,9 @@ import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { EmptyRow, GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
-import { FIN, financeHead } from './head';
+import { FIN, useFinanceHead } from './head';
 import { addMonths, budgetDay, budgetGroups, cash, centsOf, monShort, monthName, monthSpan, paceOf, type BudgetLine } from './model';
-import { ActLink, Meter, Pfig, Prow, usePhone, usePress } from './parts';
+import { ActLink, Meter, Pfig, Prow, usePhone, usePress, useViewAs } from './parts';
 import { budgetHistoryQuery, budgetsQuery, pnlQuery, type PnlRow } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
@@ -20,8 +20,9 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
   const phone = usePhone();
   const at = budgetDay();
   const ym = at.slice(0, 7);
-  const list = useQuery(budgetsQuery(at));
-  const pnl = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }));
+  const head = useFinanceHead();
+  const list = useQuery(budgetsQuery(at, search.as));
+  const pnl = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, search.as));
   const pace = paceOf();
   const lines = pnl.data?.rows ?? [];
   const { groups, spent, amount } = budgetGroups(list.data?.budgets ?? [], lines, pace.pace);
@@ -34,10 +35,10 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
 
   return (
     <List
-      {...financeHead}
+      {...head}
       state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
       onRetry={() => void list.refetch()}
-      actions={<IconButton icon="plus" label="New budget" onClick={() => void press('budget.newRow', {})} />}
+      actions={!search.as && <IconButton icon="plus" label="New budget" onClick={() => void press('budget.newRow', {})} />}
       sections={
         phone ? (
           <div className="frs">
@@ -161,7 +162,7 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
         </div>
         )
       }
-      panel={id === 'new' ? <NewBudget lines={lines} /> : row ? <BudgetPanel line={row} kids={all.filter((r) => r.budget.parent_id === row.budget.id)} /> : undefined}
+      panel={id === 'new' && !search.as ? <NewBudget lines={lines} /> : row ? <BudgetPanel line={row} kids={all.filter((r) => r.budget.parent_id === row.budget.id)} /> : undefined}
     />
   );
 }
@@ -182,7 +183,9 @@ function BudgetPanel({ line, kids }: { line: BudgetLine; kids: BudgetLine[] }) {
   const ym = at.slice(0, 7);
   const pace = paceOf();
   const first = addMonths(ym, -5);
-  const history = useQuery(budgetHistoryQuery(`${first}-01`, monthSpan(ym).end));
+  // Reading as a teammate is read only: no amount to change, no Remove.
+  const as = useViewAs();
+  const history = useQuery(budgetHistoryQuery(`${first}-01`, monthSpan(ym).end, as));
   const months = history.data?.budgets.find((h) => h.id === b.id);
   const save = (text: string) => {
     const cents = centsOf(text);
@@ -200,9 +203,11 @@ function BudgetPanel({ line, kids }: { line: BudgetLine; kids: BudgetLine[] }) {
       target={`budget:${b.id}`}
       onClose={() => void press('finance.closePanel', {})}
       foot={
-        <Button variant="quiet" onClick={() => void press('budget.removeRow', { budget: b.id })}>
-          Remove
-        </Button>
+        !as && (
+          <Button variant="quiet" onClick={() => void press('budget.removeRow', { budget: b.id })}>
+            Remove
+          </Button>
+        )
       }
     >
       <div className="money">
@@ -213,7 +218,14 @@ function BudgetPanel({ line, kids }: { line: BudgetLine; kids: BudgetLine[] }) {
           <LabelValue label="Budget">
             {/* Saved on Enter or when the field is left; `key` resets it when a refusal takes the amount back. */}
             <form key={amount ?? 'none'} onSubmit={onSubmit} onBlur={(e: FocusEvent<HTMLFormElement>) => save(typed(e.currentTarget))}>
-              <Field label={`Budget for ${monthName(ym)}`} labelHidden name="amount" defaultValue={amount != null ? cash(amount).replace('$', '') : ''} wide={false} />
+              <Field
+                label={`Budget for ${monthName(ym)}`}
+                labelHidden
+                name="amount"
+                defaultValue={amount != null ? cash(amount).replace('$', '') : ''}
+                wide={false}
+                disabled={!!as}
+              />
             </form>
           </LabelValue>
           <LabelValue label="Left" num>

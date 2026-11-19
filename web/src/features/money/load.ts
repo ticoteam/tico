@@ -7,14 +7,15 @@ import type { FinanceSearch, GrowthSearch } from './search';
 
 export function loadFinance(qc: QueryClient, search: FinanceSearch): Promise<unknown> {
   const ym = budgetDay().slice(0, 7);
-  const month = pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' });
-  const reads: Promise<unknown>[] = [qc.ensureQueryData(sourcesQuery)];
+  const as = search.as;
+  const month = pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as);
+  const reads: Promise<unknown>[] = [qc.ensureQueryData(sourcesQuery(as))];
   if (!search.tab) reads.push(qc.ensureQueryData(month));
-  if (search.tab === 'budgets') reads.push(qc.ensureQueryData(budgetsQuery(budgetDay())), qc.ensureQueryData(month));
+  if (search.tab === 'budgets') reads.push(qc.ensureQueryData(budgetsQuery(budgetDay(), as)), qc.ensureQueryData(month));
   if (search.tab === 'pnl') {
     const period = search.period ?? 'month';
     const r = pnlRange(period, search.from);
-    reads.push(qc.ensureQueryData(pnlQuery({ start: r.start, end: r.end, period, basis: search.basis ?? 'accrual' })));
+    reads.push(qc.ensureQueryData(pnlQuery({ start: r.start, end: r.end, period, basis: search.basis ?? 'accrual' }, as)));
   }
   return Promise.all(reads).catch(() => undefined);
 }

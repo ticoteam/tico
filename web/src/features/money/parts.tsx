@@ -1,12 +1,16 @@
-import { Link, useRouter } from '@tanstack/react-router';
+import { Link, useRouter, useSearch } from '@tanstack/react-router';
 import { useSyncExternalStore, type MouseEvent, type ReactNode } from 'react';
 import { registry } from '@/actions';
 import { runIn } from '@/actions/run';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { toast } from '@/kit/Toast';
+import { validateFinanceSearch } from './search';
 
 /* The parts Finance and Growth share, ported from pages/3-company/finance.js. */
+
+/** The teammate the owner reads Finance as (`?as=`), or undefined for their own view. */
+export const useViewAs = () => validateFinanceSearch(useSearch({ strict: false }) as Record<string, unknown>).as;
 
 /** Runs one of the feature's actions from a click. A refusal says so; the change is already taken back. */
 export function usePress() {

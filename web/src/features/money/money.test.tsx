@@ -225,3 +225,140 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
     expect(within(once).getAllByText('Shown once')).toHaveLength(2);
   });
 });
+
+describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
+  const access = { can_edit_defaults: false, can_view_as: true, teammates: [{ teammate: 'human:me', kind: 'human', default: 'everything', rights: [] }] };
+  const tx = (id: string, name: string, amount: number) => ({ id, kind: 'entry', entry_id: `e_${id}`, date: '2026-10-02', description: name, account: 'Software', amount });
+  const cursors = (urls: string[]) => urls.filter((u) => u.includes('cursor=')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'));
+
+  it('transactions past the first page load as the last row is drawn', async () => {
+    const urls: string[] = [];
+    serve((url) => {
+      urls.push(url);
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/finance/transactions'))
+        return ok(url.includes('cursor=') ? { rows: [tx('t2', 'Paper Co', -2000)], next: null } : { rows: [tx('t1', 'Ink Co', -1000)], next: 'page 2' });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=transactions');
+    expect(await screen.findByText('Paper Co')).toBeTruthy();
+    expect(screen.getByText('Ink Co')).toBeTruthy();
+    expect(cursors(urls)).toEqual(['page 2']);
+    expect(screen.getByText('2 entries')).toBeTruthy();
+  });
+
+  it("a line's shares are saved from its row", async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok({ kind: 'attribute', status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/attribution'))
+        return ok({ line_id: 't1', amount: -1000, can_change: true, history: [], splits: [{ teammate: 'human:lee', team: '', share_bps: 10000 }], source: 'manual', set_by: 'human:me', set_at: null, rule_id: null, rule_name: null });
+      if (url.includes('/finance/transactions')) return ok({ rows: [tx('t1', 'Ink Co', -1000)], next: null });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=transactions');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Ink Co' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Attributed to' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Attributed to' });
+    await within(dialog).findByRole('button', { name: 'Clear' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(posted).toEqual([{ kind: 'attribute', payload: { line_id: 't1', splits: [{ teammate: 'human:lee', share_bps: 10000 }] } }]));
+  });
+
+  it('the bills address is set from Payables', async () => {
+    const puts: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'PUT' && url.endsWith('/finance/bills-address')) {
+        puts.push(body);
+        return ok({ bills_email: 'bills@example.test', inbox_id: 'in_1' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/finance/bills')) return ok({ bills: [], bills_email: null });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=payables');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Bills address/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Bills address' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Address' }), { target: { value: 'bills@example.test' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(puts).toEqual([{ address: 'bills@example.test' }]));
+    expect(await screen.findByText('Saved')).toBeTruthy();
+  });
+
+  it('a rule is deleted from its row', async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok({ kind: 'attribution_rule_delete', status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/finance/attribution-rules'))
+        return ok({ can_change: true, rules: [{ id: 'r1', name: 'Paper to Lee', enabled: true, match: { kind: 'vendor', id: 'v1', label: 'Paper Co' }, splits: [{ teammate: 'human:lee', share_bps: 10000 }] }] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=attribution');
+    expect(await screen.findByRole('button', { name: 'Add rule' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'More for Paper to Lee' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Delete Paper to Lee' });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(posted).toEqual([{ kind: 'attribution_rule_delete', payload: { id: 'r1' } }]));
+  });
+
+  it('a statement is previewed, then its new rows posted with that preview', async () => {
+    const posted: { url: string; body: Record<string, unknown> }[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push({ url, body });
+        if (url.endsWith('/statements/preview'))
+          return ok({
+            token: 'tok_1',
+            expires_at: '2026-10-02T00:00:00Z',
+            new: 1,
+            rows: [{ id: 'x1', date: '2026-10-01', description: 'Paper Co', amount: -1000, status: 'new', vendor: null, attribution: null }],
+            tie: { opening: 0, added: 0, removed: 1000, ends: -1000, off_by: 0, statement_says: null },
+          });
+        return ok({ kind: 'statement_post', status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/finance/sources')) return ok({ groups: [{ group: 'banks', name: 'Banks', count: 1, rows: [{ id: 'ma1', kind: 'bank', name: 'Checking', last4: '0001' }] }] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=sources');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Checking' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Upload statement' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Upload statement' });
+    const file = new File(['date,amount\n2026-10-01,-10.00\n'], 'october.csv', { type: 'text/csv' });
+    fireEvent.change(within(dialog).getByLabelText('Statement file'), { target: { files: [file] } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview' }));
+    const data = btoa('date,amount\n2026-10-01,-10.00\n');
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Post 1 row' }));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[0]).toEqual({ url: expect.stringContaining('/finance/statements/preview') as string, body: { money_account_id: 'ma1', file: data, file_name: 'october.csv', signs: 'auto' } });
+    expect(posted[1]!.body).toEqual({ kind: 'statement_post', payload: { money_account_id: 'ma1', file: data, file_name: 'october.csv', preview_token: 'tok_1' } });
+  });
+
+  it('viewing as a teammate reads as them and offers no changes', async () => {
+    const urls: string[] = [];
+    serve((url) => {
+      urls.push(url);
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/finance/transactions')) return ok({ rows: [tx('t1', 'Ink Co', -1000)], next: null });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=transactions&as=human:sam');
+    expect(await screen.findByText('Ink Co')).toBeTruthy();
+    const read = urls.find((u) => u.includes('/finance/transactions'))!;
+    expect(new URL(read, 'http://x').searchParams.get('view_as')).toBe('human:sam');
+    expect(screen.getByText(/^Viewing as /)).toBeTruthy();
+    expect(searchOf(screen.getByRole('link', { name: 'Stop' }).getAttribute('href')).as).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'New transfer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More for Ink Co' })).toBeNull();
+  });
+});

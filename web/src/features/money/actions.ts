@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s } from '@/actions';
+import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
 import { budgetDay } from './model';
 import {
@@ -12,6 +13,7 @@ import {
   disconnectBooks,
   KEY_SOURCES,
   removeBudget,
+  setBillsAddress,
   setBudgetAmount,
   type Decided,
 } from './queries';
@@ -245,6 +247,128 @@ export const setDefaults = defineAction({
   run: (_ctx, pick) => decide('view_defaults_set', Object.fromEntries(Object.entries(pick).filter(([, v]) => v))),
   did: (_i, out) => waits(out, 'Saved'),
   target: () => ({ kind: 'tab', id: 'access' }),
+});
+
+/** The owner reads Finance as one teammate sees it, read only; no teammate is their own view again. */
+export const viewAs = defineAction({
+  id: 'finance.viewAs',
+  title: 'Read Finance as a teammate sees it, or go back to your own view',
+  kind: 'view',
+  input: s.object({ teammate: s.optional(s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' })) }),
+  run: ({ router }, { teammate }) => go(router, FIN, { as: teammate, panel: undefined }),
+  did: ({ teammate }) => (teammate ? 'Viewing as a teammate' : 'Back to your own view'),
+});
+
+const email = s.string({ max: 254, pattern: /^[^@\s]+@[^@\s]+$/, what: 'an email' });
+
+/** Bills emailed to this address land in Payables; none clears it. An address that is no Tico inbox is kept, and said. */
+export const setBillsEmail = defineAction({
+  id: 'finance.setBillsAddress',
+  title: 'Set or clear the address bills are emailed to',
+  kind: 'change',
+  input: s.object({ address: s.nullable(email) }),
+  run: async (_ctx, { address }) => {
+    let out;
+    try {
+      out = await setBillsAddress(address);
+    } catch (e) {
+      throw e instanceof ApiError && e.status === 403 ? new Error('Only a finance admin sets the bills address') : e;
+    }
+    if (out.bills_email && !out.inbox_id) throw new Error('Not an inbox address');
+    return out;
+  },
+  did: ({ address }) => (address ? 'Saved' : 'Cleared'),
+  target: () => ({ kind: 'tab', id: 'payables' }),
+});
+
+/** The rows of a statement file the preview showed as new; the token says it posts what was shown. */
+export const postStatement = defineAction({
+  id: 'finance.postStatement',
+  title: 'Post the new rows of a bank or card statement',
+  kind: 'change',
+  input: s.object({
+    account: id,
+    file: s.string({ min: 1, max: 1_400_000 }),
+    name: s.string({ min: 1, max: 255 }),
+    token: id,
+    signs: s.optional(s.oneOf(['as_shown', 'flipped'] as const)),
+  }),
+  run: (_ctx, { account, file, name, token, signs }) =>
+    decide('statement_post', { money_account_id: account, file, file_name: name, preview_token: token, ...(signs ? { signs } : {}) }),
+  did: (_i, out) => waits(out, 'Posted'),
+  target: ({ account }) => ({ kind: 'source', id: account }),
+});
+
+/** One part of a split: a teammate or a team and its share in basis points (10,000 is the whole line). */
+const share = s.object({ teammate: s.optional(id), team: s.optional(id), share_bps: s.number({ int: true, min: 1, max: 10_000 }) });
+const splits = s.array(share, { max: 10 });
+type Split = { teammate?: string; team?: string; share_bps: number };
+const whole = (parts: readonly Split[]) => parts.every((p) => !!p.teammate !== !!p.team) && parts.reduce((a, p) => a + p.share_bps, 0) <= 10_000;
+
+/** Who a line is attributed to, set by hand over its tags and rules; no parts clears that. */
+export const attribute = defineAction({
+  id: 'finance.attribute',
+  title: "Set who a line's amount is attributed to",
+  kind: 'change',
+  input: s.object({ line: id, splits }),
+  can: (_ctx, { splits }) => whole(splits),
+  run: (_ctx, { line, splits }) => decide('attribute', { line_id: line, splits }),
+  did: (i, out) => waits(out, i.splits.length ? 'Saved' : 'Cleared'),
+});
+
+export const undoAttribution = defineAction({
+  id: 'finance.undoAttribution',
+  title: "Put a line's attribution back to what it was before the last change",
+  kind: 'change',
+  input: s.object({ line: id }),
+  run: (_ctx, { line }) => decide('attribute_undo', { line_id: line }),
+  did: (_i, out) => waits(out, 'Undone'),
+});
+
+/** A rule attributes every line it matches (a vendor, a P&L account, a card or bank account) from a day on. */
+export const saveRule = defineAction({
+  id: 'finance.saveRule',
+  title: 'Add or change an attribution rule',
+  kind: 'change',
+  input: s.object({
+    rule: s.optional(id),
+    name: s.string({ min: 1, max: 80 }),
+    match: s.oneOf(['vendor', 'account', 'money_account'] as const),
+    to: id,
+    splits,
+    on: s.optional(s.boolean()),
+    from: s.optional(day),
+  }),
+  can: (_ctx, { splits }) => splits.length > 0 && whole(splits),
+  run: (_ctx, { rule, name, match, to, splits, on, from }) =>
+    decide('attribution_rule_set', { ...(rule ? { id: rule } : {}), name, match: { kind: match, id: to }, splits, enabled: on ?? true, ...(from ? { apply_from: from } : {}) }),
+  did: (i, out) => waits(out, i.rule ? 'Saved' : 'Rule added'),
+  target: ({ rule }) => (rule ? { kind: 'rule', id: rule } : { kind: 'tab', id: 'attribution' }),
+});
+
+export const deleteRule = defineAction({
+  id: 'finance.deleteRule',
+  title: 'Delete an attribution rule; its lines go back to their tags',
+  kind: 'change',
+  input: s.object({ rule: id }),
+  run: (_ctx, { rule }) => decide('attribution_rule_delete', { id: rule }),
+  did: (_i, out) => waits(out, 'Deleted'),
+});
+
+/** A spreadsheet's monthly totals (month, line, amount in cents, team), each sheet line mapped to a line of the chart. */
+export const importHistory = defineAction({
+  id: 'finance.importHistory',
+  title: "Import a spreadsheet's monthly totals as history",
+  kind: 'change',
+  input: s.object({
+    csv: s.string({ min: 1, max: 1_000_000 }),
+    basis: s.oneOf(['accrual', 'cash'] as const),
+    mapping: s.record(id),
+    source: s.optional(s.string({ max: 120 })),
+  }),
+  run: (_ctx, { csv, basis, mapping, source }) => decide('import_raw_totals', { csv, basis, mapping, ...(source?.trim() ? { source_name: source.trim() } : {}) }),
+  did: (_i, out) => waits(out, 'Imported'),
+  target: () => ({ kind: 'tab', id: 'balance' }),
 });
 
 // ---------------------------------------------------------------- budgets

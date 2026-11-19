@@ -7,9 +7,9 @@ import { IconButton } from '@/kit/IconButton';
 import { Segmented } from '@/kit/Segmented';
 import { GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
-import { FIN, financeHead } from './head';
+import { FIN, useFinanceHead } from './head';
 import { cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
-import { ActLink, Meter, Pfig, Prow, usePhone, usePress } from './parts';
+import { ActLink, Meter, Pfig, Prow, usePhone, usePress, useViewAs } from './parts';
 import { lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
@@ -30,14 +30,15 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
   const period: Period = search.period ?? 'month';
   const basis = search.basis ?? 'accrual';
   const range = pnlRange(period, search.from);
-  const q = useQuery(pnlQuery({ start: range.start, end: range.end, period, basis }));
+  const head = useFinanceHead();
+  const q = useQuery(pnlQuery({ start: range.start, end: range.end, period, basis }, search.as));
   const open = panelOf(search.panel);
   const lineId = open?.[0] === 'line' ? open[1] : null;
   const step = (dir: -1 | 1) => void press('finance.setRange', { from: stepRange(period, search.from, dir) });
 
   return (
     <List
-      {...financeHead}
+      {...head}
       state={q.isPending ? 'loading' : q.isError ? 'fault' : 'ready'}
       onRetry={() => void q.refetch()}
       after={
@@ -195,8 +196,9 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
   const i = nowCol(cols);
   const col = cols[i];
   const prev = i > 0 ? cols[i - 1] : undefined;
-  const now = useQuery(lineQuery(account, col));
-  const was = useQuery(lineQuery(account, prev));
+  const as = useViewAs();
+  const now = useQuery(lineQuery(account, col, as));
+  const was = useQuery(lineQuery(account, prev, as));
   if (!row || !col) return null;
   const v = valueAt(row, cols, i);
   const budget = row.budget?.[i] ?? null;

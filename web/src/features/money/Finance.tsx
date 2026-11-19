@@ -7,8 +7,8 @@ import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
 import { BooksPage } from './Books';
 import { BudgetsPage } from './Budgets';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
-import { FIN, financeHead, plural, TAB_NAME } from './head';
-import { ActLink, usePress } from './parts';
+import { FIN, plural, TAB_NAME, useFinanceHead } from './head';
+import { ActLink, usePress, useViewAs } from './parts';
 import { PnlPage } from './Pnl';
 import {
   billsQuery,
@@ -50,18 +50,20 @@ const KIND_TAB: Record<string, FinanceTab> = {
     the kind's padded chart slot or its two-column widget grid. */
 function Overview() {
   const press = usePress();
+  const head = useFinanceHead();
+  const as = useViewAs();
   const now = new Date();
   const ym = ymOf(now);
   const weeks = new Date(now);
   weeks.setDate(weeks.getDate() - ((weeks.getDay() + 6) % 7) - 77);
-  const sources = useQuery(sourcesQuery);
-  const month = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }));
-  const weekly = useQuery(pnlQuery({ start: dayOf(weeks), end: dayOf(now), period: 'week', basis: 'accrual' }));
-  const cashNow = useQuery(metricQuery('cash'));
-  const invoices = useQuery(invoicesQuery);
-  const bills = useQuery(billsQuery);
-  const inbox = useQuery(inboxQuery);
-  const brief = useQuery(briefQuery);
+  const sources = useQuery(sourcesQuery(as));
+  const month = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as));
+  const weekly = useQuery(pnlQuery({ start: dayOf(weeks), end: dayOf(now), period: 'week', basis: 'accrual' }, as));
+  const cashNow = useQuery(metricQuery('cash', as));
+  const invoices = useQuery(invoicesQuery(as));
+  const bills = useQuery(billsQuery(as));
+  const inbox = useQuery(inboxQuery(as));
+  const brief = useQuery(briefQuery(as));
 
   const live = connected(sources.data?.groups);
   const state = sources.isPending ? 'loading' : sources.isError ? 'fault' : live ? 'ready' : 'empty';
@@ -79,7 +81,7 @@ function Overview() {
 
   return (
     <Dashboard
-      {...financeHead}
+      {...head}
       state={state}
       onRetry={() => void sources.refetch()}
       empty={{

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useActor } from '@/data';
 import { fmtAge, fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
@@ -12,10 +12,11 @@ import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
 import { List, Section, type PageState } from '@/pagekinds';
-import { financeHead, plural } from './head';
+import { plural, useFinanceHead } from './head';
 import { cash, count } from './model';
 import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
-import { Meter, usePhone, usePress, Who } from './parts';
+import { BillsAddressDialog, copied, ImportDialog, RuleDialog, ShareDialog, StatementDialog, ViewAsDialog, type RuleRow } from './forms';
+import { Meter, usePhone, usePress, useViewAs, Who } from './parts';
 import {
   accessQuery,
   BOOKS,
@@ -25,6 +26,7 @@ import {
   hooksQuery,
   invoicesQuery,
   KEY_SOURCES,
+  loadMoreTransactions,
   payFromQuery,
   rulesQuery,
   sourcesQuery,
@@ -45,18 +47,26 @@ import type { FinanceTab } from './search';
 type Read = { isPending: boolean; isError: boolean; refetch: () => unknown };
 const stateOf = (q: Read, empty = false): PageState => (q.isPending ? 'loading' : q.isError ? 'fault' : empty ? 'empty' : 'ready');
 
-function Page({ q, empty, actions, children }: { q: Read; empty?: { title: string; action?: ReactNode }; actions?: ReactNode; children: ReactNode }) {
-  return (
-    <List
-      {...financeHead}
-      state={stateOf(q, !!empty)}
-      empty={empty}
-      onRetry={() => void q.refetch()}
-      actions={actions}
-      sections={children}
-    />
-  );
+function Page({
+  q,
+  empty,
+  actions,
+  more,
+  children,
+}: {
+  q: Read;
+  empty?: { title: string; action?: ReactNode };
+  actions?: ReactNode;
+  more?: ReactNode;
+  children: ReactNode;
+}) {
+  const head = useFinanceHead();
+  return <List {...head} state={stateOf(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} sections={children} />;
 }
+
+/** The page's ⋯ with its items, or nothing when it has none. */
+const More = ({ children }: { children: ReactNode[] }) =>
+  children.some(Boolean) ? <Menu trigger={<IconButton icon="more" label="More" />}>{children}</Menu> : null;
 
 export function BooksPage({ tab }: { tab: FinanceTab }) {
   switch (tab) {
@@ -102,14 +112,19 @@ const describe = (t: Tx) => t.vendor_name || (typeof t.vendor === 'object' ? t.v
 /** Every entry, newest first. Past 100 rows only the rows in view are drawn; on a phone, rows under each day. */
 function Transactions() {
   const may = useMay();
+  const as = useViewAs();
   const qc = useQueryClient();
   const phone = usePhone();
-  const q = useQuery(transactionsQuery);
+  const q = useQuery(transactionsQuery(as));
+  const [line, setLine] = useState<string | null>(null);
   const [find, setFind] = useState('');
   const [moving, setMoving] = useState(false);
   const words = find.trim().toLowerCase();
   const all = q.data?.rows ?? [];
   const rows = words ? all.filter((t) => `${describe(t)} ${t.account ?? ''} ${sourceOf(t)}`.toLowerCase().includes(words)) : all;
+  // The server holds more than was read: the next page comes as the last row is drawn (a search reads only what is here).
+  const more = q.data?.next && !words ? () => void loadMoreTransactions(as) : undefined;
+  const share = may('finance.attribute') ? setLine : undefined;
   // A transfer needs two bank accounts to move between (finance-books.ts finXferAdd).
   const transfer = async () => {
     try {
@@ -132,13 +147,14 @@ function Transactions() {
         )
       }
     >
+      {line && <ShareDialog line={line} onOpenChange={(o) => !o && setLine(null)} />}
       <div className="ctl-row">
         <Search label="Search transactions" value={find} onValueChange={setFind} placeholder="Search" />
         <span className="grow" />
-        <span className="count">{plural(rows.length, 'entry', 'entries')}</span>
+        <span className="count">{`${plural(rows.length, 'entry', 'entries')}${more ? '+' : ''}`}</span>
       </div>
       {phone ? (
-        <TxPhone rows={rows} />
+        <TxPhone rows={rows} onMore={more} />
       ) : (
         <div className="t-scroll">
           <Table label="Transactions" stick>
@@ -148,6 +164,7 @@ function Transactions() {
               <col className="t-line" />
               <col className="t-src" />
               <col className="t-col" />
+              {share && <col className="t-act" />}
             </colgroup>
             <thead>
               <tr>
@@ -156,9 +173,10 @@ function Transactions() {
                 <Th>Line</Th>
                 <Th>Source</Th>
                 <Th num>Amount</Th>
+                {share && <Th />}
               </tr>
             </thead>
-            <TxBody rows={rows} />
+            <TxBody rows={rows} onEnd={more} onShare={share} />
           </Table>
         </div>
       )}
@@ -166,8 +184,8 @@ function Transactions() {
   );
 }
 
-/** On a phone: each day a group, each entry its words, line and source, and its amount. */
-function TxPhone({ rows }: { rows: readonly Tx[] }) {
+/** On a phone: each day a group, each entry its words, line and source, and its amount; "More" reads the next page. */
+function TxPhone({ rows, onMore }: { rows: readonly Tx[]; onMore?: () => void }) {
   if (rows.length === 0) return <div className="fold">No entries</div>;
   return (
     <div className="frs" role="list" aria-label="Transactions">
@@ -193,11 +211,24 @@ function TxPhone({ rows }: { rows: readonly Tx[] }) {
           </div>
         </Fragment>
       ))}
+      {onMore && (
+        <button type="button" className="row fold" onClick={onMore}>
+          More
+        </button>
+      )}
     </div>
   );
 }
 
-function TxRow({ t, first }: { t: Tx; first: boolean }) {
+/** The lines a row holds, whose attribution can be read and set: a bank row's lines, or an entry's own line. */
+export function linesOf(t: Tx): { id: string; account: string }[] {
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  if (t.kind === 'entry') return t.entry_id ? [{ id: t.id, account: t.account ?? '' }] : [];
+  return (t.lines ?? []).flatMap((l) => (str(l.line_id) ? [{ id: str(l.line_id), account: str(l.account) }] : []));
+}
+
+function TxRow({ t, first, onShare }: { t: Tx; first: boolean; onShare?: (line: string) => void }) {
+  const lines = onShare ? linesOf(t) : [];
   return (
     <tr className={t.pending ? 'is-quiet' : undefined}>
       <td className="t-words">{first ? fmtDate(t.date) : ''}</td>
@@ -208,34 +239,50 @@ function TxRow({ t, first }: { t: Tx; first: boolean }) {
       <td className="t-words">{t.account ?? ''}</td>
       <td className="t-words">{sourceOf(t)}</td>
       <td className="num t-fig">{cash(t.amount, true)}</td>
+      {onShare && (
+        <td className="t-act">
+          {lines.length > 0 && (
+            <Menu trigger={<IconButton icon="more" label={`More for ${describe(t)}`} size="sm" quiet />}>
+              {lines.map((l) => (
+                <MenuItem key={l.id} label={lines.length > 1 && l.account ? `Attributed to, ${l.account}` : 'Attributed to'} onSelect={() => onShare(l.id)} />
+              ))}
+            </Menu>
+          )}
+        </td>
+      )}
     </tr>
   );
 }
 
 const ROW = 34;
 
-function TxBody({ rows }: { rows: readonly Tx[] }) {
+/** `onEnd` reads the next page once the last row is drawn. */
+function TxBody({ rows, onEnd, onShare }: { rows: readonly Tx[]; onEnd?: () => void; onShare?: (line: string) => void }) {
   // The virtualizer mutates itself between renders; the React Compiler must not memoize what it returns.
   'use no memo';
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
   // eslint-disable-next-line react-hooks/incompatible-library -- 'use no memo' above opts this component out
   const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller, estimateSize: () => ROW, overscan: 12 });
   const first = (i: number) => i === 0 || rows[i - 1]?.date !== rows[i]?.date;
+  const items = v.getVirtualItems();
+  const last = rows.length <= 100 ? rows.length - 1 : items.at(-1)?.index;
+  useEffect(() => {
+    if (rows.length > 0 && last === rows.length - 1) onEnd?.();
+  }, [last, rows.length, onEnd]);
   if (rows.length === 0)
     return (
       <tbody>
-        <EmptyRow span={5}>No entries</EmptyRow>
+        <EmptyRow span={onShare ? 6 : 5}>No entries</EmptyRow>
       </tbody>
     );
   if (rows.length <= 100)
     return (
       <tbody>
         {rows.map((t, i) => (
-          <TxRow key={t.id} t={t} first={first(i)} />
+          <TxRow key={t.id} t={t} first={first(i)} onShare={onShare} />
         ))}
       </tbody>
     );
-  const items = v.getVirtualItems();
   const before = items[0]?.start ?? 0;
   const after = v.getTotalSize() - (items.at(-1)?.end ?? 0);
   return (
@@ -243,7 +290,7 @@ function TxBody({ rows }: { rows: readonly Tx[] }) {
       {before > 0 && <tr aria-hidden="true" style={{ height: before } as CSSProperties} />}
       {items.map((it) => {
         const t = rows[it.index]!;
-        return <TxRow key={t.id} t={t} first={first(it.index)} />;
+        return <TxRow key={t.id} t={t} first={first(it.index)} onShare={onShare} />;
       })}
       {after > 0 && <tr aria-hidden="true" style={{ height: after } as CSSProperties} />}
     </tbody>
@@ -316,13 +363,35 @@ function DocTable({ label, name, number, groups }: { label: string; name: string
 }
 
 function Payables() {
-  const q = useQuery(billsQuery);
+  const may = useMay();
+  const q = useQuery(billsQuery(useViewAs()));
+  const [setting, setSetting] = useState(false);
+  const email = q.data?.bills_email ?? '';
   const bills = q.data?.bills ?? [];
   const over = bills.filter((b) => late(b));
   const week = bills.filter((b) => !late(b) && soon(b));
   const later = bills.filter((b) => !late(b) && !soon(b));
   return (
-    <Page q={q} empty={q.data && bills.length === 0 ? { title: 'Nothing to pay' } : undefined}>
+    <Page
+      q={q}
+      empty={q.data && bills.length === 0 ? { title: 'Nothing to pay' } : undefined}
+      more={
+        // The owner or an admin sets the bills address; anyone else copies it (finance-docs.ts finDocEmailDraw).
+        // The dialog sits with its menu: with no bills the page shows only its empty state.
+        <>
+          <More>
+            {[
+              may('finance.admin') ? (
+                <MenuItem key="set" label="Bills address" meta={email || 'None'} onSelect={() => setSetting(true)} />
+              ) : (
+                email && <MenuItem key="copy" label={`Copy ${email}`} onSelect={() => copied(email)} />
+              ),
+            ]}
+          </More>
+          {setting && <BillsAddressDialog address={email} onOpenChange={setSetting} />}
+        </>
+      }
+    >
       <DocTable
         label="Bills"
         name="Bill"
@@ -345,7 +414,7 @@ const AGES = [
 ] as const;
 
 function Receivables() {
-  const q = useQuery(invoicesQuery);
+  const q = useQuery(invoicesQuery(useViewAs()));
   const list = q.data?.invoices ?? [];
   const aging = q.data?.open.aging;
   const max = aging ? Math.max(1, ...AGES.map(([k]) => aging[k])) : 1;
@@ -428,11 +497,21 @@ function Side({ label, head, parts }: { label: string; head: string; parts: { na
 }
 
 function Balance() {
-  const q = useQuery(balanceQuery());
+  const may = useMay();
+  const q = useQuery(balanceQuery(undefined, useViewAs()));
+  const [importing, setImporting] = useState(false);
   const d = q.data;
   const head = d ? fmtDate(d.as_of) : '';
   return (
-    <Page q={q}>
+    <Page
+      q={q}
+      more={
+        <>
+          <More>{[may('finance.book') && <MenuItem key="import" label="Import history" onSelect={() => setImporting(true)} />]}</More>
+          {importing && <ImportDialog onOpenChange={setImporting} />}
+        </>
+      }
+    >
       {d && (
         <div className="two-col">
           <div>
@@ -461,7 +540,7 @@ const STATUS: Record<string, string> = { frozen: 'Frozen', paused: 'Frozen', clo
 function Cards() {
   const may = useMay();
   const [making, setMaking] = useState(false);
-  const q = useQuery(cardsQuery);
+  const q = useQuery(cardsQuery(useViewAs()));
   const cards = q.data?.cards ?? [];
   const spent = cards.reduce((a, c) => a + (c.spent ?? 0), 0);
   const limit = cards.reduce((a, c) => a + (c.limit ?? 0), 0);
@@ -531,7 +610,7 @@ function Cards() {
 }
 
 function Tax() {
-  const q = useQuery(taxQuery);
+  const q = useQuery(taxQuery(useViewAs()));
   const rows = q.data?.rows ?? [];
   const due = rows.filter((r) => r.due > 0);
   const filed = rows.filter((r) => r.due <= 0);
@@ -605,14 +684,37 @@ function SplitTo({ team, teammate, share }: { team: string; teammate: string; sh
   return <>{share < 10_000 ? `${name} ${Math.round(share / 100)}%` : name}</>;
 }
 
+/** The rules, with Add rule, Edit and Delete for whoever may change them (finance-attribution.ts finAttrPage). */
 function Attribution() {
   const q = useQuery(rulesQuery);
+  const viewing = !!useViewAs();
+  const can = !!q.data?.can_change && !viewing;
+  const [open, setOpen] = useState<{ kind: 'edit'; rule?: RuleRow } | { kind: 'delete'; rule: RuleRow } | null>(null);
+  const close = (o: boolean) => !o && setOpen(null);
   const rules = q.data?.rules ?? [];
+  const add = (
+    <Button variant="primary" onClick={() => setOpen({ kind: 'edit' })}>
+      Add rule
+    </Button>
+  );
   return (
-    <Page q={q} empty={q.data && rules.length === 0 ? { title: 'No rules yet' } : undefined}>
+    <Page
+      q={q}
+      // The dialogs sit with Add rule: with no rules the page shows only its empty state.
+      actions={
+        (can || open) && (
+          <>
+            {can && add}
+            {open?.kind === 'edit' && <RuleDialog rule={open.rule} onOpenChange={close} />}
+            {open?.kind === 'delete' && <ConfirmDialog title={`Delete ${open.rule.name}`} submit="Delete" action="finance.deleteRule" input={{ rule: open.rule.id }} onOpenChange={close} />}
+          </>
+        )
+      }
+      empty={q.data && rules.length === 0 ? { title: 'No rules yet', action: can ? add : undefined } : undefined}
+    >
       <Section name="Rules" count={rules.length}>
         {rules.map((r) => (
-          <div key={r.id} className={r.enabled ? 'row rule' : 'row rule is-quiet'} data-target={`rule:${r.id}`}>
+          <div key={r.id} className={['row rule', !r.enabled && 'is-quiet', can && 'has-act'].filter(Boolean).join(' ')} data-target={`rule:${r.id}`}>
             <span className="row-title">{r.match.label || r.name}</span>
             <Icon name="arrow" />
             <span className="rule-to">
@@ -627,6 +729,13 @@ function Attribution() {
               </span>
             </span>
             <span className="count">{r.enabled ? '' : 'Off'}</span>
+            {can && (
+              <Menu trigger={<IconButton icon="more" label={`More for ${r.name}`} size="sm" quiet />}>
+                <MenuItem label="Edit" onSelect={() => setOpen({ kind: 'edit', rule: r })} />
+                <MenuRule />
+                <MenuItem label="Delete" onSelect={() => setOpen({ kind: 'delete', rule: r })} />
+              </Menu>
+            )}
           </div>
         ))}
       </Section>
@@ -644,7 +753,8 @@ type SourceDialog =
   | { kind: 'key'; provider: KeyProvider }
   | { kind: 'books'; provider: keyof typeof BOOKS }
   | { kind: 'mirror' | 'stop' | 'disconnect'; row: SourceRow; books: boolean }
-  | { kind: 'hook' };
+  | { kind: 'hook' }
+  | { kind: 'statement'; row: SourceRow };
 
 const ADS: [string, string][] = [
   ['google-ads', 'Google Ads'],
@@ -659,7 +769,7 @@ function Sources() {
   const press = usePress();
   const may = useMay();
   const admin = may('finance.admin');
-  const q = useQuery(sourcesQuery);
+  const q = useQuery(sourcesQuery(useViewAs()));
   const hooks = useQuery({ ...hooksQuery, enabled: admin });
   const [open, setOpen] = useState<SourceDialog | null>(null);
   const [shown, setShown] = useState<[string, string][] | null>(null);
@@ -680,6 +790,9 @@ function Sources() {
           <MenuItem key="mirror" label="Use as books" onSelect={() => setOpen({ kind: 'mirror', row: r, books })} />
         ),
       );
+    // A bank or card account's statement file, for whoever keeps the books (finance-admin.ts `upload`).
+    if ((r.kind === 'bank' || r.kind === 'card_program') && may('finance.book'))
+      out.push(<MenuItem key="statement" label="Upload statement" onSelect={() => setOpen({ kind: 'statement', row: r })} />);
     if (admin && r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe') && hooks.data && !hooked)
       out.push(<MenuItem key="hook" label="Add webhook" onSelect={() => setOpen({ kind: 'hook' })} />);
     if (admin && r.kind === 'connection' && r.sync?.status !== 'disconnected') {
@@ -721,6 +834,7 @@ function Sources() {
           onOpenChange={close}
         />
       )}
+      {open?.kind === 'statement' && <StatementDialog account={open.row} onOpenChange={close} />}
       {open?.kind === 'hook' && <WebhookDialog onOpenChange={close} onShown={setShown} />}
       {shown && <ShownOnce title="Stripe webhook" pairs={shown} onClose={() => setShown(null)} />}
     </>
@@ -786,6 +900,8 @@ const SEES: Record<AccessTeammate['default'], string> = {
 
 function Access() {
   const [editing, setEditing] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const viewing = !!useViewAs();
   const q = useQuery(accessQuery);
   const all = q.data?.teammates ?? [];
   const sees = all.filter((t) => t.default !== 'none' || (t.grants?.length ?? 0) > 0);
@@ -794,10 +910,12 @@ function Access() {
     <Page
       q={q}
       actions={
-        q.data?.can_edit_defaults && (
+        !viewing && (
           <>
-            <Button onClick={() => setEditing(true)}>Edit defaults</Button>
-            {editing && <DefaultsDialog defaults={q.data.defaults ?? {}} onOpenChange={setEditing} />}
+            {q.data?.can_view_as && <Button onClick={() => setPicking(true)}>View as</Button>}
+            {q.data?.can_edit_defaults && <Button onClick={() => setEditing(true)}>Edit defaults</Button>}
+            {editing && <DefaultsDialog defaults={q.data?.defaults ?? {}} onOpenChange={setEditing} />}
+            {picking && <ViewAsDialog onOpenChange={setPicking} />}
           </>
         )
       }

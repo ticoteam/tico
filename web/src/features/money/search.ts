@@ -27,6 +27,8 @@ export interface FinanceSearch {
   basis?: 'cash';
   /** The statement's first month, YYYY-MM. */
   from?: string;
+  /** The owner reads Finance as this teammate (`human:…` or `bot:…`), read only. */
+  as?: string;
 }
 
 export interface GrowthSearch {
@@ -41,7 +43,7 @@ export interface GrowthSearch {
 const text = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 const PANEL = /^(line|budget|channel):\S+$/;
 
-/** `?tab=pnl&period=quarter&basis=cash&from=2026-07&panel=line:<account>`; anything else is dropped. */
+/** `?tab=pnl&period=quarter&basis=cash&from=2026-07&panel=line:<account>&as=human:<id>`; anything else is dropped. */
 export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSearch {
   const out: FinanceSearch = {};
   const tab = FINANCE_TAB_IDS.find((t) => t === raw.tab);
@@ -51,6 +53,8 @@ export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSear
   if (raw.period === 'quarter' || raw.period === 'year') out.period = raw.period;
   if (raw.basis === 'cash') out.basis = 'cash';
   if (isYm(raw.from)) out.from = raw.from;
+  const as = text(raw.as);
+  if (as && /^(human|bot):\S+$/.test(as)) out.as = as;
   return out;
 }
 

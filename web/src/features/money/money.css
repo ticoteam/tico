@@ -25,14 +25,13 @@
 .money .table td .who-cell .av{margin:0}
 .money .table td.t-bar{padding-right:var(--s-1)}
 .money .table tr.is-sub td:first-child{padding-left:calc(var(--s-6) + var(--s-1));color:var(--ink-2)}
-/* On the page the body has no left padding (marks hang in the margin) and a Section puts its name on --page-x itself,
-   so what stands under a name starts there too: a table's first column, the chart, bars, the control row, rules, folds
-   and definitions (the mock: body on --page-x less 12, each block 12 in). The panel keeps its own 12. */
-@media (min-width:761px){
-  .money .pk-body .table :is(th,td):first-child{padding-left:var(--page-x)}
-  .money .pk-body .table tr.is-sub td:first-child{padding-left:calc(var(--page-x) + var(--s-4))}
-  .money .pk-body :is(.chart-sec,.hbars,.ctl-row,.rule,.fold,.def){padding-left:var(--page-x)}
-}
+/* On the page the body has no left padding (marks hang in the margin), so what stands under a name starts on --page-x
+   too. The page kinds already do this for a table in a Section or right in the body, and for charts and bars; here are
+   the rest: a table in a scroller or two columns outside a Section, a sub row, the control row, rules, folds and
+   definitions. The panel keeps its own 12. */
+:where(html:not([data-layout="cards"])) .money .pk-body :is(.t-scroll,.two-col) .table :is(th,td):first-child{padding-left:var(--page-x)}
+:where(html:not([data-layout="cards"])) .money .pk-body .table tr.is-sub td:first-child{padding-left:calc(var(--page-x) + var(--s-4))}
+:where(html:not([data-layout="cards"])) .money .pk-body :is(.ctl-row,.rule,.fold,.def){padding-left:var(--page-x)}
 .money .table tr.is-pct td{color:var(--muted);font-size:var(--t-sm)}
 .money .table tr.is-net td{height:40px;font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
 .money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
@@ -68,12 +67,6 @@
 .money .pk-widgets>.stack{grid-column:1/-1}
 .money .stack>.two-col+.stage,.money .stack>.stage+.two-col{margin-top:var(--s-2h);padding-top:var(--s-2h);border-top:1px solid var(--line)}
 
-/* figures: label, value and sub on the same lines in every tile, whatever is missing; the sparkline keeps to the
-   bottom right and never moves the words (the mock draws every tile's three lines) */
-.money .pk-figs .widget{align-items:flex-start}
-.money .pk-figs .widget>.spark{align-self:flex-end}
-.money .pk-figs .widget b:empty::before{content:"\a0"}
-
 /* a chart under its section name */
 .money .chart-sec{padding:0 var(--s-3) var(--s-3h)}
 
@@ -86,6 +79,7 @@
 .money .rule{grid-template-columns:minmax(0,1fr) 16px minmax(0,1fr) 72px;column-gap:var(--s-2h);padding:0 var(--s-3)}
 .money .rule .ico{width:14px;height:14px;color:var(--faint)}
 .money .rule.is-quiet{color:var(--muted)}
+.money .rule.has-act{grid-template-columns:minmax(0,1fr) 16px minmax(0,1fr) 72px var(--s-10)}
 .money .rule-to{display:flex;align-items:center;gap:var(--s-2);min-width:0;color:var(--ink-2)}
 .money .rule-to span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -119,6 +113,17 @@
 .money .once{display:grid;gap:var(--s-1)}
 .money .once p span{color:var(--muted);font-size:var(--t-sm)}
 .money .once-row{display:flex;align-items:center;gap:var(--s-2)}
+.money .shares{display:grid;gap:var(--s-2)}
+.money .share-row{display:grid;grid-template-columns:minmax(0,1fr) 84px auto;column-gap:var(--s-2);align-items:center}
+.money .share-foot{display:flex;align-items:center;gap:var(--s-2)}
+.money .file-pick{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .file-pick .row-sub{overflow:hidden;text-overflow:ellipsis}
+.money .stmt{display:grid;gap:var(--s-2);min-width:0}
+.money .stmt-tie{font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* whose view the owner reads Finance as, in the where line over the title */
+.money .view-as{display:inline-flex;align-items:center;gap:var(--s-2)}
+
 .money .once-row code{flex:1;min-width:0;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
 
 /* on a phone a table becomes rows: the name and its words, one figure, a meter under them (finance.css .fr) */
@@ -147,6 +152,7 @@
   .money .two-col>*+*{box-shadow:none;border-top:1px solid var(--line);margin-top:var(--s-2)}
   .money .rule{grid-template-columns:minmax(0,1fr) auto;height:auto;min-height:52px;padding:var(--s-2) var(--s-2)}
   .money .rule>.ico{display:none}
+  .money .rule.has-act{grid-template-columns:minmax(0,1fr) auto auto}
   .money .fold{height:44px;padding:0 var(--s-2)}
   .money .def{grid-template-columns:minmax(0,1fr);height:auto;min-height:44px;padding:var(--s-2) var(--s-2)}
   .money .def span:last-child{white-space:normal;font-size:var(--t-sm)}

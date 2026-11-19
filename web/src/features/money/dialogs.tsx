@@ -12,7 +12,7 @@ import { Field } from '@/kit/Field';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { budgetDay, cash, centsOf, dayOf } from './model';
-import { Prow } from './parts';
+import { Prow, useViewAs } from './parts';
 import {
   accessQuery,
   BOOKS,
@@ -34,17 +34,19 @@ import {
 
 type Open = (open: boolean) => void;
 
-/** What the person can do in Finance, from their row on the access list (finance.ts finCapsOf). */
+/** What the person can do in Finance, from their row on the access list (finance.ts finCapsOf). Reading as a teammate
+    is read only. */
 export function useMay() {
   const me = useQuery(meQuery).data?.id;
   const acc = useQuery(accessQuery).data;
+  const viewing = !!useViewAs();
   const row = acc?.teammates.find((t) => t.teammate === me);
   const rights = new Set(row?.rights ?? []);
-  return (right: string) => !!row && (row.default === 'everything' || rights.has(right) || rights.has('finance.admin'));
+  return (right: string) => !viewing && !!row && (row.default === 'everything' || rights.has(right) || rights.has('finance.admin'));
 }
 
 /** Runs an action from a press and says how it went; a refusal's words stay in the dialog. */
-function useRun() {
+export function useRun() {
   const router = useRouter();
   return async (id: string, input: unknown): Promise<Result> => {
     const r = await runIn(registry, id, input, 'click', router);
@@ -53,10 +55,10 @@ function useRun() {
   };
 }
 
-const why = (e: string | undefined) => (e?.startsWith('failed: ') ? e.slice(8) : e === 'not_allowed' ? 'Not allowed' : "Couldn't save");
+export const why = (e: string | undefined) => (e?.startsWith('failed: ') ? e.slice(8) : e === 'not_allowed' ? 'Not allowed' : "Couldn't save");
 
 /** A dialog that asks for something: its fields, a line for what went wrong, Cancel and the act. */
-function Ask({
+export function Ask({
   title,
   submit,
   onOpenChange,
@@ -115,7 +117,7 @@ function Ask({
 }
 
 /** Busy and error for one dialog; `go` runs the action and closes on success. */
-function useAsk(onOpenChange: Open) {
+export function useAsk(onOpenChange: Open) {
   const run = useRun();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
