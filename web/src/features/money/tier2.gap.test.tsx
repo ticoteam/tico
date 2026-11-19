@@ -9,6 +9,7 @@ import { queryClient, type Actor } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import './actions';
 import { FinancePage } from './Finance';
+import { loudHealth } from './model';
 import { GrowthPage } from './Growth';
 import { accessQuery, type GrowthRead } from './queries';
 import { validateFinanceSearch, validateGrowthSearch } from './search';
@@ -218,5 +219,21 @@ describe('Growth has no Sources tab', () => {
     expect(await screen.findByRole('link', { name: 'Search ads' })).toBeTruthy();
     expect(screen.queryByRole('table', { name: 'Sources' })).toBeNull();
     expect(validateGrowthSearch(router.state.location.search)).toEqual({});
+  });
+});
+
+describe('Growth health: when each source last pushed @s400', () => {
+  it('names the fresh sources quietly and a stale one out loud, by name', () => {
+    const h = {
+      basis: 'customers' as const,
+      unknown_share: 0,
+      stale_sources: ['source:2'],
+      reconciled: 'not_reconciled' as const,
+      sources: [
+        { source: 'source:1', name: 'Payments', as_of: '2026-11-18', pushed_at: '2026-11-19T10:00:00Z', stale: false },
+        { source: 'source:2', name: 'Ad sheet', as_of: '2026-10-01', pushed_at: null, stale: true },
+      ],
+    };
+    expect(loudHealth(h)).toEqual(['Stale: Ad sheet']);
   });
 });
