@@ -808,7 +808,9 @@ class KpiUpdate(Contract):
     owner: str | None = Field(default=None, max_length=200)
     # The KPI tree (backend/growth.py): sent as null, a field is cleared. At most one KPI is the North Star.
     parent_kpi_id: str | None = Field(default=None, max_length=200)
-    growth_role: Literal["north_star", "input", "guardrail"] | None = None
+    growth_role: (
+        Literal["north_star", "input", "guardrail", "check_signups", "check_new_customers", "check_cost"] | None
+    ) = None
     stage: Literal["reach", "acquire", "activate", "retain", "refer"] | None = None
     loop_name: str | None = Field(default=None, max_length=80)
     loop_step: int | None = Field(default=None, ge=1, le=50)

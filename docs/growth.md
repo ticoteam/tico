@@ -214,7 +214,7 @@ pushed. A source holds customer facts or pushed rows, never both.
 - **Channels** each carry their `new_customers`, `new_share`, `owner`, `budget` (`budget_month`) and `over_budget` (cost past the budget, else null).
 - **A retention segment** reads `value` (`kept_d30` and `cost_per_retained`) in place of LTV, LTV:CAC and payback.
 - **Health**: the Unknown share, `no_segment` and `mismatch` (with segments), counted over customers when the company
-  pushes any, else over sign-ups (`basis`: `customers` or `signups`), `reconciled` (`not_reconciled` for now),
+  pushes any, else over sign-ups (`basis`: `customers` or `signups`), `reconciled` (`reconciled` | `off` | `not_reconciled`, with `checks`: a KPI with growth role `check_signups`, `check_new_customers` or `check_cost` holds an outside total such as Stripe's new paying customers or Finance's ad spend; its reading for the month is compared with Growth's company-wide figure, within 5% or 1 for counts),
   and `stale_sources` (rows whose newest `as_of` is over 45 days old).
 - **Metrics**: Growth's KPIs (a channel's input or guardrail KPI, or the Growth Manager's own), at most 20, each with
   its `channel`, latest `value` up to the month's end, `period_end`, `estimate` and `vs_prior` (the reading before).
