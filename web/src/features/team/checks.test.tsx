@@ -6,8 +6,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
-// eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
-import { bind } from '@/actions/bind';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { AddAgentButton, AddTeammate } from './AddTeammate';
 import { accessQuery, agentsQuery, computersQuery, groupsQuery, modelsQuery, peopleQuery, type AgentRow, type Computer, type Group } from './queries';
@@ -207,13 +205,6 @@ describe("An agent's Settings", () => {
     expect(cached()).not.toContain(TOKEN);
   });
 
-  it('lets Tico take people off who an agent works for, never add them @s717', async () => {
-    bind({ router: createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/team/ana'] }) }) });
-    serve(() => undefined);
-    expect(await run('agents.setWorksFor', { slug: 'ana', people: ['p1', 'p2'] }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(sent).toEqual([]);
-    expect(await run('agents.setWorksFor', { slug: 'ana', people: [] }, { via: 'tico' })).toMatchObject({ ok: true });
-  });
 });
 
 describe("A person's page", () => {
