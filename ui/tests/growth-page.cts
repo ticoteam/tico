@@ -16,7 +16,9 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 declare const S: {me: unknown; emps?: unknown[]};
 declare function gpChatItem(): {kind: string; id: string; name: string} | null;
-interface Shape {segments: {slug: string; name: string}[]; reads: Record<string, {period: string}>}
+interface Fig {value: number | null; status?: string; window?: string; verdict?: string}
+interface Read {period: string; headline: Record<string, Fig>; channels: Record<string, unknown>[]; metrics: {name: string}[]; series: {cac: number | null}[]}
+interface Shape {segments: {slug: string; name: string}[]; reads: Record<string, Read>}
 const uiDir = path.join(__dirname, '..');
 const roster = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'redesign-roster.json'), 'utf8'));
 const shape = (name: string): Shape => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', `growth-read-${name}.json`), 'utf8'));
@@ -25,9 +27,11 @@ const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'o
 const GM = {name: 'growth-manager', display_name: 'Growth Manager', org_parent: '', host: 'hub', status: 'active', can_chat: true};
 const REVENUE = ['signups', 'activated', 'paid', 'new', 'cost', 'cac', 'kept', 'ltv', 'ltv-cac', 'payback'];
 
-async function open(browser: Browser, name: string, {viewport = DESKTOP, hash = '#/growth', theme = 'dark', fail = 0} = {}) {
+async function open(browser: Browser, name: string, {viewport = DESKTOP, hash = '#/growth', theme = 'dark', fail = 0, edit = (_: Shape) => {}} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE, timezoneId: 'UTC'});
+  await page.clock.setFixedTime(new Date('2026-11-18T12:00:00Z'));   // the fixtures' month, 2026-10, is the last full one
   const errors: string[] = [], reads: string[] = [], data = shape(name);
+  edit(data);
   let failing = fail;
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
@@ -90,6 +94,7 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.locator('#gr-body tr[data-channel="search-consumer"] .gp-over').count(), 1, 'over budget');
       assert.equal(await word(page, 'tr[data-channel="referrals"]'), 1, 'no spend says so');
       assert.equal(await page.locator('#gr-body tr[data-channel="search-consumer"] .gr-d').count(), 1, 'a verdict on the CAC');
+      assert.equal(await word(page, 'tr[data-channel="search-rental"]'), 1, 'too few to judge its CAC');
       assert.equal(await page.locator('#gr-body .gp-chart svg').count(), 4, 'four trends');
       assert.equal(await page.locator('#gr-body .grc-ret-t tbody tr').count(), 6, 'six cohorts');
       assert.equal(await page.locator('#gr-body .gp-kpis a').getAttribute('href'), '#/strategy/goals?kpi=kpi-1');
@@ -105,6 +110,7 @@ async function shot(page: Page, name: string) {
       await month.selectOption('2026-09');
       await page.waitForFunction(() => location.hash === '#/growth?m=2026-09');
       await page.waitForFunction(() => (document.querySelector('#main select[data-gp-month]') as HTMLSelectElement | null)?.value === '2026-09');
+      assert.deepEqual(await month.locator('option').evaluateAll(els => els.map(el => (el as HTMLOptionElement).value)), options, 'an older month keeps the list');
       assert.match(reads.at(-1)!, /(^|&)period=2026-09(&|$)/);
       // Rental: its own read, the month kept; too few customers to say what they keep or are worth.
       await page.locator('#main header.ph .ph-tabs a', {hasText: 'Rental'}).click();
@@ -136,11 +142,13 @@ async function shot(page: Page, name: string) {
     }
     {
       // HotMic: a retention segment, so cost per retained in place of LTV; promotions paid, organic not.
-      const {page, errors} = await open(browser, 'hotmic');
+      // The read's Kept may be another window than cost per retained's day 30: the tile shows day 30's.
+      const {page, errors} = await open(browser, 'hotmic', {edit: s => { s.reads.all!.headline.kept = {value: 0.9, status: 'ok', window: 'd90'}; }});
       await drawn(page);
       assert.deepEqual(await tabs(page), [['All', 'page'], ['Viewers', null]]);
       assert.deepEqual(await keys(page), ['signups', 'activated', 'paid', 'new', 'cost', 'cac', 'kept', 'per-retained']);
       assert.equal(await page.locator('#gr-body [data-k="cost"] .gp-s').count(), 1, 'retention spend beside the cost');
+      assert.match(await page.locator('#gr-body [data-k="kept"] .gp-v').innerText(), /^43%/, "day 30's kept");
       assert.deepEqual(await rows(page), ['organic', 'promotions']);
       assert.equal(await word(page, 'tr[data-channel="organic"]'), 1);
       assert.equal(await word(page, 'tr[data-channel="promotions"]'), 0);
@@ -156,6 +164,25 @@ async function shot(page: Page, name: string) {
       await page.locator('#gr-body [data-gr-retry]').click();
       await drawn(page);
       assert.equal(reads.length, 2);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A shared channel's cost is not split to a segment, a paid channel with no customers has no CAC, one month of CAC
+      // is a point, and a long KPI name wraps on a phone.
+      const edit = (s: Shape) => {
+        const all = s.reads.all!;
+        all.channels.splice(0, 0, {slug: 'shared', name: 'Shared', new: 3, new_share: 0.1, cost: null, cac: null, status: 'not_split'},
+          {slug: 'idle', name: 'Idle', new: 0, new_share: 0, cost: 200, cac: null, cost_share: 0.04, status: 'no_customers'});
+        all.series.forEach((p, i) => { if (i < all.series.length - 1) p.cac = null; });
+        all.metrics[0]!.name = 'Bookings'.repeat(12);
+      };
+      const {page, errors} = await open(browser, 'tidy', {viewport: PHONE, edit});
+      await drawn(page);
+      assert.equal(await word(page, 'tr[data-channel="shared"]'), 2, 'cost and CAC say not split');
+      assert.equal(await word(page, 'tr[data-channel="idle"]'), 1, 'CAC says no customers');
+      assert.equal(await page.locator('#gr-body .gp-chart svg').count(), 4, 'one month of CAC is a point');
+      assert.equal(await sideways(page), false, 'a long KPI name wraps');
       assert.deepEqual(errors, []);
       await page.close();
     }

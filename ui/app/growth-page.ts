@@ -149,11 +149,13 @@ async function pageGrowth() {
   main.innerHTML = gpHead(state, state.read) + `<div id="gr-body" class="gr-body gp">${gpBody(state.read)}</div>`;
   pageChatUse('growth', {item: gpChatItem});   // the chip names the read's month now
 }
-// The header: All and a tab per segment (none without segments), and the months the trends cover, newest first.
+// Twelve months back from the last full one, whichever month is picked, so an older pick keeps the same list.
+const gpYear = () => Array.from({length: 12}, (_, k) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1 - k); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+// The header: All and a tab per segment (none without segments), and the months to pick, newest first.
 function gpHead(state: GrState, r: GpRead) {
   const tab = (scope: string, label: string) => ({label, href: gpHref(scope, state.month), cur: state.scope === scope});
   const tabs = state.segments.length ? [tab('all', 'All'), ...state.segments.map(s => tab('segment:' + s.slug, s.name))] : undefined;
-  const months = [...new Set([r.period, ...(r.series || []).map(p => p.period)])].sort().reverse();
+  const months = [...new Set([r.period, ...gpYear()])].sort().reverse();
   const tools = `<label class="gp-month"><span class="sr-only">Month</span><select data-gp-month>${months.map(m =>
     `<option value="${esc(m)}"${m === r.period ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>`;
   return pageHead({title: 'Growth', hook: 'gr-head', tabs, tabsAttrs: 'aria-label="Segment"', tools, more: PAGE_HEAD_COPY});
@@ -168,10 +170,11 @@ const GP_WORD: Record<string, string> = {too_few: 'too few', not_supplied: 'not 
 const gpWord = (status: string | undefined) => `<span class="muted gp-word">${esc(GP_WORD[status || ''] || '—')}</span>`;
 const gpCount = (v: number) => grX(v, 0);
 const gpRate = (v: number) => `${grX(v * 100, v < 0.1 ? 1 : 0)}%`;
-const GP_WINDOW: Record<string, string> = {d30: '30 days', d90: '90 days', d180: '180 days'};
+const GP_WINDOW: Record<string, string> = {d30: '30 days', d90: '90 days', d180: '180 days', d365: '365 days'};
 const GP_ARROW: Record<string, string> = {up: '↑', down: '↓', flat: '→'};
 // The verdict against the three months before; `good` is the direction that is good news (CAC's is down).
 function gpVerdict(verdict: string | null | undefined, good: string) {
+  if (verdict === 'too_few') return ' ' + gpWord(verdict);
   const arrow = GP_ARROW[verdict || ''];
   if (!arrow) return '';
   const tone = verdict === 'flat' ? '' : verdict === good ? ' gr-d-good' : ' gr-d-bad';
@@ -181,7 +184,7 @@ function gpVerdict(verdict: string | null | undefined, good: string) {
 function gpTile(key: string, label: string, f: GpFig | undefined, fmt: (v: number) => string, good = 'up', notes: string[] = []) {
   const small = [f?.status === 'estimate' ? 'estimate' : '', f?.cohort ? grMonth(f.cohort) : '', GP_WINDOW[f?.window || ''] || '',
     f?.n != null ? `n=${gpCount(f.n)}` : '', ...notes].filter(Boolean);
-  return `<div class="gp-tile" data-k="${key}"><span class="gr-k">${esc(label)}</span><span class="gp-v">${f?.value == null ? gpWord(f?.status) : esc(fmt(f.value))}${gpVerdict(f?.verdict, good)}</span>${small.length ? `<span class="gp-s muted">${esc(small.join(' · '))}</span>` : ''}</div>`;
+  return `<div class="gp-tile" data-k="${key}"><span class="gr-k">${esc(label)}</span><span class="gp-v">${f?.value == null ? gpWord(f?.status) : esc(fmt(f.value)) + gpVerdict(f.verdict, good)}</span>${small.length ? `<span class="gp-s muted">${esc(small.join(' · '))}</span>` : ''}</div>`;
 }
 function gpTiles(h: GpHeadline) {
   const effort = (f: GpFig | undefined) => f?.with_effort != null ? [`with effort ${grUsd(f.with_effort)}`] : [];
@@ -193,8 +196,9 @@ function gpTiles(h: GpHeadline) {
     gpTile('new', 'New customers', h.new_customers, gpCount),
     gpTile('cost', 'Cost', h.cost, grUsd, '', [...effort(h.cost), ...h.cost?.retention != null ? [`retention ${grUsd(h.cost.retention)}`] : []]),
     gpTile('cac', 'CAC', h.cac, grUsd, 'down', [...effort(h.cac), ...h.cac_loaded?.value != null ? [`loaded ${grUsd(h.cac_loaded.value)}`] : []]),
-    gpTile('kept', 'Kept', h.kept, gpRate),
-    ...h.value ? [gpTile('per-retained', 'Cost per retained', h.value.cost_per_retained, grUsd, 'down')]
+    // A retention scope's cost per retained is day 30's: Kept beside it is too.
+    h.value ? gpTile('kept', 'Kept', h.value.kept_d30, gpRate, 'up', ['30 days']) : gpTile('kept', 'Kept', h.kept, gpRate),
+    ...h.value ? [gpTile('per-retained', 'Cost per retained', h.value.cost_per_retained, grUsd, 'down', ['30 days'])]
       : [gpTile('ltv', 'LTV', h.ltv, grUsd), gpTile('ltv-cac', 'LTV:CAC', h.ltv_cac, v => `${grX(v)}×`), gpTile('payback', 'Payback', h.payback_months, months, 'down')],
   ].join('')}</div>`;
 }
@@ -205,11 +209,12 @@ function gpChannels(rows: GpChannel[]) {
   const share = (v: number | null | undefined) => td(v == null ? '' : esc(gpRate(v)));
   const row = (c: GpChannel) => {
     if (c.slug === 'unknown') return `<tr data-channel="unknown"><th scope="row" class="muted">Unknown</th><td></td>${td(esc(gpCount(c.new)))}<td></td><td></td><td></td><td></td>${share(c.new_share)}</tr>`;
-    const spend = c.status === 'no_spend';
-    const cac = c.cac != null ? esc(grUsd(c.cac)) + gpVerdict(c.verdict, 'down') : c.with_effort != null ? `${esc(grUsd(c.with_effort))} <small class="muted">effort</small>` : '';
+    const spend = c.status === 'no_spend' || c.status === 'not_split';
+    const cac = c.cac != null ? esc(grUsd(c.cac)) + gpVerdict(c.verdict, 'down') : c.with_effort != null ? `${esc(grUsd(c.with_effort))} <small class="muted">effort</small>`
+      : c.status === 'not_split' || c.status === 'no_customers' ? gpWord(c.status) : '';
     const budget = c.budget == null ? '' : esc(grUsd(c.budget)) + (c.over_budget ? ` <small class="gp-over">+${esc(grUsd(c.over_budget))}</small>` : '');
     return `<tr data-channel="${esc(c.slug)}"><th scope="row">${esc(c.name || c.slug)}</th><td>${esc(grWho(c.owner))}</td>${td(esc(gpCount(c.new)))}
-      ${td(c.cost != null ? esc(grUsd(c.cost)) : spend ? gpWord('no_spend') : '')}${td(cac)}${td(budget)}${share(c.cost_share)}${share(c.new_share)}</tr>`;
+      ${td(c.cost != null ? esc(grUsd(c.cost)) : spend ? gpWord(c.status) : '')}${td(cac)}${td(budget)}${share(c.cost_share)}${share(c.new_share)}</tr>`;
   };
   return `<section class="card gp-sec"><h2 class="gp-h">Channels</h2><div class="gp-scroll"><table class="grc-table gp-ch"><thead><tr><th scope="col">Channel</th><th scope="col">Owner</th>
     <th scope="col" class="num">New</th><th scope="col" class="num">Cost</th><th scope="col" class="num">CAC</th><th scope="col" class="num">Budget</th>

@@ -66,7 +66,7 @@
 .gp-s{font-size:var(--t-xs);line-height:1.35}
 .gp-sec{display:flex;flex-direction:column;gap:8px}
 .gp-h{margin:0;font-size:var(--t-card);font-weight:600}
-.gp-scroll{overflow-x:auto;min-width:0}
+.gp-scroll{position:relative;overflow-x:auto;min-width:0}
 .gp-ch{min-width:640px}
 .gp-ch small,.grc-ret-t small{font-size:var(--t-xs)}
 .gp-over{color:var(--fail)}
@@ -76,6 +76,7 @@
 .gp-none{margin:0;min-height:48px;display:flex;align-items:center}
 .gp-axis{display:flex;justify-content:space-between;margin:0;font-size:var(--t-xs)}
 .gp-kpis{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 20px;font-size:var(--t-sm)}
+.gp-kpis li{min-width:0;overflow-wrap:anywhere}
 .gp-kpis b{font-weight:600;font-variant-numeric:tabular-nums}
 .gp-health{margin:0;font-size:var(--t-xs)}
 .grc-table{width:100%;border-collapse:collapse;font-size:var(--t-sm);font-variant-numeric:tabular-nums}

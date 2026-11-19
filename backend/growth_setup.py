@@ -244,12 +244,10 @@ def record(c: Any, actor: str, *, seen: bool = False, at: str | None = None) -> 
     c.execute(f"UPDATE growth_setup SET {sets} WHERE id=1", list(fields.values()))
 
 
-def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool = False) -> dict[str, Any]:
-    """A Growth read's answer with `you_may` and `setup`, after writing what this read adds."""
+def opened(store: Any, who: Any, *, seen: bool = False) -> None:
+    """Write what a Growth read by `who` adds (first open, steps done, numbers seen), if anything."""
     with store.read() as c:
-        st = state(c)
-        due = _due(recorded(c), st, seen)
-        setup = block(c, auth, who, st)
+        due = _due(recorded(c), state(c), seen)
     if due and not getattr(who, "support", None):  # Tico support reading the app is not the team opening Growth
 
         def work(w: Any) -> None:
@@ -259,7 +257,15 @@ def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool =
             store.write(who, work)
         except Store.Problem:
             pass  # a write refused for this caller never fails the read; the next read records it
-    return {**out, "you_may": you_may(auth, who, c), "setup": setup}
+
+
+def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool = False) -> dict[str, Any]:
+    """A Growth read's answer with `you_may` and `setup`, after writing what this read adds."""
+    opened(store, who, seen=seen)
+    with store.read() as c:
+        setup = block(c, auth, who, state(c))
+        may = you_may(auth, who, c)
+    return {**out, "you_may": may, "setup": setup}
 
 
 def _set(c: Any, st: dict[str, Any]) -> dict[str, Any]:

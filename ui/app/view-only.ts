@@ -31,7 +31,7 @@ const VIEW_READS = [
   '#side a', '#side button', '#mobile-nav button', '#org-fan a', '#org-fan button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
   '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x', '#task-archives button', '.tl-mi',
   '.tl-chip button', '#task-more button', '.tk-row', '[data-task]',
-  '[data-need]', '[data-reload]', '[data-dash-retry]', '[data-fin-retry]', '[data-gr-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
+  '[data-need]', '[data-reload]', '[data-dash-retry]', '[data-fin-retry]', '[data-gr-retry]', '[data-gp-month]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
   '[aria-label="Close"]', '[data-close]', '[data-modal-close]', '[data-task-earlier]', '[data-task-tab]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
   // The shared page header's ⋯ (page-head.ts) opens a menu; its views held there and Copy link only move or read.
   'header.ph > .ph-more', '.ph-menu > .ph-mtabs > .ph-mtab', '.ph-menu .ph-copy',

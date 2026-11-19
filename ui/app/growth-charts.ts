@@ -32,11 +32,11 @@ function grRuns(values: readonly GrValue[], at: (i: number, v: number | string) 
 const grPath = (run: readonly GrPoint[]): string => run.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join('');
 
 // A trend: `values` oldest first with nulls for unknown, the dot on index `pick` (none when it is unknown or -1), drawn
-// `w` by `h`. Under two known values, none.
+// `w` by `h`. One known value is a point; none, nothing.
 function grSpark(values: readonly GrValue[], pick: number = values.length - 1,
                  {w = 120, h = 32}: {w?: number, h?: number} = {}): string {
   const known = values.filter(v => v != null).map(Number);
-  if (known.length < 2) return '';
+  if (!known.length) return '';
   const P = h < 30 ? 3 : 4, lo = Math.min(...known), span = Math.max(...known) - lo;
   const at = (i: number, v: number | string): GrPoint =>
     [P + i * (w - 2 * P) / Math.max(1, values.length - 1), span ? h - P - (Number(v) - lo) / span * (h - 2 * P) : h / 2];
