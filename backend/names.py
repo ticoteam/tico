@@ -241,11 +241,9 @@ def install_route_class(app, store):
                 async def answer():
                     return run_names(request, await display_names(request, await handler(request)))
 
-                # A person's identical reads are computed once (backend/shared_reads.py); each request then gets its
+                # A person's identical reads run at most once a second (backend/shared_reads.py); each request gets its
                 # own validators and wire encoding.
-                response = await compress(request, await shared_reads.answer(store, request, self.path, answer))
-                shared_reads.wrote(store, request)
-                return response
+                return await compress(request, await shared_reads.answer(store, request, self.path, answer))
 
             return named_response
 

@@ -1,4 +1,5 @@
-"""A person's identical reads are computed once, and reused for a short time (backend/shared_reads.py)."""
+"""One person's identical reads run at most once a second, and never answer from before they arrived
+(backend/shared_reads.py)."""
 
 import asyncio
 from types import SimpleNamespace
@@ -7,8 +8,10 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from backend import shared_reads
 
+RAIL = "/api/v2/threads/rail"
 
-def _request(method="GET", route_path="/api/v2/threads/rail", who="human:ana", role="human", query=b""):
+
+def _request(method="GET", route_path=RAIL, who="human:ana", role="human", query=b""):
     class Identity(SimpleNamespace):
         def __repr__(self):
             return f"Identity({self.actor}, {self.role})"
@@ -24,129 +27,130 @@ def _request(method="GET", route_path="/api/v2/threads/rail", who="human:ana", r
     )
 
 
-def _counting(gate=None):
-    """A read that counts its runs and, given `gate` (an asyncio.Event), holds each run until the gate opens."""
-    calls = []
+class Reads:
+    """A read that stays open until `release()`, counting how many ran; `own()` is one request's compute, as
+    backend/names.py makes one per request."""
 
-    async def compute():
-        calls.append(1)
-        if gate is not None:
-            await gate.wait()
-        return JSONResponse({"n": len(calls)})
+    def __init__(self, stream=False):
+        self.ran = 0
+        self.gate = asyncio.Event()
+        self.stream = stream
 
-    return calls, compute
+    def release(self):
+        self.gate.set()
 
+    def own(self):
+        async def compute():
+            self.ran += 1
+            n = self.ran
+            await self.gate.wait()
+            return StreamingResponse(iter([b"x"])) if self.stream else JSONResponse({"n": n})
 
-async def _all_at_once(reads, requests, gate):
-    """Start every request, let each reach its answer (computing or joined), then open the gate."""
-    tasks = [asyncio.ensure_future(one) for one in requests]
-    while reads.computed + reads.joined < len(tasks):
-        await asyncio.sleep(0)
-    gate.set()
-    return await asyncio.gather(*tasks)
-
-
-def test_identical_reads_at_once_compute_once(monkeypatch):
-    async def run():
-        gate = asyncio.Event()
-        reads, (calls, compute) = shared_reads.SharedReads(), _counting(gate)
-        key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
-        answers = await _all_at_once(reads, [reads.answer(key, 0, compute) for _ in range(10)], gate)
-        assert len(calls) == 1 and {a.body for a in answers} == {b'{"n":1}'}
-        assert len({id(a) for a in answers}) == 10  # each its own copy
-
-    asyncio.run(run())
+        return compute
 
 
-def test_below_zero_shares_nothing_and_zero_shares_only_while_computing(monkeypatch):
-    """Tests run with TICO_READ_CACHE_SECONDS=-1 (conftest.py): concurrent identical reads each run. 0 shares a read
-    only while it is being computed."""
-    rail = "/api/v2/threads/rail"
-    ticks = iter(range(1, 1_000_000))
-    monkeypatch.setattr(shared_reads, "clock", lambda: float(next(ticks)))  # time moves on between reads
-
-    async def run(seconds):
-        monkeypatch.setenv("TICO_READ_CACHE_SECONDS", seconds)
-        store, gate = SimpleNamespace(), asyncio.Event()
-        calls, compute = _counting(gate)
-        requests = [shared_reads.answer(store, _request(), rail, compute) for _ in range(4)]
-        if seconds == "-1":
-            gate.set()
-            await asyncio.gather(*requests)
-        else:
-            await _all_at_once(shared_reads.of(store), requests, gate)
-        await shared_reads.answer(store, _request(), rail, compute)  # after the computation ended
-        return len(calls)
-
-    assert asyncio.run(run("-1")) == 5
-    assert asyncio.run(run("0")) == 2
-
-
-def test_an_answer_serves_again_until_it_is_older_than_the_window(monkeypatch):
+def _clock(monkeypatch):
     now = [100.0]
     monkeypatch.setattr(shared_reads, "clock", lambda: now[0])
-    monkeypatch.setenv("TICO_READ_CACHE_SECONDS", "1")
+    return now
+
+
+async def _arrive(reads, n, key, limiter, seconds=1.0):
+    """n identical requests, each with its own compute; returns their tasks once all have arrived."""
+    tasks = [asyncio.create_task(limiter.answer(key, reads.own(), seconds)) for _ in range(n)]
+    for _ in range(5):
+        await asyncio.sleep(0)
+    return tasks
+
+
+def test_ten_identical_reads_at_once_run_twice_at_most(monkeypatch):
+    now = _clock(monkeypatch)
 
     async def run():
-        reads, (calls, compute) = shared_reads.SharedReads(), _counting()
-        key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
-        await reads.answer(key, 0, compute)
-        now[0] += 0.9
-        await reads.answer(key, 0, compute)
-        assert len(calls) == 1
-        now[0] += 0.2
-        await reads.answer(key, 0, compute)
-        assert len(calls) == 2
+        limiter, reads = shared_reads.SharedReads(), Reads()
+        key = shared_reads.key_of(_request(), RAIL)
+        first = await _arrive(reads, 1, key, limiter)
+        rest = await _arrive(reads, 9, key, limiter)  # they arrive while the first runs: they wait for the next read
+        assert reads.ran == 1
+        reads.release()
+        assert (await first[0]).body == b'{"n":1}'
+        now[0] += 1.0  # the queued read begins no sooner than a second after the first
+        answers = await asyncio.gather(*rest)
+        assert reads.ran == 2 and {a.body for a in answers} == {b'{"n":2}'}
+        assert len({id(a) for a in answers}) == 9  # each its own copy
 
     asyncio.run(run())
 
 
-def test_who_and_what_decide_whether_a_read_is_shared():
-    rail = "/api/v2/threads/rail"
-    assert shared_reads.key_of(_request(who="human:ana"), rail) != shared_reads.key_of(_request(who="human:ben"), rail)
-    assert shared_reads.key_of(_request(query=b"a=1"), rail) != shared_reads.key_of(_request(query=b"a=2"), rail)
-    assert shared_reads.key_of(_request(method="POST"), rail) is None
-    assert shared_reads.key_of(_request(role="runner"), rail) is None
+def test_a_read_never_answers_with_a_read_begun_before_it_arrived(monkeypatch):
+    _clock(monkeypatch)
+
+    async def run():
+        limiter, reads = shared_reads.SharedReads(), Reads()
+        key = shared_reads.key_of(_request(), RAIL)
+        first = await _arrive(reads, 1, key, limiter)
+        late = await _arrive(reads, 1, key, limiter)
+        reads.release()
+        await first[0]
+        assert reads.ran == 1 and not late[0].done()  # it does not take the first read's answer
+
+    asyncio.run(run())
+
+
+def test_a_read_a_second_later_runs_at_once(monkeypatch):
+    now = _clock(monkeypatch)
+
+    async def run():
+        limiter, reads = shared_reads.SharedReads(), Reads()
+        reads.release()
+        key = shared_reads.key_of(_request(), RAIL)
+        await limiter.answer(key, reads.own(), 1.0)
+        now[0] += 1.0
+        await limiter.answer(key, reads.own(), 1.0)
+        assert reads.ran == 2 and limiter.joined == 0
+
+    asyncio.run(run())
+
+
+def test_who_and_what_decide_whether_reads_are_limited_together():
+    assert shared_reads.key_of(_request(who="human:ana"), RAIL) != shared_reads.key_of(_request(who="human:ben"), RAIL)
+    assert shared_reads.key_of(_request(query=b"a=1"), RAIL) != shared_reads.key_of(_request(query=b"a=2"), RAIL)
+    assert shared_reads.key_of(_request(method="POST"), RAIL) is None
+    assert shared_reads.key_of(_request(role="runner"), RAIL) is None
     assert shared_reads.key_of(_request(), "/api/v2/events") is None
     assert shared_reads.key_of(_request(), "/healthz") is None
     assert shared_reads.key_of(_request(), "/api/v2/bots") is not None
 
 
-def test_a_streamed_answer_is_never_handed_to_another_request():
+def test_a_streamed_answer_is_never_handed_to_another_request(monkeypatch):
+    now = _clock(monkeypatch)
+
     async def run():
-        reads, calls, gate = shared_reads.SharedReads(), [], asyncio.Event()
-
-        async def compute():
-            calls.append(1)
-            await gate.wait()
-            return StreamingResponse(iter([b"x"]))
-
-        def own():  # each request has its own compute, as backend/names.py makes one per request
-            async def mine():
-                return await compute()
-
-            return mine
-
-        key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
-        await _all_at_once(reads, [reads.answer(key, 0, own()) for _ in range(3)], gate)
-        assert len(calls) == 3
+        limiter, reads = shared_reads.SharedReads(), Reads(stream=True)
+        key = shared_reads.key_of(_request(), RAIL)
+        first = await _arrive(reads, 1, key, limiter)
+        rest = await _arrive(reads, 2, key, limiter)
+        reads.release()
+        await first[0]
+        now[0] += 1.0
+        await asyncio.gather(*rest)
+        assert reads.ran == 3  # the queued read's creator, then the other request on its own
 
     asyncio.run(run())
 
 
-def test_a_callers_own_write_drops_their_kept_answers(monkeypatch):
-    monkeypatch.setenv("TICO_READ_CACHE_SECONDS", "5")
+def test_the_limit_is_off_below_zero(monkeypatch):
+    monkeypatch.setenv("TICO_READ_RATE_SECONDS", "-1")
+    calls = []
+
+    async def compute():
+        calls.append(1)
+        return JSONResponse({})
 
     async def run():
         store = SimpleNamespace()
-        reads, (calls, compute) = shared_reads.of(store), _counting()
-        key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
-        await reads.answer(key, 0, compute)
-        shared_reads.wrote(store, _request(method="POST", who="human:ben"))  # someone else's write: kept
-        await reads.answer(key, 0, compute)
-        assert len(calls) == 1
-        shared_reads.wrote(store, _request(method="POST"))
-        await reads.answer(key, 0, compute)
-        assert len(calls) == 2
+        request = SimpleNamespace(**vars(_request()))
+        await asyncio.gather(*(shared_reads.answer(store, request, RAIL, compute) for _ in range(3)))
+        assert len(calls) == 3
 
     asyncio.run(run())
