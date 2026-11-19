@@ -326,6 +326,8 @@ function Param({ size, name, p, owner }: { size: string; name: string; p: Market
   const v = paramValue(p);
   const [draft, setDraft] = useState(v == null ? '' : String(v));
   const extra = p && typeof p === 'object' ? p : null;
+  // the server's key in plain words: `vans_per_city` is "Vans per city"
+  const label = sourceName(name);
   const save = () => {
     const value = Number(draft);
     if (draft.trim() === '' || !Number.isFinite(value)) return;
@@ -333,7 +335,7 @@ function Param({ size, name, p, owner }: { size: string; name: string; p: Market
   };
   return (
     <div className="mkt-param">
-      <code>{name}</code>
+      <span>{label}</span>
       {owner && typeof v === 'number' ? (
         <form
           className="mkt-param-f"
@@ -342,7 +344,7 @@ function Param({ size, name, p, owner }: { size: string; name: string; p: Market
             save();
           }}
         >
-          <Field label={name} labelHidden type="number" value={draft} onValueChange={setDraft} wide={false} />
+          <Field label={label} labelHidden type="number" value={draft} onValueChange={setDraft} wide={false} />
           <Button type="submit" variant="quiet" busy={set.pending}>
             Save
           </Button>
@@ -746,5 +748,5 @@ function PostsChart({ daily }: { daily: { day: string; sources?: Record<string, 
   );
 }
 
-/** A Listening source as a name: `reddit` is Reddit. */
+/** A Listening source or a parameter's key as words: `reddit` is Reddit, `vans_per_city` is Vans per city. */
 const sourceName = (k: string) => (k ? k[0]!.toUpperCase() + k.slice(1).replace(/_/g, ' ') : k);

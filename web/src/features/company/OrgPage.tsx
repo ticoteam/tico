@@ -341,7 +341,7 @@ function NewFactory({ onClose }: { onClose: () => void }) {
       }
     >
       <form
-        className="rail-sec"
+        className="rail-sec fac-form"
         onSubmit={(e) => {
           e.preventDefault();
           void save();

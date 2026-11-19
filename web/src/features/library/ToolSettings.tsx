@@ -17,6 +17,7 @@ import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
 import { Face, press, when } from './parts';
+import { SectionFault } from './ToolShell';
 import {
   agentSendingQuery,
   googleQuery,
@@ -420,10 +421,16 @@ export function NumberRequests({ always = false }: { always?: boolean }) {
   const q = useQuery(numberRequestsQuery);
   const [now] = useState(() => Date.now());
   const live = (q.data ?? []).filter((r) => LIVE.includes(r.state));
+  if (q.isError && !q.data)
+    return (
+      <Section name="Requests" target="tool-set:numbers">
+        <SectionFault name="Requests" error={q.error} onRetry={() => void q.refetch()} />
+      </Section>
+    );
   if (!live.length && !always) return null;
   return (
     <Section name="Requests" count={live.length} target="tool-set:numbers">
-      {!live.length && <Empty title="No requests" />}
+      {!live.length && q.data && <Empty title="No requests" />}
       {live.map((r) => {
         const w = requestWord(r, now);
         return (
@@ -446,7 +453,8 @@ export function NumberRequests({ always = false }: { always?: boolean }) {
 const ADDRESS_STATE: Record<string, string> = { pending_1583: 'Waiting for Form 1583', active: 'Connected', closed: 'Closed' };
 const KINDS: Record<string, string> = { shared: 'Shared', private: 'Private' };
 
-/** Every address and open order, by its words or its state and kind. Nothing while the Gateway is off. */
+/** Every address and open order, by its words or its state and kind. Nothing when there are none; a failed read (the
+    Gateway off or not connected) says so. */
 export function PostalAddresses() {
   const q = useQuery({ ...postalAddressesQuery, retry: false });
   const rows = [
@@ -459,6 +467,12 @@ export function PostalAddresses() {
       .filter((o) => o.status === 'open')
       .map((o) => ({ id: `order:${o.order_id ?? `${o.state}-${o.kind}`}`, title: `${o.state}, ${KINDS[o.kind] ?? o.kind}`, word: 'Ordered' })),
   ];
+  if (q.isError && !q.data)
+    return (
+      <Section name="Addresses" target="tool-set:addresses">
+        <SectionFault name="Addresses" error={q.error} onRetry={() => void q.refetch()} />
+      </Section>
+    );
   if (!rows.length) return null;
   return (
     <Section name="Addresses" count={rows.length} target="tool-set:addresses">
@@ -501,6 +515,12 @@ export function LettersOutSection() {
   const admin = useAdmin();
   const [editing, setEditing] = useState(false);
   const l = q.data;
+  if (q.isError && !q.data)
+    return (
+      <Section name="Sending letters" target="tool-set:letters-out">
+        <SectionFault name="Sending letters" error={q.error} onRetry={() => void q.refetch()} />
+      </Section>
+    );
   if (!l) return null;
   const more = admin && (
     <Menu trigger={<IconButton icon="more" label="Letters out settings" size="sm" />}>

@@ -14,7 +14,8 @@
 /* a name longer than its column (the mock's names all fit one line) wraps to a second line, then ends in an ellipsis;
    it never runs into the rate. The full name is the title. */
 .co .pipe-name{color:var(--ink);font-weight:var(--w-strong);min-width:0;height:auto;white-space:normal;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
-.co .rate{color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
+/* display and opacity undo conversation.css's message `.rate` (Good / Not good), which is global and hides it until hover */
+.co .rate{display:block;opacity:1;color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
 .co .rate-out{text-align:left}
 .co .line{position:relative;align-self:stretch;display:flex;align-items:stretch}
 .co .line::before{content:"";position:absolute;left:0;right:5px;bottom:23px;height:2px;border-radius:var(--r-pill);background:var(--line-strong)}
@@ -89,6 +90,8 @@
 .pnl .kf-c>.kf-num{width:92px;flex:none}
 .pnl .kf-c .kf-num input{text-align:right;font-variant-numeric:tabular-nums}
 .pnl .kf-rename{margin-bottom:var(--s-2)}
+/* a panel form of stacked fields: the forms' field gap (calls.css .ev-form, task.css .tv-new) */
+.pnl .fac-form{display:grid;gap:var(--s-4)}
 
 /* a record in the panel: fields that save at once, sections with a count */
 .pnl .rec-flds{padding:var(--s-2) 0 var(--s-2h);border-bottom:1px solid var(--line)}
@@ -168,6 +171,9 @@
 .co .mkt-chain>li:first-child .mkt-layer,.co .fac-list>li:first-child .fac-name{margin-top:0}
 .co .mkt-node,.co .fac-pipe{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
 .co .mkt-node.is-us .row-title{font-weight:var(--w-strong)}
+/* these rows hang no mark, so on the sheets their words start on the section name's edge (8 + 24, parts.css
+   .stage-head); a phone's name and rows already share one edge */
+:where(html:not([data-layout="cards"])) .co :is(.mkt-layer,.mkt-node,.chg2,.fac-name,.fac-pipe){padding-left:var(--s-8)}
 .co .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink-2)}
 /* the four set-up questions, one at a time */
 .co .mkt-setup{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
@@ -331,6 +337,10 @@
   .co .pipe{height:auto;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto 72px;column-gap:var(--s-1h);padding-top:var(--s-1h)}
   .co .pipe-name{grid-column:1/-1;margin-bottom:0;-webkit-line-clamp:1;line-clamp:1}
   .co .line{container-type:inline-size}
+  /* placed, not auto-placed: a size container has no width of its own, so in an `auto` column it shrinks to 0 */
+  .co .pipe>.rate{grid-row:2;grid-column:1}
+  .co .pipe>.line{grid-row:2;grid-column:2}
+  .co .pipe>.rate-out{grid-row:2;grid-column:3}
   .co .decks{max-width:100%;overflow:hidden}
   .co .deck,.co .deck-none{width:10px;flex:none}
   .co .st:not(:first-child):not(:last-child) .st-name{visibility:hidden}

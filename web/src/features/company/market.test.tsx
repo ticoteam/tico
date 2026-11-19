@@ -206,7 +206,7 @@ describe('Market @s325 @s357 @s360 @s361', () => {
     market();
     show(<StrategyPage tab="market" search={{ panel: 'segment:s1' }} />, at('segment:s1'));
     const panel = await screen.findByRole('complementary', { name: 'Mobile grooming' });
-    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'vans' }), { target: { value: '5000' } });
+    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Vans' }), { target: { value: '5000' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/market/sizes/z1/params', method: 'POST', body: { params: { vans: 5000 } } }]));
   });
@@ -217,7 +217,7 @@ describe('Market @s325 @s357 @s360 @s361', () => {
     market();
     show(<StrategyPage tab="market" search={{ panel: 'segment:s1' }} />, at('segment:s1'));
     const panel = await screen.findByRole('complementary', { name: 'Mobile grooming' });
-    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'vans' }), { target: { value: '5000' } });
+    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Vans' }), { target: { value: '5000' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(toasts).toHaveBeenCalledWith({ text: 'Not allowed', kind: 'failed' }));
     expect(queryClient.getQueryData<MarketSpend>(marketSpendQuery.queryKey)?.segments?.[0]?.estimates?.[0]?.params).toEqual({ vans: 4000 });

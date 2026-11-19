@@ -12,14 +12,15 @@ import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { GithubConnection } from '@/features/start/exports';
 import { BrowserDialog } from '@/features/team/exports';
 import { FilterRow, ListAndItem, PageMore, Section, type PageState } from '@/pagekinds';
-import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
+import { AddAccountDialog, AddDialog, AddItems, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import {
   CodeDialog,
   EditApiDialog,
@@ -148,6 +149,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   const all = [...entries(rows), ...keys.map(keyEntry)].sort(order);
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
+  const cards = useCards();
   const none = !!tools.data && !tools.data.rows.length && !loose.length;
   const kinds = [...new Set([...(tools.data?.rows ?? []).map((r) => r.kind as string), ...(loose.length ? ['key'] : [])])].sort((a, b) =>
     (KIND[a] ?? a).localeCompare(KIND[b] ?? b),
@@ -207,7 +209,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
         className="lib tools"
         actions={
           <>
-            <Menu trigger={<IconButton icon="filter" label="Filter tools" on={filters.length > 0} />}>
+            <Menu trigger={<IconButton icon="filter" label="Filter tools" on={filters.length > 0} data-phone />}>
               <MenuItem
                 label="All tools"
                 on={!filters.length}
@@ -223,13 +225,21 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
               ))}
               <WhoMenu who={who} teams={teams} people={whoList} onPick={filterWho} />
             </Menu>
-            <AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />
-            <PageMore>
-              {SETTINGS.map(([tool, label]) => (
-                <MenuItem key={tool} label={label} onSelect={() => void press('tools.open', { tool })} />
-              ))}
-            </PageMore>
+            {!cards && <AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />}
           </>
+        }
+        // A phone's head keeps Filter and the ⋯; Add tool then moves into the ⋯.
+        more={
+          <PageMore>
+            {cards && (
+              <MenuSub label="Add tool" icon="plus">
+                <AddItems onPick={setAdding} />
+              </MenuSub>
+            )}
+            {SETTINGS.map(([tool, label]) => (
+              <MenuItem key={tool} label={label} onSelect={() => void press('tools.open', { tool })} />
+            ))}
+          </PageMore>
         }
         open={!!open}
         state={state}
@@ -1025,6 +1035,13 @@ function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind
             <Who key={p.id} actor={p.kind === 'group' ? null : p.id} name={p.name} />
           ))}
         </Section>
+      )}
+      {/* A mailbox the index lists without its own record (no mailbox_id): the company's rules, as MailboxView shows them. */}
+      {row.kind === 'mailbox' && (
+        <>
+          <MayDo />
+          <SendingSection />
+        </>
       )}
       {row.kind === 'slack' && <SlackLinks />}
     </Shell>

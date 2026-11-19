@@ -34,11 +34,14 @@ const ADD: Array<[Adding, string, string]> = [
 export function AddMenu({ trigger, onPick }: { trigger: ReactElement; onPick: (a: Adding) => void }) {
   return (
     <Menu trigger={trigger}>
-      {ADD.map(([k, label, glyph]) => (
-        <MenuItem key={k} label={label} lead={<ToolGlyph kind={glyph} />} onSelect={() => onPick(k)} />
-      ))}
+      <AddItems onPick={onPick} />
     </Menu>
   );
+}
+
+/** The Add menu's rows, for a menu that holds them as a second level (a phone's ⋯). */
+export function AddItems({ onPick }: { onPick: (a: Adding) => void }) {
+  return ADD.map(([k, label, glyph]) => <MenuItem key={k} label={label} lead={<ToolGlyph kind={glyph} />} onSelect={() => onPick(k)} />);
 }
 
 export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => void }) {

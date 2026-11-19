@@ -94,7 +94,18 @@ export function Shell({ name, kind, mcp, lock, problem, fill, state = 'ready', o
 export const stateOf = (q: { isError: boolean; error: unknown; data: unknown }) =>
   q.isError ? ((q.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault') : q.data ? 'ready' : 'loading';
 
-export const Code = ({ children }: { children: ReactNode }) => <code className="fact-code">{children}</code>;
+/** A section whose own read failed: it says so with Try again (a 403: not shared with you, nothing to retry). Never the
+    section's empty state, and never left out. */
+export function SectionFault({ name, error, onRetry }: { name: string; error: unknown; onRetry: () => void }) {
+  if ((error as { status?: number } | null)?.status === 403) return <Empty title="Not shared with you" icon="lock" />;
+  return (
+    <Empty title={`${name} did not load`} icon="alert">
+      <Button onClick={onRetry}>Try again</Button>
+    </Empty>
+  );
+}
+
+export const Code =({ children }: { children: ReactNode }) => <code className="fact-code">{children}</code>;
 export const Dim = ({ children }: { children: ReactNode }) => <span className="fact-n">{children}</span>;
 
 const LEVEL_WORDS: Record<string, string> = { read: 'Read', read_write: 'Read and write' };
